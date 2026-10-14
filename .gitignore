@@ -1,21 +1,27 @@
-# Зависимости
-node_modules/
-venv/
+# Python
 __pycache__/
 *.py[cod]
-
-# Сборка и артефакты
-dist/
+*.egg-info/
+.eggs/
 build/
-*.log
+dist/
+.venv/
+venv/
 
-# Окружение и секреты
-.env
-.env.*
-*.key
+# Тестовые артефакты: образы и бэкапы создаются тестами и не коммитятся
+*.img
+*.img.bak
+*.bin
+*.raw
+*.dd
+tests/_work/
+.pytest_cache/
 
-# Системное и редакторы
-.DS_Store
+# Windows (приложение целевое и для Windows)
 Thumbs.db
+desktop.ini
+
+# macOS / редакторы
+.DS_Store
 .idea/
 .vscode/
