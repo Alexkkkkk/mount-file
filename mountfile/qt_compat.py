@@ -1,8 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
 """Qt compatibility layer: PyQt6 (modern OS) or PyQt5 (Windows 7).
 
 PyQt6/Qt6 requires Windows 10+, so on Windows 7 this project falls back
 to PyQt5 (Qt 5.15 LTS, the last Qt branch supporting Windows 7).
 All GUI code imports Qt names from here and never from PyQt* directly.
+
+Note on module layout: QKeySequence lives in QtGui for BOTH PyQt5 and
+PyQt6 (it is NOT re-exported from QtCore by either binding), while QAction
+lives in QtGui on PyQt6 but in QtWidgets on PyQt5. Both quirks are handled
+below, which is why every import is routed through this module.
 """
 
 from __future__ import annotations
@@ -10,10 +18,10 @@ from __future__ import annotations
 QT6 = True
 try:  # pragma: no cover - depends on environment
     from PyQt6.QtCore import (
-        QAbstractItemModel, QKeySequence, QModelIndex, QSize, Qt,
+        QAbstractItemModel, QModelIndex, QSize, Qt,
     )
     from PyQt6.QtGui import (
-        QAction, QColor, QFont, QFontMetrics, QPainter, QPen,
+        QAction, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen,
     )
     from PyQt6.QtWidgets import (
         QAbstractScrollArea, QApplication, QComboBox, QDockWidget,
@@ -24,10 +32,10 @@ try:  # pragma: no cover - depends on environment
 except ImportError:  # pragma: no cover
     QT6 = False
     from PyQt5.QtCore import (
-        QAbstractItemModel, QKeySequence, QModelIndex, QSize, Qt,
+        QAbstractItemModel, QModelIndex, QSize, Qt,
     )
     from PyQt5.QtGui import (
-        QColor, QFont, QFontMetrics, QPainter, QPen,
+        QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen,
     )
     from PyQt5.QtWidgets import (
         QAbstractScrollArea, QAction, QApplication, QComboBox, QDockWidget,
