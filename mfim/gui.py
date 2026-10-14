@@ -23,6 +23,7 @@ import shutil
 import sys
 from typing import List, Optional
 
+_QT_IMPORT_ERROR = None
 try:  # pragma: no cover
     from PyQt6.QtCore import QAbstractItemModel, QAbstractTableModel, QModelIndex, Qt
     from PyQt6.QtGui import QAction
@@ -49,11 +50,32 @@ try:  # pragma: no cover
         QWidget,
     )
 except ImportError as exc:  # pragma: no cover
-    raise SystemExit(
-        "PyQt6 is required for the GUI: pip install PyQt6\n"
-        f"(import error: {exc})\n"
-        "Use the headless interface instead: python -m mfim.cli --help"
-    )
+    # Never raise at import time. This module must stay importable where Qt is
+    # absent (CLI, headless CI, `python -m mfim`, doctest sweeps); the error is
+    # re-raised only when the GUI is actually launched.
+    _QT_IMPORT_ERROR = exc
+
+    def _qt_hint() -> str:
+        return (
+            "PyQt6 is required for the GUI: pip install PyQt6\n"
+            f"(import error: {_QT_IMPORT_ERROR})\n"
+            "Use the headless interface instead: python -m mfim.cli --help"
+        )
+
+    class _MissingQtMeta(type):
+        def __getattr__(cls, name):
+            raise ImportError(_qt_hint())
+
+    class _MissingQt(metaclass=_MissingQtMeta):
+        def __init__(self, *args, **kwargs):
+            raise ImportError(_qt_hint())
+
+    for _name in ("""QAbstractItemModel QAbstractTableModel QModelIndex Qt QAction
+QApplication QComboBox QFileDialog QHBoxLayout QInputDialog QLabel QLineEdit
+QMainWindow QMessageBox QPlainTextEdit QPushButton QSpinBox QSplitter QStyle
+QTabWidget QTableView QToolBar QTreeView QVBoxLayout QWidget""".split()):
+        globals()[_name] = _MissingQt
+    del _name
 
 from .partition import parse_partition_table, scan_filesystems
 from .tree_model import FileNode, ImageTreeModelData
@@ -534,6 +556,8 @@ class MainWindow(QMainWindow):
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    if _QT_IMPORT_ERROR is not None:
+        raise SystemExit(_qt_hint())
     argv = list(sys.argv if argv is None else argv)
     image = next((a for a in argv[1:] if not a.startswith("-")), None)
     app = QApplication(argv)

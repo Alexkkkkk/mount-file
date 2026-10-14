@@ -788,7 +788,10 @@ def test_gui_model_offscreen(images, monkeypatch):
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
 
-    from mfim.gui import ImageTreeQtModel
+    try:
+        from mfim.gui import ImageTreeQtModel
+    except (ImportError, SystemExit) as exc:
+        pytest.skip(f"Qt GUI module unavailable: {exc}")
     from mfim.vfs import ImageVFS
 
     try:

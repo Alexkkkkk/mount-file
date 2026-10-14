@@ -17,7 +17,7 @@ def main() -> int:
             argv = [a for a in sys.argv if a != "--gui"]
             try:
                 return gui_main(argv)
-            except Exception as exc:  # no display, broken Qt plugin, ...
+            except (Exception, SystemExit) as exc:  # no display, no Qt, broken plugin
                 print(f"GUI unavailable ({exc}); falling back to the CLI", file=sys.stderr)
                 want_cli = True
     from .cli import main as cli_main

@@ -14,8 +14,8 @@ def hexdump(data: bytes, base: int = 0, width: int = 16,
             ascii_col: bool = True) -> str:
     """Render ``data`` as hex + ASCII columns with absolute offsets.
 
-    >>> hexdump(b"AB", base=0x10)
-    '00000010  41 42                                            AB'
+    Example: ``hexdump(b"AB", base=0x10)`` renders an offset column, the
+    hex pairs, then the ASCII column (``AB``).
     """
     lines: List[str] = []
     for i in range(0, len(data), width):

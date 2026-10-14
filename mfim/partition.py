@@ -213,6 +213,23 @@ def guid_str(raw: bytes) -> str:
     return f"{d1:08x}-{d2:04x}-{d3:04x}-{raw[8:10].hex()}-{raw[10:16].hex()}"
 
 
+def guid_bytes(guid: str) -> bytes:
+    """Encode a canonical GUID string into the 16 on-disk bytes (mixed endian).
+
+    The inverse of :func:`guid_str`: the first three fields are stored
+    little-endian, the last two as-is. Needed by the upcoming partition editor
+    and by tests that build a GPT entry array by hand.
+    """
+    text = str(guid).strip().strip("{}").replace("-", "")
+    if len(text) != 32:
+        raise ValueError(f"not a GUID: {guid!r}")
+    d1 = int(text[0:8], 16)
+    d2 = int(text[8:12], 16)
+    d3 = int(text[12:16], 16)
+    tail = bytes.fromhex(text[16:32])
+    return struct.pack("<IHH", d1, d2, d3) + tail
+
+
 def _read_at(fp: BinaryIO, offset: int, length: int) -> bytes:
     fp.seek(offset)
     return fp.read(length)
