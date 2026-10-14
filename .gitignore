@@ -1,27 +1,53 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
-*.egg-info/
-.eggs/
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
 .venv/
 venv/
+ENV/
+env/
 
-# Тестовые артефакты: образы и бэкапы создаются тестами и не коммитятся
-*.img
-*.img.bak
-*.bin
-*.raw
-*.dd
-tests/_work/
-.pytest_cache/
-
-# Windows (приложение целевое и для Windows)
-Thumbs.db
-desktop.ini
-
-# macOS / редакторы
-.DS_Store
+# IDEs
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Disk images and dumps (never commit test data)
+*.img
+*.bin
+*.raw
+*.dump
+*.dd
