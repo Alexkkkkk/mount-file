@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
 """Minimal FAT32 reader/writer for raw disk images.
 
 Read : directory listing, file read.

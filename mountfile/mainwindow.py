@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
 """Main window of the Mount File utility (PyQt6)."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
 """Tests for the FAT32 engine and partition parsers (synthetic images).
 
 Run:  python -m pytest tests/ -v

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
 """mountfile — file manager for raw disk images.
 
 Supports MBR/GPT partition tables, read-only browsing of FAT/NTFS/EXT/...

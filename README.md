@@ -1,3 +1,8 @@
+<!--
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Alexkkkkk
+Licensed under the MIT License - see the LICENSE file for details.
+-->
 # Mount File
 
 Утилита и файл-менеджер для монтирования образов дисков (raw-дампов NAND/eMMC/дисков) и работы с файлами внутри них — аналог функции **Mount File** из UFPI (MSL Works), реализованный с нуля на Python.
