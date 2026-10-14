@@ -35,7 +35,11 @@ class Node:
 
 
 class ImageModel(QAbstractItemModel):
-    """Lazy-loading tree model over a TskImage provider."""
+    """Lazy-loading tree model over a TskImage provider.
+
+    `self.root` is the hidden root: its children are the top-level rows of
+    the view, so the parent index of those rows is the invalid root index.
+    """
 
     def __init__(self, provider, parent=None):
         super().__init__(parent)
@@ -43,6 +47,7 @@ class ImageModel(QAbstractItemModel):
         self.root = Node(os.path.basename(provider.root_name), "/", True)
         self.last_error = None
 
+    # -- structure -----------------------------------------------------
     def index(self, row, column, parent=QModelIndex()):
         if not self.hasIndex(row, column, parent):
             return QModelIndex()
@@ -56,7 +61,11 @@ class ImageModel(QAbstractItemModel):
         if not index.isValid():
             return QModelIndex()
         node = index.internalPointer()
-        if node.parent is None:
+        # The hidden root itself, and its direct children (= the top-level
+        # rows of the view), have no parent index. Returning a *valid*
+        # index here would make the view nest every top-level entry under a
+        # phantom item, so this must stay the invalid root index.
+        if node.parent is None or node.parent is self.root:
             return QModelIndex()
         row = node.parent.children.index(node)
         return self.createIndex(row, 0, node.parent)
@@ -72,6 +81,7 @@ class ImageModel(QAbstractItemModel):
         node = parent.internalPointer() if parent.isValid() else self.root
         return node.is_dir
 
+    # -- lazy loading ----------------------------------------------------
     def canFetchMore(self, parent=QModelIndex()):
         node = parent.internalPointer() if parent.isValid() else self.root
         return node.is_dir and not node.loaded
@@ -87,15 +97,21 @@ class ImageModel(QAbstractItemModel):
             self.last_error = str(e)
             node.loaded = True
             return
-        self.beginInsertRows(parent, 0, max(0, len(items) - 1))
+        node.loaded = True
+        # An empty directory must not announce a row insertion: calling
+        # beginInsertRows(..., 0, 0) without appending anything leaves the
+        # model inconsistent and makes Qt warn about an invalid index.
+        if not items:
+            return
+        self.beginInsertRows(parent, 0, len(items) - 1)
         for it in items:
             p = (node.path.rstrip("/") + "/" + it["name"]) \
                 if node.path != "/" else "/" + it["name"]
             node.children.append(Node(it["name"], p, it["is_dir"],
                                       it.get("size", 0), node))
-        node.loaded = True
         self.endInsertRows()
 
+    # -- data ------------------------------------------------------------
     def data(self, index, role=DisplayRole):
         if not index.isValid():
             return None
@@ -120,24 +136,30 @@ class ImageModel(QAbstractItemModel):
             n /= 1024
         return "%d B" % n
 
+    # -- helpers ----------------------------------------------------------
     def node_for(self, index):
         return index.internalPointer() if index.isValid() else self.root
 
+    def index_for(self, node):
+        """Index pointing AT `node` (invalid for the hidden root).
+
+        The internal pointer must be `node` itself, not `node.parent`: the
+        returned index is used as the parent index for `node`'s children
+        (e.g. in reload()), so it has to address `node`.
+        """
+        if node.parent is None:
+            return QModelIndex()
+        return self.createIndex(node.parent.children.index(node), 0, node)
+
     def reload(self, node):
+        """Drop cached children of `node` so they are re-fetched lazily."""
         if not node.loaded:
             return
-        idx = self.index_for(node)
-        parent_idx = self.parent(idx)
+        parent_idx = self.index_for(node)
         self.beginRemoveRows(parent_idx, 0, max(0, len(node.children) - 1))
         node.children = []
         node.loaded = False
         self.endRemoveRows()
-
-    def index_for(self, node):
-        if node.parent is None:
-            return QModelIndex()
-        row = node.parent.children.index(node)
-        return self.createIndex(row, 0, node)
 
 
 class MainWindow(QMainWindow):
