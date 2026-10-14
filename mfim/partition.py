@@ -7,14 +7,20 @@ those tools do not exist.
 Implemented layouts
 -------------------
 MBR     4 primary entries at byte offset 446, boot signature 0x55AA at 510.
-EBR     linked list for extended partitions (types 0x05 / 0x0F / 0x85); each
-        record holds one logical partition (LBA relative to *its own* EBR) and
-        a pointer to the next EBR (LBA relative to the *extended base*).
+EBR     linked list for extended partitions (types 0x05 / 0x0F / 0x85). The
+        FIRST EBR lives at the extended partition's own start LBA (the LBA in
+        the MBR's type-0x05 entry); each EBR holds one logical partition in
+        slot 0 (LBA *relative to the EBR itself*) and a pointer to the next EBR
+        in slot 1 (LBA *relative to the extended base*) — the asymmetric
+        offsets fdisk emits. Cyclic chains are detected and stopped.
 GPT     header at LBA 1 with signature ``EFI PART``; entry array located by
         ``partition_entry_lba``. Both CRCs are recomputed with zlib.crc32 —
         a mismatch is reported as a warning instead of aborting the parse,
         because real-world dumps from programmers very often have a stale
         backup header or a truncated tail.
+
+Filesystem sniffing is magic-based and layered separately: it must be able to
+name a filesystem even when TSK cannot open it (squashfs, UBI, JFFS2, LUKS).
 """
 
 from __future__ import annotations
@@ -32,7 +38,10 @@ GPT_SIGNATURE = b"EFI PART"
 GPT_ENTRY_SIZE = 128
 
 SECTOR_SIZE = 512
-EXT_SB = 0x400  # ext2/3/4 superblock offset from the start of the filesystem
+
+# ext2/3/4 superblock starts at byte 1024 of the volume, not at byte 0.
+EXT_SB_OFFSET = 1024
+EXT_SB_MAGIC = 0xEF53
 
 
 class PartitionError(Exception):
@@ -154,12 +163,12 @@ class PartitionTable:
         return any(p.scheme == "logical" for p in self.partitions)
 
     def describe(self) -> str:
+        from .util import human_size
+
         lines = [
             f"scheme={self.scheme} sector_size={self.sector_size} "
             f"image_size={self.image_size} bytes, partitions={len(self.partitions)}"
         ]
-        from .util import human_size
-
         for p in self.partitions:
             lines.append(
                 f"  #{p.index:<2} {p.scheme:<7} start={p.offset:<12} "
@@ -197,27 +206,11 @@ def _u64(buf: bytes, off: int = 0) -> int:
 
 
 def guid_str(raw: bytes) -> str:
-    """Format a 16-byte EFI GUID (mixed endianness: first 3 fields LE)."""
+    """Format a 16-byte EFI GUID: the first three fields are little-endian."""
     if len(raw) < 16:
         return ""
     d1, d2, d3 = struct.unpack_from("<IHH", raw, 0)
     return f"{d1:08x}-{d2:04x}-{d3:04x}-{raw[8:10].hex()}-{raw[10:16].hex()}"
-
-
-def guid_bytes(text: str) -> bytes:
-    """Inverse of :func:`guid_str` — textual GUID to 16 on-disk bytes.
-
-    Needed for the planned partition editor (writing a GPT entry back), and it
-    lets the test-suite verify the mixed-endian conversion in both directions.
-    """
-    parts = text.strip().strip("{}").split("-")
-    if len(parts) != 5:
-        raise ValueError(f"not a GUID: {text!r}")
-    d1, d2, d3 = (int(parts[i], 16) for i in range(3))
-    tail = bytes.fromhex("".join(parts[3:]))
-    if len(tail) != 8:
-        raise ValueError(f"not a GUID: {text!r}")
-    return struct.pack("<IHH", d1, d2, d3) + tail
 
 
 def _read_at(fp: BinaryIO, offset: int, length: int) -> bytes:
@@ -262,7 +255,7 @@ def _parse_mbr_entries(sector: bytes) -> List[_MbrEntry]:
 
 def _walk_ebr(fp: BinaryIO, base_lba: int, sector_size: int,
               start_index: int = 5, max_chain: int = 32) -> List[Partition]:
-    """Follow the extended-partition chain. Guarded against cycles/lies."""
+    """Follow the extended-partition chain. Guarded against cycles and lies."""
     found: List[Partition] = []
     next_lba = base_lba
     seen = set()
@@ -316,7 +309,7 @@ def _parse_gpt(fp: BinaryIO, sector_size: int, warnings: List[str]) -> Partition
     entry_size = _u32(header, 84)
     array_crc = _u32(header, 88)
 
-    # CRC of the header is computed with the CRC field itself zeroed out.
+    # The header CRC is computed with the CRC field itself zeroed out.
     check = bytearray(header[:header_size])
     if header_size >= 20:
         check[16:20] = b"\x00\x00\x00\x00"
@@ -411,7 +404,6 @@ def parse_partition_table_fp(fp: BinaryIO, sector_size: int = SECTOR_SIZE,
     if any(e.ptype == PROTECTIVE_TYPE for e in entries):
         table = _parse_gpt(fp, sector_size, warnings)
         table.image_size = image_size
-        # keep the protective MBR note last
         table.warnings = warnings + table.warnings
         return table
 
@@ -443,13 +435,15 @@ def parse_partition_table_fp(fp: BinaryIO, sector_size: int = SECTOR_SIZE,
             warnings.append("extended partition header found but no logical volumes parsed")
         partitions.extend(logical)
 
-    table = PartitionTable("mbr", sector_size, partitions, warnings, image_size)
-    return table
+    return PartitionTable("mbr", sector_size, partitions, warnings, image_size)
 
 
 # --------------------------------------------------------------------------- #
-# filesystem sniffing (independent of pytsk3, so it can describe a partition
-# even when TSK cannot open it)
+# filesystem sniffing
+#
+# Independent of pytsk3 on purpose: it must be able to name a filesystem even
+# when TSK cannot open it, and it must survive a short probe (a 4-byte magic is
+# identifiable from 4 bytes — every branch guards its own minimum length).
 # --------------------------------------------------------------------------- #
 def sniff_filesystem(path: str, offset: int = 0, probe: int = 8192) -> FsInfo:
     with open(path, "rb") as fp:
@@ -459,86 +453,89 @@ def sniff_filesystem(path: str, offset: int = 0, probe: int = 8192) -> FsInfo:
 
 
 def sniff_bytes(head: bytes) -> FsInfo:
-    if len(head) < 8:
+    n = len(head)
+    if n < 4:
         return FsInfo("unknown", "short read")
 
-    # --- NTFS / exFAT (OEM id at offset 3) ---
-    oem = head[3:11] if len(head) >= 11 else b""
-    if len(head) >= 512 and oem == b"NTFS    ":
-        bps = struct.unpack_from("<H", head, 11)[0]
-        total = struct.unpack_from("<Q", head, 40)[0]
-        label = head[0x30:0x48].decode("utf-16-le", "replace").split("\x00")[0]
-        size = bps * total if bps and total else None
-        return FsInfo("ntfs", label, size)
-    if len(head) >= 512 and oem == b"EXFAT   ":
-        bps = 1 << head[108] if head[108] < 16 else 512
-        vol_len = struct.unpack_from("<Q", head, 72)[0]
-        return FsInfo("exfat", "", bps * vol_len if vol_len else None)
+    # --- NTFS / exFAT / ext2-4 / FAT all live in the first 512 bytes ---
+    if n >= 512:
+        oem = head[3:11]
+        if oem == b"NTFS    ":
+            bps = struct.unpack_from("<H", head, 11)[0]
+            total = struct.unpack_from("<Q", head, 40)[0]
+            label = head[0x30:0x48].decode("utf-16-le", "replace").split("\x00")[0]
+            return FsInfo("ntfs", label, bps * total if bps and total else None)
+        if oem == b"EXFAT   ":
+            bps = 1 << head[108] if head[108] < 16 else 512
+            vol_len = struct.unpack_from("<Q", head, 72)[0]
+            return FsInfo("exfat", "", bps * vol_len if vol_len else None)
 
-    # --- EXT2/3/4 ---
-    # The superblock is 1024 bytes into the filesystem (boot block is skipped),
-    # so the magic sits at 0x400 + 0x38, NOT at 0x438. Reading the wrong base
-    # silently shifts every field by 1 KiB (a real bug this suite caught).
-    if len(head) >= 0x600 and struct.unpack_from("<H", head, EXT_SB + 0x38)[0] == 0xEF53:
-        return _sniff_ext(head)
+        if (n >= EXT_SB_OFFSET + 0x3A
+                and struct.unpack_from("<H", head, EXT_SB_OFFSET + 0x38)[0] == EXT_SB_MAGIC):
+            return _sniff_ext(head)
 
-    # --- FAT12/16 (label at 0x36) and FAT32 (label at 0x52) ---
-    if head[510:512] == MBR_SIGNATURE and head[0] in (0xE9, 0xEB):
-        bps = struct.unpack_from("<H", head, 11)[0] or 512
-        spc = head[13] or 1
-        if head[0x52:0x5A].startswith(b"FAT32"):
-            total = struct.unpack_from("<I", head, 32)[0] or struct.unpack_from("<H", head, 19)[0]
-            label = head[0x47:0x52].decode("ascii", "replace").strip()
-            return FsInfo("fat32", label, total * bps)
-        if head[0x36:0x3E].startswith(b"FAT1"):
-            kind = "fat16" if head[0x36:0x3E] == b"FAT16   " else "fat12"
-            total = struct.unpack_from("<H", head, 19)[0] or struct.unpack_from("<I", head, 32)[0]
-            label = head[0x2B:0x36].decode("ascii", "replace").strip()
-            return FsInfo(kind, label, total * bps)
-        return FsInfo("fat", "boot sector, flavour not stated")
+        if head[510:512] == MBR_SIGNATURE and head[0] in (0xE9, 0xEB):
+            bps = struct.unpack_from("<H", head, 11)[0] or 512
+            if head[0x52:0x5A].startswith(b"FAT32"):
+                total = struct.unpack_from("<I", head, 32)[0] or struct.unpack_from("<H", head, 19)[0]
+                label = head[0x47:0x52].decode("ascii", "replace").strip()
+                return FsInfo("fat32", label, total * bps)
+            if head[0x36:0x3E].startswith(b"FAT1"):
+                kind = "fat16" if head[0x36:0x3E] == b"FAT16   " else "fat12"
+                total = struct.unpack_from("<H", head, 19)[0] or struct.unpack_from("<I", head, 32)[0]
+                label = head[0x2B:0x36].decode("ascii", "replace").strip()
+                return FsInfo(kind, label, total * bps)
+            return FsInfo("fat", "boot sector, flavour not stated")
 
-    # --- others ---
+    # --- magic-only formats ---
     if head[:4] in (b"hsqs", b"sqsh"):
+        if n < 32:
+            return FsInfo("squashfs", "magic present, superblock truncated")
         s_major = struct.unpack_from("<H", head, 28)[0]
         s_minor = struct.unpack_from("<H", head, 30)[0]
         bs = struct.unpack_from("<I", head, 12)[0]
         return FsInfo("squashfs", f"v{s_major}.{s_minor}, block {bs}")
-    if head[0x8001:0x8006] == b"CD001":
+    if n >= 0x8006 and head[0x8001:0x8006] == b"CD001":
         return FsInfo("iso9660", head[0x8028:0x8033].decode("ascii", "replace").strip())
     if head[:4] == b"UBI#":
-        return FsInfo("ubifs", f"version {head[4]}")
-    if head[:2] == b"\x19\x85":
-        return FsInfo("jffs2", "big-endian magic")
-    if head[:2] == b"\x85\x19":
-        return FsInfo("jffs2", "little-endian magic")
-    if head[512:516] == b"UBI#":
+        return FsInfo("ubifs", f"version {head[4]}" if n > 4 else "")
+    if head[:2] in (b"\x19\x85", b"\x85\x19"):
+        order = "big-endian" if head[:2] == b"\x19\x85" else "little-endian"
+        return FsInfo("jffs2", f"{order} magic")
+    if n >= 516 and head[512:516] == b"UBI#":
         return FsInfo("ubi", "EC header at LBA1 (UBI volume)")
-    if head[:4] == b"LUKS":
-        version = struct.unpack_from(">H", head, 6)[0] if len(head) > 8 else 0
-        return FsInfo("luks", f"version {version}")
-    if head[:4] == b"\x00\x00\x00\x00" and head[4:8] == b"\x00\x00\x00\x00":
+    if n >= 8 and head[:4] == b"LUKS":
+        return FsInfo("luks", f"version {struct.unpack_from('>H', head, 6)[0]}")
+    if n >= 8 and head[:8] == b"\x00" * 8:
         return FsInfo("unknown", "first sectors are zero-filled")
     return FsInfo("unknown", head[:8].hex())
 
 
 def _sniff_ext(head: bytes) -> FsInfo:
-    b = EXT_SB
-    s_inodes = struct.unpack_from("<I", head, b + 0x00)[0]
-    s_blocks = struct.unpack_from("<I", head, b + 0x04)[0]
-    log_bs = struct.unpack_from("<I", head, b + 0x18)[0]
-    feature_compat = struct.unpack_from("<I", head, b + 0x5C)[0]
-    feature_incompat = struct.unpack_from("<I", head, b + 0x60)[0]
-    label = head[b + 0x78:b + 0x88].split(b"\x00")[0].decode("utf-8", "replace")
+    """Parse the ext2/3/4 superblock, which starts at byte 1024 of the volume.
+
+    ``head`` is a probe taken from the *start of the volume*, so every
+    superblock field offset is shifted by 1024 — the classic off-by-1024 bug
+    that silently reports every ext4 as ext2.
+    """
+    SB = EXT_SB_OFFSET
+    if len(head) < SB + 0x158:
+        return FsInfo("ext", "superblock truncated")
+    s_inodes = _u32(head, SB + 0x00)
+    s_blocks = _u32(head, SB + 0x04)
+    log_bs = _u32(head, SB + 0x18)
+    feature_compat = _u32(head, SB + 0x5C)
+    feature_incompat = _u32(head, SB + 0x60)
+    label = head[SB + 0x78:SB + 0x88].split(b"\x00")[0].decode("utf-8", "replace")
     block_size = 1024 << log_bs if log_bs < 8 else 4096
     blocks = s_blocks
-    if feature_incompat & 0x80 and len(head) >= b + 0x154:  # 64BIT -> hi word
-        blocks |= struct.unpack_from("<I", head, b + 0x150)[0] << 32
+    if feature_incompat & 0x80:  # 64BIT -> hi word at 0x150
+        blocks |= _u32(head, SB + 0x150) << 32
     total = blocks * block_size
-    # journal present + extents/flex_bg used -> ext4, journal only -> ext3
     if feature_incompat & 0x40 or feature_incompat & 0x200:
-        name = "ext4"
+        name = "ext4"          # EXTENTS or FLEX_BG
     elif feature_compat & 0x04:
-        name = "ext3"
+        name = "ext3"          # has_journal
     else:
         name = "ext2"
     detail = f"label={label or '-'} inodes={s_inodes} block={block_size}"
@@ -548,8 +545,9 @@ def _sniff_ext(head: bytes) -> FsInfo:
 def scan_filesystems(path: str, table: Optional[PartitionTable] = None) -> PartitionTable:
     """Attach magic-based filesystem names to every partition of ``table``.
 
-    Also tries the whole image at offset 0 — a raw dump of a single filesystem
-    (typical for SPI flash dumps) has no partition table at all.
+    Also probes the whole image at offset 0 — a raw dump of a single filesystem
+    (typical for SPI flash dumps) has no partition table at all, and saying so
+    explicitly is more useful than reporting "unknown".
     """
     if table is None:
         table = parse_partition_table(path)
