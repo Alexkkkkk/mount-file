@@ -9,6 +9,17 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 A file manager for raw disk images (NAND/eMMC/disk dumps). Browse, extract and (on FAT32) modify files inside an image without flashing it back to the device.
 
+## Download / Скачивание
+
+Готовые сборки доступны на странице релизов: **[Download v1.0.0](https://github.com/Alexkkkkk/mount-file/releases/latest)**
+
+| Файл | Платформа |
+|---|---|
+| [`MountFile.exe`](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile.exe) | Windows 10/11 x64 — автономный exe, Python не нужен |
+| [`MountFile-linux-x86-64`](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile-linux-x86-64) | Linux x86-64 — автономный бинарник |
+
+Сборку под Windows 7 (Python 3.8 + PyQt5) соберите сами по инструкции ниже.
+
 ## Возможности / Features
 
 - 🔍 **Разметка**: автодетекция MBR и GPT, выбор раздела из списка.
