@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Read-only hex viewer widget for PyQt6."""
+"""Read-only hex viewer widget (Qt5 / Qt6 via qt_compat)."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PyQt6.QtWidgets import QAbstractScrollArea, QApplication, QWidget
+from .qt_compat import (
+    QAbstractScrollArea, QColor, QFont, QFontMetrics, MOUSE_LEFT, QPainter,
+    QPen, Qt, FONT_TYPEWRITER, Key_Down, Key_Up, Key_Left, Key_Right,
+    Key_PageDown, Key_PageUp, event_pos,
+)
 
 
 class HexView(QAbstractScrollArea):
@@ -18,14 +20,14 @@ class HexView(QAbstractScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
         font = QFont("Courier New", 10)
-        font.setStyleHint(QFont.StyleHint.TypeWriter)
+        font.setStyleHint(FONT_TYPEWRITER)
         self.setFont(font)
         fm = QFontMetrics(font)
         self._char_w = max(fm.horizontalAdvance("0"), 1)
         self._line_h = fm.height() + 4
 
         self._data = b""
-        self._base = 0  # address shown for the first byte
+        self._base = 0
 
         self._c_addr = QColor("#888888")
         self._c_hex = QColor("#222222")
@@ -35,10 +37,10 @@ class HexView(QAbstractScrollArea):
         self._sel_start = -1
         self._sel_end = -1
 
-        self.setMinimumSize(self._row_width_px() + 40, self._line_h * 8 + 24)
+        self.setMinimumSize(self._row_width_px() + 40,
+                            self._line_h * 8 + 24)
         self._update_scroll()
 
-    # ------------------------------------------------------------ API
     def setData(self, data: bytes, base: int = 0):
         self._data = bytes(data)
         self._base = base
@@ -51,8 +53,8 @@ class HexView(QAbstractScrollArea):
 
     def _row_width_px(self):
         c = self._char_w
-        hex_part = self.BYTES_PER_ROW * 3 * c
-        return 10 * c + 12 + hex_part + 12 + self.BYTES_PER_ROW * c
+        return 10 * c + 12 + self.BYTES_PER_ROW * 3 * c + 12 \
+            + self.BYTES_PER_ROW * c
 
     def _total_rows(self):
         if not self._data:
@@ -69,7 +71,6 @@ class HexView(QAbstractScrollArea):
         self._update_scroll()
         super().resizeEvent(e)
 
-    # ---------------------------------------------------------- painting
     def paintEvent(self, e):
         painter = QPainter(self.viewport())
         painter.setFont(self.font())
@@ -103,23 +104,18 @@ class HexView(QAbstractScrollArea):
                 abs_off = row_off + i
                 if self._sel_start <= abs_off < self._sel_end:
                     painter.fillRect(x_hex + i * 3 * c, y - self._line_h + 6,
-                                     2 * c + 2, self._line_h - 2,
-                                     self._c_sel)
+                                     2 * c + 2, self._line_h - 2, self._c_sel)
                 painter.drawText(x_hex + i * 3 * c, y, "%02X" % b)
 
             painter.setPen(self._c_ascii)
-            ascii_chars = "".join(chr(b) if 32 <= b < 127 else "."
-                                  for b in row)
-            painter.drawText(x_ascii, y, ascii_chars)
+            painter.drawText(x_ascii, y, "".join(
+                chr(b) if 32 <= b < 127 else "." for b in row))
 
         painter.setPen(QPen(QColor("#dddddd")))
-        painter.drawLine(x_hex - 8, 0, x_hex - 8,
-                         self.viewport().height())
-        painter.drawLine(x_ascii - 8, 0, x_ascii - 8,
-                         self.viewport().height())
+        painter.drawLine(x_hex - 8, 0, x_hex - 8, self.viewport().height())
+        painter.drawLine(x_ascii - 8, 0, x_ascii - 8, self.viewport().height())
         painter.end()
 
-    # -------------------------------------------------------- selection
     def _pos_from_point(self, pos):
         c = self._char_w
         top = self.verticalScrollBar().value()
@@ -128,7 +124,6 @@ class HexView(QAbstractScrollArea):
         row = top + y // self._line_h
         x_hex = 4 + 10 * c + 12
         x_ascii = x_hex + self.BYTES_PER_ROW * 3 * c + 12
-        col = 0
         if x >= x_ascii:
             col = min(self.BYTES_PER_ROW - 1, (x - x_ascii) // c)
         elif x >= x_hex:
@@ -139,7 +134,7 @@ class HexView(QAbstractScrollArea):
         return off if off < len(self._data) else None
 
     def mousePressEvent(self, e):
-        off = self._pos_from_point(e.position())
+        off = self._pos_from_point(event_pos(e))
         if off is not None:
             self._sel_start = off
             self._sel_end = off + 1
@@ -147,9 +142,8 @@ class HexView(QAbstractScrollArea):
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.MouseButton.LeftButton \
-                and self._sel_start >= 0:
-            off = self._pos_from_point(e.position())
+        if e.buttons() & MOUSE_LEFT and self._sel_start >= 0:
+            off = self._pos_from_point(event_pos(e))
             if off is not None:
                 self._sel_end = off + 1
                 self.viewport().update()
@@ -159,19 +153,19 @@ class HexView(QAbstractScrollArea):
         step = self.BYTES_PER_ROW
         cur = self._sel_start if self._sel_start >= 0 else 0
         key = e.key()
-        if key == Qt.Key.Key_Down:
+        if key == Key_Down:
             cur = min(len(self._data) - 1, cur + step)
-        elif key == Qt.Key.Key_Up:
+        elif key == Key_Up:
             cur = max(0, cur - step)
-        elif key == Qt.Key.Key_Right:
+        elif key == Key_Right:
             cur = min(len(self._data) - 1, cur + 1)
-        elif key == Qt.Key.Key_Left:
+        elif key == Key_Left:
             cur = max(0, cur - 1)
-        elif key == Qt.Key.Key_PageDown:
+        elif key == Key_PageDown:
             cur = min(len(self._data) - 1,
                       cur + step * max(1, self.viewport().height()
                                        // self._line_h - 1))
-        elif key == Qt.Key.Key_PageUp:
+        elif key == Key_PageUp:
             cur = max(0, cur - step * max(1, self.viewport().height()
                                           // self._line_h - 1))
         else:

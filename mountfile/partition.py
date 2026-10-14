@@ -131,15 +131,3 @@ def list_partitions(path):
             if gpt:
                 return gpt
         return mbr
-
-
-def describe_partitions(path):
-    """Human-readable summary used by the GUI."""
-    parts = list_partitions(path)
-    lines = []
-    for p in parts:
-        lines.append(
-            "%d  %-24s LBA %-10d  %8.1f MB  %s%s" % (
-                p.index, p.name[:24], p.start_lba, p.size_mb, p.type_name,
-                "  [boot]" if p.bootable else ""))
-    return lines

@@ -20,13 +20,33 @@ A file manager for raw disk images (NAND/eMMC/disk dumps). Browse, extract and (
   - создание каталогов (`mkdir`),
   - корректная аллокация/освобождение кластеров (проверено тестами на утечки).
 - 🧮 **HEX-просмотр** первого мегабайта выбранного файла, выделение мышью.
+- 🪟 **Windows 7** поддерживается через слой совместимости (PyQt5).
+
+## Windows 7
+
+На Windows 7 работает та же кодовая база через слой совместимости (`mountfile/qt_compat.py`):
+PyQt6 на Win7 не поддерживается, поэтому используется **PyQt5 (Qt 5.15 LTS — последний Qt для Win7)**
+и **Python 3.8.10** (последняя версия Python для Win7).
+
+```bat
+:: установка
+py -3.8 -m pip install -r requirements-win7.txt
+
+:: запуск
+py -3.8 main.py dump.img
+
+:: сборка exe (dist\MountFile.exe, работает без установленного Python)
+build_exe.bat
+```
+
+На Windows 10/11 и Linux/macOS используйте `requirements.txt` (PyQt6) — код тот же.
 
 ## Установка / Installation
 
 ```bash
 git clone https://github.com/Alexkkkkk/mount-file.git
 cd mount-file
-pip install -r requirements.txt
+pip install -r requirements.txt        # Win10+/Linux/macOS (PyQt6)
 ```
 
 > `pytsk3` предоставляет готовые wheel для Windows/Linux/macOS. Если на вашей платформе wheel нет — соберите libtsk из исходников.
@@ -49,12 +69,13 @@ python main.py dump.img        # сразу открыть образ
 
 ```
 mount-file/
-├── main.py               # точка входа (PyQt6)
+├── main.py               # точка входа (PyQt6 → PyQt5 fallback)
 ├── mountfile/
+│   ├── qt_compat.py      # слой совместимости Qt5/Qt6
 │   ├── partition.py      # парсер MBR/GPT
 │   ├── fat32.py          # собственный драйвер FAT32 (чтение + запись)
 │   ├── vfs.py            # read-only доступ к ФС через pytsk3 (TSK)
-│   ├── hexview.py        # HEX-просмотрщик (QPainter)
+│   ├── hexview.py        # HEX-просмотрщик
 │   └── mainwindow.py     # главное окно, дерево образа, ленивая загрузка
 └── tests/
     └── test_fat32.py     # автотесты на синтетических образах
@@ -87,9 +108,8 @@ python tests/test_fat32.py
 ## Ограничения / Limitations (roadmap)
 
 - Запись пока только в **FAT32** (FAT12/16, exFAT, EXT, UBIFS — чтение через TSK; запись — в планах).
-- Запись файла, для которого не хватает кластеров в текущей цепочке, выполняется через реаллокацию (старая цепочка освобождается) — без дефрагментации «на месте».
 - eMMC-специфика (OOB/ECC-области NAND-дампов) не обрабатывается — подавайте образ user-раздела без OOB.
-- Длинные имена при записи сохраняют регистр через LFN; имена длиннее ~250 символов отклоняются файловой системой.
+- Длинные имена при записи сохраняют регистр через LFN.
 
 ## Лицензия / License
 
@@ -97,4 +117,4 @@ MIT, см. [LICENSE](LICENSE).
 
 ## Отказ от ответственности / Disclaimer
 
-Инструмент предоставляется «как есть». Авторы не несут ответственности за повреждение образов или данных. Всегда держите резервную копию образа, в который пишете.
+Инструмент предоставляется «как есть». Всегда держите резервную копию образа, в который пишете.

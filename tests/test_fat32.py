@@ -54,7 +54,7 @@ def make_fat32_image(path):
         fat = bytearray(SPF * BPS)
         struct.pack_into("<I", fat, 0, 0x0FFFFFF8)
         struct.pack_into("<I", fat, 4, 0xFFFFFFFF)
-        struct.pack_into("<I", fat, 8, 0x0FFFFFFF)  # root = EOC
+        struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
         f.seek(RESERVED * BPS)
         f.write(fat)
 
@@ -107,8 +107,8 @@ class TestFat32:
             assert self.fs.read_file("/file_%03d.dat" % i) == \
                 ("content %d" % i).encode()
         self.fs.write_file("/", "temp.tmp", os.urandom(1000))
-        base, dirlen = self._free(), len(
-            self.fs.cluster_chain(self.fs.root_cluster))
+        base = self._free()
+        dirlen = len(self.fs.cluster_chain(self.fs.root_cluster))
         for _ in range(20):
             self.fs.write_file("/", "temp.tmp", os.urandom(1000))
         assert self._free() == base

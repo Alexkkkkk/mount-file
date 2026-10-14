@@ -1,18 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Main window of the Mount File utility (PyQt6)."""
+"""Main window of the Mount File utility (Qt5 / Qt6 via qt_compat)."""
 
 from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QAbstractItemModel, QModelIndex, Qt
-from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import (
-    QComboBox, QDockWidget, QFileDialog, QHeaderView, QInputDialog,
-    QLabel, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QSplitter, QTabWidget, QTreeView,
+from .qt_compat import (
+    QAction, QAbstractItemModel, BottomDock, DisplayRole, QComboBox,
+    QDockWidget, QFileDialog, QHeaderView, Horizontal, QInputDialog,
+    QLabel, QMainWindow, MB_No, MB_Yes, QMessageBox, QModelIndex,
+    QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QTreeView, Qt,
+    SC_Open, SingleSelection, Stretch,
 )
 
 from .hexview import HexView
@@ -20,7 +20,6 @@ from .partition import list_partitions
 from .vfs import TskImage, TskError
 
 
-# ============================================================ tree model
 class Node:
     __slots__ = ("name", "path", "is_dir", "size", "parent", "children",
                  "loaded")
@@ -44,15 +43,13 @@ class ImageModel(QAbstractItemModel):
         self.root = Node(os.path.basename(provider.root_name), "/", True)
         self.last_error = None
 
-    # -- structure -----------------------------------------------------
     def index(self, row, column, parent=QModelIndex()):
         if not self.hasIndex(row, column, parent):
             return QModelIndex()
         parent_node = parent.internalPointer() if parent.isValid() \
             else self.root
         if row < len(parent_node.children):
-            return self.createIndex(row, column,
-                                    parent_node.children[row])
+            return self.createIndex(row, column, parent_node.children[row])
         return QModelIndex()
 
     def parent(self, index):
@@ -75,7 +72,6 @@ class ImageModel(QAbstractItemModel):
         node = parent.internalPointer() if parent.isValid() else self.root
         return node.is_dir
 
-    # -- lazy loading ----------------------------------------------------
     def canFetchMore(self, parent=QModelIndex()):
         node = parent.internalPointer() if parent.isValid() else self.root
         return node.is_dir and not node.loaded
@@ -100,22 +96,19 @@ class ImageModel(QAbstractItemModel):
         node.loaded = True
         self.endInsertRows()
 
-    # -- data ------------------------------------------------------------
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+    def data(self, index, role=DisplayRole):
         if not index.isValid():
             return None
         node = index.internalPointer()
-        if role == Qt.ItemDataRole.DisplayRole:
+        if role == DisplayRole:
             if index.column() == 0:
                 return node.name + ("/" if node.is_dir else "")
             if index.column() == 1 and not node.is_dir:
                 return self._fmt_size(node.size)
         return None
 
-    def headerData(self, section, orientation,
-                   role=Qt.ItemDataRole.DisplayRole):
-        if role == Qt.ItemDataRole.DisplayRole \
-                and orientation == Qt.Orientation.Horizontal:
+    def headerData(self, section, orientation, role=DisplayRole):
+        if role == DisplayRole and orientation == Horizontal:
             return ("Name", "Size")[section]
         return None
 
@@ -123,17 +116,14 @@ class ImageModel(QAbstractItemModel):
     def _fmt_size(n):
         for unit in ("B", "KB", "MB", "GB"):
             if n < 1024 or unit == "GB":
-                return "%.1f %s" % (n, unit) if unit != "B" \
-                    else "%d B" % n
+                return "%.1f %s" % (n, unit) if unit != "B" else "%d B" % n
             n /= 1024
         return "%d B" % n
 
-    # -- helpers ----------------------------------------------------------
     def node_for(self, index):
         return index.internalPointer() if index.isValid() else self.root
 
     def reload(self, node):
-        """Drop cached children of `node` so they are re-fetched lazily."""
         if not node.loaded:
             return
         idx = self.index_for(node)
@@ -150,7 +140,6 @@ class ImageModel(QAbstractItemModel):
         return self.createIndex(row, 0, node)
 
 
-# ============================================================ main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -158,20 +147,18 @@ class MainWindow(QMainWindow):
         self.resize(1000, 640)
 
         self.image_path = None
-        self.provider = None       # TskImage (read)
-        self.writer = None         # Fat32 (write) or None
+        self.provider = None
+        self.writer = None
         self.writer_fh = None
         self.model = None
 
         self._build_ui()
         self._set_loaded(False)
 
-    # ------------------------------------------------------------ UI
     def _build_ui(self):
-        # toolbar
         tb = self.addToolBar("Main")
         self.act_open = QAction("Open image…", self)
-        self.act_open.setShortcut(QKeySequence.StandardKey.Open)
+        self.act_open.setShortcut(SC_Open)
         self.act_open.triggered.connect(self.open_image)
         tb.addAction(self.act_open)
 
@@ -192,11 +179,9 @@ class MainWindow(QMainWindow):
         self.btn_mkdir.clicked.connect(self.make_dir)
         tb.addWidget(self.btn_mkdir)
 
-        # central: tree + tabs
         self.tree = QTreeView()
         self.tree.setUniformRowHeights(True)
-        self.tree.setSelectionMode(
-            QTreeView.SelectionMode.SingleSelection)
+        self.tree.setSelectionMode(SingleSelection)
         self.tree.doubleClicked.connect(self.on_double_click)
 
         self.hex_view = HexView()
@@ -213,12 +198,11 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         self.setCentralWidget(splitter)
 
-        # log dock
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         dock = QDockWidget("Log", self)
         dock.setWidget(self.log)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+        self.addDockWidget(BottomDock, dock)
 
         self.statusBar().showMessage("Open a disk image to start")
 
@@ -234,7 +218,6 @@ class MainWindow(QMainWindow):
             self.btn_import.setEnabled(False)
             self.btn_mkdir.setEnabled(False)
 
-    # ------------------------------------------------------------ open
     def open_image(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open disk image", "",
@@ -279,12 +262,9 @@ class MainWindow(QMainWindow):
             return
         self.model = ImageModel(self.provider)
         self.tree.setModel(self.model)
-        self.tree.selectionModel().currentChanged.connect(
-            self.on_selection)
-        self.tree.header().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
+        self.tree.selectionModel().currentChanged.connect(self.on_selection)
+        self.tree.header().setSectionResizeMode(0, Stretch)
 
-        # try to attach the built-in FAT32 writer
         self._close_writer()
         from .fat32 import Fat32, Fat32Error
         try:
@@ -310,7 +290,6 @@ class MainWindow(QMainWindow):
         self.writer_fh = None
         self.writer = None
 
-    # ------------------------------------------------------------ tree
     def on_selection(self, current, previous):
         node = self.model.node_for(current) if self.model else None
         if node is None or node.is_dir:
@@ -336,15 +315,14 @@ class MainWindow(QMainWindow):
         idx = self.tree.currentIndex()
         return self.model.node_for(idx) if self.model else None
 
-    # ------------------------------------------------------------ extract
     def extract_selected(self):
         node = self._current_node()
         if node is None or node.is_dir:
             QMessageBox.information(self, "Extract",
                                     "Select a file in the tree first.")
             return
-        dst, _ = QFileDialog.getSaveFileName(
-            self, "Extract file as…", node.name)
+        dst, _ = QFileDialog.getSaveFileName(self, "Extract file as…",
+                                             node.name)
         if not dst:
             return
         try:
@@ -356,7 +334,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Extract failed", str(e))
 
-    # ------------------------------------------------------------ import
     def import_file(self):
         node = self._current_node()
         if node is None:
@@ -379,8 +356,8 @@ class MainWindow(QMainWindow):
             "  %s\n  -> %s%s\n\n"
             "Make sure you have a backup of the image. Continue?"
             % (src, target_dir, name),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ret != QMessageBox.StandardButton.Yes:
+            MB_Yes | MB_No)
+        if ret != MB_Yes:
             return
         try:
             self.writer.write_file(target_dir, name, data)
@@ -408,10 +385,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "mkdir failed", str(e))
 
     def _refresh_dir(self, path):
-        """Force re-read of the given image directory in the tree."""
         if not self.model:
             return
-        # find the node matching path
+
         def walk(node, parts):
             if not parts:
                 return node
@@ -425,7 +401,6 @@ class MainWindow(QMainWindow):
         if node is not None:
             self.model.reload(node)
 
-    # ------------------------------------------------------------ close
     def closeEvent(self, e):
         self._close_writer()
         super().closeEvent(e)

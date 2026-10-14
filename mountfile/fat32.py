@@ -125,7 +125,8 @@ class Fat32:
     def read_chain(self, start, size=None):
         if start < 2:
             return b""
-        data = b"".join(self.read_cluster(c) for c in self.cluster_chain(start))
+        data = b"".join(self.read_cluster(c)
+                        for c in self.cluster_chain(start))
         return data if size is None else data[:size]
 
     def _alloc_cluster(self):
@@ -185,9 +186,7 @@ class Fat32:
     def _sanitize(name):
         cleaned = []
         for c in name.strip():
-            if c in '\\/*?":<>|':
-                cleaned.append("_")
-            elif ord(c) < 32:
+            if c in '\\/*?":<>|' or ord(c) < 32:
                 cleaned.append("_")
             else:
                 cleaned.append(c)
@@ -201,7 +200,6 @@ class Fat32:
             base, ext = name, ""
         base = base.upper()
         ext = ext.upper()
-        # name fits 8.3 exactly -> use it without a numeric suffix
         if len(base) <= 8 and len(ext) <= 3 and " " not in base + ext:
             candidate = base.ljust(8) + ext.ljust(3)
             enc = candidate.encode("ascii", "replace")
@@ -269,11 +267,11 @@ class Fat32:
         e[11] = attr
         date = ((2026 - 1980) << 9) | (1 << 5) | 1
         t = (12 << 11)
-        struct.pack_into("<H", e, 14, t)     # create time
-        struct.pack_into("<H", e, 16, date)  # create date
-        struct.pack_into("<H", e, 18, date)  # access date
-        struct.pack_into("<H", e, 22, t)     # write time
-        struct.pack_into("<H", e, 24, date)  # write date
+        struct.pack_into("<H", e, 14, t)
+        struct.pack_into("<H", e, 16, date)
+        struct.pack_into("<H", e, 18, date)
+        struct.pack_into("<H", e, 22, t)
+        struct.pack_into("<H", e, 24, date)
         struct.pack_into("<H", e, 20, (first_cluster >> 16) & 0xFFFF)
         struct.pack_into("<H", e, 26, first_cluster & 0xFFFF)
         struct.pack_into("<I", e, 28, size)

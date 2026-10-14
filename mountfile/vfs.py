@@ -32,7 +32,6 @@ class TskImage:
             raise TskError(str(e))
         self.root_name = image_path
 
-    # ------------------------------------------------------------ listing
     def list_dir(self, path="/"):
         out = []
         try:
@@ -57,7 +56,6 @@ class TskImage:
         out.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
         return out
 
-    # ------------------------------------------------------------ reading
     def _open(self, path):
         try:
             return self.fs.open(path)
