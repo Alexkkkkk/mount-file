@@ -210,8 +210,7 @@ def main():
         win = MainWindow()
         win.show()
         if len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
-            win.image_path = sys.argv[1]
-            win.open_image()
+            win.open_image(sys.argv[1])
         sys.exit(exec_app(app))
     except Exception:
         traceback.print_exc()
