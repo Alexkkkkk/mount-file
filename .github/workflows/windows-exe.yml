@@ -1,0 +1,145 @@
+name: Windows EXE
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  build:
+    name: exe (${{ matrix.label }})
+    runs-on: windows-latest
+    continue-on-error: ${{ matrix.legacy }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: win10
+            python: '3.12'
+            qt: PyQt6
+            spec: requirements.txt
+            pyi: 'pyinstaller>=6.2'
+            legacy: false
+          - label: win7
+            python: '3.8'
+            qt: PyQt5
+            spec: requirements-win7.txt
+            pyi: 'pyinstaller>=5.6,<6'
+            legacy: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ matrix.spec }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '${{ matrix.pyi }}'
+          python -m pip install -r '${{ matrix.spec }}'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning title=Optional dependency::requirements install failed, falling back to ${{ matrix.qt }} only"
+            python -m pip install '${{ matrix.qt }}'
+          }
+          python -c "import ${{ matrix.qt }} as m; print('${{ matrix.qt }} OK ->', getattr(m, '__file__', '?'))"
+          python -c "import pytsk3" 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Host 'pytsk3 OK' } else { Write-Host '::warning title=pytsk3 missing::NTFS/EXT browsing will be unavailable in this build' }
+
+      - name: Source smoke test (diagnostics)
+        shell: pwsh
+        run: |
+          $out = '' | python main.py --diag
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "source diagnostics failed (exit $LASTEXITCODE)" }
+
+      - name: Build one-file executable
+        shell: pwsh
+        run: |
+          $flags = @('--noconfirm', '--clean', '--onefile', '--windowed', '--name', 'MountFile')
+          python -c "import pytsk3" 2>$null
+          if ($LASTEXITCODE -eq 0) { $flags += @('--collect-submodules', 'pytsk3') }
+          python -m PyInstaller @flags main.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
+
+      - name: Verify the executable
+        shell: pwsh
+        run: |
+          $exe = 'dist\MountFile.exe'
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $item = Get-Item $exe
+          $mb = [math]::Round($item.Length / 1MB, 1)
+          Write-Host "artifact: $($item.Name)  size: $mb MB"
+          $magic = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe)[0..1])
+          if ($magic -ne 'MZ') { throw "not a Windows PE binary (magic=$magic)" }
+          if ($item.Length -lt 5MB) { throw "executable suspiciously small ($mb MB)" }
+
+      - name: Frozen exe self-check (informational)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Set-Content -Path stdin.txt -Value '' -NoNewline
+          $p = Start-Process -FilePath 'dist\MountFile.exe' -ArgumentList '--diag' -PassThru `
+               -RedirectStandardOutput diag.out -RedirectStandardError diag.err -RedirectStandardInput stdin.txt
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); throw 'frozen exe did not exit within 90s' }
+          Write-Host "frozen exe exit code: $($p.ExitCode)"
+          if (Test-Path diag.out) { Get-Content diag.out }
+          if (Test-Path diag.err) { Get-Content diag.err }
+
+      - name: Finalize artifact name and checksum
+        shell: pwsh
+        run: |
+          $final = 'dist\MountFile-${{ matrix.label }}-x64.exe'
+          Move-Item 'dist\MountFile.exe' $final -Force
+          $hash = (Get-FileHash $final -Algorithm SHA256).Hash
+          Write-Host "sha256: $hash"
+          "sha256  $hash" | Set-Content "$final.sha256"
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mountfile-${{ matrix.label }}-x64
+          path: |
+            dist/MountFile-${{ matrix.label }}-x64.exe
+            dist/MountFile-${{ matrix.label }}-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  release-assets:
+    name: attach EXE to release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mountfile-*
+          merge-multiple: true
+          path: dist
+      - name: Upload EXE files to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          ls -lh dist
+          TAG="$GITHUB_REF_NAME"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          gh release upload "$TAG" dist/*.exe dist/*.sha256 --clobber
