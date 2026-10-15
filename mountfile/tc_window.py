@@ -26,15 +26,16 @@ import time
 
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (
-    QAction, AlignRight, AlignVCenter, QEvent_KeyPress, QFileDialog,
-    HVC_ResizeToContents, QComboBox, QDialog, QDockWidget, QHBoxLayout,
-    QInputDialog, ItemIsEnabled, ItemIsSelectable, Key_Backspace, Key_Enter,
-    Key_Return, Key_Tab, QLabel, QLineEdit, QMainWindow, MB_No, MB_Yes,
-    QMessageBox, NoEditTriggers, QKeySequence, QPlainTextEdit, QPushButton,
-    QSplitter, Stretch, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
-    SC_Open, SelectRows, TableSingleSelection, BottomDock, exec_dialog,
-)
+from .qt_compat import (AlignRight, AlignVCenter, BottomDock,
+                        HVC_ResizeToContents, ItemIsEnabled, ItemIsSelectable,
+                        Key_Backspace, Key_Enter, Key_Return, Key_Tab, MB_No,
+                        MB_Yes, NoEditTriggers, QAction, QComboBox, QDialog,
+                        QDockWidget, QEvent_KeyPress, QFileDialog, QHBoxLayout,
+                        QInputDialog, QKeySequence, QLabel, QLineEdit,
+                        QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+                        QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
+                        QWidget, SC_Open, SelectRows, Stretch,
+                        TableSingleSelection, exec_dialog)
 
 
 def fmt_size(n):
@@ -68,8 +69,10 @@ class ViewerDialog(QDialog):
         self.resize(760, 520)
         lay = QVBoxLayout(self)
         lay.addWidget(
-            QLabel("%s   ·   %s байт   ·   показаны первые %d байт"
-                   % (name, size, len(data)))
+            QLabel(
+                "%s   ·   %s байт   ·   показаны первые %d байт"
+                % (name, size, len(data))
+            )
         )
         hv = HexView()
         hv.setData(data)
@@ -135,8 +138,7 @@ class TcPanel(QWidget):
     def join(self, name):
         if self.mode == "local":
             return os.path.join(self.path, name)
-        return (self.path.rstrip("/") + "/" + name) if self.path != "/" \
-            else "/" + name
+        return (self.path.rstrip("/") + "/" + name) if self.path != "/" else "/" + name
 
     def up_path(self):
         if self.mode == "local":
@@ -161,7 +163,9 @@ class TcPanel(QWidget):
         hint = None
         if self.mode == "img":
             if self.win.provider is None:
-                hint = "образ не открыт — нажмите «Открыть образ…» в панели инструментов"
+                hint = (
+                    "образ не открыт — нажмите «Открыть образ…» в панели инструментов"
+                )
             else:
                 try:
                     self.entries = self.win.provider.list_dir(self.path)
@@ -203,8 +207,9 @@ class TcPanel(QWidget):
         rows = []
         up = self.up_path()
         if up is not None:
-            rows.append({"name": "..", "is_dir": True, "size": None,
-                         "date": "", "up": True})
+            rows.append(
+                {"name": "..", "is_dir": True, "size": None, "date": "", "up": True}
+            )
         rows.extend(self.entries)
 
         self.table.setRowCount(len(rows))
@@ -219,8 +224,11 @@ class TcPanel(QWidget):
                 vals = ("<папка>", "", e.get("date", ""))
             else:
                 stem, dot, ext = name.rpartition(".")
-                vals = (ext if dot and stem else "",
-                        fmt_size(e["size"]), e.get("date", ""))
+                vals = (
+                    ext if dot and stem else "",
+                    fmt_size(e["size"]),
+                    e.get("date", ""),
+                )
             for c, text in enumerate(vals, start=1):
                 x = QTableWidgetItem(text)
                 x.setFlags(ItemIsEnabled | ItemIsSelectable)
@@ -386,7 +394,8 @@ class MainWindow(QMainWindow):
 
     def about(self):
         QMessageBox.information(
-            self, "О программе",
+            self,
+            "О программе",
             "Mount File — файловый менеджер для raw-образов дисков\n"
             "Режим интерфейса: Total Commander (две панели)\n"
             "Python + Qt + The Sleuth Kit, лицензия MIT",
@@ -488,12 +497,14 @@ class MainWindow(QMainWindow):
             self.writer_fh = open(self.image_path, "r+b")
             self.writer = Fat32(self.writer_fh, offset=offset)
             self.fs_label = "FAT32 ofs %d" % offset
-            self.log_msg("Том смонтирован @ offset %d — запись в FAT32 включена"
-                         % offset)
+            self.log_msg(
+                "Том смонтирован @ offset %d — запись в FAT32 включена" % offset
+            )
         except (Fat32Error, OSError) as e:
             self.writer = None
-            self.log_msg("Том смонтирован @ offset %d (только чтение: %s)"
-                         % (offset, e))
+            self.log_msg(
+                "Том смонтирован @ offset %d (только чтение: %s)" % (offset, e)
+            )
 
     def _close_writer(self):
         if self.writer_fh:
@@ -555,8 +566,10 @@ class MainWindow(QMainWindow):
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):
-        self.log_msg("Правка (F4) не поддерживается — образ изменяется "
-                     "только импортом через F5")
+        self.log_msg(
+            "Правка (F4) не поддерживается — образ изменяется "
+            "только импортом через F5"
+        )
 
     def _checked_file(self):
         p = self.active_panel()
@@ -568,7 +581,8 @@ class MainWindow(QMainWindow):
             return None, None
         if entry["is_dir"]:
             QMessageBox.information(
-                self, "Mount File",
+                self,
+                "Mount File",
                 "Каталоги в этом режиме не поддерживаются — выберите файл.",
             )
             return None, None
@@ -589,8 +603,10 @@ class MainWindow(QMainWindow):
             return
         if p.mode == "img":
             self._extract(entry)
-            self.log_msg("Исходный файл в образе не удалён: движок FAT32 "
-                         "не поддерживает удаление")
+            self.log_msg(
+                "Исходный файл в образе не удалён: движок FAT32 "
+                "не поддерживает удаление"
+            )
         else:
             self._import(entry, delete_src=True)
 
@@ -598,8 +614,9 @@ class MainWindow(QMainWindow):
         p = self.active_panel()
         other = self.other_panel()
         if other.mode != "local":
-            QMessageBox.warning(self, "Копировать",
-                                "Правая панель должна быть локальной папкой.")
+            QMessageBox.warning(
+                self, "Копировать", "Правая панель должна быть локальной папкой."
+            )
             return
         dst, _ = QFileDialog.getSaveFileName(
             self, "Копировать в…", os.path.join(other.path, entry["name"])
@@ -614,15 +631,15 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Копирование не удалось", str(e))
             return
         other.refresh()
-        self.log_msg("Извлечено %s (%d байт) -> %s"
-                     % (entry["name"], len(data), dst))
+        self.log_msg("Извлечено %s (%d байт) -> %s" % (entry["name"], len(data), dst))
 
     def _import(self, entry, delete_src):
         p = self.active_panel()
         other = self.other_panel()
         if other.mode != "img" or self.writer is None:
             QMessageBox.warning(
-                self, "Копировать",
+                self,
+                "Копировать",
                 "Левая панель должна показывать FAT32-том образа "
                 "(запись в другие ФС не поддерживается).",
             )
@@ -653,14 +670,14 @@ class MainWindow(QMainWindow):
                 os.remove(src)
             except OSError as e:
                 self.log_msg("Не удалось удалить источник: %s" % e)
-        self.log_msg("Записано в образ %s (%d байт) -> %s%s"
-                     % (entry["name"], len(data), target_dir, entry["name"]))
+        self.log_msg(
+            "Записано в образ %s (%d байт) -> %s%s"
+            % (entry["name"], len(data), target_dir, entry["name"])
+        )
 
     def f7_mkdir(self):
         p = self.active_panel()
-        name, ok = QInputDialog.getText(
-            self, "Новая папка", "Создать в %s:" % p.path
-        )
+        name, ok = QInputDialog.getText(self, "Новая папка", "Создать в %s:" % p.path)
         if not ok or not name.strip():
             return
         name = name.strip()
@@ -687,13 +704,15 @@ class MainWindow(QMainWindow):
             return
         if p.mode == "img":
             QMessageBox.information(
-                self, "Удалить",
+                self,
+                "Удалить",
                 "Удаление из образа не поддерживается движком FAT32 "
                 "(создание, перезапись и mkdir).",
             )
             return
         ret = QMessageBox.warning(
-            self, "Удалить",
+            self,
+            "Удалить",
             "Удалить файл?\n\n  %s" % p.join(entry["name"]),
             MB_Yes | MB_No,
         )

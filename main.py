@@ -71,7 +71,6 @@ def diagnostics():
         traceback.print_exc()
 
     try:
-        from mountfile import tc_window
 
         print("tc_window: OK")
     except Exception as e:
