@@ -22,34 +22,97 @@ from __future__ import annotations
 
 QT6 = True
 try:  # pragma: no cover - depends on environment
-    from PyQt6.QtCore import (QAbstractItemModel, QEvent, QModelIndex, QSize,
-                              Qt, QThread, pyqtSignal)
-    from PyQt6.QtGui import (QAction, QColor, QFont, QFontMetrics,
-                             QKeySequence, QPainter, QPen)
-    from PyQt6.QtWidgets import (QAbstractItemView, QAbstractScrollArea,
-                                 QApplication, QComboBox, QDialog, QDockWidget,
-                                 QFileDialog, QHBoxLayout, QHeaderView,
-                                 QInputDialog, QLabel, QLineEdit, QMainWindow,
-                                 QMenu, QMessageBox, QPlainTextEdit,
-                                 QPushButton, QSplitter, QTableWidget,
-                                 QTableWidgetItem, QTabWidget, QTreeView,
-                                 QVBoxLayout, QWidget)
+    from PyQt6.QtCore import (
+        QAbstractItemModel,
+        QEvent,
+        QModelIndex,
+        QSize,
+        Qt,
+        QThread,
+        pyqtSignal,
+    )
+    from PyQt6.QtGui import (
+        QAction,
+        QColor,
+        QFont,
+        QFontMetrics,
+        QKeySequence,
+        QPainter,
+        QPen,
+    )
+    from PyQt6.QtWidgets import (
+        QAbstractItemView,
+        QAbstractScrollArea,
+        QApplication,
+        QComboBox,
+        QDialog,
+        QDockWidget,
+        QFileDialog,
+        QHBoxLayout,
+        QHeaderView,
+        QInputDialog,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QMenu,
+        QMessageBox,
+        QPlainTextEdit,
+        QPushButton,
+        QSplitter,
+        QTableWidget,
+        QTableWidgetItem,
+        QTabWidget,
+        QTreeView,
+        QVBoxLayout,
+        QWidget,
+    )
 except ImportError as _pyqt6_error:  # pragma: no cover
     QT6 = False
     try:
-        from PyQt5.QtCore import (QAbstractItemModel, QEvent, QModelIndex,
-                                  QSize, Qt, QThread, pyqtSignal)
-        from PyQt5.QtGui import (QColor, QFont, QFontMetrics, QKeySequence,
-                                 QPainter, QPen)
-        from PyQt5.QtWidgets import (QAbstractItemView, QAbstractScrollArea,
-                                     QAction, QApplication, QComboBox, QDialog,
-                                     QDockWidget, QFileDialog, QHBoxLayout,
-                                     QHeaderView, QInputDialog, QLabel,
-                                     QLineEdit, QMainWindow, QMenu,
-                                     QMessageBox, QPlainTextEdit, QPushButton,
-                                     QSplitter, QTableWidget, QTableWidgetItem,
-                                     QTabWidget, QTreeView, QVBoxLayout,
-                                     QWidget)
+        from PyQt5.QtCore import (
+            QAbstractItemModel,
+            QEvent,
+            QModelIndex,
+            QSize,
+            Qt,
+            QThread,
+            pyqtSignal,
+        )
+        from PyQt5.QtGui import (
+            QColor,
+            QFont,
+            QFontMetrics,
+            QKeySequence,
+            QPainter,
+            QPen,
+        )
+        from PyQt5.QtWidgets import (
+            QAbstractItemView,
+            QAbstractScrollArea,
+            QAction,
+            QApplication,
+            QComboBox,
+            QDialog,
+            QDockWidget,
+            QFileDialog,
+            QHBoxLayout,
+            QHeaderView,
+            QInputDialog,
+            QLabel,
+            QLineEdit,
+            QMainWindow,
+            QMenu,
+            QMessageBox,
+            QPlainTextEdit,
+            QPushButton,
+            QSplitter,
+            QTableWidget,
+            QTableWidgetItem,
+            QTabWidget,
+            QTreeView,
+            QVBoxLayout,
+            QWidget,
+        )
     except ImportError as _pyqt5_error:
         raise ImportError(
             "no usable Qt bindings: PyQt6 -> %s; PyQt5 -> %s"

@@ -59,15 +59,19 @@ except Exception:  # pragma: no cover - проверки/тесты работа
         """Заглушка сигнала: позволяет импортировать модуль без PyQt."""
 
         def __init__(self, *args, **kwargs):
-            pass
+            # Сохраняем подключённые слоты и вызываем их при emit(),
+            # чтобы фоновые классы работали по-настоящему и без Qt
+            # (так делают тесты CI, где PyQt не установлен).
+            self._slots = []
 
-        def connect(self, *args, **kwargs):
-            pass
+        def connect(self, slot):
+            self._slots.append(slot)
 
         def emit(self, *args, **kwargs):
-            pass
+            for slot in list(self._slots):
+                slot(*args, **kwargs)
 
-    def pyqtSignal(*args, **kwargs):
+    def pyqtSignal(*args, **kwargs):  # noqa: N802 - имя как в PyQt
         return _NoQtSignal()
 
     QThread = object
