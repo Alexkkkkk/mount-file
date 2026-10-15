@@ -31,6 +31,10 @@ from .vfs import TskError, TskImage
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
+#: Subcommand names; main.py routes to this module when the executable is
+#: called with one of them (works in the packaged binary too).
+COMMANDS = ("volumes", "info", "ls", "get", "put", "mkdir", "mv", "rm")
+
 _READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError)
 
 
@@ -230,10 +234,12 @@ def cmd_rm(args):
     offset, _, _ = _select(args.image, args)
     fh, fs = _open_write(args.image, offset, backup=args.backup)
     try:
-        entry = fs.delete(_abs_path(args.path))
-        print("Deleted %s (%s, %d bytes)"
+        entry = fs.delete(_abs_path(args.path), recursive=args.recursive)
+        print("Deleted %s (%s, %d bytes)%s"
               % (_abs_path(args.path), "dir" if entry.is_dir else "file",
-                 entry.size))
+                 entry.size,
+                 " with its contents" if args.recursive and entry.is_dir
+                 else ""))
     finally:
         fh.close()
     return OK
@@ -298,9 +304,11 @@ def build_parser():
     sp.add_argument("new_name", help="new name inside the same directory")
     sp.set_defaults(func=cmd_mv)
 
-    sp = sub.add_parser("rm", help="delete a file or empty directory (FAT32)")
+    sp = sub.add_parser("rm", help="delete a file or directory (FAT32)")
     _add_target(sp)
     sp.add_argument("path")
+    sp.add_argument("-r", "--recursive", action="store_true",
+                    help="delete a non-empty directory with its contents")
     sp.add_argument("--yes", action="store_true", help="confirm the delete")
     sp.set_defaults(func=cmd_rm)
     return p

@@ -387,21 +387,33 @@ class Fat32:
         chain, data = self._dir_stream(entry.cluster)
         return not self._parse_dir_data(data, 0)
 
-    def delete(self, path):
-        """Delete a file, or a directory that is already empty.
+    def delete(self, path, recursive=False):
+        """Delete a file, or a directory (recursively with `recursive=True`).
 
-        Returns the removed :class:`DirEntry`. The cluster chain is released
-        before the entry is tombstoned, so a failure leaves the image with the
-        file still reachable instead of leaking its data clusters.
+        Returns the removed :class:`DirEntry`. Cluster chains are released
+        before the entries are tombstoned, so a failure leaves the image with
+        the data still reachable instead of leaking clusters.
         """
         parent, entry = self.entry(path)
-        if entry.is_dir and not self.dir_is_empty(entry):
-            raise Fat32Error("directory is not empty: %s" % path)
+        if entry.is_dir:
+            if not recursive and not self.dir_is_empty(entry):
+                raise Fat32Error("directory is not empty: %s" % path)
+            if recursive:
+                self._delete_tree(entry)
         if entry.cluster >= 2:
             self._free_chain(entry.cluster)
         self._delete_entry(parent, entry.entry_offset)
         self.f.flush()
         return entry
+
+    def _delete_tree(self, directory):
+        """Remove the contents of `directory` (its own entry stays)."""
+        for child in self.list_dir(directory.cluster):
+            if child.is_dir:
+                self._delete_tree(child)
+            if child.cluster >= 2:
+                self._free_chain(child.cluster)
+            self._delete_entry(directory.cluster, child.entry_offset)
 
     def rename(self, path, new_name):
         """Rename a file or directory in place (LFN entries are rebuilt)."""

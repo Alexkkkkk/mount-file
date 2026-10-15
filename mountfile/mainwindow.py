@@ -9,9 +9,9 @@ import os
 
 from .qt_compat import (
     QAction, QAbstractItemModel, BottomDock, DisplayRole, QComboBox,
-    QDockWidget, QFileDialog, QHeaderView, Horizontal, QInputDialog,
+    QDockWidget, QFileDialog, Horizontal, QInputDialog,
     QLabel, QMainWindow, MB_No, MB_Yes, QMessageBox, QModelIndex,
-    QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QTreeView, Qt,
+    QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QTreeView,
     SC_Open, SingleSelection, Stretch,
 )
 
@@ -297,6 +297,9 @@ class MainWindow(QMainWindow):
         if offset is None:
             offset = 0
         self._unmount()
+        # Nothing is writable until a volume is actually mounted and its FAT32
+        # header parsed - a failed mount must not leave live buttons behind.
+        self._set_write_enabled(False)
         try:
             self.provider = TskImage(self.image_path, offset=offset)
             self.backend = "The Sleuth Kit"
@@ -494,7 +497,7 @@ class MainWindow(QMainWindow):
             return
         parent = os.path.dirname(node.path) or "/"
         what = "folder" if node.is_dir else "file"
-        extra = "\n(only empty folders can be deleted)" if node.is_dir else ""
+        extra = "\n(and everything inside it)" if node.is_dir else ""
         ret = QMessageBox.warning(
             self, "Confirm delete",
             "Delete this %s from the image?\n\n  %s%s\n\n"
@@ -504,7 +507,7 @@ class MainWindow(QMainWindow):
         if ret != MB_Yes:
             return
         try:
-            self.writer.delete(node.path)
+            self.writer.delete(node.path, recursive=node.is_dir)
             self.log_msg("Deleted %s" % node.path)
             self._refresh_dir(parent)
         except Exception as e:

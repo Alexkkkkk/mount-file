@@ -59,6 +59,34 @@ class TestDelete:
             return
         raise AssertionError("expected Fat32Error")
 
+    def test_recursive_delete_removes_whole_tree(self):
+        self.fs.mkdir("/", "A")
+        self.fs.mkdir("/A", "B")
+        self.fs.write_file("/A", "f1.bin", os.urandom(3000))
+        self.fs.write_file("/A/B", "f2.bin", os.urandom(2000))
+        free = self._free()
+        try:
+            self.fs.delete("/A")                 # non-empty, not recursive
+        except Fat32Error as e:
+            assert "not empty" in str(e)
+        else:
+            raise AssertionError("expected Fat32Error for a non-empty dir")
+
+        entry = self.fs.delete("/A", recursive=True)
+        assert entry.is_dir is True
+        assert self.fs.list_dir() == []
+        # A + B + ceil(3000/512) + ceil(2000/512) clusters all came back.
+        expected = 2 + math.ceil(3000 / 512) + math.ceil(2000 / 512)
+        assert self._free() - free == expected
+
+    def test_recursive_delete_keeps_name_reusable(self):
+        self.fs.mkdir("/", "DIR")
+        self.fs.write_file("/DIR", "inner.bin", os.urandom(1500))
+        self.fs.delete("/DIR", recursive=True)
+        self.fs.mkdir("/", "DIR")               # the name is free again
+        self.fs.write_file("/DIR", "other.bin", b"ok")
+        assert self.fs.read_file("/DIR/other.bin") == b"ok"
+
     def test_delete_empty_dir_but_not_full_dir(self):
         self.fs.mkdir("/", "SUB")
         self.fs.write_file("/SUB", "inner.txt", b"x" * 10)

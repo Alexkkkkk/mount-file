@@ -10,14 +10,21 @@ import uuid
 
 SECTOR_SIZE = 512
 
+# Extended partition types (MBR); their contents are chained through EBRs.
+_EXTENDED_TYPES = (0x05, 0x0F, 0x85)
+_MAX_LOGICAL = 128
+
 _TYPE_NAMES = {
     0x01: "FAT12",
     0x04: "FAT16",
+    0x05: "Extended (MBR)",
     0x06: "FAT16",
     0x07: "NTFS / exFAT",
     0x0B: "FAT32",
     0x0C: "FAT32 (LBA)",
     0x0E: "FAT16 (LBA)",
+    0x0F: "Extended (LBA)",
+    0x85: "Linux extended",
     0x83: "Linux",
     0x8E: "Linux LVM",
     0xEE: "GPT protective",
@@ -78,20 +85,57 @@ class Partition:
             self.name, self.start_lba, self.sectors, self.type_name)
 
 
+def _parse_ebr_chain(f, ebr_lba, start_index=0):
+    """Walk the EBR chain of an extended partition (logical volumes).
+
+    Each EBR repeats in its first slot the logical volume it describes and
+    keeps the pointer to the next EBR in the second slot. A broken sector
+    (missing 0x55AA), a zero pointer or a loop simply ends the walk.
+    """
+    parts = []
+    seen = set()
+    while ebr_lba and ebr_lba not in seen and len(parts) < _MAX_LOGICAL:
+        seen.add(ebr_lba)
+        f.seek(ebr_lba * SECTOR_SIZE)
+        sector = f.read(SECTOR_SIZE)
+        if len(sector) < SECTOR_SIZE or sector[510:512] != b"\x55\xaa":
+            break
+        e0 = sector[446:462]
+        ptype0 = e0[4]
+        rel0, size0 = struct.unpack_from("<II", e0, 8)
+        if ptype0 and size0 and ptype0 not in _EXTENDED_TYPES:
+            idx = start_index + len(parts) + 1
+            parts.append(Partition(idx, "Logical %d" % idx,
+                                   ebr_lba + rel0, size0, ptype0,
+                                   bool(e0[0] & 0x80)))
+        e1 = sector[462:478]
+        ptype1 = e1[4]
+        rel1 = struct.unpack_from("<I", e1, 8)[0]
+        ebr_lba = (ebr_lba + rel1) if (ptype1 in _EXTENDED_TYPES and rel1) \
+            else 0
+    return parts
+
+
 def _parse_mbr(f):
     f.seek(0)
     mbr = f.read(SECTOR_SIZE)
     if len(mbr) < SECTOR_SIZE or mbr[510:512] != b"\x55\xaa":
         return []
     parts = []
+    extended_lba = 0
     for i in range(4):
         e = mbr[446 + 16 * i: 446 + 16 * (i + 1)]
         ptype = e[4]
         start, size = struct.unpack_from("<II", e, 8)
         if ptype == 0 or size == 0:
             continue
+        if ptype in _EXTENDED_TYPES and not extended_lba:
+            extended_lba = start
         parts.append(Partition(i + 1, "Partition %d" % (i + 1),
                                start, size, ptype, bool(e[0] & 0x80)))
+    # Logical volumes live inside the extended container and are chained
+    # through EBR sectors, so they are appended after the primary entries.
+    parts.extend(_parse_ebr_chain(f, extended_lba, start_index=len(parts)))
     return parts
 
 
@@ -101,8 +145,12 @@ def _parse_gpt(f):
     if len(hdr) < SECTOR_SIZE or hdr[:8] != b"EFI PART":
         return []
     entry_lba = struct.unpack_from("<Q", hdr, 72)[0]
-    num_entries = struct.unpack_from("<I", hdr, 80)[0]
+    # Clamp what the header claims: a corrupt entry count must not become a
+    # huge read loop, and an out-of-range entry size is not a valid GPT.
+    num_entries = min(struct.unpack_from("<I", hdr, 80)[0], 128)
     entry_size = struct.unpack_from("<I", hdr, 84)[0]
+    if not entry_lba or not 128 <= entry_size <= 4096:
+        return []
     parts = []
     f.seek(entry_lba * SECTOR_SIZE)
     for i in range(num_entries):
@@ -127,7 +175,10 @@ def list_partitions(path):
     with open(path, "rb") as f:
         mbr = _parse_mbr(f)
         if any(p.type == 0xEE for p in mbr):
-            gpt = _parse_gpt(f)
-            if gpt:
-                return gpt
+            # Protective MBR: the disk really is GPT, so report the GPT
+            # entries only. Returning the 0xEE container as a "volume" would
+            # offer the user a whole-disk entry that mounts nothing, and if
+            # the GPT is unreadable an empty list lets the signature scan in
+            # mountfile.firmware find the filesystems on its own.
+            return _parse_gpt(f)
         return mbr

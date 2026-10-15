@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+      - name: Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyQt6 pyinstaller
+          python -m pip install pytsk3 || echo "pytsk3 unavailable - building with the built-in FAT32 engine only"
+      - name: Build
+        run: ./build_exe.sh
+      - name: Smoke test the binary
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./dist/MountFile-linux-x86-64 --diag
+          ./dist/MountFile-linux-x86-64 --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MountFile-linux-x86-64
+          path: dist/MountFile-linux-x86-64
+          if-no-files-found: error
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MountFile-linux-x86-64
+
+  windows:
+    name: windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyQt6 pyinstaller
+          python -m pip install pytsk3
+          if ($LASTEXITCODE -ne 0) { Write-Host "pytsk3 unavailable - building with the built-in FAT32 engine only" }
+      - name: Build
+        run: cmd /c build_exe.bat --no-pause
+      - name: Smoke test the exe
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          dist\MountFile.exe --diag
+          dist\MountFile.exe --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MountFile.exe
+          path: dist/MountFile.exe
+          if-no-files-found: error
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MountFile.exe

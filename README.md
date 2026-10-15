@@ -28,7 +28,7 @@ A file manager for raw disk images (NAND/eMMC/disk dumps). Browse, extract and (
 - ✏️ **Запись в FAT32** (собственный движок, без внешних зависимостей):
   - создание и перезапись файлов (включая файлы больше кластера),
   - длинные имена (LFN) и короткие 8.3,
-  - создание каталогов (`mkdir`), **переименование** (`mv`) и **удаление** файлов/пустых каталогов (`rm`) с корректным освобождением кластеров,
+  - создание каталогов (`mkdir`), **переименование** (`mv`) и **удаление** файлов и каталогов — рекурсивно вместе с содержимым (`rm -r`) — с корректным освобождением кластеров,
   - корректная аллокация/освобождение кластеров (проверено тестами на утечки).
 - 🧮 **HEX-просмотр** первого мегабайта выбранного файла, выделение мышью.
 - ⌨️ **CLI** (`python -m mountfile`) для скриптов и сборки образов без графики.
@@ -73,7 +73,19 @@ python -m mountfile put dump.img hello.txt --dest /docs --yes    # записа�
 python -m mountfile mkdir dump.img /docs/new
 python -m mountfile mv  dump.img /docs/old.txt new.txt
 python -m mountfile rm  dump.img /docs/old.txt --yes
+python -m mountfile rm  dump.img /docs --recursive --yes
 ```
+
+То же самое умеет и собранный бинарник — удобно, когда Python на машине нет:
+
+```bat
+MountFile.exe volumes dump.img
+MountFile.exe ls dump.img /photos
+MountFile.exe get dump.img /boot -o out\
+MountFile.exe --version
+```
+
+Без аргументов (двойной клик) запускается графический интерфейс; с путём к образу — GUI сразу открывает этот образ.
 
 Том выбирается автоматически (первый распознанный), либо явно: `--volume 2` (номер из `volumes`) или `--offset 0x400000`. Ключ `--backup` делает копию `<image>.bak` перед записью. Разрушающие операции (`put`, `rm`) без `--yes` только печатают предупреждение и ничего не меняют.
 
@@ -100,10 +112,13 @@ build_exe.bat
 
 ```bat
 build_exe.bat            :: Windows -> dist\MountFile.exe
+build_exe.bat --no-pause :: то же, без ожидания нажатия клавиши (для CI)
 ```
 ```bash
 ./build_exe.sh           # Linux x86-64 -> dist/MountFile-linux-x86-64
 ```
+
+Если `pytsk3` не установлен, сборка всё равно проходит: бинарник получит встроенный движок FAT32, а скрипт об этом предупредит. Сборка на тег (`v*`) автоматически выполняется в CI (`.github/workflows/release.yml`) — готовые файлы прикрепляются к релизу; те же артефакты можно скачать со страницы запуска workflow.
 
 ## Архитектура / Architecture
 
@@ -146,8 +161,8 @@ python tests/test_fat32_write.py
 ## Ограничения / Limitations (roadmap)
 
 - Запись пока только в **FAT32** (FAT12/16, exFAT, EXT, UBIFS — чтение через TSK; запись — в планах).
-- Удаление каталога возможно только когда он пуст.
 - eMMC-специфика (OOB/ECC-области NAND-дампов) не обрабатывается — подавайте образ user-раздела без OOB.
+- Автономный бинарник под Linux требует системных библиотек Qt: `sudo apt install libgl1 libxkbcommon-x11-0 libdbus-1-3`.
 
 ## Лицензия / License
 

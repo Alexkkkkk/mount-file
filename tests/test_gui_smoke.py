@@ -26,14 +26,15 @@ from mountfile.mainwindow import ImageModel, MainWindow  # noqa: E402
 
 
 TREE = {
-    "/": [("boot", True), ("README.TXT", False), ("data.bin", False)],
+    "/": [("boot", True), ("empty", True), ("README.TXT", False),
+          ("data.bin", False)],
     "/boot": [("kernel.img", False)],
-    "/boot/empty": [],
+    "/empty": [],
 }
 
 
 class FakeProvider:
-    """Minimal stand-in for the TSK provider (no sample images required)."""
+    """Minimal stand-in for the TSK/FAT32 provider (no sample images needed)."""
 
     root_name = "fake.img"
 
@@ -65,18 +66,20 @@ def test_model_lazy_load(app):
     assert model.canFetchMore(QModelIndex())
     model.fetchMore(QModelIndex())
 
-    assert model.rowCount() == 3
+    assert model.rowCount() == 4
     # Top-level rows must not be nested under a phantom parent item.
     top = model.index(0, 0)
     assert top.isValid()
     assert not model.parent(top).isValid()
     assert model.data(top) == "boot/"
-    assert model.data(model.index(1, 0)) == "README.TXT"
-    assert model.data(model.index(1, 1)) == "42 B"
+    assert model.data(model.index(1, 0)) == "empty/"
+    assert model.data(model.index(2, 0)) == "README.TXT"
+    assert model.data(model.index(2, 1)) == "42 B"
+    assert model.data(model.index(1, 1)) is None          # dirs have no size
 
     # Directories report children, files do not.
     assert model.hasChildren(top)
-    assert not model.hasChildren(model.index(1, 0))
+    assert not model.hasChildren(model.index(2, 0))
 
     # Children of "boot" are loaded on demand and have a valid parent.
     model.fetchMore(top)
@@ -85,17 +88,38 @@ def test_model_lazy_load(app):
     assert model.parent(child) == top
 
 
-def test_model_empty_dir_and_reload(app):
+def test_model_empty_dir_is_marked_loaded(app):
     model = ImageModel(FakeProvider())
     model.fetchMore(QModelIndex())
-    boot = model.index(0, 0)
-    model.fetchMore(model.index(2, 0))          # empty directory
+    empty = model.index(1, 0)
 
-    model.reload(boot)                          # must not raise
+    assert model.data(empty) == "empty/"
+    assert model.canFetchMore(empty)
+    model.fetchMore(empty)                     # legitimate empty directory
+    assert model.rowCount(empty) == 0
+    assert not model.canFetchMore(empty)       # loaded, just empty
+
+
+def test_model_reload_refetches(app):
+    model = ImageModel(FakeProvider())
+    model.fetchMore(QModelIndex())
+
+    boot = model.index(0, 0)
+    model.fetchMore(boot)
+    assert model.rowCount(boot) == 1
+    model.reload(model.node_for(boot))          # must not raise
     assert model.rowCount(boot) == 0
     assert model.canFetchMore(boot)
     model.fetchMore(boot)
     assert model.rowCount(boot) == 1
+
+    # Reloading the top level (an empty result right after) is a no-op, not a
+    # beginRemoveRows(0, -1).
+    model.reload(model.root)
+    assert model.rowCount() == 0
+    assert model.canFetchMore(QModelIndex())
+    model.fetchMore(QModelIndex())
+    assert model.rowCount() == 4
 
 
 def test_mainwindow_builds(app):
@@ -116,9 +140,18 @@ def test_mainwindow_refresh_dir(app):
         win.model = ImageModel(FakeProvider())
         win.provider = win.model.provider
         win.model.fetchMore(QModelIndex())
+
         win._refresh_dir("/")                    # must not raise
         assert win.model.rowCount() == 0
+        assert win.model.canFetchMore(QModelIndex())
+
+        win.model.fetchMore(QModelIndex())
         win._refresh_dir("/boot")
+        assert win.model.rowCount(model_idx(win)) == 4
         win._close_writer()
     finally:
         win.close()
+
+
+def model_idx(win):
+    return QModelIndex()
