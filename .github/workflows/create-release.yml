@@ -1,0 +1,52 @@
+name: create-release
+
+# A tag push turns into a GitHub Release with a generated, categorized
+# changelog. Creating the Release fires the "release: published" event,
+# which is what starts the build pipeline (release.yml).
+# Release notes are built here, so there is exactly ONE version calculator
+# in this repository (version-bump), and no competing draft-release bot.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists - nothing to do."
+            exit 0
+          fi
+          PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
+          echo "commit range: $RANGE"
+          NOTES=notes.md
+          printf '### What changed in %s\n\n' "$TAG" > "$NOTES"
+          add_section() {
+            title="$1"; pat="$2"
+            items=$(git log --no-merges --pretty=format:'- %s (`%h`)' "$RANGE" | grep -E "^- ($pat)" || true)
+            if [ -n "$items" ]; then printf '#### %s\n%s\n\n' "$title" "$items" >> "$NOTES"; fi
+          }
+          add_section "Features" "feat"
+          add_section "Fixes" "fix|perf"
+          add_section "Maintenance" "chore|ci|build|refactor|docs|test|style"
+          add_section "Other" "revert"
+          printf '**Full diff**: https://github.com/%s/compare/%s...%s\n' \
+            "$GITHUB_REPOSITORY" "${PREV:-$TAG}" "$TAG" >> "$NOTES"
+          cat "$NOTES"
+          gh release create "$TAG" --title "$TAG" --verify-tag --notes-file "$NOTES"
+          echo "release $TAG created"

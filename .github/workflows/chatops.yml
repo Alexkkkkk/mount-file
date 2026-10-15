@@ -1,0 +1,77 @@
+name: chatops
+
+# Commands in a pull-request comment:
+#   /release  - compute the next version and push its tag (release pipeline)
+#   /autofix  - run the autofix workflow right now
+# Only the owner, members and collaborators may trigger them.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  parse:
+    if: |
+      github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    outputs:
+      cmd: ${{ steps.p.outputs.cmd }}
+    steps:
+      - id: p
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          for c in release autofix; do
+            if printf '%s' "$BODY" | grep -qE "(^|[[:space:]])/$c([[:space:]]|$)"; then
+              echo "cmd=$c" >> "$GITHUB_OUTPUT"
+              echo "detected /$c"
+              exit 0
+            fi
+          done
+          echo "no known command"
+
+  release:
+    name: /release
+    needs: parse
+    if: needs.parse.outputs.cmd == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag the next version and push it
+        env:
+          TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          LAST=${LAST:-v0.0.0}
+          MAJ=$(echo "$LAST" | sed -E 's/^v([0-9]+).*/\1/')
+          MIN=$(echo "$LAST" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
+          PAT=$(echo "$LAST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+          TAG="v$MAJ.$MIN.$((PAT + 1))"
+          echo "tagging $TAG (previous: $LAST)"
+          git tag -a "$TAG" -m "release $TAG"
+          git push "https://x-access-token:$TOKEN@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
+      - name: React with a rocket
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -X POST -f content=rocket >/dev/null
+
+  autofix:
+    name: /autofix
+    needs: parse
+    if: needs.parse.outputs.cmd == 'autofix'
+    uses: ./.github/workflows/autofix.yml
+    secrets: inherit

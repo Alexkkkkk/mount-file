@@ -7,9 +7,17 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     labels: [dependencies, automation]
+    groups:
+      runtime:
+        patterns: ["PyQt*", "pytsk3"]
+      tooling:
+        patterns: ["pyinstaller", "pytest*", "black", "isort", "ruff"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, ci]
+    groups:
+      actions:
+        patterns: ["*"]
