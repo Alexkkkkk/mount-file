@@ -152,11 +152,20 @@ class ImageModel(QAbstractItemModel):
         return self.createIndex(node.parent.children.index(node), 0, node)
 
     def reload(self, node):
-        """Drop cached children of `node` so they are re-fetched lazily."""
+        """Drop cached children of `node` so they are re-fetched lazily.
+
+        An empty `children` list must NOT reach beginRemoveRows():
+        announcing the removal of row 0 when there is nothing to remove
+        leaves the model inconsistent and makes Qt complain about an
+        invalid index. Reset the flag and bail out instead.
+        """
         if not node.loaded:
             return
+        if not node.children:
+            node.loaded = False
+            return
         parent_idx = self.index_for(node)
-        self.beginRemoveRows(parent_idx, 0, max(0, len(node.children) - 1))
+        self.beginRemoveRows(parent_idx, 0, len(node.children) - 1)
         node.children = []
         node.loaded = False
         self.endRemoveRows()
@@ -252,15 +261,17 @@ class MainWindow(QMainWindow):
         self.cmb_parts.clear()
         self.cmb_parts.addItem("Whole image (offset 0)", 0)
         try:
-            parts = list_partitions(path)
-            for p in parts:
-                self.cmb_parts.addItem(
-                    "%d  %s  %s  %.1f MB @ LBA %d" % (
-                        p.index, p.name, p.type_name, p.size_mb,
-                        p.start_lba),
-                    p.offset)
+            try:
+                from .firmware import detect_volumes
+                vols = detect_volumes(path)
+            except ImportError:
+                vols = []
+                for p in list_partitions(path):
+                    vols.append(_PartitionVolume(p))
+            for v in vols:
+                self.cmb_parts.addItem(v.desc, v.offset)
         except Exception as e:
-            self.log_msg("Partition scan failed: %s" % e)
+            self.log_msg("Volume scan failed: %s" % e)
         self.cmb_parts.blockSignals(False)
         self.cmb_parts.setCurrentIndex(0)
         self._mount_volume(0)
@@ -426,3 +437,12 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         self._close_writer()
         super().closeEvent(e)
+
+
+class _PartitionVolume:
+    """Adapter presenting a Partition as a FoundVolume-like object."""
+
+    def __init__(self, p):
+        self.offset = p.offset
+        self.desc = "%d  %s  %s  %.1f MB @ LBA %d" % (
+            p.index, p.name, p.type_name, p.size_mb, p.start_lba)

@@ -7,19 +7,16 @@ PyQt6/Qt6 requires Windows 10+, so on Windows 7 this project falls back
 to PyQt5 (Qt 5.15 LTS, the last Qt branch supporting Windows 7).
 All GUI code imports Qt names from here and never from PyQt* directly.
 
-Note on module layout: QKeySequence lives in QtGui for BOTH PyQt5 and
-PyQt6 (it is NOT re-exported from QtCore by either binding), while QAction
-lives in QtGui on PyQt6 but in QtWidgets on PyQt5. Both quirks are handled
-below, which is why every import is routed through this module.
+NOTE: QKeySequence lives in QtGui in BOTH Qt5 and Qt6 - importing it
+from QtCore raises ImportError and kills the whole application at
+startup (this was the "won't launch on Windows 10" bug).
 """
 
 from __future__ import annotations
 
 QT6 = True
 try:  # pragma: no cover - depends on environment
-    from PyQt6.QtCore import (
-        QAbstractItemModel, QModelIndex, QSize, Qt,
-    )
+    from PyQt6.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt
     from PyQt6.QtGui import (
         QAction, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen,
     )
@@ -31,9 +28,7 @@ try:  # pragma: no cover - depends on environment
     )
 except ImportError:  # pragma: no cover
     QT6 = False
-    from PyQt5.QtCore import (
-        QAbstractItemModel, QModelIndex, QSize, Qt,
-    )
+    from PyQt5.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt
     from PyQt5.QtGui import (
         QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen,
     )
