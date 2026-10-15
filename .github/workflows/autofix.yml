@@ -24,7 +24,8 @@ permissions:
 jobs:
   autofix:
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.head_commit.message || '', 'autofix') }}
+    if: >-
+      ${{ !startsWith(github.event.head_commit.message || '', 'chore: autofix') }}
     steps:
       - uses: actions/checkout@v4
 

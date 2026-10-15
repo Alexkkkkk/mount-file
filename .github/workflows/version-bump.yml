@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       !startsWith(github.event.head_commit.message, 'chore(release)') &&
-      !contains(github.event.head_commit.message, 'autofix') &&
+      !startsWith(github.event.head_commit.message, 'chore: autofix') &&
       !contains(github.event.head_commit.message, '[skip version]')
     steps:
       - uses: actions/checkout@v4
