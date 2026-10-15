@@ -26,19 +26,50 @@ import time
 
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (AlignRight, AlignVCenter, BottomDock,
-                        HVC_ResizeToContents, ItemIsEnabled, ItemIsSelectable,
-                        Key_Backspace, Key_Enter, Key_Return, Key_Tab, MB_No,
-                        MB_Yes, NoEditTriggers, QAction, QApplication,
-                        QComboBox, QDialog, QDockWidget, QEvent_KeyPress,
-                        QFileDialog, QHBoxLayout,
-                        QInputDialog, QKeySequence, QLabel, QLineEdit,
-                        QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-                        QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
-                        QWidget, SC_Open, SelectRows, Stretch,
-                        TableSingleSelection, exec_dialog)
-from .updater import (StartupUpdater, app_version, auto_install,
-                      disabled as updates_disabled, is_frozen)
+from .qt_compat import (
+    AlignRight,
+    AlignVCenter,
+    BottomDock,
+    HVC_ResizeToContents,
+    ItemIsEnabled,
+    ItemIsSelectable,
+    Key_Backspace,
+    Key_Enter,
+    Key_Return,
+    Key_Tab,
+    MB_No,
+    MB_Yes,
+    NoEditTriggers,
+    QAction,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QDockWidget,
+    QEvent_KeyPress,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QKeySequence,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+    SC_Open,
+    SelectRows,
+    Stretch,
+    TableSingleSelection,
+    exec_dialog,
+)
+from .updater import StartupUpdater, app_version, auto_install
+from .updater import disabled as updates_disabled
+from .updater import is_frozen
 
 
 def fmt_size(n):
@@ -313,9 +344,7 @@ class MainWindow(QMainWindow):
     def _start_updater(self):
         """Проверка обновлений GitHub при КАЖДОМ старте (фоновым потоком)."""
         if updates_disabled():
-            self.log_msg(
-                "Автопроверка обновлений выключена (MOUNTFILE_NO_UPDATE=1)"
-            )
+            self.log_msg("Автопроверка обновлений выключена (MOUNTFILE_NO_UPDATE=1)")
             return
         if self.updater is not None and self.updater.isRunning():
             return
@@ -342,8 +371,7 @@ class MainWindow(QMainWindow):
                     self,
                     "Доступна новая версия",
                     "Версия v%s уже вышла, но сборки для вашей системы "
-                    "в релизе нет.\n\nСтраница релиза:\n%s"
-                    % (version, info["url"]),
+                    "в релизе нет.\n\nСтраница релиза:\n%s" % (version, info["url"]),
                 )
             return
         if not is_frozen():

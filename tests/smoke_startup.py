@@ -22,8 +22,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         # заведомо нерабочий: локальный порт, где никто не слушает
         os.environ["MOUNTFILE_UPDATE_URL"] = "http://127.0.0.1:9/latest.json"
-        from mountfile.tc_window import MainWindow
         from mountfile import updater
+        from mountfile.tc_window import MainWindow
 
         app = QApplication(sys.argv)
         win = MainWindow()
@@ -38,9 +38,9 @@ def main():
         print("--- журнал окна ---")
         print(text)
         assert "Проверка обновлений" in text, "проверка не запустилась"
-        assert ("не удалась" in text) or ("Обновлений нет" in text), (
-            "нет строки о результате проверки"
-        )
+        assert ("не удалась" in text) or (
+            "Обновлений нет" in text
+        ), "нет строки о результате проверки"
         win._close_writer()
         win.close()
 

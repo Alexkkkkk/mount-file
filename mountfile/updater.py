@@ -59,13 +59,17 @@ except Exception:  # pragma: no cover - проверки/тесты работа
         """Заглушка сигнала: позволяет импортировать модуль без PyQt."""
 
         def __init__(self, *args, **kwargs):
-            pass
+            # Сохраняем подключённые слоты и вызываем их при emit(),
+            # чтобы фоновые классы работали по-настоящему и без Qt
+            # (так делают тесты CI, где PyQt не установлен).
+            self._slots = []
 
-        def connect(self, *args, **kwargs):
-            pass
+        def connect(self, slot):
+            self._slots.append(slot)
 
         def emit(self, *args, **kwargs):
-            pass
+            for slot in list(self._slots):
+                slot(*args, **kwargs)
 
     def pyqtSignal(*args, **kwargs):  # noqa: N802 - имя как в PyQt
         return _NoQtSignal()
@@ -161,7 +165,9 @@ def _asset_score(name):
     if sys.platform.startswith("linux"):
         if any(k in low for k in ("win", ".exe")):
             return -1
-        return 80 if any(k in low for k in ("linux", "x86_64", "x86-64", "amd64")) else 20
+        return (
+            80 if any(k in low for k in ("linux", "x86_64", "x86-64", "amd64")) else 20
+        )
     return -1
 
 
@@ -186,8 +192,10 @@ def _request(url, timeout=TIMEOUT):
 
 def fetch_latest(repo_slug=None, timeout=TIMEOUT):
     """JSON последнего релиза (GitHub API или MOUNTFILE_UPDATE_URL)."""
-    url = update_url() if repo_slug is None else (
-        "https://api.github.com/repos/%s/releases/latest" % repo_slug
+    url = (
+        update_url()
+        if repo_slug is None
+        else ("https://api.github.com/repos/%s/releases/latest" % repo_slug)
     )
     with _request(url, timeout) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
@@ -246,7 +254,9 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
     dest = os.path.join(dest_dir, name)
     total = int(asset.get("size") or 0)
     got = 0
-    with _request(asset.get("browser_download_url"), timeout) as resp, open(dest, "wb") as fh:
+    with _request(asset.get("browser_download_url"), timeout) as resp, open(
+        dest, "wb"
+    ) as fh:
         while True:
             chunk = resp.read(CHUNK)
             if not chunk:
@@ -256,7 +266,7 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
             if progress and total:
                 progress(min(99, int(got * 100 / total)))
     if total and got != total:
-        raise IOError("скачано %d из %d байт" % (got, total))
+        raise OSError("скачано %d из %d байт" % (got, total))
     if progress:
         progress(100)
     return dest, got
@@ -439,7 +449,10 @@ class Installer(QThread):
             if not is_frozen():
                 note = None
                 if self.info.get("url"):
-                    for root in (os.path.dirname(os.path.dirname(os.path.abspath(__file__))), os.getcwd()):
+                    for root in (
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        os.getcwd(),
+                    ):
                         try:
                             note = git_upgrade(root)
                         except Exception as exc:
@@ -478,7 +491,9 @@ class StartupUpdater(Updater):
 
     def __init__(self, parent=None, current_version=None, installer_factory=None):
         super().__init__(parent, current_version)
-        self._installer_factory = installer_factory or (lambda info, p: Installer(info, p))
+        self._installer_factory = installer_factory or (
+            lambda info, p: Installer(info, p)
+        )
         self._installer = None
         self.available.connect(self._on_available)
 

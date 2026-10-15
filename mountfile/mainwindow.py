@@ -9,12 +9,31 @@ import os
 
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (BottomDock, DisplayRole, Horizontal, MB_No, MB_Yes,
-                        QAbstractItemModel, QAction, QComboBox, QDockWidget,
-                        QFileDialog, QInputDialog, QLabel, QMainWindow,
-                        QMessageBox, QModelIndex, QPlainTextEdit, QPushButton,
-                        QSplitter, QTabWidget, QTreeView, SC_Open,
-                        SingleSelection, Stretch)
+from .qt_compat import (
+    BottomDock,
+    DisplayRole,
+    Horizontal,
+    MB_No,
+    MB_Yes,
+    QAbstractItemModel,
+    QAction,
+    QComboBox,
+    QDockWidget,
+    QFileDialog,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QModelIndex,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QTreeView,
+    SC_Open,
+    SingleSelection,
+    Stretch,
+)
 from .vfs import TskError, TskImage
 
 
