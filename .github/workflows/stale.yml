@@ -1,0 +1,30 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 45
+          days-before-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: 'pinned,security,good first issue,help wanted'
+          exempt-pr-labels: 'pinned,security,automerge'
+          exempt-all-milestones: true
+          exempt-draft-pr: true
+          operations-per-run: 100
+          stale-issue-message: 'Нет активности 45 дней — помечено как stale. Через 14 дней закроется автоматически.'
+          stale-pr-message: 'Нет активности 45 дней — помечено как stale. Через 14 дней закроется автоматически.'
+          close-issue-message: 'Закрыто автоматически после 60 дней без активности. Открой заново, если проблема актуальна.'
+          close-pr-message: 'Закрыто автоматически после 60 дней без активности. Открой заново, если работа ещё нужна.'
