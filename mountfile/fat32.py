@@ -88,6 +88,7 @@ class Fat32:
         cluster_count = data_sectors // self.spc
         if cluster_count < 65525:
             raise Fat32Error("not FAT32 (cluster count %d)" % cluster_count)
+        self.cluster_count = cluster_count
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):
@@ -129,6 +130,27 @@ class Fat32:
                 break
             n = nxt
         return chain
+
+    @property
+    def total_bytes(self):
+        """Size of the data area (all clusters) in bytes."""
+        return self.cluster_count * self.cluster_size
+
+    def free_space(self, max_fat_bytes=64 << 20):
+        """Free bytes on the volume, or None when the FAT is too big to scan.
+
+        The whole FAT is read in one call and zeroed entries are counted, so
+        this stays fast on the small volumes (firmware dumps, SD cards) the
+        utility is used on and simply gives up on multi-gigabyte FATs.
+        """
+        if self.fat_size > max_fat_bytes:
+            return None
+        data = self._read(self.fat_start, self.fat_size)
+        free = 0
+        for n in range(2, self.fat_size // 4):
+            if struct.unpack_from("<I", data, n * 4)[0] == 0:
+                free += 1
+        return free * self.cluster_size
 
     def read_cluster(self, n):
         return self._read(self.cluster_offset(n), self.cluster_size)

@@ -2,6 +2,9 @@
 """Smoke-тест: окно стартует без сети и с битым URL обновления.
 
 Запуск:  QT_QPA_PLATFORM=offscreen python3 tests/smoke_startup.py
+
+Binding-agnostic: QApplication берётся из mountfile.qt_compat, поэтому тест
+работает и на PyQt6 (Win10+/Linux), и на PyQt5 (Win7).
 """
 
 import os
@@ -17,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 def main():
-    from PyQt5.QtWidgets import QApplication
+    from mountfile.qt_compat import QApplication
 
     with tempfile.TemporaryDirectory() as tmp:
         # заведомо нерабочий: локальный порт, где никто не слушает

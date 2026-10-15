@@ -6,6 +6,19 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- Интерфейс приведён к виду классического Total Commander: меню
+  Файлы/Выделение/Команды/Сеть/Вид/Конфигурация/Запуск/Справка, панель
+  инструментов с иконками, вкладки каталогов, строка диска со свободным
+  местом, строка пути вида `c:\путь\*.*`, колонки
+  Имя / Тип / Размер / Дата / Атрибуты, строка состояния у каждой панели
+  и строка функциональных клавиш (F3 Просмотр … Alt+F4 Выход).
+  Добавлены тёмная и светлая темы, настройки шрифта и журнала
+  (`mountfile/tc_style.py`), отметка файлов Space/Insert и копирование
+  группами, вкладки (Ctrl+T/Ctrl+W), смена панелей (Ctrl+U).
+- Массовые операции: F5/F6/F8 работают с отмеченными файлами, копирование
+  папок целиком (локально и в образ).
+- Новое: `tests/test_tc_ui.py` — тест интерфейса на синтетическом образе
+  (offscreen) плюс рендер скриншотов обеих тем.
 - Fixed the startup crash on PyQt5 builds ("Unhandled exception in
   script" / `ImportError: cannot import name 'QAbstractScrollArea'`):
   the PyQt5 branch of `mountfile/qt_compat.py` exported only a handful
