@@ -17,27 +17,18 @@ from __future__ import annotations
 QT6 = True
 try:  # pragma: no cover - depends on environment
     from PyQt6.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt
-    from PyQt6.QtGui import (
-        QAction, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen,
-    )
-    from PyQt6.QtWidgets import (
-        QAbstractScrollArea, QApplication, QComboBox, QDockWidget,
-        QFileDialog, QHeaderView, QInputDialog, QLabel, QMainWindow,
-        QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
-        QTreeView, QWidget,
-    )
+    from PyQt6.QtGui import (QAction, QColor, QFont, QFontMetrics,
+                             QKeySequence, QPainter, QPen)
+    from PyQt6.QtWidgets import (QAbstractScrollArea, QApplication, QComboBox,
+                                 QDockWidget, QFileDialog, QHeaderView,
+                                 QInputDialog, QLabel, QMainWindow,
+                                 QMessageBox, QPlainTextEdit, QPushButton,
+                                 QSplitter, QTabWidget, QTreeView, QWidget)
 except ImportError:  # pragma: no cover
     QT6 = False
-    from PyQt5.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt
-    from PyQt5.QtGui import (
-        QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPen,
-    )
-    from PyQt5.QtWidgets import (
-        QAbstractScrollArea, QAction, QApplication, QComboBox, QDockWidget,
-        QFileDialog, QHeaderView, QInputDialog, QLabel, QMainWindow,
-        QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
-        QTreeView, QWidget,
-    )
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QFont, QKeySequence
+    from PyQt5.QtWidgets import QHeaderView, QMessageBox, QTreeView
 
 
 # ---------------------------------------------------------- enum shims

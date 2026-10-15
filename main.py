@@ -38,6 +38,7 @@ def diagnostics():
 
     try:
         from mountfile import __version__
+
         print("mountfile package: OK (v%s)" % __version__)
     except Exception as e:
         ok = False
@@ -52,13 +53,17 @@ def diagnostics():
 
     try:
         import pytsk3
+
         print("pytsk3: OK (%s)" % getattr(pytsk3, "__file__", "?"))
     except ImportError as e:
-        print("pytsk3: not installed (%s) -- read-only browsing of "
-              "FAT/NTFS/EXT will not work" % e)
+        print(
+            "pytsk3: not installed (%s) -- read-only browsing of "
+            "FAT/NTFS/EXT will not work" % e
+        )
 
     try:
         from mountfile import qt_compat
+
         print("qt_compat: OK (QT6=%s)" % qt_compat.QT6)
     except Exception as e:
         ok = False
@@ -66,7 +71,6 @@ def diagnostics():
         traceback.print_exc()
 
     try:
-        from mountfile.mainwindow import MainWindow
         print("mainwindow: OK")
     except Exception as e:
         ok = False
@@ -85,15 +89,19 @@ def main():
 
     try:
         from PyQt6.QtWidgets import QApplication
+
         from mountfile.qt_compat import exec_app
     except ImportError:
         try:
             from PyQt5.QtWidgets import QApplication
+
             from mountfile.qt_compat import exec_app
         except ImportError:
-            print("No Qt bindings found.\n"
-                  "Windows 10+/Linux:  pip install -r requirements.txt\n"
-                  "Windows 7:          pip install -r requirements-win7.txt")
+            print(
+                "No Qt bindings found.\n"
+                "Windows 10+/Linux:  pip install -r requirements.txt\n"
+                "Windows 7:          pip install -r requirements-win7.txt"
+            )
             _pause_on_windows()
             sys.exit(1)
 
