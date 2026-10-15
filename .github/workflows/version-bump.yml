@@ -1,23 +1,26 @@
 name: version-bump
 
-# Automatic semantic versioning from conventional commits.
-#   feat:            -> minor
-#   fix: / perf:     -> patch
-#   any type! :      -> major (breaking change)
-# feat always wins over fix: minor is evaluated FIRST and patch only when
-# no feat exists, so a fix in the same release cannot downgrade the bump.
+# Automatic semantic versioning from conventional commits:
+#   feat:         -> minor
+#   fix: / perf:  -> patch
+#   any type!:    -> major (breaking change)
+# minor is evaluated before patch, so a fix in the same release cannot
+# downgrade a feat.
 #
-# The tag is pushed with AUTOMATION_TOKEN (a PAT), not GITHUB_TOKEN:
-# a tag pushed with the default token does NOT trigger other workflows,
-# so the release pipeline would never start.
-# That same push is also what triggers create-release.yml.
+# The tag is pushed with the workflow's own GITHUB_TOKEN (which the tag
+# ruleset allows - only branches are protected). A tag pushed with
+# GITHUB_TOKEN does not fire other workflows by itself, therefore the
+# next stage is started explicitly with `gh workflow run`
+# (workflow_dispatch IS allowed to be triggered by GITHUB_TOKEN - it is
+# the documented exception to the recursion rule).
 
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
 
 concurrency:
   group: version-bump
@@ -46,19 +49,17 @@ jobs:
           LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
           if [ -z "$LAST" ]; then
             echo "next=v0.1.0" >> "$GITHUB_OUTPUT"
-            echo "last=" > last.txt
             exit 0
           fi
           echo "last tag: $LAST"
           LOG=$(git log "$LAST..HEAD" --no-merges --pretty=format:'%s')
           echo "commits since $LAST:"; echo "$LOG"
           BUMP=none
-          if echo "$LOG" | grep -qE '^[a-z]+(\([^)]*\))?!:';   then BUMP=major
-          elif echo "$LOG" | grep -qE '^feat(\([^)]*\))?:';   then BUMP=minor
-          elif echo "$LOG" | grep -qE '^(fix|perf)(\([^)]*\))?:'; then BUMP=patch
+          if echo "$LOG" | grep -qE '^[a-z]+(\([^)]*\))?!:';        then BUMP=major
+          elif echo "$LOG" | grep -qE '^feat(\([^)]*\))?:';        then BUMP=minor
+          elif echo "$LOG" | grep -qE '^(fix|perf)(\([^)]*\))?:';  then BUMP=patch
           fi
           echo "bump: $BUMP"
-          echo "last=$LAST" >> last.txt
           if [ "$BUMP" = "none" ]; then exit 0; fi
           MAJ=$(echo "$LAST" | sed -E 's/^v([0-9]+).*/\1/')
           MIN=$(echo "$LAST" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
@@ -70,10 +71,8 @@ jobs:
           esac
           echo "next=v$MAJ.$MIN.$PAT" >> "$GITHUB_OUTPUT"
 
-      - name: Push the tag (with the PAT, so the release pipeline actually fires)
+      - name: Push the tag
         if: steps.ver.outputs.next != ''
-        env:
-          TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -84,5 +83,16 @@ jobs:
             exit 0
           fi
           git tag -a "$TAG" -m "release $TAG"
-          git push "https://x-access-token:$TOKEN@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
+          git push origin "$TAG"
           echo "pushed $TAG"
+
+      - name: Start the release stage
+        if: steps.ver.outputs.next != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run create-release.yml \
+            --repo "$GITHUB_REPOSITORY" --ref main \
+            -f tag="${{ steps.ver.outputs.next }}"
+          echo "dispatched create-release for ${{ steps.ver.outputs.next }}"
