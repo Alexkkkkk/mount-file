@@ -1,0 +1,15 @@
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ['**/*.md', 'LICENSE']
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ['.github/**']
+tests:
+  - changed-files:
+      - any-glob-to-any-file: ['tests/**']
+gui:
+  - changed-files:
+      - any-glob-to-any-file: ['mountfile/mainwindow.py', 'mountfile/qt_compat.py', 'main.py']
+core:
+  - changed-files:
+      - any-glob-to-any-file: ['mountfile/**']
