@@ -1,13 +1,15 @@
 name: auto-merge
 
-# Automatic merging of pull requests:
-#   * dependabot PRs are approved and merged automatically;
-#   * any PR labeled "auto-merge" is merged automatically.
+# Approves and squash-merges pull requests that are ready:
+#   * dependabot PRs, and
+#   * any PR labeled "auto-merge" (e.g. the autofix PR).
 # Merge method: squash; the head branch is deleted automatically.
 #
-# The PR is merged only after the "tests" checks of CI succeed
-# (wait-on-check polls the Checks API). CI names those checks
-# "Tests (<os>, py<x.y>)", so they are matched by regexp.
+# Ordering proof: `gh pr checks --watch --required` waits for the REQUIRED
+# checks of the branch ruleset only - never for this job's own check, so
+# there is no self-deadlock. Enabling GitHub's native auto-merge with
+# `gh pr merge --auto` makes the merge happen server-side the moment the
+# required checks turn green, and the final step verifies it really merged.
 
 on:
   pull_request:
@@ -16,7 +18,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  checks: read
 
 jobs:
   auto-merge:
@@ -26,24 +27,38 @@ jobs:
       (github.event.pull_request.user.login == 'dependabot[bot]' ||
        contains(github.event.pull_request.labels.*.name, 'auto-merge'))
     steps:
-      - name: Wait for CI tests to pass
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          check-regexp: '^Tests '
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-interval: 20
-          timeout-minutes: 30
-
-      - name: Approve dependabot PR
-        if: github.event.pull_request.user.login == 'dependabot[bot]'
-        run: gh pr review --approve "$PR_URL"
+      - name: Log the PR checks (informational)
+        continue-on-error: true
         env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checks "$PR_URL" --watch --required --interval 20 || true
 
-      - name: Squash merge and delete the branch
-        run: gh pr merge --squash --delete-branch "$PR_URL"
+      - name: Approve the pull request
         env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr review --approve "$PR_URL" || echo "approval not required or already given"
+
+      - name: Enable the merge (squash) on green
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --squash --delete-branch --auto "$PR_URL"
+
+      - name: Verify the merge actually happened
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 30); do
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+            echo "attempt $i: state=$STATE"
+            case "$STATE" in
+              MERGED) echo "merged"; exit 0 ;;
+              CLOSED) echo "::error::PR closed without merging"; exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "::error::PR was not merged within 10 minutes"; exit 1

@@ -1,0 +1,88 @@
+name: version-bump
+
+# Automatic semantic versioning from conventional commits.
+#   feat:            -> minor
+#   fix: / perf:     -> patch
+#   any type! :      -> major (breaking change)
+# feat always wins over fix: minor is evaluated FIRST and patch only when
+# no feat exists, so a fix in the same release cannot downgrade the bump.
+#
+# The tag is pushed with AUTOMATION_TOKEN (a PAT), not GITHUB_TOKEN:
+# a tag pushed with the default token does NOT trigger other workflows,
+# so the release pipeline would never start.
+# That same push is also what triggers create-release.yml.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    if: >-
+      !startsWith(github.event.head_commit.message, 'chore(release)') &&
+      !contains(github.event.head_commit.message, 'autofix') &&
+      !contains(github.event.head_commit.message, '[skip version]')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: ver
+        run: |
+          set -euo pipefail
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "HEAD is already tagged, nothing to do."
+            exit 0
+          fi
+          LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$LAST" ]; then
+            echo "next=v0.1.0" >> "$GITHUB_OUTPUT"
+            echo "last=" > last.txt
+            exit 0
+          fi
+          echo "last tag: $LAST"
+          LOG=$(git log "$LAST..HEAD" --no-merges --pretty=format:'%s')
+          echo "commits since $LAST:"; echo "$LOG"
+          BUMP=none
+          if echo "$LOG" | grep -qE '^[a-z]+(\([^)]*\))?!:';   then BUMP=major
+          elif echo "$LOG" | grep -qE '^feat(\([^)]*\))?:';   then BUMP=minor
+          elif echo "$LOG" | grep -qE '^(fix|perf)(\([^)]*\))?:'; then BUMP=patch
+          fi
+          echo "bump: $BUMP"
+          echo "last=$LAST" >> last.txt
+          if [ "$BUMP" = "none" ]; then exit 0; fi
+          MAJ=$(echo "$LAST" | sed -E 's/^v([0-9]+).*/\1/')
+          MIN=$(echo "$LAST" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
+          PAT=$(echo "$LAST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+          case "$BUMP" in
+            major) MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
+            minor) MIN=$((MIN + 1)); PAT=0 ;;
+            patch) PAT=$((PAT + 1)) ;;
+          esac
+          echo "next=v$MAJ.$MIN.$PAT" >> "$GITHUB_OUTPUT"
+
+      - name: Push the tag (with the PAT, so the release pipeline actually fires)
+        if: steps.ver.outputs.next != ''
+        env:
+          TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="${{ steps.ver.outputs.next }}"
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "tag $TAG already exists on the remote, skipping."
+            exit 0
+          fi
+          git tag -a "$TAG" -m "release $TAG"
+          git push "https://x-access-token:$TOKEN@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
+          echo "pushed $TAG"
