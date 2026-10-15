@@ -71,7 +71,7 @@ except Exception:  # pragma: no cover - проверки/тесты работа
             for slot in list(self._slots):
                 slot(*args, **kwargs)
 
-    def pyqtSignal(*args, **kwargs):  # noqa: N802 - имя как в PyQt
+    def pyqtSignal(*args, **kwargs):
         return _NoQtSignal()
 
     QThread = object

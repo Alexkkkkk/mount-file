@@ -39,74 +39,23 @@ import webbrowser
 from . import tc_style
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (
-    AlignRight,
-    AlignVCenter,
-    BottomDock,
-    CtrlModifier,
-    ComboAdjustToContents,
-    DialogAccepted,
-    DlgCancel,
-    DlgOk,
-    HVC_Interactive,
-    HVC_ResizeToContents,
-    ItemIsEnabled,
-    ItemIsSelectable,
-    Key_A,
-    Key_Backspace,
-    Key_Delete,
-    Key_Enter,
-    Key_Insert,
-    Key_Return,
-    Key_Space,
-    Key_Tab,
-    MB_No,
-    MB_Yes,
-    NoEditTriggers,
-    QAction,
-    QApplication,
-    QBrush,
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QDockWidget,
-    QEvent_KeyPress,
-    QFileDialog,
-    QFormLayout,
-    QGridLayout,
-    QHBoxLayout,
-    QIcon,
-    QInputDialog,
-    QKeySequence,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QPlainTextEdit,
-    QPushButton,
-    QSizePolicy,
-    QSpinBox,
-    QSplitter,
-    QTabBar,
-    QTableWidget,
-    QTableWidgetItem,
-    QToolBar,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-    SC_Open,
-    SelectRows,
-    SizePolicyExpanding,
-    SizePolicyFixed,
-    Stretch,
-    TB_IconOnly,
-    TB_InstantPopup,
-    TableExtendedSelection,
-    exec_dialog,
-    standard_icon,
-)
+from .qt_compat import (AlignRight, AlignVCenter, BottomDock,
+                        ComboAdjustToContents, CtrlModifier, DialogAccepted,
+                        DlgCancel, DlgOk, HVC_ResizeToContents, ItemIsEnabled,
+                        ItemIsSelectable, Key_A, Key_Backspace, Key_Delete,
+                        Key_Enter, Key_Insert, Key_Return, Key_Space, Key_Tab,
+                        MB_No, MB_Yes, NoEditTriggers, QAction, QApplication,
+                        QBrush, QCheckBox, QComboBox, QDialog,
+                        QDialogButtonBox, QDockWidget, QEvent_KeyPress,
+                        QFileDialog, QFormLayout, QHBoxLayout, QInputDialog,
+                        QKeySequence, QLabel, QLineEdit, QMainWindow, QMenu,
+                        QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
+                        QSpinBox, QSplitter, QTabBar, QTableWidget,
+                        QTableWidgetItem, QToolBar, QToolButton, QVBoxLayout,
+                        QWidget, SelectRows, SizePolicyExpanding,
+                        SizePolicyFixed, Stretch, TableExtendedSelection,
+                        TB_IconOnly, TB_InstantPopup, exec_dialog,
+                        standard_icon)
 from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
 from .updater import is_frozen
@@ -128,10 +77,7 @@ FKEYS = (
     ("F8", "Удаление"),
 )
 
-IMAGE_FILTER = (
-    "Образы дисков (*.img *.bin *.raw *.dump *.dd);;"
-    "Все файлы (*)"
-)
+IMAGE_FILTER = "Образы дисков (*.img *.bin *.raw *.dump *.dd);;" "Все файлы (*)"
 
 
 def local_drives():
@@ -299,9 +245,7 @@ class TcPanel(QWidget):
     def join(self, name):
         if self.mode == "local":
             return os.path.join(self.path, name)
-        return (
-            (self.path.rstrip("/") + "/" + name) if self.path != "/" else "/" + name
-        )
+        return (self.path.rstrip("/") + "/" + name) if self.path != "/" else "/" + name
 
     def up_path(self):
         if self.mode == "local":
@@ -394,9 +338,7 @@ class TcPanel(QWidget):
                 for v in self.win.volumes:
                     items.append(("Образ: %s" % v.desc, ("img", v.offset)))
             else:
-                items.append(
-                    ("Образ: целый образ (offset 0)", ("img", 0))
-                )
+                items.append(("Образ: целый образ (offset 0)", ("img", 0)))
         if not items:
             items.append((self.path, ("local", self.path)))
         return items
@@ -407,12 +349,15 @@ class TcPanel(QWidget):
         current = 0
         found = False
         for i, (_text, data) in enumerate(items):
-            if self.mode == "img" and data[0] == "img" and data[1] == self.volume_offset:
-                current, found = i, True
-            elif (
-                self.mode == "local"
-                and data[0] == "local"
-                and os.path.normpath(data[1]) == os.path.normpath(self.path)
+            if (
+                self.mode == "img"
+                and data[0] == "img"
+                and data[1] == self.volume_offset
+                or (
+                    self.mode == "local"
+                    and data[0] == "local"
+                    and os.path.normpath(data[1]) == os.path.normpath(self.path)
+                )
             ):
                 current, found = i, True
         if self.mode == "local" and not found:
@@ -720,9 +665,7 @@ class TcPanel(QWidget):
         self.update_header()
 
     def invert_marks(self):
-        self.marked = {
-            e["name"] for e in self.entries if e["name"] not in self.marked
-        }
+        self.marked = {e["name"] for e in self.entries if e["name"] not in self.marked}
         self._fill()
         self.update_header()
 
@@ -904,15 +847,24 @@ class MainWindow(QMainWindow):
         self._bind_fkeys()
 
         self.act_open = self._action(
-            "Открыть образ", self.open_image, "Ctrl+O", "SP_DialogOpenButton",
+            "Открыть образ",
+            self.open_image,
+            "Ctrl+O",
+            "SP_DialogOpenButton",
             "Открыть образ диска (Ctrl+O)",
         )
         self.act_reload = self._action(
-            "Обновить", self.refresh_panels, "Ctrl+R", "SP_BrowserReload",
+            "Обновить",
+            self.refresh_panels,
+            "Ctrl+R",
+            "SP_BrowserReload",
             "Обновить активную панель (Ctrl+R)",
         )
         self.act_up = self._action(
-            "Вверх", lambda: self.active_panel().go_up(), None, "SP_ArrowUp",
+            "Вверх",
+            lambda: self.active_panel().go_up(),
+            None,
+            "SP_ArrowUp",
             "На уровень вверх (Backspace)",
         )
         tb.addAction(self.act_open)
@@ -924,12 +876,18 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         self.act_pack = self._action(
-            "Упаковать", lambda: self._unsupported("Упаковка"), None,
-            "SP_DriveFDIcon", "Упаковка файлов (не поддерживается)",
+            "Упаковать",
+            lambda: self._unsupported("Упаковка"),
+            None,
+            "SP_DriveFDIcon",
+            "Упаковка файлов (не поддерживается)",
         )
         self.act_unpack = self._action(
-            "Распаковать", lambda: self._unsupported("Распаковка"), None,
-            "SP_DriveHDIcon", "Распаковка архивов (не поддерживается)",
+            "Распаковать",
+            lambda: self._unsupported("Распаковка"),
+            None,
+            "SP_DriveHDIcon",
+            "Распаковка архивов (не поддерживается)",
         )
         tb.addAction(self.act_pack)
         tb.addAction(self.act_unpack)
@@ -937,19 +895,28 @@ class MainWindow(QMainWindow):
 
         tb.addAction(
             self._action(
-                "FTP", lambda: self._unsupported("FTP-соединение"), None,
-                "SP_DriveNetIcon", "FTP-соединение (не поддерживается)",
+                "FTP",
+                lambda: self._unsupported("FTP-соединение"),
+                None,
+                "SP_DriveNetIcon",
+                "FTP-соединение (не поддерживается)",
             )
         )
         tb.addAction(
             self._action(
-                "Настройки", self.open_settings, None, "SP_FileDialogInfoView",
+                "Настройки",
+                self.open_settings,
+                None,
+                "SP_FileDialogInfoView",
                 "Настройки интерфейса",
             )
         )
         tb.addAction(
             self._action(
-                "Справка", self.about, "F1", "SP_DialogHelpButton",
+                "Справка",
+                self.about,
+                "F1",
+                "SP_DialogHelpButton",
                 "О программе (F1)",
             )
         )
@@ -1051,14 +1018,22 @@ class MainWindow(QMainWindow):
             )
         )
         m_file.addSeparator()
-        m_file.addAction(
-            self._action("Выход", self.close, "Alt+F4")
-        )
+        m_file.addAction(self._action("Выход", self.close, "Alt+F4"))
 
         m_sel = mb.addMenu("Выделение")
-        m_sel.addAction(self._action("Выделить всё (Ctrl+A)", lambda: self.active_panel().mark_all()))
-        m_sel.addAction(self._action("Снять выделение", lambda: self.active_panel().unmark_all()))
-        m_sel.addAction(self._action("Инвертировать выделение", lambda: self.active_panel().invert_marks()))
+        m_sel.addAction(
+            self._action(
+                "Выделить всё (Ctrl+A)", lambda: self.active_panel().mark_all()
+            )
+        )
+        m_sel.addAction(
+            self._action("Снять выделение", lambda: self.active_panel().unmark_all())
+        )
+        m_sel.addAction(
+            self._action(
+                "Инвертировать выделение", lambda: self.active_panel().invert_marks()
+            )
+        )
         m_sel.addSeparator()
         m_sel.addAction(self._action("Выделить по маске +…", lambda: self._mask(True)))
         m_sel.addAction(self._action("Снять по маске -…", lambda: self._mask(False)))
@@ -1112,21 +1087,13 @@ class MainWindow(QMainWindow):
             m_cfg.addAction(act)
             self.theme_acts[key] = act
         m_cfg.addSeparator()
-        m_cfg.addAction(
-            self._action("Сохранить настройки", tc_style.save_settings)
-        )
+        m_cfg.addAction(self._action("Сохранить настройки", tc_style.save_settings))
 
         m_start = mb.addMenu("Запуск")
-        m_start.addAction(
-            self._action("Обновить активную панель", self.refresh_panels)
-        )
-        m_start.addAction(
-            self._action("Обновить обе панели", self.refresh_all)
-        )
+        m_start.addAction(self._action("Обновить активную панель", self.refresh_panels))
+        m_start.addAction(self._action("Обновить обе панели", self.refresh_all))
         m_start.addSeparator()
-        m_start.addAction(
-            self._action("Проверить обновления", self._start_updater)
-        )
+        m_start.addAction(self._action("Проверить обновления", self._start_updater))
         m_start.addAction(
             self._action("Страница релизов на GitHub", self.open_releases)
         )
@@ -1268,10 +1235,10 @@ class MainWindow(QMainWindow):
         sep = os.sep if p.mode == "local" else "/"
         path = p.path if p.path.endswith(sep) else p.path + sep
         self.cmd_prompt.setText("%s>" % path)
-        prefix = "[%s] " % (self.image_path or "образ не открыт") if p.mode == "img" else ""
-        self.setWindowTitle(
-            "%sMount File — режим Total Commander" % prefix
+        prefix = (
+            "[%s] " % (self.image_path or "образ не открыт") if p.mode == "img" else ""
         )
+        self.setWindowTitle("%sMount File — режим Total Commander" % prefix)
 
     def _set_loaded(self, loaded):
         self._loaded = loaded
@@ -1559,10 +1526,10 @@ class MainWindow(QMainWindow):
                     else:
                         files.append((_src, os.path.join(target_dir, rel)))
             else:
-                files.append((panel.join(e["name"]), os.path.join(target_dir, e["name"])))
-        total = sum(
-            1 for _s, d in files if os.path.exists(d)
-        )
+                files.append(
+                    (panel.join(e["name"]), os.path.join(target_dir, e["name"]))
+                )
+        total = sum(1 for _s, d in files if os.path.exists(d))
         if total:
             ret = QMessageBox.question(
                 self,
@@ -1593,7 +1560,9 @@ class MainWindow(QMainWindow):
         if os.path.isdir(src):
             writer.mkdir(dst_dir, name)
             counter["dirs"] += 1
-            new_dir = (dst_dir.rstrip("/") + "/" + name) if dst_dir != "/" else "/" + name
+            new_dir = (
+                (dst_dir.rstrip("/") + "/" + name) if dst_dir != "/" else "/" + name
+            )
             for child in sorted(os.listdir(src)):
                 self._import_path(
                     writer, os.path.join(src, child), new_dir, child, counter
@@ -1624,8 +1593,7 @@ class MainWindow(QMainWindow):
             self,
             "Подтвердите запись",
             "Эта операция ЗАПИШЕТ данные в файл образа на диске:\n\n%s\n\n"
-            "Убедитесь, что у образа есть резервная копия. Продолжить?"
-            % listing,
+            "Убедитесь, что у образа есть резервная копия. Продолжить?" % listing,
             MB_Yes | MB_No,
         )
         if ret != MB_Yes:
@@ -1634,9 +1602,7 @@ class MainWindow(QMainWindow):
         for e in entries:
             src = panel.join(e["name"])
             try:
-                self._import_path(
-                    other.writer, src, target_dir, e["name"], counter
-                )
+                self._import_path(other.writer, src, target_dir, e["name"], counter)
             except Exception as exc:
                 self.log_msg("Запись не удалась (%s): %s" % (e["name"], exc))
                 continue
@@ -1685,9 +1651,7 @@ class MainWindow(QMainWindow):
 
     def f7_mkdir(self):
         p = self.active_panel()
-        name, ok = QInputDialog.getText(
-            self, "Новая папка", "Создать в %s:" % p.path
-        )
+        name, ok = QInputDialog.getText(self, "Новая папка", "Создать в %s:" % p.path)
         if not ok or not name.strip():
             return
         name = name.strip()

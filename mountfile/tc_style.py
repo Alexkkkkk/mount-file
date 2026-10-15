@@ -20,24 +20,10 @@ import json
 import os
 import time
 
-from .qt_compat import (
-    CG_Disabled,
-    P_ALTERNATEBASE,
-    P_BASE,
-    P_BUTTON,
-    P_BUTTONTEXT,
-    P_HIGHLIGHT,
-    P_HIGHLIGHTEDTEXT,
-    P_TEXT,
-    P_TOOLTIPBASE,
-    P_TOOLTIPTEXT,
-    P_WINDOW,
-    P_WINDOWTEXT,
-    QColor,
-    QFont,
-    QFontDatabase,
-    QPalette,
-)
+from .qt_compat import (P_ALTERNATEBASE, P_BASE, P_BUTTON, P_BUTTONTEXT,
+                        P_HIGHLIGHT, P_HIGHLIGHTEDTEXT, P_TEXT, P_TOOLTIPBASE,
+                        P_TOOLTIPTEXT, P_WINDOW, P_WINDOWTEXT, CG_Disabled,
+                        QColor, QFont, QFontDatabase, QPalette)
 
 # Two skins: the dark one the interface is modelled on and the classic
 # light grey one people know from Total Commander on Windows.
@@ -242,7 +228,7 @@ def app_font(size=None, mono=False):
 # ------------------------------------------------------------- formatting
 def group(n):
     """1234567 -> '1 234 567' (Total Commander groups digits with spaces)."""
-    return "{:,}".format(int(n)).replace(",", " ")
+    return f"{int(n):,}".replace(",", " ")
 
 
 def fmt_size(n):
@@ -322,9 +308,7 @@ def qcolor(key):
 # ------------------------------------------------------------ settings
 #: Where the two switches of the Настройки dialog are remembered.
 SETTINGS_PATH = os.path.join(
-    os.environ.get(
-        "XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config")
-    ),
+    os.environ.get("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config")),
     "mount-file",
     "ui.json",
 )
