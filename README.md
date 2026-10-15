@@ -20,6 +20,28 @@ A file manager for raw disk images (NAND/eMMC/disk dumps). Browse, extract and (
 
 Сборку под Windows 7 (Python 3.8 + PyQt5) соберите сами по инструкции ниже.
 
+## Автообновление / Auto-update
+
+При **каждом запуске** программа в фоновом потоке спрашивает GitHub Releases
+репозитория [`Alexkkkkk/mount-file`](https://github.com/Alexkkkkk/mount-file/releases/latest)
+и, если там версия новее, предлагает обновиться (в собранном `.exe` — скачивает
+подходящий файл релиза, сверяет `sha256`, подменяет exe и перезапускается сам).
+Нет сети или плохой URL — в журнал окна падает одна строка, программа работает
+как обычно; версии сравниваются как числа (`1.10.0` > `1.9.9`).
+
+Проверить обновления можно и без GUI: `python main.py --check-updates`
+(найдено обновление → код возврата 10, обновлений нет → 0).
+
+| Переменная окружения | Действие |
+|---|---|
+| `MOUNTFILE_UPDATE_REPO=owner/repo` | другой репозиторий с релизами |
+| `MOUNTFILE_NO_UPDATE=1` | выключить проверку обновлений |
+| `MOUNTFILE_AUTO_UPDATE=1` | ставить и перезапускаться без вопроса |
+| `MOUNTFILE_GIT_PULL=1` | в режиме исходников разрешить `git pull --ff-only` |
+| `MOUNTFILE_UPDATE_URL=…` | прямой URL на JSON последнего релиза (свой сервер) |
+
+Из кода: `from mountfile import updater; updater.check(mountfile.__version__)`.
+
 ## Возможности / Features
 
 - 🔍 **Разметка**: автодетекция MBR и GPT, выбор раздела из списка.
@@ -87,7 +109,9 @@ mount-file/
 │   ├── fat32.py          # собственный драйвер FAT32 (чтение + запись)
 │   ├── vfs.py            # read-only доступ к ФС через pytsk3 (TSK)
 │   ├── hexview.py        # HEX-просмотрщик
-│   └── mainwindow.py     # главное окно, дерево образа, ленивая загрузка
+│   ├── updater.py        # автообновление из GitHub Releases (потоки)
+│   ├── mainwindow.py     # окно «дерево образа», ленивая загрузка
+│   └── tc_window.py      # основное окно (Total Commander) + меню
 └── tests/
     └── test_fat32.py     # автотесты на синтетических образах
 ```

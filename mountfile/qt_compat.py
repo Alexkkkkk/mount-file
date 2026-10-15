@@ -7,16 +7,23 @@ PyQt6/Qt6 requires Windows 10+, so on Windows 7 this project falls back
 to PyQt5 (Qt 5.15 LTS, the last Qt branch supporting Windows 7).
 All GUI code imports Qt names from here and never from PyQt* directly.
 
+IMPORTANT: both branches must export the SAME set of names. The PyQt5
+branch used to import only a handful of widgets, so hexview.py died with
+``ImportError: cannot import name 'QAbstractScrollArea' from 'mountfile'``
+on every PyQt5 build (the "Unhandled exception in script" dialog).
+
 NOTE: QKeySequence lives in QtGui in BOTH Qt5 and Qt6 - importing it
 from QtCore raises ImportError and kills the whole application at
 startup (this was the "won't launch on Windows 10" bug).
+NOTE: QAction lives in QtWidgets on Qt5 but moved to QtGui in Qt6.
 """
 
 from __future__ import annotations
 
 QT6 = True
 try:  # pragma: no cover - depends on environment
-    from PyQt6.QtCore import QAbstractItemModel, QEvent, QModelIndex, QSize, Qt
+    from PyQt6.QtCore import (QAbstractItemModel, QEvent, QModelIndex, QSize,
+                              QThread, Qt, pyqtSignal)
     from PyQt6.QtGui import (QAction, QColor, QFont, QFontMetrics,
                              QKeySequence, QPainter, QPen)
     from PyQt6.QtWidgets import (QAbstractItemView, QAbstractScrollArea,
@@ -27,12 +34,26 @@ try:  # pragma: no cover - depends on environment
                                  QPushButton, QSplitter, QTableWidget,
                                  QTableWidgetItem, QTabWidget, QTreeView,
                                  QVBoxLayout, QWidget)
-except ImportError:  # pragma: no cover
+except ImportError as _pyqt6_error:  # pragma: no cover
     QT6 = False
-    from PyQt5.QtCore import QEvent, Qt
-    from PyQt5.QtGui import QFont, QKeySequence
-    from PyQt5.QtWidgets import (QAbstractItemView, QHeaderView, QMessageBox,
-                                 QTreeView)
+    try:
+        from PyQt5.QtCore import (QAbstractItemModel, QEvent, QModelIndex,
+                                  QSize, QThread, Qt, pyqtSignal)
+        from PyQt5.QtGui import (QColor, QFont, QFontMetrics, QKeySequence,
+                                 QPainter, QPen)
+        from PyQt5.QtWidgets import (QAbstractItemView, QAbstractScrollArea,
+                                     QAction, QApplication, QComboBox, QDialog,
+                                     QDockWidget, QFileDialog, QHBoxLayout,
+                                     QHeaderView, QInputDialog, QLabel,
+                                     QLineEdit, QMainWindow, QMenu, QMessageBox,
+                                     QPlainTextEdit, QPushButton, QSplitter,
+                                     QTableWidget, QTableWidgetItem, QTabWidget,
+                                     QTreeView, QVBoxLayout, QWidget)
+    except ImportError as _pyqt5_error:
+        raise ImportError(
+            "no usable Qt bindings: PyQt6 -> %s; PyQt5 -> %s"
+            % (_pyqt6_error, _pyqt5_error)
+        ) from _pyqt5_error
 
 
 # ---------------------------------------------------------- enum shims
@@ -103,6 +124,14 @@ else:  # pragma: no cover
 def event_pos(e):
     """QMouseEvent position as QPoint (Qt6: position(), Qt5: pos())."""
     return e.position() if QT6 else e.pos()
+
+
+def font_char_width(metrics):
+    """Ширина символа '0' (Qt5 < 5.11 знает только QFontMetrics.width)."""
+    advance = getattr(metrics, "horizontalAdvance", None)
+    if advance is not None:
+        return advance("0")
+    return metrics.width("0")
 
 
 def exec_app(app):

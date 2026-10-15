@@ -29,13 +29,16 @@ from .partition import list_partitions
 from .qt_compat import (AlignRight, AlignVCenter, BottomDock,
                         HVC_ResizeToContents, ItemIsEnabled, ItemIsSelectable,
                         Key_Backspace, Key_Enter, Key_Return, Key_Tab, MB_No,
-                        MB_Yes, NoEditTriggers, QAction, QComboBox, QDialog,
-                        QDockWidget, QEvent_KeyPress, QFileDialog, QHBoxLayout,
+                        MB_Yes, NoEditTriggers, QAction, QApplication,
+                        QComboBox, QDialog, QDockWidget, QEvent_KeyPress,
+                        QFileDialog, QHBoxLayout,
                         QInputDialog, QKeySequence, QLabel, QLineEdit,
                         QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
                         QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
                         QWidget, SC_Open, SelectRows, Stretch,
                         TableSingleSelection, exec_dialog)
+from .updater import (StartupUpdater, app_version, auto_install,
+                      disabled as updates_disabled, is_frozen)
 
 
 def fmt_size(n):
@@ -301,8 +304,78 @@ class MainWindow(QMainWindow):
         self.writer_fh = None
         self.active_side = "L"
 
+        self.updater = None
         self._build_ui()
         self._set_loaded(False)
+        self._start_updater()
+
+    # ----------------------------------------------------------- обновление
+    def _start_updater(self):
+        """Проверка обновлений GitHub при КАЖДОМ старте (фоновым потоком)."""
+        if updates_disabled():
+            self.log_msg(
+                "Автопроверка обновлений выключена (MOUNTFILE_NO_UPDATE=1)"
+            )
+            return
+        if self.updater is not None and self.updater.isRunning():
+            return
+        self.log_msg("Проверка обновлений (установлено v%s)…" % app_version())
+        self.updater = StartupUpdater(self)
+        self.updater.status.connect(self.log_msg)
+        self.updater.available.connect(self._on_update_available)
+        self.updater.installing.connect(
+            lambda info: self.log_msg(
+                "Устанавливаю v%s и перезапускаюсь…" % info.get("version")
+            )
+        )
+        self.updater.restarting.connect(self._on_update_restarting)
+        self.updater.installed.connect(self._on_update_installed)
+        self.updater.start()
+
+    def _on_update_available(self, info):
+        """Диалог «установить сейчас?» (или ничего, если режим авто)."""
+        version = info.get("version") or "?"
+        asset = info.get("asset")
+        if not asset:
+            if info.get("url"):
+                QMessageBox.information(
+                    self,
+                    "Доступна новая версия",
+                    "Версия v%s уже вышла, но сборки для вашей системы "
+                    "в релизе нет.\n\nСтраница релиза:\n%s"
+                    % (version, info["url"]),
+                )
+            return
+        if not is_frozen():
+            self.log_msg(
+                "Новая версия v%s. Запуск из исходников — файлы не меняются: "
+                "%s" % (version, info.get("url") or "")
+            )
+            return
+        if auto_install():
+            return  # установку уже запустил StartupUpdater
+        ret = QMessageBox.question(
+            self,
+            "Обновление Mount File",
+            "Доступна версия v%s (у вас v%s).\n\n"
+            "Скачать %s и установить сейчас? Программа перезапустится "
+            "сама.\n"
+            "Подробности — в журнале внизу окна."
+            % (version, app_version(), asset.get("name")),
+            MB_Yes | MB_No,
+        )
+        if ret == MB_Yes:
+            self.updater.install(info, self)
+
+    def _on_update_restarting(self):
+        self.statusBar().showMessage("Установка обновления — перезапуск…")
+
+    def _on_update_installed(self):
+        """Обновление развёрнуто: закрываемся, чтобы .cmd смог подменить exe."""
+        self._close_writer()
+        if self.updater is not None:
+            self.updater.wait_installer(3000)
+        QApplication.quit()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -380,6 +453,9 @@ class MainWindow(QMainWindow):
         for key in ("F3", "F4", "F5", "F6", "F7", "F8"):
             m_cmd.addAction(self.facts[key])
         m_help = mb.addMenu("Справка")
+        act_upd = QAction("Проверить обновления", self)
+        act_upd.triggered.connect(self._start_updater)
+        m_help.addAction(act_upd)
         act_about = QAction("О программе", self)
         act_about.triggered.connect(self.about)
         m_help.addAction(act_about)
@@ -396,9 +472,11 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "О программе",
-            "Mount File — файловый менеджер для raw-образов дисков\n"
+            "Mount File v%s — файловый менеджер для raw-образов дисков\n"
             "Режим интерфейса: Total Commander (две панели)\n"
-            "Python + Qt + The Sleuth Kit, лицензия MIT",
+            "Python + Qt + The Sleuth Kit, лицензия MIT\n\n"
+            "Обновления: %s"
+            % (app_version(), "выключены" if updates_disabled() else "при старте"),
         )
 
     # ------------------------------------------------------------- plumbing
@@ -732,6 +810,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         self._close_writer()
+        if self.updater is not None and self.updater.isRunning():
+            self.updater.wait(1500)
         super().closeEvent(e)
 
 

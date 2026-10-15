@@ -8,7 +8,7 @@ from __future__ import annotations
 from .qt_compat import (FONT_TYPEWRITER, MOUSE_LEFT, Key_Down, Key_Left,
                         Key_PageDown, Key_PageUp, Key_Right, Key_Up,
                         QAbstractScrollArea, QColor, QFont, QFontMetrics,
-                        QPainter, QPen, event_pos)
+                        QPainter, QPen, event_pos, font_char_width)
 
 
 class HexView(QAbstractScrollArea):
@@ -22,7 +22,7 @@ class HexView(QAbstractScrollArea):
         font.setStyleHint(FONT_TYPEWRITER)
         self.setFont(font)
         fm = QFontMetrics(font)
-        self._char_w = max(fm.horizontalAdvance("0"), 1)
+        self._char_w = max(font_char_width(fm), 1)
         self._line_h = fm.height() + 4
 
         self._data = b""

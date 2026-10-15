@@ -6,11 +6,16 @@
 Usage:
     python main.py [disk_image.img]     start the GUI
     python main.py --diag               print environment diagnostics and exit
+    python main.py --version            print the version and exit
+    python main.py --check-updates      check GitHub Releases and exit
 
 Works with PyQt6 (Windows 10/11, Linux, macOS) or PyQt5 (Windows 7).
 
 Any startup error is printed with a full traceback and the console stays
 open (double-click friendly) so the message can actually be read.
+
+The GUI checks GitHub Releases for a newer build on every start; see
+`mountfile/updater.py` and the README for the environment switches.
 """
 
 import sys
@@ -21,13 +26,26 @@ def _pause_on_windows():
     """Keep the console window open after a fatal error (double-click).
 
     Only pauses for an interactive console: in CI (or any piped stdin)
-    waiting for Enter would hang the job forever.
+    waiting for Enter would hang the job forever. A windowed PyInstaller
+    build has no stdin at all, so it must be checked for None first -
+    calling .isatty() on None was the "AttributeError: 'NoneType' object
+    has no attribute 'isatty'" crash dialog that hid the real error.
     """
-    if sys.platform.startswith("win") and sys.stdin.isatty():
-        try:
-            input("\nPress Enter to close this window...")
-        except EOFError:
-            pass
+    if not sys.platform.startswith("win"):
+        return
+    stdin = sys.stdin
+    if stdin is None or not hasattr(stdin, "isatty"):
+        return
+    try:
+        interactive = stdin.isatty()
+    except (ValueError, OSError):
+        interactive = False
+    if not interactive:
+        return
+    try:
+        input("\nPress Enter to close this window...")
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 
 def diagnostics():
@@ -35,6 +53,7 @@ def diagnostics():
     ok = True
     print("Python: %s (%s)" % (sys.version.split()[0], sys.executable))
     print("Platform: %s" % sys.platform)
+    print("Frozen build: %s" % bool(getattr(sys, "frozen", False)))
 
     try:
         from mountfile import __version__
@@ -71,6 +90,16 @@ def diagnostics():
         traceback.print_exc()
 
     try:
+        from mountfile.hexview import HexView  # noqa: F401
+
+        print("hexview: OK")
+    except Exception as e:
+        ok = False
+        print("hexview: FAIL -- %s" % e)
+        traceback.print_exc()
+
+    try:
+        from mountfile.tc_window import MainWindow  # noqa: F401
 
         print("tc_window: OK")
     except Exception as e:
@@ -78,11 +107,69 @@ def diagnostics():
         print("tc_window: FAIL -- %s" % e)
         traceback.print_exc()
 
+    try:
+        from mountfile import updater
+
+        print(
+            "updater: OK (repo=%s, check-at-start=%s, auto-install=%s)"
+            % (
+                updater.repo(),
+                "off" if updater.disabled() else "on",
+                "on" if updater.auto_install() else "ask",
+            )
+        )
+    except Exception as e:
+        print("updater: FAIL -- %s" % e)
+
     print("\nDiagnostics %s." % ("PASSED" if ok else "FAILED"))
     return 0 if ok else 1
 
 
+def check_updates():
+    """`--check-updates`: one synchronous update check, then exit.
+
+    Never raises: a broken network/URL is reported and returns 0 so a
+    launcher script does not treat "offline" as a program failure.
+    """
+    from mountfile import __version__
+    from mountfile import updater
+
+    print("Installed version: v%s" % __version__)
+    print("Update source: %s" % updater.update_url())
+    if updater.disabled():
+        print("Update checks are disabled (MOUNTFILE_NO_UPDATE).")
+        return 0
+    try:
+        info = updater.check(__version__)
+    except Exception as e:
+        print("Update check failed: %s" % e)
+        return 0
+    if not info:
+        print("No updates: v%s is the newest release." % __version__)
+        return 0
+    print("Update available: v%s (you have v%s)" % (info["version"], __version__))
+    if info.get("asset"):
+        print("  asset: %s (%s bytes)" % (info["asset"].get("name"), info["asset"].get("size") or "?"))
+        print("  sha256: %s" % (info.get("sha256") or "not published"))
+    else:
+        print("  no build for this platform in the release")
+    print("  page: %s" % info.get("url"))
+    return 10
+
+
 def main():
+    if "--version" in sys.argv:
+        try:
+            from mountfile import __version__
+        except Exception as e:  # pragma: no cover - broken checkout
+            print("mountfile is not importable here: %s" % e)
+            sys.exit(1)
+        print("Mount File v%s" % __version__)
+        return
+
+    if "--check-updates" in sys.argv:
+        sys.exit(check_updates())
+
     if "--diag" in sys.argv:
         code = diagnostics()
         _pause_on_windows()
@@ -107,6 +194,8 @@ def main():
             sys.exit(1)
 
     try:
+        # Importing the GUI module up front keeps a broken install in the
+        # traceback path instead of inside a half-built QApplication.
         from mountfile.tc_window import MainWindow
     except Exception:
         traceback.print_exc()
