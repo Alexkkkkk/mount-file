@@ -9,6 +9,8 @@ Supports FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 and more
 
 from __future__ import annotations
 
+import time
+
 try:
     import pytsk3
 except ImportError:  # pragma: no cover
@@ -17,6 +19,17 @@ except ImportError:  # pragma: no cover
 
 class TskError(Exception):
     pass
+
+
+def _fmt_mtime(meta):
+    """Modification time of a TSK meta record as 'YYYY-MM-DD HH:MM'."""
+    try:
+        ts = int(meta.mtime)
+        if ts <= 0:
+            return ""
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
 
 
 class TskImage:
@@ -53,6 +66,7 @@ class TskImage:
                     "name": name,
                     "is_dir": is_dir,
                     "size": 0 if is_dir else int(meta.size),
+                    "date": "" if is_dir else _fmt_mtime(meta),
                 }
             )
         out.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))

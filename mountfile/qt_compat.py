@@ -16,19 +16,32 @@ from __future__ import annotations
 
 QT6 = True
 try:  # pragma: no cover - depends on environment
-    from PyQt6.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt
+    from PyQt6.QtCore import (QAbstractItemModel, QEvent, QModelIndex, QSize,
+                              Qt)
     from PyQt6.QtGui import (QAction, QColor, QFont, QFontMetrics,
                              QKeySequence, QPainter, QPen)
-    from PyQt6.QtWidgets import (QAbstractScrollArea, QApplication, QComboBox,
-                                 QDockWidget, QFileDialog, QHeaderView,
-                                 QInputDialog, QLabel, QMainWindow,
-                                 QMessageBox, QPlainTextEdit, QPushButton,
-                                 QSplitter, QTabWidget, QTreeView, QWidget)
+    from PyQt6.QtWidgets import (QAbstractItemView, QAbstractScrollArea,
+                                 QApplication, QComboBox, QDialog,
+                                 QDockWidget, QFileDialog, QHBoxLayout,
+                                 QHeaderView, QInputDialog, QLabel,
+                                 QLineEdit, QMainWindow, QMenu, QMessageBox,
+                                 QPlainTextEdit, QPushButton, QSplitter,
+                                 QTabWidget, QTableWidget, QTableWidgetItem,
+                                 QTreeView, QVBoxLayout, QWidget)
 except ImportError:  # pragma: no cover
     QT6 = False
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtGui import QFont, QKeySequence
-    from PyQt5.QtWidgets import QHeaderView, QMessageBox, QTreeView
+    from PyQt5.QtCore import (QAbstractItemModel, QEvent, QModelIndex, QSize,
+                              Qt)
+    from PyQt5.QtGui import (QColor, QFont, QFontMetrics, QKeySequence,
+                             QPainter, QPen)
+    from PyQt5.QtWidgets import (QAbstractItemView, QAbstractScrollArea,
+                                 QAction, QApplication, QComboBox, QDialog,
+                                 QDockWidget, QFileDialog, QHBoxLayout,
+                                 QHeaderView, QInputDialog, QLabel,
+                                 QLineEdit, QMainWindow, QMenu, QMessageBox,
+                                 QPlainTextEdit, QPushButton, QSplitter,
+                                 QTabWidget, QTableWidget, QTableWidgetItem,
+                                 QTreeView, QVBoxLayout, QWidget)
 
 
 # ---------------------------------------------------------- enum shims
@@ -36,36 +49,64 @@ if QT6:  # pragma: no branch
     DisplayRole = Qt.ItemDataRole.DisplayRole
     Horizontal = Qt.Orientation.Horizontal
     MOUSE_LEFT = Qt.MouseButton.LeftButton
-    Key_Down = Qt.Key.Key_Down
     Key_Up = Qt.Key.Key_Up
+    Key_Down = Qt.Key.Key_Down
     Key_Left = Qt.Key.Key_Left
     Key_Right = Qt.Key.Key_Right
     Key_PageDown = Qt.Key.Key_PageDown
     Key_PageUp = Qt.Key.Key_PageUp
+    Key_Backspace = Qt.Key.Key_Backspace
+    Key_Return = Qt.Key.Key_Return
+    Key_Enter = Qt.Key.Key_Enter
+    Key_Tab = Qt.Key.Key_Tab
     BottomDock = Qt.DockWidgetArea.BottomDockWidgetArea
     Stretch = QHeaderView.ResizeMode.Stretch
+    HVC_Interactive = QHeaderView.ResizeMode.Interactive
+    HVC_ResizeToContents = QHeaderView.ResizeMode.ResizeToContents
     SingleSelection = QTreeView.SelectionMode.SingleSelection
+    TableSingleSelection = QAbstractItemView.SelectionMode.SingleSelection
+    SelectRows = QAbstractItemView.SelectionBehavior.SelectRows
+    NoEditTriggers = QAbstractItemView.EditTrigger.NoEditTriggers
     MB_Yes = QMessageBox.StandardButton.Yes
     MB_No = QMessageBox.StandardButton.No
     FONT_TYPEWRITER = QFont.StyleHint.TypeWriter
     SC_Open = QKeySequence.StandardKey.Open
+    QEvent_KeyPress = QEvent.Type.KeyPress
+    ItemIsEnabled = Qt.ItemFlag.ItemIsEnabled
+    ItemIsSelectable = Qt.ItemFlag.ItemIsSelectable
+    AlignRight = Qt.AlignmentFlag.AlignRight
+    AlignVCenter = Qt.AlignmentFlag.AlignVCenter
 else:  # pragma: no cover
     DisplayRole = Qt.DisplayRole
     Horizontal = Qt.Horizontal
     MOUSE_LEFT = Qt.LeftButton
-    Key_Down = Qt.Key_Down
     Key_Up = Qt.Key_Up
+    Key_Down = Qt.Key_Down
     Key_Left = Qt.Key_Left
     Key_Right = Qt.Key_Right
     Key_PageDown = Qt.Key_PageDown
     Key_PageUp = Qt.Key_PageUp
+    Key_Backspace = Qt.Key_Backspace
+    Key_Return = Qt.Key_Return
+    Key_Enter = Qt.Key_Enter
+    Key_Tab = Qt.Key_Tab
     BottomDock = Qt.BottomDockWidgetArea
     Stretch = QHeaderView.Stretch
+    HVC_Interactive = QHeaderView.Interactive
+    HVC_ResizeToContents = QHeaderView.ResizeToContents
     SingleSelection = QTreeView.SingleSelection
+    TableSingleSelection = QAbstractItemView.SingleSelection
+    SelectRows = QAbstractItemView.SelectRows
+    NoEditTriggers = QAbstractItemView.NoEditTriggers
     MB_Yes = QMessageBox.Yes
     MB_No = QMessageBox.No
     FONT_TYPEWRITER = QFont.TypeWriter
     SC_Open = QKeySequence.Open
+    QEvent_KeyPress = QEvent.KeyPress
+    ItemIsEnabled = Qt.ItemIsEnabled
+    ItemIsSelectable = Qt.ItemIsSelectable
+    AlignRight = Qt.AlignRight
+    AlignVCenter = Qt.AlignVCenter
 
 
 def event_pos(e):
@@ -76,3 +117,8 @@ def event_pos(e):
 def exec_app(app):
     """QApplication.exec() (Qt6) or .exec_() (Qt5)."""
     return app.exec() if QT6 else app.exec_()
+
+
+def exec_dialog(dlg):
+    """QDialog.exec() (Qt6) or .exec_() (Qt5)."""
+    return dlg.exec() if QT6 else dlg.exec_()

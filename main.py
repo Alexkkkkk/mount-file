@@ -71,10 +71,12 @@ def diagnostics():
         traceback.print_exc()
 
     try:
-        print("mainwindow: OK")
+        from mountfile import tc_window
+
+        print("tc_window: OK")
     except Exception as e:
         ok = False
-        print("mainwindow: FAIL -- %s" % e)
+        print("tc_window: FAIL -- %s" % e)
         traceback.print_exc()
 
     print("\nDiagnostics %s." % ("PASSED" if ok else "FAILED"))
@@ -106,7 +108,7 @@ def main():
             sys.exit(1)
 
     try:
-        from mountfile.mainwindow import MainWindow
+        from mountfile.tc_window import MainWindow
     except Exception:
         traceback.print_exc()
         _pause_on_windows()

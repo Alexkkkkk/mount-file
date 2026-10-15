@@ -1,0 +1,13 @@
+{
+  "name": "Mount File GUI",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  "postCreateCommand": "bash scripts/setup-gui.sh",
+  "postStartCommand": "nohup bash scripts/start-gui.sh >/tmp/mountfile-gui.log 2>&1 &",
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "noVNC desktop",
+      "onAutoForward": "notify"
+    }
+  }
+}
