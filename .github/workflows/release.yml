@@ -167,6 +167,11 @@ jobs:
     if: always() && needs.gate.outputs.proceed == 'true' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      # gh release create/upload shell out to git, so the job must be inside
+      # a repository - without this checkout the publish job failed with
+      # "fatal: not a git repository (or any of the parent directories): .git".
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: exe-*
@@ -183,18 +188,18 @@ jobs:
         run: |
           set -uo pipefail
           for i in $(seq 1 10); do
-            if gh release view "$TAG" >/dev/null 2>&1; then
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               echo "release $TAG exists"; break
             fi
             echo "release $TAG not found yet (attempt $i) - creating it"
-            gh release create "$TAG" --title "$TAG" --generate-notes || true
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes || true
             sleep 15
           done
           for i in 1 2 3 4 5; do
-            if gh release upload "$TAG" dist/*.exe dist/*.sha256 --clobber; then
+            if gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" dist/*.exe dist/*.sha256 --clobber; then
               echo "upload OK on attempt $i"; break
             fi
             echo "upload attempt $i failed, retrying in 15s..."; sleep 15
           done
           echo "--- assets now in $TAG ---"
-          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
