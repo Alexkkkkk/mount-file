@@ -8,4 +8,4 @@ via The Sleuth Kit (pytsk3) and read-write operations on FAT32
 (create/overwrite files, mkdir) implemented from scratch.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
