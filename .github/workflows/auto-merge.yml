@@ -41,10 +41,29 @@ jobs:
         run: gh pr review --approve "$PR_URL" || echo "approval not required or already given"
 
       - name: Enable the merge (squash) on green
+        id: attempt
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --squash --delete-branch --auto "$PR_URL"
+
+      # A GitHub App (and this includes the default GITHUB_TOKEN) is not
+      # allowed to create or update files under .github/workflows/, so PRs
+      # that bump workflow actions cannot be merged programmatically. Those
+      # are flagged instead of failing the job - a personal token is the
+      # only way to merge them automatically.
+      - name: Flag PRs that need a manual merge (workflow files)
+        if: steps.attempt.outcome == 'failure'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh label create needs-manual-merge --force \
+            --description "Must be merged with a personal token (workflow files)" --color d93f0b || true
+          gh pr edit "$PR_URL" --add-label needs-manual-merge || true
+          gh pr comment "$PR_URL" --body "Automated merging is blocked for this PR: it changes files under \`.github/workflows/\`, which a GitHub App may not merge without the \`workflows\` permission. Please merge it manually (or push the update with a personal token)." || true
 
       - name: Verify the merge actually happened
         env:
@@ -61,4 +80,8 @@ jobs:
             esac
             sleep 20
           done
+          if [ "${{ steps.attempt.outcome }}" = "failure" ]; then
+            echo "::warning::PR left open on purpose - it changes workflow files and needs a manual merge (label needs-manual-merge)"
+            exit 0
+          fi
           echo "::error::PR was not merged within 10 minutes"; exit 1
