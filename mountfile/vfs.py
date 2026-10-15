@@ -48,11 +48,13 @@ class TskImage:
             if meta is None:
                 continue
             is_dir = meta.type == pytsk3.TSK_FS_META_TYPE_DIR
-            out.append({
-                "name": name,
-                "is_dir": is_dir,
-                "size": 0 if is_dir else int(meta.size),
-            })
+            out.append(
+                {
+                    "name": name,
+                    "is_dir": is_dir,
+                    "size": 0 if is_dir else int(meta.size),
+                }
+            )
         out.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
         return out
 

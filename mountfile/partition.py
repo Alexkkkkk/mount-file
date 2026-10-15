@@ -75,7 +75,11 @@ class Partition:
 
     def __repr__(self):
         return "<Partition %s LBA=%d+%d %s>" % (
-            self.name, self.start_lba, self.sectors, self.type_name)
+            self.name,
+            self.start_lba,
+            self.sectors,
+            self.type_name,
+        )
 
 
 def _parse_mbr(f):
@@ -85,13 +89,16 @@ def _parse_mbr(f):
         return []
     parts = []
     for i in range(4):
-        e = mbr[446 + 16 * i: 446 + 16 * (i + 1)]
+        e = mbr[446 + 16 * i : 446 + 16 * (i + 1)]
         ptype = e[4]
         start, size = struct.unpack_from("<II", e, 8)
         if ptype == 0 or size == 0:
             continue
-        parts.append(Partition(i + 1, "Partition %d" % (i + 1),
-                               start, size, ptype, bool(e[0] & 0x80)))
+        parts.append(
+            Partition(
+                i + 1, "Partition %d" % (i + 1), start, size, ptype, bool(e[0] & 0x80)
+            )
+        )
     return parts
 
 
@@ -116,9 +123,15 @@ def _parse_gpt(f):
         if last < first:
             continue
         name = e[56:128].decode("utf-16-le", "ignore").rstrip("\x00")
-        parts.append(Partition(i + 1, name or "Partition %d" % (i + 1),
-                               first, last - first + 1,
-                               str(type_guid)))
+        parts.append(
+            Partition(
+                i + 1,
+                name or "Partition %d" % (i + 1),
+                first,
+                last - first + 1,
+                str(type_guid),
+            )
+        )
     return parts
 
 

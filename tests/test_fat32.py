@@ -15,8 +15,8 @@ import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mountfile.partition import list_partitions
 from mountfile.fat32 import Fat32
+from mountfile.partition import list_partitions
 
 BPS, SPC, RESERVED, NFATS, ROOTC = 512, 1, 32, 1, 2
 TOTAL_SECTORS = 70000
@@ -71,8 +71,9 @@ class TestFat32:
         self.fh.close()
 
     def _free(self):
-        return sum(1 for n in range(2, self.fs.fat_size // 4)
-                   if self.fs._fat_get(n) == 0)
+        return sum(
+            1 for n in range(2, self.fs.fat_size // 4) if self.fs._fat_get(n) == 0
+        )
 
     def test_short_name_roundtrip(self):
         self.fs.write_file("/", "HELLO.TXT", b"Hello, FAT32 world!")
@@ -96,16 +97,15 @@ class TestFat32:
     def test_mkdir_nested(self):
         self.fs.mkdir("/", "CONFIG")
         self.fs.write_file("/CONFIG", "settings.ini", b"[main]\nkey=value\n")
-        assert self.fs.read_file("/CONFIG/settings.ini") == \
-            b"[main]\nkey=value\n"
+        assert self.fs.read_file("/CONFIG/settings.ini") == b"[main]\nkey=value\n"
 
     def test_many_files_no_leak(self):
         for i in range(40):
-            self.fs.write_file("/", "file_%03d.dat" % i,
-                               ("content %d" % i).encode())
+            self.fs.write_file("/", "file_%03d.dat" % i, ("content %d" % i).encode())
         for i in range(40):
-            assert self.fs.read_file("/file_%03d.dat" % i) == \
-                ("content %d" % i).encode()
+            assert (
+                self.fs.read_file("/file_%03d.dat" % i) == ("content %d" % i).encode()
+            )
         self.fs.write_file("/", "temp.tmp", os.urandom(1000))
         base = self._free()
         dirlen = len(self.fs.cluster_chain(self.fs.root_cluster))
@@ -165,7 +165,7 @@ class TestPartitions:
             struct.pack_into("<Q", ent, 32, 2048)
             struct.pack_into("<Q", ent, 40, 2048 + 99999)
             name16 = "RootFS".encode("utf-16-le")
-            ent[56:56 + len(name16)] = name16
+            ent[56 : 56 + len(name16)] = name16
             f.seek(2 * 512)
             f.write(ent)
         parts = list_partitions(path)
