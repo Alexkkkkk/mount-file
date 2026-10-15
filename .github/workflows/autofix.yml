@@ -1,0 +1,55 @@
+name: autofix
+
+# Automatic code fixing: after every push to main, ruff (real bugs:
+# unused imports, undefined names, shadowing), black and isort run on
+# the codebase and commit the result. The commit message contains
+# "[skip ci]" so the autofix commit does not retrigger workflows
+# (built-in loop protection).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    # Do not run on the autofix commit itself (extra guard on top of
+    # "[skip ci]"): without this, two quick pushes could race.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install fixers
+        run: pip install ruff black isort
+
+      - name: "ruff --fix (real bug classes: F401, F821, F841, ...)"
+        run: ruff check --fix mountfile tests main.py || true
+
+      - name: black (formatting)
+        run: black --quiet mountfile tests main.py || true
+
+      - name: isort (import order)
+        run: isort --quiet mountfile tests main.py || true
+
+      - name: Verify the code still compiles
+        run: python -m compileall -q mountfile main.py
+
+      - name: Commit and push fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No automatic fixes needed."
+          else
+            git commit -m "chore: autofix (ruff/black/isort) [skip ci]"
+            git push
+            echo "Pushed automatic fixes."
+          fi

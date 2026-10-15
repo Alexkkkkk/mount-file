@@ -1,32 +1,53 @@
-name: Release
+name: release
+
+# Automatic release:
+#   * push a tag like "v0.2.0"  ->  build MountFile.exe + GitHub Release;
+#   * or run manually from the Actions tab (workflow_dispatch).
+#
+# The exe is built on Python 3.8 with PyQt5 (requirements-win7.txt), so
+# the same binary runs on Windows 7, 10 and 11.
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build-and-release:
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-      - name: Create the GitHub Release (idempotent)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          python-version: "3.8"
+
+      - name: Install dependencies (Win7-compatible set) + PyInstaller
         run: |
-          set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists - leaving it in place"
-          else
-            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
-          fi
-          gh release view "$TAG" --json tagName,url --jq '"release " + .tagName + " -> " + .url'
+          pip install -r requirements-win7.txt
+          pip install pyinstaller
+
+      - name: Run the test suite before releasing
+        run: |
+          pip install pytest
+          python -m pytest tests/ -v
+
+      - name: Build MountFile.exe
+        run: |
+          python -m PyInstaller --onefile --windowed --name MountFile `
+            --collect-submodules pytsk3 main.py
+
+      - name: Smoke-test the executable
+        run: dist\MountFile.exe --diag
+
+      - name: Create GitHub Release with the exe
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MountFile.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

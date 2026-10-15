@@ -18,8 +18,12 @@ import traceback
 
 
 def _pause_on_windows():
-    """Keep the console window open after a fatal error (double-click)."""
-    if sys.platform.startswith("win"):
+    """Keep the console window open after a fatal error (double-click).
+
+    Only pauses for an interactive console: in CI (or any piped stdin)
+    waiting for Enter would hang the job forever.
+    """
+    if sys.platform.startswith("win") and sys.stdin.isatty():
         try:
             input("\nPress Enter to close this window...")
         except EOFError:
