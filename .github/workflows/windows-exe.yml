@@ -7,12 +7,18 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the EXE to (leave empty for a normal build)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
 
 concurrency:
-  group: windows-exe-${{ github.ref }}
+  group: windows-exe-${{ github.ref }}-${{ inputs.tag }}
   cancel-in-progress: true
 
 env:
@@ -41,6 +47,8 @@ jobs:
             legacy: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -124,7 +132,7 @@ jobs:
   release-assets:
     name: attach EXE to release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -134,12 +142,20 @@ jobs:
           pattern: mountfile-*
           merge-multiple: true
           path: dist
-      - name: Upload EXE files to the GitHub Release
+
+      - name: Attach EXE + checksums to the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          set -e
+          set -euo pipefail
           ls -lh dist
-          TAG="$GITHUB_REF_NAME"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists - adding assets"
+          else
+            echo "creating release $TAG"
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          fi
           gh release upload "$TAG" dist/*.exe dist/*.sha256 --clobber
+          echo "--- assets now in $TAG ---"
+          gh release view "$TAG" --json assets --jq '.assets[].name'
