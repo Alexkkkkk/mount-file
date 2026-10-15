@@ -19,7 +19,7 @@ import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mountfile import updater  # noqa: E402
+from mountfile import updater
 
 
 # ---------------------------------------------------------------- заглушки
@@ -114,7 +114,9 @@ def test_check_reports_newer_release(monkeypatch):
         "v1.2.0", [("MountFile.exe", payload), ("MountFile.exe.sha256", b"x")]
     )
     monkeypatch.setattr(updater.sys, "platform", "win32")
-    monkeypatch.setattr(updater.urllib.request, "urlopen", _fake_urlopen(release, payload))
+    monkeypatch.setattr(
+        updater.urllib.request, "urlopen", _fake_urlopen(release, payload)
+    )
     info = updater.check("1.1.1")
     assert info["version"] == "1.2.0"
     assert info["asset"]["name"] == "MountFile.exe"
@@ -161,9 +163,13 @@ def _boom_offline(req, timeout=None):
 def test_download_asset_writes_and_reports(tmp_path, monkeypatch):
     payload = b"0123456789" * 100
     release = _release("v2.0.0", [("MountFile.exe", payload)])
-    monkeypatch.setattr(updater.urllib.request, "urlopen", _fake_urlopen(release, payload))
+    monkeypatch.setattr(
+        updater.urllib.request, "urlopen", _fake_urlopen(release, payload)
+    )
     seen = []
-    path, size = updater.download_asset(release["assets"][0], str(tmp_path), seen.append)
+    path, size = updater.download_asset(
+        release["assets"][0], str(tmp_path), seen.append
+    )
     assert size == len(payload)
     assert open(path, "rb").read() == payload
     assert seen[-1] == 100
@@ -180,7 +186,7 @@ def test_download_detects_truncated_file(tmp_path, monkeypatch):
     )
     try:
         updater.download_asset(asset, str(tmp_path))
-    except IOError:
+    except OSError:
         pass
     else:  # pragma: no cover
         raise AssertionError("неполная загрузка должна считаться ошибкой")
@@ -230,7 +236,9 @@ def test_install_requires_frozen_build(monkeypatch):
 
 def test_windows_swap_script_waits_for_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path))
-    script = updater._windows_swap_script("C:\\new.exe", "C:\\app\\MountFile.exe", 4242, str(tmp_path / "l.log"))
+    script = updater._windows_swap_script(
+        "C:\\new.exe", "C:\\app\\MountFile.exe", 4242, str(tmp_path / "l.log")
+    )
     text = open(script, encoding="utf-8").read()
     assert "4242" in text
     assert "move /Y" in text

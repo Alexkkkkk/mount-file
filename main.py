@@ -131,8 +131,7 @@ def check_updates():
     Never raises: a broken network/URL is reported and returns 0 so a
     launcher script does not treat "offline" as a program failure.
     """
-    from mountfile import __version__
-    from mountfile import updater
+    from mountfile import __version__, updater
 
     print("Installed version: v%s" % __version__)
     print("Update source: %s" % updater.update_url())
@@ -149,7 +148,10 @@ def check_updates():
         return 0
     print("Update available: v%s (you have v%s)" % (info["version"], __version__))
     if info.get("asset"):
-        print("  asset: %s (%s bytes)" % (info["asset"].get("name"), info["asset"].get("size") or "?"))
+        print(
+            "  asset: %s (%s bytes)"
+            % (info["asset"].get("name"), info["asset"].get("size") or "?")
+        )
         print("  sha256: %s" % (info.get("sha256") or "not published"))
     else:
         print("  no build for this platform in the release")
