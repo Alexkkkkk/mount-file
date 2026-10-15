@@ -6,6 +6,7 @@
 Usage:
     python main.py [disk_image.img]     start the GUI
     python main.py --diag               print environment diagnostics and exit
+    python -m mountfile --help          command line interface
 
 Works with PyQt6 (Windows 10/11, Linux, macOS) or PyQt5 (Windows 7).
 
@@ -50,24 +51,18 @@ def diagnostics():
         import pytsk3
         print("pytsk3: OK (%s)" % getattr(pytsk3, "__file__", "?"))
     except ImportError as e:
-        print("pytsk3: not installed (%s) -- read-only browsing of "
-              "FAT/NTFS/EXT will not work" % e)
+        print("pytsk3: not installed (%s) -- FAT32 images are still browsable "
+              "with the built-in engine, other filesystems need libtsk" % e)
 
-    try:
-        from mountfile import qt_compat
-        print("qt_compat: OK (QT6=%s)" % qt_compat.QT6)
-    except Exception as e:
-        ok = False
-        print("qt_compat: FAIL -- %s" % e)
-        traceback.print_exc()
-
-    try:
-        from mountfile.mainwindow import MainWindow
-        print("mainwindow: OK")
-    except Exception as e:
-        ok = False
-        print("mainwindow: FAIL -- %s" % e)
-        traceback.print_exc()
+    for module in ("mountfile.qt_compat", "mountfile.firmware",
+                   "mountfile.fat32", "mountfile.mainwindow"):
+        try:
+            __import__(module)
+            print("%s: OK" % module)
+        except Exception as e:
+            ok = False
+            print("%s: FAIL -- %s" % (module, e))
+            traceback.print_exc()
 
     print("\nDiagnostics %s." % ("PASSED" if ok else "FAILED"))
     return 0 if ok else 1
@@ -80,23 +75,14 @@ def main():
         sys.exit(code)
 
     try:
-        from PyQt6.QtWidgets import QApplication
-        from mountfile.qt_compat import exec_app
-    except ImportError:
-        try:
-            from PyQt5.QtWidgets import QApplication
-            from mountfile.qt_compat import exec_app
-        except ImportError:
-            print("No Qt bindings found.\n"
-                  "Windows 10+/Linux:  pip install -r requirements.txt\n"
-                  "Windows 7:          pip install -r requirements-win7.txt")
-            _pause_on_windows()
-            sys.exit(1)
-
-    try:
+        from mountfile.qt_compat import QApplication, exec_app
         from mountfile.mainwindow import MainWindow
-    except Exception:
-        traceback.print_exc()
+    except Exception as e:
+        print("Cannot start the GUI: %s\n"
+              "Windows 10+/Linux:  pip install -r requirements.txt\n"
+              "Windows 7:          pip install -r requirements-win7.txt\n\n"
+              "The command line interface has no Qt dependency:\n"
+              "  python -m mountfile --help" % e)
         _pause_on_windows()
         sys.exit(1)
 
@@ -105,9 +91,8 @@ def main():
         app.setApplicationName("Mount File")
         win = MainWindow()
         win.show()
-        if len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
-            win.image_path = sys.argv[1]
-            win.open_image()
+        if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+            win.open_image(sys.argv[1])
         sys.exit(exec_app(app))
     except Exception:
         traceback.print_exc()

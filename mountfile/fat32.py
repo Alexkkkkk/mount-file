@@ -368,6 +368,62 @@ class Fat32:
                 return self.read_chain(e.cluster, e.size)
         raise Fat32Error("file not found: %s" % path)
 
+    def entry(self, path):
+        """Return ``(parent_cluster, DirEntry)`` for a path (file or dir)."""
+        parts = [p for p in path.replace("\\", "/").split("/") if p]
+        if not parts:
+            raise Fat32Error("the root directory has no directory entry")
+        parent = self.find_dir("/" + "/".join(parts[:-1]))
+        name = parts[-1].upper()
+        for e in self.list_dir(parent):
+            if e.name.upper() == name:
+                return parent, e
+        raise Fat32Error("not found: %s" % path)
+
+    def dir_is_empty(self, entry):
+        """True when a directory holds nothing besides "." and ".."."""
+        if entry.cluster < 2:
+            return True
+        chain, data = self._dir_stream(entry.cluster)
+        return not self._parse_dir_data(data, 0)
+
+    def delete(self, path):
+        """Delete a file, or a directory that is already empty.
+
+        Returns the removed :class:`DirEntry`. The cluster chain is released
+        before the entry is tombstoned, so a failure leaves the image with the
+        file still reachable instead of leaking its data clusters.
+        """
+        parent, entry = self.entry(path)
+        if entry.is_dir and not self.dir_is_empty(entry):
+            raise Fat32Error("directory is not empty: %s" % path)
+        if entry.cluster >= 2:
+            self._free_chain(entry.cluster)
+        self._delete_entry(parent, entry.entry_offset)
+        self.f.flush()
+        return entry
+
+    def rename(self, path, new_name):
+        """Rename a file or directory in place (LFN entries are rebuilt)."""
+        new_name = self._sanitize(new_name)
+        parent, entry = self.entry(path)
+        if entry.name.upper() == new_name.upper():
+            return entry
+        siblings = self.list_dir(parent)
+        if any(e.name.upper() == new_name.upper() for e in siblings):
+            raise Fat32Error("already exists: %s" % new_name)
+        used = {e.short_raw for e in siblings}
+        used |= {self._short_to_name(e.short_raw).encode("ascii", "replace")
+                 for e in siblings}
+        short = self._make_short_name(new_name, used)
+        attr = 0x10 if entry.is_dir else 0x20
+        raw = self._build_entries(new_name, short, entry.cluster, entry.size,
+                                  attr=attr)
+        self._delete_entry(parent, entry.entry_offset)
+        self._insert_entries(parent, raw)
+        self.f.flush()
+        return entry
+
     # -------------------------------------------------------- writing
     def _find_slots(self, data, needed):
         free_run = 0
@@ -437,16 +493,24 @@ class Fat32:
         target = next(
             (e for e in entries_now
              if not e.is_dir and e.name.upper() == filename.upper()), None)
-        used = {e.short_raw for e in entries_now}
-        used |= {self._short_to_name(e.short_raw) for e in entries_now}
-        short = self._make_short_name(filename, used)
+        if target is not None:
+            # Reuse the existing 8.3 name: it is unique by construction and
+            # keeps the directory entry stable across repeated overwrites.
+            short = target.short_raw
+        else:
+            used = {e.short_raw for e in entries_now}
+            used |= {self._short_to_name(e.short_raw).encode("ascii", "replace")
+                     for e in entries_now}
+            short = self._make_short_name(filename, used)
         nclusters = max(1, math.ceil(len(data) / self.cluster_size)) \
             if data else 0
-        if target is not None:
-            self._delete_entry(dir_cluster, target.entry_offset)
+        # Allocate the new chain first: if the volume is full the old file is
+        # still intact and nothing has been destroyed yet.
         first = self._alloc_chain(nclusters) if nclusters else 0
         self._write_chain_data(first, data)
         raw = self._build_entries(filename, short, first, len(data))
+        if target is not None:
+            self._delete_entry(dir_cluster, target.entry_offset)
         self._insert_entries(dir_cluster, raw)
         if target is not None and target.cluster >= 2:
             self._free_chain(target.cluster)
@@ -463,7 +527,10 @@ class Fat32:
         short = self._make_short_name(name, used)
         c = self._alloc_cluster()
         dot = bytearray(32)
-        dot[0:11] = short[0:1].ljust(8) + b"   "
+        # The self/parent entries are spelled "." and ".." padded with
+        # spaces - writing the short name there made list_dir() report a
+        # phantom entry inside every freshly created directory.
+        dot[0:11] = b"." + b" " * 10
         dot[11] = 0x10
         struct.pack_into("<H", dot, 20, (c >> 16) & 0xFFFF)
         struct.pack_into("<H", dot, 26, c & 0xFFFF)
@@ -477,3 +544,82 @@ class Fat32:
         raw = self._build_entries(name, short, c, 0, attr=0x10)
         self._insert_entries(dir_cluster, raw)
         self.f.flush()
+
+
+class Fat32Provider:
+    """Read-only provider over a FAT32 volume.
+
+    Exposes the same tiny interface as the pytsk3 provider in
+    :mod:`mountfile.vfs` (`list_dir`, `read_file`, `read_file_range`,
+    `file_size`, `root_name`), so the GUI and the CLI can browse and extract
+    FAT32 images even when The Sleuth Kit is not installed.
+    """
+
+    def __init__(self, image_path, offset=0, writable=False, fileobj=None):
+        self.root_name = image_path
+        self._owns = fileobj is None
+        self.f = fileobj or open(image_path, "r+b" if writable else "rb")
+        try:
+            self.fs = Fat32(self.f, offset)
+        except Exception:
+            self.close()
+            raise
+
+    # -- lifecycle -----------------------------------------------------
+    def close(self):
+        if self._owns and self.f is not None:
+            try:
+                self.f.close()
+            except OSError:
+                pass
+            self.f = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    # -- provider interface --------------------------------------------
+    def list_dir(self, path="/"):
+        entries = self.fs.list_dir(self.fs.find_dir(path))
+        out = [{"name": e.name, "is_dir": e.is_dir, "size": e.size}
+               for e in entries]
+        out.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        return out
+
+    def _entry(self, path):
+        return self.fs.entry(path)[1]
+
+    def file_size(self, path):
+        entry = self._entry(path)
+        return 0 if entry.is_dir else int(entry.size)
+
+    def read_file_range(self, path, offset=0, length=1 << 20):
+        entry = self._entry(path)
+        if entry.is_dir:
+            raise Fat32Error("is a directory: %s" % path)
+        size = int(entry.size)
+        if offset >= size or offset < 0:
+            return b""
+        length = min(length, size - offset)
+        if entry.cluster < 2:
+            return b""
+        out = bytearray()
+        pos = 0
+        csize = self.fs.cluster_size
+        for c in self.fs.cluster_chain(entry.cluster):
+            if pos + csize <= offset:
+                pos += csize
+                continue
+            data = self.fs.read_cluster(c)
+            start = max(0, offset - pos)
+            out += data[start:start + (length - len(out))]
+            pos += csize
+            if len(out) >= length:
+                break
+        return bytes(out)
+
+    def read_file(self, path):
+        return self.fs.read_file(path)
