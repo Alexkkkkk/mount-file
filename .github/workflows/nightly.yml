@@ -17,9 +17,9 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.8'
 
@@ -41,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
           Get-ChildItem dist | Select-Object Name, Length
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MountFile-nightly-${{ github.sha }}
           path: dist/MountFile-nightly.exe

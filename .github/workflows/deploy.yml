@@ -23,8 +23,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Sanity build (byte-compile)
@@ -34,7 +34,7 @@ jobs:
           STAMP="${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
           mkdir -p dist
           git archive --format=zip --prefix="MountFile-${STAMP}/" -o "dist/MountFile-${STAMP}.zip" HEAD
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mountfile-bundle
           path: dist/*.zip
@@ -48,7 +48,7 @@ jobs:
       name: staging
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: mountfile-bundle
           path: dist
@@ -68,8 +68,8 @@ jobs:
       name: production
       url: https://github.com/${{ github.repository }}/releases
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: mountfile-bundle
           path: dist

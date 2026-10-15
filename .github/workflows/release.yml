@@ -52,10 +52,10 @@ jobs:
     if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install pytest
@@ -90,11 +90,11 @@ jobs:
             name: MountFile-win7-x64
             legacy: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
 
@@ -152,7 +152,7 @@ jobs:
           & "dist\${{ matrix.name }}.exe" --diag
           Write-Host "frozen exe exit code: $LASTEXITCODE"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: exe-${{ matrix.label }}
           path: |
@@ -170,9 +170,9 @@ jobs:
       # gh release create/upload shell out to git, so the job must be inside
       # a repository - without this checkout the publish job failed with
       # "fatal: not a git repository (or any of the parent directories): .git".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: exe-*
           merge-multiple: true
