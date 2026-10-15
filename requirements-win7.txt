@@ -6,4 +6,4 @@
 # Установка:  py -3.8 -m pip install -r requirements-win7.txt
 PyQt5>=5.15.11,<5.16
 pytsk3>=20260715
-pyinstaller>=5.6
+pyinstaller>=6.22.3
