@@ -33,7 +33,6 @@ jobs:
           set -uo pipefail
           python -m pip install markdown
           mkdir -p docs
-          if ! python -m pip install pdoc && false; then :; fi
           python -m pip install pdoc || true
           if python -m pdoc -o docs mountfile; then
             echo "pdoc build OK"
