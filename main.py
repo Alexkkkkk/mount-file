@@ -8,6 +8,8 @@ Usage:
     python main.py --diag               print environment diagnostics and exit
     python main.py --version            print the version and exit
     python main.py --check-updates      check GitHub Releases and exit
+    python main.py <command> ...        CLI (volumes/info/ls/get/put/mkdir/mv/rm)
+    python -m mountfile --help          full command line help
 
 Works with PyQt6 (Windows 10/11, Linux, macOS) or PyQt5 (Windows 7).
 
@@ -160,6 +162,7 @@ def check_updates():
 
 
 def main():
+    argv = [a for a in sys.argv[1:] if a not in ("--pause", "--no-pause")]
     if "--version" in sys.argv:
         try:
             from mountfile import __version__
@@ -176,6 +179,12 @@ def main():
         code = diagnostics()
         _pause_on_windows()
         sys.exit(code)
+
+    # Keep disk commands independent of Qt, including in frozen builds.
+    from mountfile.cli import COMMANDS, main as cli_main
+
+    if argv and (argv[0] in COMMANDS or argv[0].startswith("-")):
+        sys.exit(cli_main(argv))
 
     try:
         from PyQt6.QtWidgets import QApplication
@@ -209,8 +218,8 @@ def main():
         app.setApplicationName("Mount File")
         win = MainWindow()
         win.show()
-        if len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
-            win.open_image(sys.argv[1])
+        if argv and not argv[0].startswith("-"):
+            win.open_image(argv[0])
         sys.exit(exec_app(app))
     except Exception:
         traceback.print_exc()

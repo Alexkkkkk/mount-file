@@ -1313,17 +1313,19 @@ class MainWindow(QMainWindow):
 
         try:
             panel.provider = TskImage(self.image_path, offset=offset)
-        except TskError as e:
-            panel.provider = None
-            QMessageBox.warning(
-                self,
-                "Не удалось смонтировать том",
-                "The Sleuth Kit не смог открыть этот том:\n%s\n\n"
-                "Совет: выберите конкретный раздел в списке томов "
-                "или установите pytsk3." % e,
-            )
-            panel.refresh()
-            return False
+        except TskError as tsk_error:
+            from .fat32 import Fat32Error, Fat32Provider
+
+            try:
+                panel.provider = Fat32Provider(self.image_path, offset=offset)
+            except (Fat32Error, OSError, ValueError) as fat_error:
+                panel.provider = None
+                QMessageBox.warning(
+                    self, "Не удалось смонтировать том",
+                    "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
+                )
+                panel.refresh()
+                return False
 
         panel.mode = "img"
         panel.volume_offset = offset
@@ -1366,7 +1368,9 @@ class MainWindow(QMainWindow):
                 pass
         panel.writer_fh = None
         panel.writer = None
-        panel.provider = None
+        provider, panel.provider = panel.provider, None
+        if provider is not None and hasattr(provider, "close"):
+            provider.close()
 
     def _close_writer(self, panel=None):
         """Close write handles (all panels when called without arguments)."""

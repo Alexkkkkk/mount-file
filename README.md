@@ -17,6 +17,7 @@ A file manager for raw disk images and NAND/eMMC dumps. Browse images, extract f
 - [Возможности](#возможности)
 - [Быстрый старт](#быстрый-старт)
 - [Использование](#использование)
+- [Командная строка](#командная-строка)
 - [Windows 7](#windows-7)
 - [Автообновление](#автообновление)
 - [Интерфейс и клавиши](#интерфейс-и-клавиши)
@@ -71,6 +72,31 @@ python main.py dump.img
 4. Для тома FAT32 доступны **Import file…** и **New folder**.
 
 Импорт изменяет исходный файл образа. Перед записью сохраните его резервную копию.
+
+## Командная строка
+
+Команды доступны и через `python main.py`, и через собранный бинарник;
+для CLI установка Qt не требуется. Все пути ниже — примеры.
+
+```bash
+python -m mountfile --help
+python main.py volumes dump.img
+python main.py ls dump.img /
+python main.py get dump.img /photos -o ./out
+python main.py put dump.img ./hello.txt --dest / --yes
+python main.py mkdir dump.img /new
+python main.py mv dump.img /hello.txt renamed.txt
+python main.py rm dump.img /new --recursive --yes
+```
+
+Без `pytsk3` CLI и классическое дерево используют встроенный провайдер FAT32.
+Запись, переименование и удаление поддерживаются только на FAT32. Команды
+`put` и `rm` требуют `--yes`; перед изменением образа сделайте резервную копию.
+`mv` переименовывает файл в том же каталоге, а не переносит между томами.
+
+Сборка Linux: `./build_exe.sh`; результат — `dist/MountFile-linux-x86-64`.
+Для запуска Qt на Linux могут потребоваться системные пакеты `libgl1`,
+`libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3` и `libxcb-cursor0`.
 
 ## Windows 7
 
