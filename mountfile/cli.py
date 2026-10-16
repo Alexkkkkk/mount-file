@@ -34,7 +34,18 @@ OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
-COMMANDS = ("volumes", "info", "ls", "get", "put", "mkdir", "mv", "rm", "decode", "split")
+COMMANDS = (
+    "volumes",
+    "info",
+    "ls",
+    "get",
+    "put",
+    "mkdir",
+    "mv",
+    "rm",
+    "decode",
+    "split",
+)
 
 _READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
 
@@ -261,7 +272,9 @@ def cmd_decode(args):
         raise Rt809Error("no such file: %s" % args.dump)
     out = decode_dump(args.dump, table_dir=args.table_dir)
     if out is None:
-        print("Dump carries an MST/MTK marker but is not encrypted - nothing to decode.")
+        print(
+            "Dump carries an MST/MTK marker but is not encrypted - nothing to decode."
+        )
         return OK
     print("Decoded dump written: %s" % out)
     return OK
@@ -277,7 +290,10 @@ def cmd_split(args):
     print("%-3s %-10s %-10s %s" % ("#", "offset", "length", "name"))
     for i, p in enumerate(parts, 1):
         print("%-3d 0x%08X  0x%08X  %s" % (i, p.offset, p.length, p.name))
-    print("\nWritten %d partition file(s) to %s" % (len(written), args.output or "<dump>_/"))
+    print(
+        "\nWritten %d partition file(s) to %s"
+        % (len(written), args.output or "<dump>_/")
+    )
     return OK
 
 

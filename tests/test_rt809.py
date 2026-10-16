@@ -21,11 +21,11 @@ def make_encrypted_dump(path, kind="MTK", plain_check=True):
     """Build a synthetic encrypted dump of the shape the decoder expects."""
     buf = bytearray(rt809.BLOCK * 3)
     if kind == "MTK":
-        buf[0x100 : 0x114] = rt809.MARKER_MTK
-        buf[0xFC : 0xFE] = rt809.FLAG_ENCODE
+        buf[0x100:0x114] = rt809.MARKER_MTK
+        buf[0xFC:0xFE] = rt809.FLAG_ENCODE
         xor_addr, start, end = rt809.MTK_XOR_ADDR, rt809.MTK_DATA_START, rt809.BLOCK
         check_at, check_data = rt809.MTK_PLAIN_CHECK
-        head_plain = buf[0x114 : end]  # placeholder payload
+        head_plain = buf[0x114:end]  # placeholder payload
     else:
         # flag "JC" at 0x200090, XOR byte at 0x200092, marker at 0x200094
         buf[rt809.MST_FLAG_ADDR : rt809.MST_FLAG_ADDR + 2] = rt809.FLAG_ENCODE
@@ -42,9 +42,7 @@ def make_encrypted_dump(path, kind="MTK", plain_check=True):
     table = bytearray(os.urandom(0x400))
     src = bytes(head_plain)
     # payload = plain XOR one-byte XOR table
-    payload = bytes(
-        b ^ 0x5A ^ table[i % len(table)] for i, b in enumerate(src)
-    )
+    payload = bytes(b ^ 0x5A ^ table[i % len(table)] for i, b in enumerate(src))
     buf[start:end] = payload
 
     with open(path, "wb") as f:
@@ -157,7 +155,11 @@ class TestUdev:
     def test_parse_windows_eol(self):
         parts = parse_udev(self._udev())
         assert len(parts) == 3
-        assert (parts[0].offset, parts[0].length, parts[0].name) == (0, 0x4000, "preloader")
+        assert (parts[0].offset, parts[0].length, parts[0].name) == (
+            0,
+            0x4000,
+            "preloader",
+        )
         assert parts[2].name == "system"
 
     def test_parse_unix_eol(self):
