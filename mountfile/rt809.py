@@ -35,15 +35,14 @@ byte-exact output):
 from __future__ import annotations
 
 import os
-import struct
 
 __all__ = [
-    "Rt809Error",
-    "Part",
     "BLOCK",
+    "Part",
+    "Rt809Error",
+    "decode_dump",
     "detect",
     "load_table",
-    "decode_dump",
     "parse_udev",
     "split_by_udev",
 ]
@@ -86,7 +85,7 @@ class Rt809Error(ValueError):
 class Part:
     """One partition entry parsed from a udev file."""
 
-    __slots__ = ("name", "offset", "length")
+    __slots__ = ("length", "name", "offset")
 
     def __init__(self, name, offset, length):
         self.name = name

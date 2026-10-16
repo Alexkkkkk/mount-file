@@ -1250,10 +1250,14 @@ class MainWindow(QMainWindow):
             out = decode_dump(path)
         except Exception as e:
             self.log_msg("Ошибка декодирования: %s" % e)
-            QMessageBox.warning(self, "Декодирование", "Не удалось декодировать:\n%s" % e)
+            QMessageBox.warning(
+                self, "Декодирование", "Не удалось декодировать:\n%s" % e
+            )
             return
         if out is None:
-            self.log_msg("Дамп не зашифрован (маркер найден, флаг JC сброшен): %s" % path)
+            self.log_msg(
+                "Дамп не зашифрован (маркер найден, флаг JC сброшен): %s" % path
+            )
             return
         self.log_msg("Декодированный дамп записан: %s" % out)
 
@@ -1264,7 +1268,9 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        udev, _ = QFileDialog.getOpenFileName(self, "Выбрать файл udev", "", "udev (*.*)")
+        udev, _ = QFileDialog.getOpenFileName(
+            self, "Выбрать файл udev", "", "udev (*.*)"
+        )
         if not udev:
             return
         try:
