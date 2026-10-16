@@ -14,25 +14,19 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import rt809
-from mountfile.rt809 import (
-    Part,
-    Rt809Error,
-    decode_dump,
-    detect,
-    format_parts_table,
-    parse_udev,
-)
+from mountfile.rt809 import (Part, Rt809Error, decode_dump, detect,
+                             format_parts_table, parse_udev)
 
 
 def make_encrypted_dump(path, kind="MTK", plain_check=True):
     """Build a synthetic encrypted dump of the shape the decoder expects."""
     buf = bytearray(rt809.BLOCK * 3)
     if kind == "MTK":
-        buf[0x100 : 0x114] = rt809.MARKER_MTK
-        buf[0xFC : 0xFE] = rt809.FLAG_ENCODE
+        buf[0x100:0x114] = rt809.MARKER_MTK
+        buf[0xFC:0xFE] = rt809.FLAG_ENCODE
         xor_addr, start, end = rt809.MTK_XOR_ADDR, rt809.MTK_DATA_START, rt809.BLOCK
         check_at, check_data = rt809.MTK_PLAIN_CHECK
-        head_plain = buf[0x114 : end]  # placeholder payload
+        head_plain = buf[0x114:end]  # placeholder payload
     else:
         # flag "JC" at 0x200090, XOR byte at 0x200092, marker at 0x200094
         buf[rt809.MST_FLAG_ADDR : rt809.MST_FLAG_ADDR + 2] = rt809.FLAG_ENCODE
@@ -49,9 +43,7 @@ def make_encrypted_dump(path, kind="MTK", plain_check=True):
     table = bytearray(os.urandom(0x400))
     src = bytes(head_plain)
     # payload = plain XOR one-byte XOR table
-    payload = bytes(
-        b ^ 0x5A ^ table[i % len(table)] for i, b in enumerate(src)
-    )
+    payload = bytes(b ^ 0x5A ^ table[i % len(table)] for i, b in enumerate(src))
     buf[start:end] = payload
 
     with open(path, "wb") as f:
@@ -164,7 +156,11 @@ class TestUdev:
     def test_parse_windows_eol(self):
         parts = parse_udev(self._udev())
         assert len(parts) == 3
-        assert (parts[0].offset, parts[0].length, parts[0].name) == (0, 0x4000, "preloader")
+        assert (parts[0].offset, parts[0].length, parts[0].name) == (
+            0,
+            0x4000,
+            "preloader",
+        )
         assert parts[2].name == "system"
 
     def test_parse_unix_eol(self):
@@ -207,19 +203,56 @@ class TestUdev:
 
 
 class TestFormatPartsTable:
+    """The table the GUI prints before asking for confirmation."""
+
+    def setup_method(self):
+        self.tmp = tempfile.mkdtemp(prefix="rt809_table_")
+
     def test_header_and_rows(self):
         parts = [Part("preloader", 0, 0x4000), Part("lk", 0x4000, 0x8000)]
-        table = format_parts_table(parts)
-        lines = table.splitlines()
+        lines = format_parts_table(parts).splitlines()
         assert len(lines) == 3
         assert "Offset" in lines[0] and "Length" in lines[0] and "Name" in lines[0]
+        # header and rows share the same column layout
+        assert lines[0].index("Offset") == lines[1].index("0x")
         assert lines[1].split()[:3] == ["1", "0x00000000", "0x00004000"]
         assert lines[1].endswith("preloader")
         assert lines[2].split()[:3] == ["2", "0x00004000", "0x00008000"]
         assert lines[2].endswith("lk")
 
     def test_empty(self):
-        assert format_parts_table([]).count("\n") == 0  # header only
+        assert len(format_parts_table([]).splitlines()) == 1  # header only
+
+    def test_numbering_starts_at_one(self):
+        lines = format_parts_table([Part("boot", 0, 0x1000)]).splitlines()
+        assert lines[1].startswith("1 ")
+
+    def test_cli_rows_match(self, capsys):
+        """The `split` command prints the same rows as the GUI table."""
+        from types import SimpleNamespace
+
+        from mountfile import cli
+
+        dump = os.path.join(self.tmp, "dump.bin")
+        with open(dump, "wb") as f:
+            f.write(bytes(0x100) * 0x200000)
+        udev = os.path.join(self.tmp, "udev.txt")
+        with open(udev, "w") as f:
+            f.write(
+                "[PARTITIONS]"
+                + os.linesep
+                + "0x00000000,0x00004000,preloader"
+                + os.linesep
+                + "0x00010000,0x00100000,system"
+                + os.linesep
+            )
+        args = SimpleNamespace(
+            dump=dump, udev=udev, output=os.path.join(self.tmp, "out")
+        )
+        assert cli.cmd_split(args) == getattr(cli, "OK", 0)
+        printed = capsys.readouterr().out
+        for row in format_parts_table(parse_udev(udev)).splitlines()[1:]:
+            assert row in printed
 
 
 if __name__ == "__main__":
@@ -237,5 +270,8 @@ if __name__ == "__main__":
         getattr(tc, meth)()
     tc = TestFormatPartsTable()
     for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
+        if meth == "test_cli_rows_match":
+            continue  # needs the pytest capsys fixture
+        tc.setup_method()
         getattr(tc, meth)()
     print("all rt809 tests passed")

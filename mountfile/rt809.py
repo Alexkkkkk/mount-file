@@ -35,15 +35,14 @@ byte-exact output):
 from __future__ import annotations
 
 import os
-import struct
 
 __all__ = [
-    "Rt809Error",
-    "Part",
     "BLOCK",
+    "Part",
+    "Rt809Error",
+    "decode_dump",
     "detect",
     "load_table",
-    "decode_dump",
     "parse_udev",
     "split_by_udev",
     "format_parts_table",
@@ -87,7 +86,7 @@ class Rt809Error(ValueError):
 class Part:
     """One partition entry parsed from a udev file."""
 
-    __slots__ = ("name", "offset", "length")
+    __slots__ = ("length", "name", "offset")
 
     def __init__(self, name, offset, length):
         self.name = name
@@ -232,11 +231,14 @@ def decode_dump(path, out_path=None, table_dir=None, kind=None):
 
 # ------------------------------------------------------------- presentation
 def format_parts_table(parts):
-    """Numbered ``# / Offset / Length / Name`` table, as print_parts()
-    in the original script (one line per partition)."""
-    lines = ["  №  Offset      Length      Name"]
+    """Numbered ``# / Offset / Length / Name`` table, one line per partition.
+
+    The rows use the same layout as the ``split`` command, so the GUI log
+    and the CLI show identical partition lines.
+    """
+    lines = ["  № Offset      Length      Name"]
     for i, p in enumerate(parts, 1):
-        lines.append("%3d  0x%08X  0x%08X  %s" % (i, p.offset, p.length, p.name))
+        lines.append("%-3d 0x%08X  0x%08X  %s" % (i, p.offset, p.length, p.name))
     return "\n".join(lines)
 
 

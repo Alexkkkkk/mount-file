@@ -1250,26 +1250,32 @@ class MainWindow(QMainWindow):
             out = decode_dump(path)
         except Exception as e:
             self.log_msg("Ошибка декодирования: %s" % e)
-            QMessageBox.warning(self, "Декодирование", "Не удалось декодировать:\n%s" % e)
+            QMessageBox.warning(
+                self, "Декодирование", "Не удалось декодировать:\n%s" % e
+            )
             return
         if out is None:
-            self.log_msg("Дамп не зашифрован (маркер найден, флаг JC сброшен): %s" % path)
+            self.log_msg(
+                "Дамп не зашифрован (маркер найден, флаг JC сброшен): %s" % path
+            )
             return
         self.log_msg("Декодированный дамп записан: %s" % out)
 
     def tool_split(self):
         """Split a dump into partitions by a udev file.
 
-        Mirrors the original RT809H script: parse the udev file, show the
-        partition table, ask for confirmation and only then write files,
-        reporting each partition result.
+        The udev file is parsed first, the partition table is written to the
+        log, and nothing is extracted until the confirmation dialog is
+        answered Yes - as in the original RT809H script.
         """
         path, _ = QFileDialog.getOpenFileName(
             self, "Разбить дамп на партиции", "", IMAGE_FILTER
         )
         if not path:
             return
-        udev, _ = QFileDialog.getOpenFileName(self, "Выбрать файл udev", "", "udev (*.*)")
+        udev, _ = QFileDialog.getOpenFileName(
+            self, "Выбрать файл udev", "", "udev (*.*)"
+        )
         if not udev:
             return
         try:
@@ -1278,7 +1284,9 @@ class MainWindow(QMainWindow):
             parts = parse_udev(udev)
         except Exception as e:
             self.log_msg("Ошибка разбиения: %s" % e)
-            QMessageBox.warning(self, "Разбиение", "Не удалось разобрать файл udev:\n%s" % e)
+            QMessageBox.warning(
+                self, "Разбиение", "Не удалось разобрать файл udev:\n%s" % e
+            )
             return
         if not parts:
             self.log_msg("В файле udev нет партиций: %s" % udev)
@@ -1290,10 +1298,10 @@ class MainWindow(QMainWindow):
             self,
             "Разбиение дампа",
             "Извлечь партиции?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            MB_Yes | MB_No,
+            MB_No,
         )
-        if answer != QMessageBox.Yes:
+        if answer != MB_Yes:
             self.log_msg("Разбиение отменено — файлы не записаны.")
             return
         try:
@@ -1304,9 +1312,12 @@ class MainWindow(QMainWindow):
             return
         for out in written:
             self.log_msg(
-                "Записан: %s (%s) OK" % (os.path.basename(out), tc_style.fmt_kb(os.path.getsize(out)))
+                "Записан: %s (%s) OK"
+                % (os.path.basename(out), tc_style.fmt_kb(os.path.getsize(out)))
             )
-        self.log_msg("Извлечено %d партиций из %s" % (len(written), os.path.basename(path)))
+        self.log_msg(
+            "Извлечено %d партиций из %s" % (len(written), os.path.basename(path))
+        )
 
     def _unsupported(self, what):
         self.log_msg("%s: не поддерживается в этой сборке" % what)
