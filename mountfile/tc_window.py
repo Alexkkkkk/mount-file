@@ -100,7 +100,7 @@ class ViewerDialog(QDialog):
     def __init__(self, parent, name, size, data):
         super().__init__(parent)
         self.setWindowTitle("Просмотр — %s" % name)
-        self.resize(820, 560)
+        self._fit_to_screen()
         lay = QVBoxLayout(self)
         lay.addWidget(
             QLabel(
@@ -114,6 +114,20 @@ class ViewerDialog(QDialog):
         btn = QPushButton("Закрыть (Esc)")
         btn.clicked.connect(self.accept)
         lay.addWidget(btn, 0, AlignRight)
+
+    def _fit_to_screen(self):
+        """Viewer takes ~90% of the monitor work area, not fixed 820x560."""
+        geo = None
+        try:
+            geo = self.screen().availableGeometry()
+        except Exception:
+            geo = None
+        if geo is None:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen else None
+        if geo is not None:
+            self.resize(max(400, geo.width() * 9 // 10),
+                        max(300, geo.height() * 9 // 10))
 
 
 class PanelTable(QTableWidget):
@@ -729,7 +743,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
-        self.resize(1180, 720)
+        self.setMinimumSize(640, 400)
 
         self.image_path = None
         self.volumes = []
@@ -739,9 +753,52 @@ class MainWindow(QMainWindow):
         self.updater = None
 
         self._build_ui()
+        self._fit_to_screen()
+        act_fs = QAction("Полный экран (F11)", self)
+        act_fs.setShortcut(QKeySequence("F11"))
+        act_fs.triggered.connect(self.toggle_fullscreen)
+        self.addAction(act_fs)
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._start_updater()
+
+    # -------------------------------------------------------- screen fit
+    def screen_geometry(self):
+        """Work area of the monitor the window lives on (None if unknown)."""
+        screen = None
+        try:
+            screen = self.screen()
+        except Exception:
+            screen = None
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return None
+        return screen.availableGeometry()
+
+    def _fit_to_screen(self):
+        """Fill the monitor work area instead of the fixed 1180x720 size.
+
+        Keeps the window centered on the monitor it is on and follows the
+        real resolution (DPI-scaled), so the panel columns and the log dock
+        always have all the space the monitor can give.
+        """
+        geo = self.screen_geometry()
+        if geo is None:
+            self.resize(1180, 720)
+            return
+        self.resize(geo.width(), geo.height())
+        self.move(geo.x(), geo.y())
+
+    def toggle_fullscreen(self):
+        """F11: true fullscreen <-> back to the maximized window."""
+        if self.isFullScreen():
+            self.showNormal()
+            self.showMaximized()
+            self.log_msg("Полный экран выключен (F11)")
+        else:
+            self.showFullScreen()
+            self.log_msg("Полный экран включен (F11 — выход)")
 
     # ----------------------------------------------------------- updater
     def _start_updater(self):
