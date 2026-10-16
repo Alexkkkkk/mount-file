@@ -65,8 +65,8 @@ python main.py path/to/image.img
 
 ## Командная строка
 
-Команды работают и через `python main.py`, и через собранный бинарник; для CLI
-установка Qt не требуется. Все пути ниже — примеры.
+Команды доступны и через `python main.py`, и через собранный бинарник;
+для CLI установка Qt не требуется. Все пути ниже — примеры.
 
 ```bash
 python -m mountfile --help
@@ -75,14 +75,20 @@ python main.py ls dump.img /
 python main.py get dump.img /photos -o ./out
 python main.py put dump.img ./hello.txt --dest / --yes
 python main.py mkdir dump.img /new
+python main.py mv dump.img /hello.txt renamed.txt
 python main.py rm dump.img /new --recursive --yes
-python main.py decode dump.bin                      # расшифровка дампа RT809H (MST/MTK)
+python main.py decode dump.bin                # расшифровка дампа RT809H (MST/MTK) -> dump.bin_decode.bin
 python main.py split dump.bin udev.txt -o ./parts   # разбиение дампа на партиции по udev
 ```
 
-Запись (`put`, `mkdir`, `rm`) поддерживается только в FAT32 и требует `--yes`;
-перед изменением образа сделайте резервную копию. `mv` переименовывает файл в том
-же каталоге, а не переносит между томами.
+Без `pytsk3` CLI и классическое дерево используют встроенный провайдер FAT32.
+Запись, переименование и удаление поддерживаются только на FAT32. Команды
+`put` и `rm` требуют `--yes`; перед изменением образа сделайте резервную копию.
+`mv` переименовывает файл в том же каталоге, а не переносит между томами.
+
+Сборка Linux: `./build_exe.sh`; результат — `dist/MountFile-linux-x86-64`.
+Для запуска Qt на Linux могут потребоваться системные пакеты `libgl1`,
+`libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3` и `libxcb-cursor0`.
 
 ## Windows 7
 
