@@ -235,16 +235,21 @@ class TestFormatPartsTable:
 
         dump = os.path.join(self.tmp, "dump.bin")
         with open(dump, "wb") as f:
-            f.write(bytes(0x100) * 0x200000)
+            f.write(bytes(0x200000))
         udev = os.path.join(self.tmp, "udev.txt")
-        with open(udev, "w") as f:
+        with open(udev, "wb") as f:
+            # CRLF built from byte values: byte-identical file on Linux and Windows.
+            # A text-mode write of os.linesep produced CR CR LF on Windows, the
+            # udev parser then stopped at the empty line and found no partitions
+            # (CI: "No partitions parsed from ...udev.txt" on windows-latest).
+            crlf = bytes([13, 10])
             f.write(
-                "[PARTITIONS]"
-                + os.linesep
-                + "0x00000000,0x00004000,preloader"
-                + os.linesep
-                + "0x00010000,0x00100000,system"
-                + os.linesep
+                b"[PARTITIONS]"
+                + crlf
+                + b"0x00000000,0x00004000,preloader"
+                + crlf
+                + b"0x00010000,0x00100000,system"
+                + crlf
             )
         args = SimpleNamespace(
             dump=dump, udev=udev, output=os.path.join(self.tmp, "out")
