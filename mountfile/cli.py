@@ -27,15 +27,16 @@ from . import __version__
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
+from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .vfs import TskError, TskImage
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
-COMMANDS = ("volumes", "info", "ls", "get", "put", "mkdir", "mv", "rm")
+COMMANDS = ("volumes", "info", "ls", "get", "put", "mkdir", "mv", "rm", "decode", "split")
 
-_READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError)
+_READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
 
 
 # --------------------------------------------------------------- helpers
@@ -254,6 +255,32 @@ def cmd_rm(args):
     return OK
 
 
+def cmd_decode(args):
+    """Decode an RT809H dump; writes <dump>_decode.bin next to it."""
+    if not os.path.isfile(args.dump):
+        raise Rt809Error("no such file: %s" % args.dump)
+    out = decode_dump(args.dump, table_dir=args.table_dir)
+    if out is None:
+        print("Dump carries an MST/MTK marker but is not encrypted - nothing to decode.")
+        return OK
+    print("Decoded dump written: %s" % out)
+    return OK
+
+
+def cmd_split(args):
+    if not os.path.isfile(args.dump):
+        raise Rt809Error("no such file: %s" % args.dump)
+    parts, written = split_by_udev(args.dump, args.udev, args.output)
+    if not parts:
+        print("No partitions parsed from %s" % args.udev)
+        return ERROR
+    print("%-3s %-10s %-10s %s" % ("#", "offset", "length", "name"))
+    for i, p in enumerate(parts, 1):
+        print("%-3d 0x%08X  0x%08X  %s" % (i, p.offset, p.length, p.name))
+    print("\nWritten %d partition file(s) to %s" % (len(written), args.output or "<dump>_/"))
+    return OK
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -340,6 +367,32 @@ def build_parser():
     )
     sp.add_argument("--yes", action="store_true", help="confirm the delete")
     sp.set_defaults(func=cmd_rm)
+
+    sp = sub.add_parser(
+        "decode",
+        help="decode an RT809H-encrypted MST/MTK eMMC dump",
+    )
+    sp.add_argument("dump", help="encrypted dump read by the RT809H programmer")
+    sp.add_argument(
+        "--table-dir",
+        default=None,
+        help="directory with XOR_MST_00.bin / XOR_MTK_00.bin (bundled by default)",
+    )
+    sp.set_defaults(func=cmd_decode)
+
+    sp = sub.add_parser(
+        "split",
+        help="split a dump into partitions by a udev file",
+    )
+    sp.add_argument("dump", help="raw dump to split")
+    sp.add_argument("udev", help="udev file with a [PARTITIONS] section")
+    sp.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="output directory (default: <dump name>_/ next to the dump)",
+    )
+    sp.set_defaults(func=cmd_split)
     return p
 
 

@@ -1109,6 +1109,10 @@ class MainWindow(QMainWindow):
         m_cmd.addSeparator()
         m_cmd.addAction(self._action("Выход", self.close, "Alt+F4"))
 
+        m_tool = mb.addMenu("Инструменты")
+        m_tool.addAction(self._action("Декодировать дамп RT809…", self.tool_decode))
+        m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
+
         m_net = mb.addMenu("Сеть")
         m_net.addAction(
             self._action("FTP-соединение…", lambda: self._unsupported("FTP-соединение"))
@@ -1231,6 +1235,49 @@ class MainWindow(QMainWindow):
 
     def open_repo(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file")
+
+    # ------------------------------------------------------ rt809 tools
+    def tool_decode(self):
+        """Decode an RT809H-encrypted MST/MTK dump into <dump>_decode.bin."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Декодировать дамп RT809 (MST/MTK)", "", IMAGE_FILTER
+        )
+        if not path:
+            return
+        try:
+            from .rt809 import decode_dump
+
+            out = decode_dump(path)
+        except Exception as e:
+            self.log_msg("Ошибка декодирования: %s" % e)
+            QMessageBox.warning(self, "Декодирование", "Не удалось декодировать:\n%s" % e)
+            return
+        if out is None:
+            self.log_msg("Дамп не зашифрован (маркер найден, флаг JC сброшен): %s" % path)
+            return
+        self.log_msg("Декодированный дамп записан: %s" % out)
+
+    def tool_split(self):
+        """Split a dump into partitions by a udev file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Разбить дамп на партиции", "", IMAGE_FILTER
+        )
+        if not path:
+            return
+        udev, _ = QFileDialog.getOpenFileName(self, "Выбрать файл udev", "", "udev (*.*)")
+        if not udev:
+            return
+        try:
+            from .rt809 import split_by_udev
+
+            parts, written = split_by_udev(path, udev)
+        except Exception as e:
+            self.log_msg("Ошибка разбиения: %s" % e)
+            QMessageBox.warning(self, "Разбиение", "Не удалось разбить дамп:\n%s" % e)
+            return
+        self.log_msg(
+            "Разбиение: партиций %d, записано файлов %d" % (len(parts), len(written))
+        )
 
     def _unsupported(self, what):
         self.log_msg("%s: не поддерживается в этой сборке" % what)

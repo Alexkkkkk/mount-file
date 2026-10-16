@@ -46,6 +46,7 @@ A file manager for raw disk images and NAND/eMMC dumps. Browse images, extract f
 ## Возможности
 
 - **Разметка диска:** автоматическое определение MBR и GPT, выбор раздела или всего образа.
+- **Дампы RT809H:** расшифровка зашифрованных дампов eMMC плат MStar (MST) и MediaTek (MTK) по XOR-таблицам (таблицы `XOR_MST_00.bin` / `XOR_MTK_00.bin` встроены), разбиение дампа на партиции по файлу `udev` (секции `[PARTITIONS]`, переводы строк Windows/Unix/Mac).
 - **Просмотр файлов:** через The Sleuth Kit (`pytsk3`) для FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+ и ISO9660.
 - **Извлечение:** копирование файлов из образа на диск.
 - **Запись в FAT32:** создание и перезапись файлов, длинные имена (LFN) и имена 8.3, создание каталогов, выделение и освобождение кластеров.
@@ -93,6 +94,8 @@ python main.py put dump.img ./hello.txt --dest / --yes
 python main.py mkdir dump.img /new
 python main.py mv dump.img /hello.txt renamed.txt
 python main.py rm dump.img /new --recursive --yes
+python main.py decode dump.bin                # расшифровка дампа RT809H (MST/MTK) -> dump.bin_decode.bin
+python main.py split dump.bin udev.txt -o ./parts   # разбиение дампа на партиции по udev
 ```
 
 Без `pytsk3` CLI и классическое дерево используют встроенный провайдер FAT32.
