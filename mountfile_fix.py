@@ -2014,3 +2014,634 @@ def find_project_root(start: Path) -> Path:
             break
         cur = cur.parent
     return start.resolve()
+
+
+# --- модульные константы (шаблоны) из ветки #39, потеряны при слиянии ---
+
+OLMA_TEMPLATE = '''\
+# MOUNTFILE_FIX — OLMA (Object-Level Memory Access) layer
+"""
+olma.py — безопасный слой доступа к памяти и файлам для Mount File.
+
+Ключевые объекты:
+    OlmaError                 — базовое исключение слоя
+    OlmaBoundsError           — выход за границы
+    OlmaIntegrityError        — нарушение целостности
+
+    OlmaHandle                — RAII-обёртка над файловым дескриптором
+    OlmaView                  — read-only окно в файл с явным size
+    OlmaBuffer                — буфер с проверкой границ на __getitem__
+    OlmaCluster               — кластер FAT32 с инвариантом 2..max-1
+    OlmaChain                 — обход цепочки кластеров с бюджетом
+    OlmaPartition             — раздел с валидацией границ
+    OlmaPartitionTable        — MBR/GPT с проверкой сигнатур
+    OlmaTransaction           — атомарная запись (commit/rollback)
+    OlmaXorDecoder            — безопасная XOR-расшифровка (RT809H)
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import BinaryIO, Iterable, Iterator, Optional
+
+
+# --------------------------------------------------------------------------- #
+# Исключения
+# --------------------------------------------------------------------------- #
+
+class OlmaError(Exception):
+    """Базовое исключение OLMA-слоя."""
+
+
+class OlmaBoundsError(OlmaError):
+    """Попытка доступа за границами объекта."""
+
+
+class OlmaIntegrityError(OlmaError):
+    """Нарушена целостность структуры (сигнатура, размер, хэш)."""
+
+
+class OlmaStateError(OlmaError):
+    """Операция недопустима в текущем состоянии объекта."""
+
+
+# --------------------------------------------------------------------------- #
+# Константы
+# --------------------------------------------------------------------------- #
+
+SECTOR = 512
+MAX_PARTITIONS = 128
+FAT32_MAX_CLUSTER = 0x0FFFFFF5
+FAT32_EOC_MIN = 0x0FFFFFF8
+FAT32_BAD = 0x0FFFFFF7
+DEFAULT_CHUNK = 1 << 20
+DEFAULT_MAX_DOWNLOAD = 512 * 1024 * 1024
+
+
+# --------------------------------------------------------------------------- #
+# OlmaHandle — RAII над файлом
+# --------------------------------------------------------------------------- #
+
+class OlmaHandle:
+    """
+    RAII-обёртка над бинарным файлом.
+    Гарантирует закрытие дескриптора даже при исключении.
+    """
+
+    __slots__ = ("_fh", "_path", "_size", "_closed")
+
+    def __init__(self, path: str | os.PathLike, mode: str = "rb") -> None:
+        self._path = os.fspath(path)
+        self._fh: BinaryIO = open(self._path, mode)
+        self._closed = False
+        try:
+            self._fh.seek(0, os.SEEK_END)
+            self._size = self._fh.tell()
+            self._fh.seek(0)
+        except OSError:
+            self._size = 0
+
+    # --- свойства
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    # --- чтение
+    def read_at(self, offset: int, size: int) -> bytes:
+        """Читает ровно size байт или бросает OlmaBoundsError."""
+        if self._closed:
+            raise OlmaStateError("handle закрыт")
+        if size < 0:
+            raise OlmaBoundsError(f"отрицательный size: {size}")
+        if offset < 0:
+            raise OlmaBoundsError(f"отрицательный offset: {offset}")
+        if offset + size > self._size:
+            raise OlmaBoundsError(
+                f"чтение {offset}+{size} за границей файла ({self._size})"
+            )
+        self._fh.seek(offset)
+        data = self._fh.read(size)
+        if len(data) != size:
+            raise OlmaIntegrityError(
+                f"короткое чтение: {len(data)} != {size}"
+            )
+        return data
+
+    def read_upto(self, offset: int, size: int) -> bytes:
+        """Читает не более size; допускает короткое чтение в конце."""
+        if self._closed:
+            raise OlmaStateError("handle закрыт")
+        if size <= 0 or offset >= self._size:
+            return b""
+        offset = max(0, offset)
+        self._fh.seek(offset)
+        return self._fh.read(min(size, self._size - offset))
+
+    # --- запись (только в режимах с записью)
+    def write_at(self, offset: int, data: bytes) -> None:
+        if self._closed:
+            raise OlmaStateError("handle закрыт")
+        if self._fh.mode == "rb":
+            raise OlmaStateError("handle открыт только для чтения")
+        if offset < 0:
+            raise OlmaBoundsError(f"отрицательный offset: {offset}")
+        self._fh.seek(offset)
+        self._fh.write(data)
+        self._fh.flush()
+
+    def flush(self) -> None:
+        if not self._closed:
+            self._fh.flush()
+            try:
+                os.fsync(self._fh.fileno())
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        if not self._closed:
+            try:
+                self._fh.close()
+            finally:
+                self._closed = True
+
+    # --- контекст
+    def __enter__(self) -> "OlmaHandle":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------- #
+# OlmaView — read-only окно в файл
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class OlmaView:
+    """
+    Окно в OlmaHandle: фиксированные base_offset и length.
+    Все обращения — относительно окна, не файла.
+    """
+    handle: OlmaHandle
+    base_offset: int
+    length: int
+
+    def __post_init__(self) -> None:
+        if self.base_offset < 0:
+            raise OlmaBoundsError("base_offset < 0")
+        if self.length < 0:
+            raise OlmaBoundsError("length < 0")
+        if self.base_offset + self.length > self.handle.size:
+            raise OlmaBoundsError(
+                f"окно {self.base_offset}+{self.length} вне файла "
+                f"({self.handle.size})"
+            )
+
+    @property
+    def size(self) -> int:
+        return self.length
+
+    def read(self, rel_offset: int, size: int) -> bytes:
+        if rel_offset < 0 or size < 0:
+            raise OlmaBoundsError("отрицательные rel_offset/size")
+        if rel_offset + size > self.length:
+            raise OlmaBoundsError(
+                f"чтение {rel_offset}+{size} за границей окна ({self.length})"
+            )
+        return self.handle.read_at(self.base_offset + rel_offset, size)
+
+    def read_upto(self, rel_offset: int, size: int) -> bytes:
+        if rel_offset < 0:
+            rel_offset = 0
+        if rel_offset >= self.length or size <= 0:
+            return b""
+        size = min(size, self.length - rel_offset)
+        return self.handle.read_at(self.base_offset + rel_offset, size)
+
+    def subview(self, rel_offset: int, length: int) -> "OlmaView":
+        if rel_offset < 0 or length < 0 or rel_offset + length > self.length:
+            raise OlmaBoundsError("subview вне окна")
+        return OlmaView(self.handle, self.base_offset + rel_offset, length)
+
+
+# --------------------------------------------------------------------------- #
+# OlmaBuffer — буфер с проверкой границ
+# --------------------------------------------------------------------------- #
+
+class OlmaBuffer:
+    """
+    Буфер в памяти с проверкой границ на каждом обращении.
+    Используется для чтения таблиц FAT/MBR/GPT.
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: bytes | bytearray) -> None:
+        self._data = bytes(data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return self._data[key]  # срез безопасен
+        if not isinstance(key, int):
+            raise TypeError(f"неверный тип ключа: {type(key).__name__}")
+        if key < 0 or key >= len(self._data):
+            raise OlmaBoundsError(f"индекс {key} вне [0, {len(self._data)})")
+        return self._data[key]
+
+    def slice(self, start: int, size: int) -> bytes:
+        if start < 0 or size < 0 or start + size > len(self._data):
+            raise OlmaBoundsError(
+                f"slice {start}+{size} вне [0, {len(self._data)})"
+            )
+        return self._data[start:start + size]
+
+    def u8(self, off: int) -> int:
+        return self.slice(off, 1)[0]
+
+    def u16le(self, off: int) -> int:
+        return int.from_bytes(self.slice(off, 2), "little")
+
+    def u32le(self, off: int) -> int:
+        return int.from_bytes(self.slice(off, 4), "little")
+
+    def u64le(self, off: int) -> int:
+        return int.from_bytes(self.slice(off, 8), "little")
+
+    def raw(self) -> bytes:
+        return self._data
+
+    def sha256(self) -> str:
+        return hashlib.sha256(self._data).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# OlmaCluster — кластер FAT32 с инвариантом
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class OlmaCluster:
+    """Кластер FAT32: значение в допустимом диапазоне."""
+    value: int
+    max_cluster: int = FAT32_MAX_CLUSTER
+
+    def __post_init__(self) -> None:
+        if not (2 <= self.value < self.max_cluster):
+            raise OlmaBoundsError(
+                f"кластер {self.value:#x} вне [2, {self.max_cluster:#x})"
+            )
+
+    @property
+    def is_eoc(self) -> bool:
+        return self.value >= FAT32_EOC_MIN
+
+    @property
+    def is_bad(self) -> bool:
+        return self.value == FAT32_BAD
+
+    def next_from(self, fat_get) -> Optional["OlmaCluster"]:
+        nxt = fat_get(self.value)
+        if nxt == 0 or nxt >= FAT32_EOC_MIN or nxt == FAT32_BAD:
+            return None
+        try:
+            return OlmaCluster(nxt, self.max_cluster)
+        except OlmaBoundsError:
+            return None
+
+
+class OlmaChain:
+    """
+    Обход цепочки кластеров FAT32 с бюджетом и защитой от циклов.
+    """
+
+    def __init__(self, start: int, fat_get, max_cluster: int = FAT32_MAX_CLUSTER,
+                 budget: int = 1_000_000) -> None:
+        self._start = OlmaCluster(start, max_cluster)
+        self._fat_get = fat_get
+        self._max = max_cluster
+        self._budget = budget
+
+    def __iter__(self) -> Iterator[OlmaCluster]:
+        seen: set[int] = set()
+        cur: Optional[OlmaCluster] = self._start
+        left = self._budget
+        while cur is not None and left > 0:
+            if cur.value in seen:
+                raise OlmaIntegrityError(
+                    f"цикл в цепочке кластеров на {cur.value:#x}"
+                )
+            seen.add(cur.value)
+            yield cur
+            left -= 1
+            cur = cur.next_from(self._fat_get)
+        if left <= 0:
+            raise OlmaIntegrityError("исчерпан бюджет обхода цепочки")
+
+
+# --------------------------------------------------------------------------- #
+# OlmaPartition + OlmaPartitionTable
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class OlmaPartition:
+    """Раздел с валидированными границами."""
+    index: int
+    start_sector: int
+    size_sectors: int
+    type_id: int = 0
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        if self.index < 0:
+            raise OlmaBoundsError("index < 0")
+        if self.start_sector < 0 or self.size_sectors < 0:
+            raise OlmaBoundsError("отрицательные границы раздела")
+
+    def clamp(self, total_sectors: int) -> "OlmaPartition":
+        start = max(0, self.start_sector)
+        if start >= total_sectors:
+            return OlmaPartition(self.index, 0, 0, self.type_id, self.label)
+        size = min(self.size_sectors, total_sectors - start)
+        return OlmaPartition(self.index, start, size, self.type_id, self.label)
+
+    def view(self, handle: OlmaHandle, total_sectors: int) -> OlmaView:
+        p = self.clamp(total_sectors)
+        return OlmaView(handle, p.start_sector * SECTOR, p.size_sectors * SECTOR)
+
+
+class OlmaPartitionTable:
+    """
+    Валидированная таблица разделов (MBR или GPT).
+    """
+
+    def __init__(self, buf: OlmaBuffer) -> None:
+        self._buf = buf
+        self._kind: str = "unknown"
+        self._parts: list[OlmaPartition] = []
+        self._parse()
+
+    @property
+    def kind(self) -> str:
+        return self._kind
+
+    @property
+    def partitions(self) -> list[OlmaPartition]:
+        return list(self._parts)
+
+    def _parse(self) -> None:
+        if len(self._buf) < SECTOR:
+            raise OlmaIntegrityError("буфер меньше сектора")
+        if self._buf.slice(510, 2) == b"\\x55\\xAA":
+            if len(self._buf) >= 1024 and self._buf.slice(512, 8) == b"EFI PART":
+                self._kind = "gpt"
+                self._parse_gpt()
+            else:
+                self._kind = "mbr"
+                self._parse_mbr()
+        else:
+            raise OlmaIntegrityError("нет сигнатуры 0x55AA")
+
+    def _parse_mbr(self) -> None:
+        for i in range(4):
+            off = 446 + i * 16
+            entry = self._buf.slice(off, 16)
+            start = int.from_bytes(entry[8:12], "little")
+            size = int.from_bytes(entry[12:16], "little")
+            type_id = entry[4]
+            if start == 0 and size == 0:
+                continue
+            if size == 0:
+                continue
+            self._parts.append(
+                OlmaPartition(i, start, size, type_id, "")
+            )
+            if len(self._parts) > MAX_PARTITIONS:
+                raise OlmaIntegrityError("слишком много разделов MBR")
+
+    def _parse_gpt(self) -> None:
+        # Упрощённо: одна запись = 128 байт, начиная с LBA 2
+        header = self._buf.slice(512, 92)
+        entries_lba = int.from_bytes(header[72:80], "little")
+        num = int.from_bytes(header[80:84], "little")
+        entry_size = int.from_bytes(header[84:88], "little")
+        if num > MAX_PARTITIONS:
+            num = MAX_PARTITIONS
+        if entry_size == 0 or entry_size > 512:
+            raise OlmaIntegrityError(f"неверный entry_size={entry_size}")
+        base = entries_lba * SECTOR
+        for i in range(num):
+            off = base + i * entry_size
+            if off + 16 > len(self._buf):
+                break
+            type_guid = self._buf.slice(off, 16)
+            if type_guid == b"\\x00" * 16:
+                continue
+            first_lba = int.from_bytes(self._buf.slice(off + 32, 8), "little")
+            last_lba = int.from_bytes(self._buf.slice(off + 40, 8), "little")
+            if last_lba < first_lba:
+                continue
+            self._parts.append(
+                OlmaPartition(i, first_lba, last_lba - first_lba + 1, 0, "")
+            )
+
+
+# --------------------------------------------------------------------------- #
+# OlmaTransaction — атомарная запись
+# --------------------------------------------------------------------------- #
+
+class OlmaTransaction:
+    """
+    Атомарная запись: писать во временный файл, затем os.replace.
+    При исключении — откат (temp удаляется, оригинал не тронут).
+    """
+
+    def __init__(self, target: str | os.PathLike) -> None:
+        self._target = os.fspath(target)
+        d = os.path.dirname(os.path.abspath(self._target)) or "."
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".olma-", suffix=".tmp")
+        os.close(fd)
+        self._tmp = tmp
+        self._committed = False
+        self._handle = OlmaHandle(tmp, "wb")
+
+    @property
+    def handle(self) -> OlmaHandle:
+        return self._handle
+
+    def write_all(self, data: bytes) -> None:
+        self._handle.write_at(0, data)
+
+    def commit(self) -> None:
+        if self._committed:
+            raise OlmaStateError("транзакция уже зафиксирована")
+        self._handle.flush()
+        self._handle.close()
+        os.replace(self._tmp, self._target)
+        self._committed = True
+
+    def rollback(self) -> None:
+        if self._committed:
+            return
+        try:
+            self._handle.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(self._tmp)
+        except OSError:
+            pass
+
+    def __enter__(self) -> "OlmaTransaction":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+
+
+# --------------------------------------------------------------------------- #
+# OlmaXorDecoder — безопасная XOR-расшифровка (RT809H MST/MTK)
+# --------------------------------------------------------------------------- #
+
+class OlmaXorDecoder:
+    """
+    Потоковая XOR-расшифровка с проверкой размера таблицы.
+    """
+
+    def __init__(self, table: bytes | bytearray) -> None:
+        self._table = bytes(table)
+        if not self._table:
+            raise OlmaIntegrityError("пустая XOR-таблица")
+
+    @property
+    def table_size(self) -> int:
+        return len(self._table)
+
+    def decode(self, data: bytes | bytearray) -> bytes:
+        return bytes(
+            b ^ self._table[i % len(self._table)]
+            for i, b in enumerate(data)
+        )
+
+    def decode_file(self, src: OlmaHandle, dst: OlmaHandle,
+                    *, chunk: int = DEFAULT_CHUNK) -> int:
+        total = src.size
+        written = 0
+        off = 0
+        while off < total:
+            n = min(chunk, total - off)
+            block = src.read_at(off, n)
+            dst.write_at(off, self.decode(block))
+            off += n
+            written += n
+        return written
+
+
+# --------------------------------------------------------------------------- #
+# Утилиты
+# --------------------------------------------------------------------------- #
+
+def safe_download(url: str, *, timeout: float = 30.0,
+                  max_size: int = DEFAULT_MAX_DOWNLOAD) -> bytes:
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "MountFile/OLMA"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        length = resp.headers.get("Content-Length")
+        if length and int(length) > max_size:
+            raise OlmaIntegrityError(f"файл слишком большой: {length}")
+        data = bytearray()
+        while True:
+            chunk = resp.read(1 << 16)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > max_size:
+                raise OlmaIntegrityError("превышен лимит при скачивании")
+    return bytes(data)
+
+
+def verify_sha256(data: bytes, expected_hex: str) -> bool:
+    if not expected_hex:
+        return True
+    return hashlib.sha256(data).hexdigest().lower() == expected_hex.strip().lower()
+
+
+__all__ = [
+    "OlmaError", "OlmaBoundsError", "OlmaIntegrityError", "OlmaStateError",
+    "OlmaHandle", "OlmaView", "OlmaBuffer",
+    "OlmaCluster", "OlmaChain",
+    "OlmaPartition", "OlmaPartitionTable",
+    "OlmaTransaction", "OlmaXorDecoder",
+    "safe_download", "verify_sha256",
+    "SECTOR", "FAT32_MAX_CLUSTER", "FAT32_EOC_MIN", "FAT32_BAD",
+]
+'''
+
+QT_COMPAT_TEMPLATE = '''\
+# MOUNTFILE_FIX — auto-patched + OLMA
+"""qt_compat.py — унифицированный слой PyQt5/PyQt6."""
+
+from __future__ import annotations
+
+IS_QT6 = False
+QT_VERSION = "none"
+_IMPORT_ERROR = None
+
+try:
+    from PyQt6 import QtCore, QtGui, QtWidgets  # type: ignore
+    from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot  # type: ignore
+    from PyQt6.QtGui import QKeySequence, QAction, QIcon  # type: ignore
+    IS_QT6 = True
+    QT_VERSION = "PyQt6"
+except Exception as e6:  # noqa: BLE001
+    try:
+        from PyQt5 import QtCore, QtGui, QtWidgets  # type: ignore
+        from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot  # type: ignore
+        from PyQt5.QtGui import QKeySequence, QIcon  # type: ignore
+        from PyQt5.QtWidgets import QAction  # type: ignore
+        IS_QT6 = False
+        QT_VERSION = "PyQt5"
+    except Exception as e5:  # noqa: BLE001
+        _IMPORT_ERROR = f"PyQt6: {e6!r}; PyQt5: {e5!r}"
+
+
+def is_qt_available() -> bool:
+    return _IMPORT_ERROR is None
+
+
+def require_qt() -> None:
+    if not is_qt_available():
+        raise RuntimeError(
+            "Qt не найден. Установите PyQt6 (рекомендуется) или PyQt5.\\n"
+            f"Детали: {_IMPORT_ERROR}"
+        )
+
+
+__all__ = [
+    "QtCore", "QtGui", "QtWidgets", "Qt",
+    "pyqtSignal", "pyqtSlot", "QKeySequence", "QAction", "QIcon",
+    "IS_QT6", "QT_VERSION", "is_qt_available", "require_qt",
+]
+'''
