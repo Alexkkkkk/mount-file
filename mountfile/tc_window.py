@@ -538,6 +538,10 @@ class TcPanel(QWidget):
             for c, text in enumerate(self._row_values(e)):
                 it = QTableWidgetItem(text)
                 it.setFlags(ItemIsEnabled | ItemIsSelectable)
+                if c == 0:
+                    # Keep the complete name available even when Qt elides
+                    # it to fit a narrow panel or a high-DPI display.
+                    it.setToolTip(text)
                 if c == 2 and not e.get("up"):
                     it.setTextAlignment(AlignRight | AlignVCenter)
                 if marked:

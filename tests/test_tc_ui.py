@@ -193,6 +193,8 @@ def main():
         assert rows["boot.bin"][2] == "65 536", rows["boot.bin"]
         assert rows["boot.bin"][4] == "-a--c", rows["boot.bin"]
         assert rows["system"][4] == "----c", rows["system"]
+        boot_row = left._row_of("boot.bin")
+        assert left.table.item(boot_row, 0).toolTip() == "boot.bin"
         # at the root of a volume there is no parent row - '..' appears only
         # inside a subdirectory (same as Total Commander)
         assert ".." not in rows, list(rows)
@@ -210,6 +212,11 @@ def main():
         # ---- local panel ----------------------------------------------
         lrows = {r[0]: r for r in _cells(right)}
         assert "firmware_2024-06-11.dump" in lrows, list(lrows)
+        firmware_row = right._row_of("firmware_2024-06-11.dump")
+        assert (
+            right.table.item(firmware_row, 0).toolTip()
+            == "firmware_2024-06-11.dump"
+        )
         assert lrows["logs"][2] == DIR_SIZE_TEXT, lrows["logs"]
         assert lrows["notes.txt"][1] == "TXT", lrows["notes.txt"]
         assert lrows["notes.txt"][2] == "1 200", lrows["notes.txt"]
