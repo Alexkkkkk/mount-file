@@ -14,7 +14,14 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import rt809
-from mountfile.rt809 import Part, Rt809Error, decode_dump, detect, parse_udev
+from mountfile.rt809 import (
+    Part,
+    Rt809Error,
+    decode_dump,
+    detect,
+    format_parts_table,
+    parse_udev,
+)
 
 
 def make_encrypted_dump(path, kind="MTK", plain_check=True):
@@ -199,6 +206,22 @@ class TestUdev:
         )
 
 
+class TestFormatPartsTable:
+    def test_header_and_rows(self):
+        parts = [Part("preloader", 0, 0x4000), Part("lk", 0x4000, 0x8000)]
+        table = format_parts_table(parts)
+        lines = table.splitlines()
+        assert len(lines) == 3
+        assert "Offset" in lines[0] and "Length" in lines[0] and "Name" in lines[0]
+        assert lines[1].split()[:3] == ["1", "0x00000000", "0x00004000"]
+        assert lines[1].endswith("preloader")
+        assert lines[2].split()[:3] == ["2", "0x00004000", "0x00008000"]
+        assert lines[2].endswith("lk")
+
+    def test_empty(self):
+        assert format_parts_table([]).count("\n") == 0  # header only
+
+
 if __name__ == "__main__":
     tc = TestDetect()
     for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
@@ -211,5 +234,8 @@ if __name__ == "__main__":
     tc = TestUdev()
     for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
         tc.setup_method()
+        getattr(tc, meth)()
+    tc = TestFormatPartsTable()
+    for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
         getattr(tc, meth)()
     print("all rt809 tests passed")
