@@ -42,10 +42,10 @@ __all__ = [
     "Rt809Error",
     "decode_dump",
     "detect",
+    "format_parts_table",
     "load_table",
     "parse_udev",
     "split_by_udev",
-    "format_parts_table",
 ]
 
 BLOCK = 0x100000
