@@ -162,9 +162,10 @@ def test_main_window_fills_screen_workarea(monkeypatch):
     app.processEvents()
     geo = win.screen_geometry()
     assert geo is not None
-    assert (win.width(), win.height()) == (geo.width(), geo.height()), (
-        "main window must fill the monitor work area"
-    )
+    assert (win.width(), win.height()) == (
+        geo.width(),
+        geo.height(),
+    ), "main window must fill the monitor work area"
     assert (win.minimumWidth(), win.minimumHeight()) == (640, 400)
 
     # F11: into fullscreen and back to the maximized window
