@@ -18,8 +18,9 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mountfile.firmware import detect_volumes, probe_filesystem
 from test_fat32 import BPS, TOTAL_SECTORS, make_fat32_image
+
+from mountfile.firmware import detect_volumes, probe_filesystem
 
 
 def fat32_boot_sector():

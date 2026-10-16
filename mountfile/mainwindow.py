@@ -7,41 +7,21 @@ from __future__ import annotations
 
 import os
 
-from .qt_compat import (
-    QAction,
-    QAbstractItemModel,
-    BottomDock,
-    DisplayRole,
-    QComboBox,
-    QDockWidget,
-    QFileDialog,
-    Horizontal,
-    QInputDialog,
-    QLabel,
-    QMainWindow,
-    MB_No,
-    MB_Yes,
-    QMessageBox,
-    QModelIndex,
-    QPlainTextEdit,
-    QPushButton,
-    QSplitter,
-    QTabWidget,
-    QTreeView,
-    SC_Open,
-    SingleSelection,
-    Stretch,
-)
-
 from .extract import extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import detect_volumes
 from .hexview import HexView
-from .vfs import TskImage, TskError
+from .qt_compat import (BottomDock, DisplayRole, Horizontal, MB_No, MB_Yes,
+                        QAbstractItemModel, QAction, QComboBox, QDockWidget,
+                        QFileDialog, QInputDialog, QLabel, QMainWindow,
+                        QMessageBox, QModelIndex, QPlainTextEdit, QPushButton,
+                        QSplitter, QTabWidget, QTreeView, SC_Open,
+                        SingleSelection, Stretch)
+from .vfs import TskError, TskImage
 
 
 class Node:
-    __slots__ = ("name", "path", "is_dir", "size", "parent", "children", "loaded")
+    __slots__ = ("children", "is_dir", "loaded", "name", "parent", "path", "size")
 
     def __init__(self, name, path, is_dir, size=0, parent=None):
         self.name = name

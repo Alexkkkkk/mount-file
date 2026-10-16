@@ -70,16 +70,18 @@ def _split_dir(path):
 def _select(image, args):
     """Resolve --offset / --volume / automatic choice to one volume."""
     if args.offset is not None:
-        return args.offset, probe_filesystem(image, args.offset) or "unknown", \
-            "offset 0x%X" % args.offset
+        return (
+            args.offset,
+            probe_filesystem(image, args.offset) or "unknown",
+            "offset 0x%X" % args.offset,
+        )
     try:
         vols = detect_volumes(image, scan_limit=args.scan_limit)
     except OSError as e:
         raise Fat32Error(str(e))
     if args.volume is not None:
         if not 1 <= args.volume <= len(vols):
-            raise Fat32Error("no volume %d (image has %d)"
-                             % (args.volume, len(vols)))
+            raise Fat32Error("no volume %d (image has %d)" % (args.volume, len(vols)))
         v = vols[args.volume - 1]
         return v.offset, v.fstype, v.desc
     for v in vols:
@@ -114,18 +116,21 @@ def _open_write(image, offset, backup=False):
 
 
 def _warn(path):
-    print("(!) This writes into the image: %s\n"
-          "    Keep a backup. Re-run the same command with --yes to confirm."
-          % path)
+    print(
+        "(!) This writes into the image: %s\n"
+        "    Keep a backup. Re-run the same command with --yes to confirm." % path
+    )
 
 
 # -------------------------------------------------------------- commands
 def cmd_volumes(args):
     vols = detect_volumes(args.image, scan_limit=args.scan_limit)
     if not vols:
-        print("No volumes detected: no partition table and no known "
-              "filesystem signature in the first %d MB."
-              % (args.scan_limit // (1024 * 1024)))
+        print(
+            "No volumes detected: no partition table and no known "
+            "filesystem signature in the first %d MB."
+            % (args.scan_limit // (1024 * 1024))
+        )
         return ERROR
     print("%-3s %-12s %-10s %s" % ("#", "offset", "type", "source"))
     for i, v in enumerate(vols, 1):
@@ -137,8 +142,7 @@ def cmd_info(args):
     size = os.path.getsize(args.image)
     print("Image:  %s" % args.image)
     print("Size:   %s (%d bytes)" % (_fmt_size(size), size))
-    print("At 0:   %s" % (probe_filesystem(args.image, 0)
-                          or "no filesystem signature"))
+    print("At 0:   %s" % (probe_filesystem(args.image, 0) or "no filesystem signature"))
     try:
         vols = detect_volumes(args.image, scan_limit=args.scan_limit)
     except OSError as e:
@@ -173,8 +177,7 @@ def cmd_get(args):
     try:
         src = _abs_path(args.path)
         count = extract_path(provider, src if args.path else "/", out)
-        print("Extracted %d file(s) from %s [%s] to %s"
-              % (count, src, fstype, out))
+        print("Extracted %d file(s) from %s [%s] to %s" % (count, src, fstype, out))
     finally:
         if hasattr(provider, "close"):
             provider.close()
@@ -197,8 +200,10 @@ def cmd_put(args):
                 data = f.read()
             name = os.path.basename(src)
             fs.write_file(dest, name, data)
-            print("Wrote %s (%d bytes) -> %s%s"
-                  % (src, len(data), dest if dest != "/" else "/", name))
+            print(
+                "Wrote %s (%d bytes) -> %s%s"
+                % (src, len(data), dest if dest != "/" else "/", name)
+            )
     finally:
         fh.close()
     return OK
@@ -235,11 +240,15 @@ def cmd_rm(args):
     fh, fs = _open_write(args.image, offset, backup=args.backup)
     try:
         entry = fs.delete(_abs_path(args.path), recursive=args.recursive)
-        print("Deleted %s (%s, %d bytes)%s"
-              % (_abs_path(args.path), "dir" if entry.is_dir else "file",
-                 entry.size,
-                 " with its contents" if args.recursive and entry.is_dir
-                 else ""))
+        print(
+            "Deleted %s (%s, %d bytes)%s"
+            % (
+                _abs_path(args.path),
+                "dir" if entry.is_dir else "file",
+                entry.size,
+                " with its contents" if args.recursive and entry.is_dir else "",
+            )
+        )
     finally:
         fh.close()
     return OK
@@ -248,23 +257,39 @@ def cmd_rm(args):
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
-    sp.add_argument("-V", "--volume", type=int, default=None,
-                    help="volume number as printed by `volumes` (1-based)")
-    sp.add_argument("-O", "--offset", type=_parse_offset, default=None,
-                    help="raw byte offset of the filesystem (e.g. 0x400000)")
-    sp.add_argument("--scan-limit", type=_parse_offset,
-                    default=DEFAULT_SCAN_LIMIT,
-                    help="bytes scanned for filesystem signatures")
-    sp.add_argument("--backup", action="store_true",
-                    help="copy the image to <image>.bak before writing")
+    sp.add_argument(
+        "-V",
+        "--volume",
+        type=int,
+        default=None,
+        help="volume number as printed by `volumes` (1-based)",
+    )
+    sp.add_argument(
+        "-O",
+        "--offset",
+        type=_parse_offset,
+        default=None,
+        help="raw byte offset of the filesystem (e.g. 0x400000)",
+    )
+    sp.add_argument(
+        "--scan-limit",
+        type=_parse_offset,
+        default=DEFAULT_SCAN_LIMIT,
+        help="bytes scanned for filesystem signatures",
+    )
+    sp.add_argument(
+        "--backup",
+        action="store_true",
+        help="copy the image to <image>.bak before writing",
+    )
 
 
 def build_parser():
     p = argparse.ArgumentParser(
         prog="python -m mountfile",
-        description="Mount File - browse and edit raw disk images.")
-    p.add_argument("--version", action="version",
-                   version="Mount File %s" % __version__)
+        description="Mount File - browse and edit raw disk images.",
+    )
+    p.add_argument("--version", action="version", version="Mount File %s" % __version__)
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("volumes", help="list detected volumes")
@@ -307,8 +332,12 @@ def build_parser():
     sp = sub.add_parser("rm", help="delete a file or directory (FAT32)")
     _add_target(sp)
     sp.add_argument("path")
-    sp.add_argument("-r", "--recursive", action="store_true",
-                    help="delete a non-empty directory with its contents")
+    sp.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="delete a non-empty directory with its contents",
+    )
     sp.add_argument("--yes", action="store_true", help="confirm the delete")
     sp.set_defaults(func=cmd_rm)
     return p

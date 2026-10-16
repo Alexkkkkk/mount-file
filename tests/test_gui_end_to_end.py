@@ -25,11 +25,12 @@ qt_compat = pytest.importorskip(
     "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
 )
 
-from mountfile.fat32 import Fat32  # noqa: E402
-from mountfile.firmware import detect_volumes  # noqa: E402
-from mountfile.mainwindow import MainWindow  # noqa: E402
-from mountfile.qt_compat import QApplication, QModelIndex  # noqa: E402
-from test_fat32 import BPS, TOTAL_SECTORS, make_fat32_image  # noqa: E402
+from test_fat32 import BPS, TOTAL_SECTORS, make_fat32_image
+
+from mountfile.fat32 import Fat32
+from mountfile.firmware import detect_volumes
+from mountfile.mainwindow import MainWindow
+from mountfile.qt_compat import QApplication, QModelIndex
 
 
 class _Dialogs:
@@ -41,7 +42,6 @@ class _Dialogs:
     def __getattr__(self, name):
         def record(*args, **kwargs):
             self.calls.append((name, args))
-            return None
 
         return record
 

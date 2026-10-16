@@ -1321,7 +1321,8 @@ class MainWindow(QMainWindow):
             except (Fat32Error, OSError, ValueError) as fat_error:
                 panel.provider = None
                 QMessageBox.warning(
-                    self, "Не удалось смонтировать том",
+                    self,
+                    "Не удалось смонтировать том",
                     "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
                 )
                 panel.refresh()

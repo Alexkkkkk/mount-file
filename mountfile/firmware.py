@@ -58,7 +58,7 @@ _MAGIC = (
 class FoundVolume:
     """One mountable volume: `offset` is where the filesystem starts."""
 
-    __slots__ = ("offset", "fstype", "size", "desc", "source")
+    __slots__ = ("desc", "fstype", "offset", "size", "source")
 
     def __init__(self, offset, fstype, desc=None, size=None, source="signature"):
         self.offset = int(offset)
