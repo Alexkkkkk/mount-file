@@ -15,9 +15,10 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from test_fat32 import make_fat32_image
+
 from mountfile.extract import extract_path
 from mountfile.fat32 import Fat32, Fat32Error, Fat32Provider
-from test_fat32 import make_fat32_image
 
 
 class TestDelete:
@@ -32,19 +33,19 @@ class TestDelete:
         self.fh.close()
 
     def _free(self):
-        return sum(1 for n in range(2, self.fs.fat_size // 4)
-                   if self.fs._fat_get(n) == 0)
+        return sum(
+            1 for n in range(2, self.fs.fat_size // 4) if self.fs._fat_get(n) == 0
+        )
 
     def test_delete_file_frees_clusters(self):
-        payload = os.urandom(5000)                  # spans several clusters
+        payload = os.urandom(5000)  # spans several clusters
         self.fs.write_file("/", "big.bin", payload)
         used = self._free()
         entry = self.fs.delete("/big.bin")
         assert entry.is_dir is False
         assert entry.size == len(payload)
         # Every data cluster of the file went back to the free pool.
-        assert self._free() - used == math.ceil(
-            len(payload) / self.fs.cluster_size)
+        assert self._free() - used == math.ceil(len(payload) / self.fs.cluster_size)
         assert [e.name for e in self.fs.list_dir()] == []
 
     def test_delete_is_case_insensitive(self):
@@ -66,7 +67,7 @@ class TestDelete:
         self.fs.write_file("/A/B", "f2.bin", os.urandom(2000))
         free = self._free()
         try:
-            self.fs.delete("/A")                 # non-empty, not recursive
+            self.fs.delete("/A")  # non-empty, not recursive
         except Fat32Error as e:
             assert "not empty" in str(e)
         else:
@@ -83,7 +84,7 @@ class TestDelete:
         self.fs.mkdir("/", "DIR")
         self.fs.write_file("/DIR", "inner.bin", os.urandom(1500))
         self.fs.delete("/DIR", recursive=True)
-        self.fs.mkdir("/", "DIR")               # the name is free again
+        self.fs.mkdir("/", "DIR")  # the name is free again
         self.fs.write_file("/DIR", "other.bin", b"ok")
         assert self.fs.read_file("/DIR/other.bin") == b"ok"
 
@@ -108,7 +109,7 @@ class TestDelete:
         self.fs.write_file("/", "a.bin", payload)
         after_write = self._free()
         self.fs.delete("/a.bin")
-        assert self._free() > after_write          # space came back
+        assert self._free() > after_write  # space came back
         self.fs.write_file("/", "b.bin", payload)
         assert self.fs.read_file("/b.bin") == payload
         # b.bin fits in the space a.bin released: no growth of the used area.
@@ -129,7 +130,7 @@ class TestRename:
     def test_rename_keeps_content(self):
         payload = os.urandom(3000)
         self.fs.write_file("/", "old.bin", payload)
-        self.fs.rename("/old.bin", "new name.bin")      # LFN path too
+        self.fs.rename("/old.bin", "new name.bin")  # LFN path too
         assert self.fs.read_file("/new name.bin") == payload
         assert [e.name for e in self.fs.list_dir()] == ["new name.bin"]
 
@@ -182,13 +183,12 @@ class TestFat32Provider:
     def test_list_and_read_range(self):
         with Fat32Provider(self.path) as p:
             names = [i["name"] for i in p.list_dir("/")]
-            assert names == ["DIR", "tiny.txt"]          # dirs first
+            assert names == ["DIR", "tiny.txt"]  # dirs first
             assert p.list_dir("/DIR")[0]["size"] == 51200
             assert p.read_file("/tiny.txt") == b"hello"
             # Unaligned windows across cluster boundaries.
             assert p.read_file_range("/DIR/sub.bin", 0, 16) == bytes(range(16))
-            assert p.read_file_range("/DIR/sub.bin", 1023, 2) == bytes(
-                [255, 0])
+            assert p.read_file_range("/DIR/sub.bin", 1023, 2) == bytes([255, 0])
             assert p.read_file_range("/DIR/sub.bin", 51200, 10) == b""
             assert len(p.read_file_range("/DIR/sub.bin", 0, 1 << 20)) == 51200
             assert p.file_size("/DIR/sub.bin") == 51200
@@ -214,7 +214,7 @@ class TestFat32Provider:
                 p.fs.write_file("/", "nope.bin", b"x")
             except Exception:
                 pass
-        with open(self.path, "rb") as f:                 # still intact
+        with open(self.path, "rb") as f:  # still intact
             assert f.read(3) == b"\xeb\x58\x90"
 
 

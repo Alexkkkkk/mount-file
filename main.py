@@ -181,7 +181,8 @@ def main():
         sys.exit(code)
 
     # Keep disk commands independent of Qt, including in frozen builds.
-    from mountfile.cli import COMMANDS, main as cli_main
+    from mountfile.cli import COMMANDS
+    from mountfile.cli import main as cli_main
 
     if argv and (argv[0] in COMMANDS or argv[0].startswith("-")):
         sys.exit(cli_main(argv))

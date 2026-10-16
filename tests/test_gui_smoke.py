@@ -22,8 +22,8 @@ qt_compat = pytest.importorskip(
     "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
 )
 
-from mountfile.qt_compat import QApplication, QModelIndex  # noqa: E402
-from mountfile.mainwindow import ImageModel, MainWindow  # noqa: E402
+from mountfile.mainwindow import ImageModel, MainWindow
+from mountfile.qt_compat import QApplication, QModelIndex
 
 TREE = {
     "/": [("boot", True), ("empty", True), ("README.TXT", False), ("data.bin", False)],

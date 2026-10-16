@@ -10,9 +10,10 @@ pytest.importorskip(
     "mountfile.qt_compat", exc_type=ImportError, reason="Qt not installed"
 )
 
+from test_gui_end_to_end import build_disk
+
 from mountfile.qt_compat import QApplication
 from mountfile.tc_window import MainWindow
-from test_gui_end_to_end import build_disk
 
 
 @pytest.fixture(scope="module")

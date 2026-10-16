@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 
-__all__ = ["ExtractError", "extract_path", "extract_file"]
+__all__ = ["ExtractError", "extract_file", "extract_path"]
 
 
 class ExtractError(Exception):
@@ -37,8 +37,7 @@ def _find(provider, parent, name):
     for item in provider.list_dir(parent or "/"):
         if item["name"].upper() == name.upper():
             return item
-    raise ExtractError("not found in image: %s"
-                       % _join(parent or "/", name))
+    raise ExtractError("not found in image: %s" % _join(parent or "/", name))
 
 
 def extract_file(provider, src_path, dst_path):
@@ -66,7 +65,7 @@ def extract_path(provider, src_path, dst_dir, progress=None):
         is_root = False
         slash = src.rfind("/")
         parent = src[:slash] or "/"
-        name = src[slash + 1:]
+        name = src[slash + 1 :]
 
     if is_root:
         is_dir = True

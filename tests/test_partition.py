@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile.partition import SECTOR_SIZE, list_partitions
 
-IMG_SECTORS = 128 * 1024            # 64 MB is plenty for these tables
+IMG_SECTORS = 128 * 1024  # 64 MB is plenty for these tables
 
 
 def _blank_image(tmpdir, name="disk.img"):
@@ -53,7 +53,7 @@ def _ebr(logical=None, nxt=None):
     if logical:
         _mbr_entry(s, 0, logical[0], logical[1], logical[2])
     if nxt:
-        _mbr_entry(s, 1, 0x0F, nxt, 4096)     # second slot: next EBR (relative)
+        _mbr_entry(s, 1, 0x0F, nxt, 4096)  # second slot: next EBR (relative)
     s[510:512] = b"\x55\xaa"
     return bytes(s)
 
@@ -70,7 +70,7 @@ class TestExtendedMBR:
         parts = list_partitions(path)
         assert [p.type for p in parts] == [0x0B, 0x0F, 0x83]
         logical = parts[-1]
-        assert logical.start_lba == 4096 + 63          # EBR-relative offset
+        assert logical.start_lba == 4096 + 63  # EBR-relative offset
         assert logical.offset == (4096 + 63) * SECTOR_SIZE
         assert logical.size_bytes == 1024 * SECTOR_SIZE
         assert logical.name == "Logical 3"
@@ -81,25 +81,28 @@ class TestExtendedMBR:
         _put_sector(path, 0, _mbr([(0x0F, 2048, 65536)]))
         # EBR #1 at the start of the extended area, chain: 2048 -> 6144 -> 14336
         _put_sector(path, 2048, _ebr(logical=(0x0B, 63, 2048), nxt=4096))
-        _put_sector(path, 2048 + 4096,
-                    _ebr(logical=(0x07, 63, 2048), nxt=8192))
+        _put_sector(path, 2048 + 4096, _ebr(logical=(0x07, 63, 2048), nxt=8192))
         _put_sector(path, 2048 + 4096 + 8192, _ebr(logical=(0x83, 63, 1024)))
 
         parts = list_partitions(path)
         assert [p.start_lba for p in parts] == [2048, 2111, 6207, 14399]
         assert [p.type for p in parts] == [0x0F, 0x0B, 0x07, 0x83]
         assert [p.name for p in parts] == [
-            "Partition 1", "Logical 2", "Logical 3", "Logical 4"]
+            "Partition 1",
+            "Logical 2",
+            "Logical 3",
+            "Logical 4",
+        ]
 
     def test_chain_stops_on_broken_ebr(self):
         path = _blank_image(self.tmp)
         _put_sector(path, 0, _mbr([(0x0B, 2048, 1024), (0x05, 4096, 8192)]))
         broken = bytearray(_ebr(logical=(0x83, 63, 512), nxt=2048))
-        broken[510:512] = b"\x00\x00"                 # damaged signature
+        broken[510:512] = b"\x00\x00"  # damaged signature
         _put_sector(path, 4096, bytes(broken))
 
         parts = list_partitions(path)
-        assert [p.type for p in parts] == [0x0B, 0x05]   # walk ended safely
+        assert [p.type for p in parts] == [0x0B, 0x05]  # walk ended safely
 
     def test_chain_stops_on_dead_end(self):
         path = _blank_image(self.tmp)
@@ -131,13 +134,12 @@ class TestGptRobustness:
         struct.pack_into("<I", hdr, 88, 128)
         _put_sector(path, 1, bytes(hdr))
         if entry_size < 128:
-            return          # unusable entry size: nothing sensible to write
+            return  # unusable entry size: nothing sensible to write
         ent = bytearray(entry_size)
-        ent[0:16] = uuid.UUID(
-            "0fc63daf-8483-4772-8e79-3d69d8477de4").bytes_le
+        ent[0:16] = uuid.UUID("0fc63daf-8483-4772-8e79-3d69d8477de4").bytes_le
         struct.pack_into("<Q", ent, 32, 2048)
         struct.pack_into("<Q", ent, 40, 2048 + 99999)
-        ent[56:56 + len(name) * 2] = name.encode("utf-16-le")
+        ent[56 : 56 + len(name) * 2] = name.encode("utf-16-le")
         _put_sector(path, 2, bytes(ent))
 
     def test_plausible_gpt(self):
@@ -151,7 +153,7 @@ class TestGptRobustness:
     def test_absurd_entry_count_is_clamped(self):
         path = _blank_image(self.tmp)
         self._gpt_image(path, 0xFFFFFFFF, 128)
-        parts = list_partitions(path)          # must return, not spin
+        parts = list_partitions(path)  # must return, not spin
         assert len(parts) == 1
         assert parts[0].name == "RootFS"
 
@@ -166,7 +168,7 @@ class TestGptRobustness:
     def test_zero_entry_lba_is_rejected(self):
         path = _blank_image(self.tmp)
         self._gpt_image(path, 128, 128)
-        with open(path, "r+b") as f:            # entry_lba 2 -> 0
+        with open(path, "r+b") as f:  # entry_lba 2 -> 0
             f.seek(SECTOR_SIZE + 72)
             f.write(struct.pack("<Q", 0))
         assert list_partitions(path) == []
