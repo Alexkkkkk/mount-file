@@ -68,11 +68,16 @@ jobs:
           python-version: "3.12"
 
       # pytsk3 builds bundled libtsk from source; the build tools ship
-      # with ubuntu-latest but must be present for pip to compile it
+      # with ubuntu-latest but must be present for pip to compile it.
+      # The Qt runtime libraries are required too: requirements.txt pulls
+      # in PyQt6, but without libEGL/libGL the binding cannot import and
+      # every GUI test in tests/test_build_ci.py is silently skipped
+      # instead of running.
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y dosfstools mtools build-essential
+          sudo apt-get install -y dosfstools mtools build-essential \
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
 
       - name: Install runtime dependencies
         run: |
