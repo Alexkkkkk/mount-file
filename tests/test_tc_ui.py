@@ -213,10 +213,7 @@ def main():
         lrows = {r[0]: r for r in _cells(right)}
         assert "firmware_2024-06-11.dump" in lrows, list(lrows)
         firmware_row = right._row_of("firmware_2024-06-11.dump")
-        assert (
-            right.table.item(firmware_row, 0).toolTip()
-            == "firmware_2024-06-11.dump"
-        )
+        assert right.table.item(firmware_row, 0).toolTip() == "firmware_2024-06-11.dump"
         assert lrows["logs"][2] == DIR_SIZE_TEXT, lrows["logs"]
         assert lrows["notes.txt"][1] == "TXT", lrows["notes.txt"]
         assert lrows["notes.txt"][2] == "1 200", lrows["notes.txt"]
