@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+#
+# Конфигурация python-semantic-release v9 для проекта mount-file.
+# Версия проекта живёт в mountfile/__init__.py и обновляется
+# автоматически при каждом релизном прогоне Auto Release.
+
+[tool.semantic_release]
+# v9: ключ во множественном числе и списком, старое version_variable
+# из v7 больше не поддерживается.
+version_variables = ["mountfile/__init__.py:__version__"]
+commit_parser = "conventional"
+tag_format = "v{version}"
+# [skip ci] обязателен: иначе коммит semantic-release сам запускает
+# Auto Release и получается бесконечный цикл.
+commit_message = "chore(release): {version} [skip ci]"
+
+[tool.semantic_release.branches.main]
+# v9: ветки описываются таблицей branches, ключ branch — legacy.
+match = "main"
+prerelease = false
+
+[tool.semantic_release.changelog]
+# mode = "update" дописывает новый раздел в существующий CHANGELOG.md,
+# а не перезаписывает его целиком.
+changelog_file = "CHANGELOG.md"
+mode = "update"
