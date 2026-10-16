@@ -4,11 +4,12 @@
 
 PY ?= python3
 
-.PHONY: help install test lint fmt exe clean all-in-one sample
+.PHONY: help install test test-standalone lint fmt exe clean all-in-one sample
 
 help:
 	@echo "make install    - install runtime dependencies"
 	@echo "make test       - run the test suite"
+	@echo "make test-standalone - run the standalone mountfile.py tests"
 	@echo "make lint       - ruff static check (E9,F63,F7,F82)"
 	@echo "make fmt        - apply ruff --fix + black + isort"
 	@echo "make exe        - build MountFile.exe with PyInstaller"
@@ -21,6 +22,11 @@ install:
 
 test:
 	$(PY) -m pytest tests/ -v
+
+# Tests for the standalone single-file build (mountfile.py). Neither
+# pytsk3 nor a display is required, so these run anywhere, including CI.
+test-standalone:
+	$(PY) -m pytest tests/test_mountfile_standalone.py -v
 
 lint:
 	$(PY) -m ruff check . --select E9,F63,F7,F82
