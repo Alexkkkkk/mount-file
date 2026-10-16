@@ -255,7 +255,9 @@ def test_launcher_api_only_survives_missing_images():
 
 
 def test_launcher_cli_only_cli_and_api_refuse_gracefully():
-    r = _run_launcher("--cli-only", "--img", "definitely-missing.img", "--dump", "missing.bin")
+    r = _run_launcher(
+        "--cli-only", "--img", "definitely-missing.img", "--dump", "missing.bin"
+    )
     assert r.returncode == 0, r.stderr
     assert "Traceback" not in r.stdout
 
