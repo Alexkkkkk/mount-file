@@ -14,6 +14,11 @@ on:
         description: 'Existing tag to rebuild and attach assets to'
         required: true
         type: string
+      source_ref:
+        description: 'Build from this ref instead of the tag (backfill of an older release)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -54,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.source_ref || inputs.tag }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -92,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.source_ref || inputs.tag }}
 
       - uses: actions/setup-python@v7
         with:
@@ -186,7 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.source_ref || inputs.tag }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
