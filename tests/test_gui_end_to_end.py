@@ -22,7 +22,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 qt_compat = pytest.importorskip(
-    "mountfile.qt_compat", reason="no Qt bindings installed"
+    "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
 )
 
 from mountfile.fat32 import Fat32  # noqa: E402

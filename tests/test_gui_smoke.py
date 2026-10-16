@@ -18,16 +18,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-qt_compat = pytest.importorskip("mountfile.qt_compat",
-                                reason="no Qt bindings installed")
+qt_compat = pytest.importorskip(
+    "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
+)
 
 from mountfile.qt_compat import QApplication, QModelIndex  # noqa: E402
 from mountfile.mainwindow import ImageModel, MainWindow  # noqa: E402
 
-
 TREE = {
-    "/": [("boot", True), ("empty", True), ("README.TXT", False),
-          ("data.bin", False)],
+    "/": [("boot", True), ("empty", True), ("README.TXT", False), ("data.bin", False)],
     "/boot": [("kernel.img", False)],
     "/empty": [],
 }
@@ -43,8 +42,10 @@ class FakeProvider:
 
     def list_dir(self, path):
         self.calls.append(path)
-        return [{"name": n, "is_dir": d, "size": 0 if d else 42}
-                for n, d in TREE.get(path, [])]
+        return [
+            {"name": n, "is_dir": d, "size": 0 if d else 42}
+            for n, d in TREE.get(path, [])
+        ]
 
     def read_file_range(self, path, offset=0, length=1 << 20):
         return b"\x00" * 16
@@ -75,7 +76,7 @@ def test_model_lazy_load(app):
     assert model.data(model.index(1, 0)) == "empty/"
     assert model.data(model.index(2, 0)) == "README.TXT"
     assert model.data(model.index(2, 1)) == "42 B"
-    assert model.data(model.index(1, 1)) is None          # dirs have no size
+    assert model.data(model.index(1, 1)) is None  # dirs have no size
 
     # Directories report children, files do not.
     assert model.hasChildren(top)
@@ -95,9 +96,9 @@ def test_model_empty_dir_is_marked_loaded(app):
 
     assert model.data(empty) == "empty/"
     assert model.canFetchMore(empty)
-    model.fetchMore(empty)                     # legitimate empty directory
+    model.fetchMore(empty)  # legitimate empty directory
     assert model.rowCount(empty) == 0
-    assert not model.canFetchMore(empty)       # loaded, just empty
+    assert not model.canFetchMore(empty)  # loaded, just empty
 
 
 def test_model_reload_refetches(app):
@@ -107,7 +108,7 @@ def test_model_reload_refetches(app):
     boot = model.index(0, 0)
     model.fetchMore(boot)
     assert model.rowCount(boot) == 1
-    model.reload(model.node_for(boot))          # must not raise
+    model.reload(model.node_for(boot))  # must not raise
     assert model.rowCount(boot) == 0
     assert model.canFetchMore(boot)
     model.fetchMore(boot)
@@ -141,7 +142,7 @@ def test_mainwindow_refresh_dir(app):
         win.provider = win.model.provider
         win.model.fetchMore(QModelIndex())
 
-        win._refresh_dir("/")                    # must not raise
+        win._refresh_dir("/")  # must not raise
         assert win.model.rowCount() == 0
         assert win.model.canFetchMore(QModelIndex())
 

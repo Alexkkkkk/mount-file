@@ -6,7 +6,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-pytest.importorskip("mountfile.qt_compat", reason="Qt not installed")
+pytest.importorskip(
+    "mountfile.qt_compat", exc_type=ImportError, reason="Qt not installed"
+)
 
 from mountfile.qt_compat import QApplication
 from mountfile.tc_window import MainWindow
