@@ -190,3 +190,92 @@ def test_viewer_dialog_scales_with_screen():
     app.processEvents()
     assert dlg.width() >= 400 and dlg.height() >= 300
     dlg.close()
+
+
+# ------------------------------------------------------- unified launcher
+#
+# mountfile_all.py drives every feature in one run; if its CLI/API calls
+# drift away from the real modules these tests fail instead of the user
+# getting a wall of warnings.
+
+LAUNCHER = os.path.join(ROOT, "mountfile_all.py")
+
+
+def _run_launcher(*args):
+    """Run mountfile_all.py offline and return the completed process."""
+    env = dict(os.environ)
+    env["MOUNTFILE_NO_UPDATE"] = "1"  # the update check must not hit the network
+    env["PYTHONIOENCODING"] = "utf-8"
+    return subprocess.run(
+        [sys.executable, LAUNCHER, *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        env=env,
+    )
+
+
+def test_launcher_is_importable_and_compiles():
+    r = subprocess.run(
+        [sys.executable, "-m", "py_compile", LAUNCHER],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_launcher_help_exits_zero():
+    r = _run_launcher("--help")
+    assert r.returncode == 0, r.stderr
+    assert "--cli-only" in r.stdout
+
+
+def test_launcher_cheatsheet_lists_every_cli_command():
+    from mountfile.cli import COMMANDS
+
+    r = _run_launcher("--cheatsheet")
+    assert r.returncode == 0, r.stderr
+    for cmd in COMMANDS:
+        assert cmd in r.stdout, "the cheatsheet does not document %r" % cmd
+
+
+def test_launcher_api_only_survives_missing_images():
+    """No image/dump given: every section must skip, never raise."""
+    r = _run_launcher(
+        "--api-only", "--img", "definitely-missing.img", "--dump", "missing.bin"
+    )
+    assert r.returncode == 0, r.stderr
+    assert "Traceback" not in r.stdout
+    assert "Python API" in r.stdout
+
+
+def test_launcher_cli_only_cli_and_api_refuse_gracefully():
+    r = _run_launcher(
+        "--cli-only", "--img", "definitely-missing.img", "--dump", "missing.bin"
+    )
+    assert r.returncode == 0, r.stderr
+    assert "Traceback" not in r.stdout
+
+
+@needs_mkfs_vfat
+def test_launcher_api_only_roundtrips_fat32(tmp_path):
+    """The API demo really writes/renames/deletes on a FAT32 image."""
+    img = _make_vfat_image(tmp_path)
+    r = _run_launcher("--api-only", "--img", img, "--dump", "missing.bin")
+    assert r.returncode == 0, r.stderr
+    assert "FAT32" in r.stdout
+    assert "Traceback" not in r.stdout
+
+    # the demo must clean up after itself: no api_test/ and no hello.txt left
+    from mountfile.fat32 import Fat32
+
+    with open(img, "r+b") as fh:
+        fs = Fat32(fh, 0)
+        names = [e.name for e in fs.list_dir(fs.find_dir("/"))]
+    assert "API_TEST" not in [n.upper() for n in names]
+    assert "HELLO.TXT" in [n.upper() for n in names], names

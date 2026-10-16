@@ -4,15 +4,17 @@
 
 PY ?= python3
 
-.PHONY: help install test lint fmt exe clean
+.PHONY: help install test lint fmt exe clean all-in-one sample
 
 help:
-	@echo "make install  - install runtime dependencies"
-	@echo "make test     - run the test suite"
-	@echo "make lint     - ruff static check (E9,F63,F7,F82)"
-	@echo "make fmt      - apply ruff --fix + black + isort"
-	@echo "make exe      - build MountFile.exe with PyInstaller"
-	@echo "make clean    - remove build artifacts"
+	@echo "make install    - install runtime dependencies"
+	@echo "make test       - run the test suite"
+	@echo "make lint       - ruff static check (E9,F63,F7,F82)"
+	@echo "make fmt        - apply ruff --fix + black + isort"
+	@echo "make exe        - build MountFile.exe with PyInstaller"
+	@echo "make clean      - remove build artifacts"
+	@echo "make all-in-one - run every feature: CLI + API + tests (no GUI)"
+	@echo "make sample     - build a FAT32 dump.img and an RT809H-style sample"
 
 install:
 	$(PY) -m pip install -r requirements.txt
@@ -33,3 +35,16 @@ exe:
 
 clean:
 	rm -rf build dist *.spec
+
+# One-shot exercise of everything the project can do (mountfile_all.py):
+# CLI commands, the Python API demo and the test suite. The GUI is skipped so
+# the target also works over SSH and in CI (no display needed).
+# Extra flags:  make all-in-one ARGS="--build"
+all-in-one:
+	$(PY) mountfile_all.py --no-gui $(ARGS)
+
+# Build the sample images the launcher uses by default (dump.img / dump.bin /
+# udev.txt) with the system dosfstools + mtools, then nothing is skipped in
+# `make all-in-one`.
+sample:
+	bash scripts/make_sample_image.sh

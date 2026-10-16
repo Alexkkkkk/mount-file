@@ -14,7 +14,8 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import rt809
-from mountfile.rt809 import Part, Rt809Error, decode_dump, detect, parse_udev
+from mountfile.rt809 import (Part, Rt809Error, decode_dump, detect,
+                             format_parts_table, parse_udev)
 
 
 def make_encrypted_dump(path, kind="MTK", plain_check=True):
@@ -201,6 +202,64 @@ class TestUdev:
         )
 
 
+class TestFormatPartsTable:
+    """The table the GUI prints before asking for confirmation."""
+
+    def setup_method(self):
+        self.tmp = tempfile.mkdtemp(prefix="rt809_table_")
+
+    def test_header_and_rows(self):
+        parts = [Part("preloader", 0, 0x4000), Part("lk", 0x4000, 0x8000)]
+        lines = format_parts_table(parts).splitlines()
+        assert len(lines) == 3
+        assert "Offset" in lines[0] and "Length" in lines[0] and "Name" in lines[0]
+        # header and rows share the same column layout
+        assert lines[0].index("Offset") == lines[1].index("0x")
+        assert lines[1].split()[:3] == ["1", "0x00000000", "0x00004000"]
+        assert lines[1].endswith("preloader")
+        assert lines[2].split()[:3] == ["2", "0x00004000", "0x00008000"]
+        assert lines[2].endswith("lk")
+
+    def test_empty(self):
+        assert len(format_parts_table([]).splitlines()) == 1  # header only
+
+    def test_numbering_starts_at_one(self):
+        lines = format_parts_table([Part("boot", 0, 0x1000)]).splitlines()
+        assert lines[1].startswith("1 ")
+
+    def test_cli_rows_match(self, capsys):
+        """The `split` command prints the same rows as the GUI table."""
+        from types import SimpleNamespace
+
+        from mountfile import cli
+
+        dump = os.path.join(self.tmp, "dump.bin")
+        with open(dump, "wb") as f:
+            f.write(bytes(0x200000))
+        udev = os.path.join(self.tmp, "udev.txt")
+        with open(udev, "wb") as f:
+            # CRLF built from byte values: byte-identical file on Linux and Windows.
+            # A text-mode write of os.linesep produced CR CR LF on Windows, the
+            # udev parser then stopped at the empty line and found no partitions
+            # (CI: "No partitions parsed from ...udev.txt" on windows-latest).
+            crlf = bytes([13, 10])
+            f.write(
+                b"[PARTITIONS]"
+                + crlf
+                + b"0x00000000,0x00004000,preloader"
+                + crlf
+                + b"0x00010000,0x00100000,system"
+                + crlf
+            )
+        args = SimpleNamespace(
+            dump=dump, udev=udev, output=os.path.join(self.tmp, "out")
+        )
+        assert cli.cmd_split(args) == getattr(cli, "OK", 0)
+        printed = capsys.readouterr().out
+        for row in format_parts_table(parse_udev(udev)).splitlines()[1:]:
+            assert row in printed
+
+
 if __name__ == "__main__":
     tc = TestDetect()
     for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
@@ -212,6 +271,12 @@ if __name__ == "__main__":
         getattr(tc, meth)()
     tc = TestUdev()
     for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
+        tc.setup_method()
+        getattr(tc, meth)()
+    tc = TestFormatPartsTable()
+    for meth in sorted(n for n in dir(tc) if n.startswith("test_")):
+        if meth == "test_cli_rows_match":
+            continue  # needs the pytest capsys fixture
         tc.setup_method()
         getattr(tc, meth)()
     print("all rt809 tests passed")
