@@ -17,6 +17,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 - Открытие raw-образов и обнаружение разделов MBR/GPT.
 - Просмотр и извлечение файловых систем, поддерживаемых The Sleuth Kit (`pytsk3`): FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 и других — в зависимости от сборки `libtsk`.
+- **Дампы RT809H:** расшифровка зашифрованных дампов eMMC плат MStar (MST) и MediaTek (MTK) по XOR-таблицам (таблицы `XOR_MST_00.bin` / `XOR_MTK_00.bin` встроены), разбиение дампа на партиции по файлу `udev` (секции `[PARTITIONS]`, переводы строк Windows/Unix/Mac).
 - Создание и перезапись файлов, длинные имена (LFN), имена 8.3 и создание папок в FAT32.
 - Двухпанельный интерфейс и HEX-просмотр первых 1 МБ выбранного файла.
 - Автоматическая проверка обновлений GitHub Releases при запуске.
@@ -61,6 +62,27 @@ python main.py path/to/image.img
 В окне выберите образ и раздел (или весь образ). Двойной щелчок открывает папку или файл; для FAT32 доступны **Import file…** и **New folder**.
 
 > **Важно:** запись изменяет файл образа. Перед импортом и созданием папок сделайте резервную копию; безопаснее работать с копией образа.
+
+## Командная строка
+
+Команды работают и через `python main.py`, и через собранный бинарник; для CLI
+установка Qt не требуется. Все пути ниже — примеры.
+
+```bash
+python -m mountfile --help
+python main.py volumes dump.img
+python main.py ls dump.img /
+python main.py get dump.img /photos -o ./out
+python main.py put dump.img ./hello.txt --dest / --yes
+python main.py mkdir dump.img /new
+python main.py rm dump.img /new --recursive --yes
+python main.py decode dump.bin                      # расшифровка дампа RT809H (MST/MTK)
+python main.py split dump.bin udev.txt -o ./parts   # разбиение дампа на партиции по udev
+```
+
+Запись (`put`, `mkdir`, `rm`) поддерживается только в FAT32 и требует `--yes`;
+перед изменением образа сделайте резервную копию. `mv` переименовывает файл в том
+же каталоге, а не переносит между томами.
 
 ## Windows 7
 

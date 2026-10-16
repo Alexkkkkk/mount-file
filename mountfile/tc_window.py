@@ -100,7 +100,7 @@ class ViewerDialog(QDialog):
     def __init__(self, parent, name, size, data):
         super().__init__(parent)
         self.setWindowTitle("Просмотр — %s" % name)
-        self.resize(820, 560)
+        self._fit_to_screen()
         lay = QVBoxLayout(self)
         lay.addWidget(
             QLabel(
@@ -114,6 +114,21 @@ class ViewerDialog(QDialog):
         btn = QPushButton("Закрыть (Esc)")
         btn.clicked.connect(self.accept)
         lay.addWidget(btn, 0, AlignRight)
+
+    def _fit_to_screen(self):
+        """Viewer takes ~90% of the monitor work area, not fixed 820x560."""
+        geo = None
+        try:
+            geo = self.screen().availableGeometry()
+        except Exception:
+            geo = None
+        if geo is None:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen else None
+        if geo is not None:
+            self.resize(
+                max(400, geo.width() * 9 // 10), max(300, geo.height() * 9 // 10)
+            )
 
 
 class PanelTable(QTableWidget):
@@ -523,6 +538,10 @@ class TcPanel(QWidget):
             for c, text in enumerate(self._row_values(e)):
                 it = QTableWidgetItem(text)
                 it.setFlags(ItemIsEnabled | ItemIsSelectable)
+                if c == 0:
+                    # Keep the complete name available even when Qt elides
+                    # it to fit a narrow panel or a high-DPI display.
+                    it.setToolTip(text)
                 if c == 2 and not e.get("up"):
                     it.setTextAlignment(AlignRight | AlignVCenter)
                 if marked:
@@ -729,7 +748,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
-        self.resize(1180, 720)
+        self.setMinimumSize(640, 400)
 
         self.image_path = None
         self.volumes = []
@@ -739,9 +758,52 @@ class MainWindow(QMainWindow):
         self.updater = None
 
         self._build_ui()
+        self._fit_to_screen()
+        act_fs = QAction("Полный экран (F11)", self)
+        act_fs.setShortcut(QKeySequence("F11"))
+        act_fs.triggered.connect(self.toggle_fullscreen)
+        self.addAction(act_fs)
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._start_updater()
+
+    # -------------------------------------------------------- screen fit
+    def screen_geometry(self):
+        """Work area of the monitor the window lives on (None if unknown)."""
+        screen = None
+        try:
+            screen = self.screen()
+        except Exception:
+            screen = None
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return None
+        return screen.availableGeometry()
+
+    def _fit_to_screen(self):
+        """Fill the monitor work area instead of the fixed 1180x720 size.
+
+        Keeps the window centered on the monitor it is on and follows the
+        real resolution (DPI-scaled), so the panel columns and the log dock
+        always have all the space the monitor can give.
+        """
+        geo = self.screen_geometry()
+        if geo is None:
+            self.resize(1180, 720)
+            return
+        self.resize(geo.width(), geo.height())
+        self.move(geo.x(), geo.y())
+
+    def toggle_fullscreen(self):
+        """F11: true fullscreen <-> back to the maximized window."""
+        if self.isFullScreen():
+            self.showNormal()
+            self.showMaximized()
+            self.log_msg("Полный экран выключен (F11)")
+        else:
+            self.showFullScreen()
+            self.log_msg("Полный экран включен (F11 — выход)")
 
     # ----------------------------------------------------------- updater
     def _start_updater(self):
@@ -1047,6 +1109,10 @@ class MainWindow(QMainWindow):
         m_cmd.addSeparator()
         m_cmd.addAction(self._action("Выход", self.close, "Alt+F4"))
 
+        m_tool = mb.addMenu("Инструменты")
+        m_tool.addAction(self._action("Декодировать дамп RT809…", self.tool_decode))
+        m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
+
         m_net = mb.addMenu("Сеть")
         m_net.addAction(
             self._action("FTP-соединение…", lambda: self._unsupported("FTP-соединение"))
@@ -1169,6 +1235,55 @@ class MainWindow(QMainWindow):
 
     def open_repo(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file")
+
+    # ------------------------------------------------------ rt809 tools
+    def tool_decode(self):
+        """Decode an RT809H-encrypted MST/MTK dump into <dump>_decode.bin."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Декодировать дамп RT809 (MST/MTK)", "", IMAGE_FILTER
+        )
+        if not path:
+            return
+        try:
+            from .rt809 import decode_dump
+
+            out = decode_dump(path)
+        except Exception as e:
+            self.log_msg("Ошибка декодирования: %s" % e)
+            QMessageBox.warning(
+                self, "Декодирование", "Не удалось декодировать:\n%s" % e
+            )
+            return
+        if out is None:
+            self.log_msg(
+                "Дамп не зашифрован (маркер найден, флаг JC сброшен): %s" % path
+            )
+            return
+        self.log_msg("Декодированный дамп записан: %s" % out)
+
+    def tool_split(self):
+        """Split a dump into partitions by a udev file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Разбить дамп на партиции", "", IMAGE_FILTER
+        )
+        if not path:
+            return
+        udev, _ = QFileDialog.getOpenFileName(
+            self, "Выбрать файл udev", "", "udev (*.*)"
+        )
+        if not udev:
+            return
+        try:
+            from .rt809 import split_by_udev
+
+            parts, written = split_by_udev(path, udev)
+        except Exception as e:
+            self.log_msg("Ошибка разбиения: %s" % e)
+            QMessageBox.warning(self, "Разбиение", "Не удалось разбить дамп:\n%s" % e)
+            return
+        self.log_msg(
+            "Разбиение: партиций %d, записано файлов %d" % (len(parts), len(written))
+        )
 
     def _unsupported(self, what):
         self.log_msg("%s: не поддерживается в этой сборке" % what)
@@ -1313,17 +1428,20 @@ class MainWindow(QMainWindow):
 
         try:
             panel.provider = TskImage(self.image_path, offset=offset)
-        except TskError as e:
-            panel.provider = None
-            QMessageBox.warning(
-                self,
-                "Не удалось смонтировать том",
-                "The Sleuth Kit не смог открыть этот том:\n%s\n\n"
-                "Совет: выберите конкретный раздел в списке томов "
-                "или установите pytsk3." % e,
-            )
-            panel.refresh()
-            return False
+        except TskError as tsk_error:
+            from .fat32 import Fat32Error, Fat32Provider
+
+            try:
+                panel.provider = Fat32Provider(self.image_path, offset=offset)
+            except (Fat32Error, OSError, ValueError) as fat_error:
+                panel.provider = None
+                QMessageBox.warning(
+                    self,
+                    "Не удалось смонтировать том",
+                    "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
+                )
+                panel.refresh()
+                return False
 
         panel.mode = "img"
         panel.volume_offset = offset
@@ -1366,7 +1484,9 @@ class MainWindow(QMainWindow):
                 pass
         panel.writer_fh = None
         panel.writer = None
-        panel.provider = None
+        provider, panel.provider = panel.provider, None
+        if provider is not None and hasattr(provider, "close"):
+            provider.close()
 
     def _close_writer(self, panel=None):
         """Close write handles (all panels when called without arguments)."""

@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import os
 
+from .extract import extract_path
+from .fat32 import Fat32, Fat32Error, Fat32Provider
+from .firmware import detect_volumes
 from .hexview import HexView
-from .partition import list_partitions
 from .qt_compat import (BottomDock, DisplayRole, Horizontal, MB_No, MB_Yes,
                         QAbstractItemModel, QAction, QComboBox, QDockWidget,
                         QFileDialog, QInputDialog, QLabel, QMainWindow,
@@ -19,15 +21,7 @@ from .vfs import TskError, TskImage
 
 
 class Node:
-    __slots__ = (
-        "children",
-        "is_dir",
-        "loaded",
-        "name",
-        "parent",
-        "path",
-        "size",
-    )
+    __slots__ = ("children", "is_dir", "loaded", "name", "parent", "path", "size")
 
     def __init__(self, name, path, is_dir, size=0, parent=None):
         self.name = name
@@ -40,7 +34,7 @@ class Node:
 
 
 class ImageModel(QAbstractItemModel):
-    """Lazy-loading tree model over a TskImage provider.
+    """Lazy-loading tree model over a filesystem provider.
 
     `self.root` is the hidden root: its children are the top-level rows of
     the view, so the parent index of those rows is the invalid root index.
@@ -187,6 +181,7 @@ class MainWindow(QMainWindow):
 
         self.image_path = None
         self.provider = None
+        self.backend = None
         self.writer = None
         self.writer_fh = None
         self.model = None
@@ -217,6 +212,12 @@ class MainWindow(QMainWindow):
         self.btn_mkdir = QPushButton("New folder (FAT32)")
         self.btn_mkdir.clicked.connect(self.make_dir)
         tb.addWidget(self.btn_mkdir)
+        self.btn_rename = QPushButton("Rename (FAT32)")
+        self.btn_rename.clicked.connect(self.rename_selected)
+        tb.addWidget(self.btn_rename)
+        self.btn_delete = QPushButton("Delete (FAT32)")
+        self.btn_delete.clicked.connect(self.delete_selected)
+        tb.addWidget(self.btn_delete)
 
         self.tree = QTreeView()
         self.tree.setUniformRowHeights(True)
@@ -249,44 +250,45 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(msg)
         self.statusBar().showMessage(msg, 5000)
 
+    def _set_write_enabled(self, on):
+        for w in (self.btn_import, self.btn_mkdir, self.btn_rename, self.btn_delete):
+            w.setEnabled(bool(on))
+
     def _set_loaded(self, loaded):
-        for w in (self.cmb_parts, self.btn_extract, self.btn_import, self.btn_mkdir):
+        for w in (self.cmb_parts, self.btn_extract):
             w.setEnabled(loaded)
         if not loaded:
-            self.btn_import.setEnabled(False)
-            self.btn_mkdir.setEnabled(False)
+            self._set_write_enabled(False)
 
-    def open_image(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open disk image",
-            "",
-            "Disk images (*.img *.bin *.raw *.dump *.dd);;All files (*)",
-        )
+    # ------------------------------------------------------------- open
+    def open_image(self, path=None):
+        """Open an image; `path` may come from argv or the File menu."""
+        if not isinstance(path, str) or not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Open disk image",
+                "",
+                "Disk images (*.img *.bin *.raw *.dump *.dd);;All files (*)",
+            )
         if not path:
             return
         self.image_path = path
-        self._close_writer()
+        self._unmount()
         self.cmb_parts.blockSignals(True)
         self.cmb_parts.clear()
         self.cmb_parts.addItem("Whole image (offset 0)", 0)
         try:
-            try:
-                from .firmware import detect_volumes
-
-                vols = detect_volumes(path)
-            except ImportError:
-                vols = []
-                for p in list_partitions(path):
-                    vols.append(_PartitionVolume(p))
-            for v in vols:
-                self.cmb_parts.addItem(v.desc, v.offset)
+            for i, v in enumerate(detect_volumes(path), 1):
+                self.cmb_parts.addItem("%d. %s" % (i, v.desc), v.offset)
         except Exception as e:
             self.log_msg("Volume scan failed: %s" % e)
         self.cmb_parts.blockSignals(False)
-        self.cmb_parts.setCurrentIndex(0)
-        self._mount_volume(0)
+        # Auto-select the first real volume when the image has a partition
+        # table; otherwise stay on offset 0.
+        idx = 1 if self.cmb_parts.count() > 1 else 0
+        self.cmb_parts.setCurrentIndex(idx)
         self._set_loaded(True)
+        self._mount_volume(self.cmb_parts.itemData(idx))
         self.log_msg("Opened image: %s" % path)
 
     def volume_changed(self, idx):
@@ -294,39 +296,54 @@ class MainWindow(QMainWindow):
             self._mount_volume(self.cmb_parts.itemData(idx))
 
     def _mount_volume(self, offset):
+        if offset is None:
+            offset = 0
+        self._unmount()
+        # Nothing is writable until a volume is actually mounted and its FAT32
+        # header parsed - a failed mount must not leave live buttons behind.
+        self._set_write_enabled(False)
         try:
             self.provider = TskImage(self.image_path, offset=offset)
-        except TskError as e:
-            QMessageBox.warning(
-                self,
-                "Cannot mount volume",
-                "The Sleuth Kit could not open this volume:\n%s\n\n"
-                "Tip: select a specific partition or install pytsk3." % e,
-            )
-            self.provider = None
-            self.tree.setModel(None)
-            return
+            self.backend = "The Sleuth Kit"
+        except TskError as tsk_err:
+            try:
+                self.provider = Fat32Provider(self.image_path, offset=offset)
+                self.backend = "built-in FAT32 engine"
+            except (Fat32Error, OSError, ValueError) as fat_err:
+                self.provider = None
+                QMessageBox.warning(
+                    self,
+                    "Cannot mount volume",
+                    "No filesystem could be mounted at offset %d.\n\n"
+                    "The Sleuth Kit: %s\nBuilt-in FAT32 engine: %s\n\n"
+                    "Tip: pick another entry in the Volume list."
+                    % (offset, tsk_err, fat_err),
+                )
+                return
         self.model = ImageModel(self.provider)
         self.tree.setModel(self.model)
         self.tree.selectionModel().currentChanged.connect(self.on_selection)
         self.tree.header().setSectionResizeMode(0, Stretch)
+        self.log_msg("Volume mounted @ offset %d via %s" % (offset, self.backend))
+        self._open_writer(offset)
 
-        self._close_writer()
-        from .fat32 import Fat32, Fat32Error
-
+    def _open_writer(self, offset):
         try:
-            self.writer_fh = open(self.image_path, "r+b")
-            self.writer = Fat32(self.writer_fh, offset=offset)
-            self.btn_import.setEnabled(True)
-            self.btn_mkdir.setEnabled(True)
-            self.log_msg(
-                "Volume mounted @ offset %d — FAT32 write support " "enabled" % offset
-            )
+            fh = open(self.image_path, "r+b")
+            try:
+                self.writer = Fat32(fh, offset)
+            except Exception:
+                fh.close()
+                raise
         except (Fat32Error, OSError) as e:
             self.writer = None
-            self.btn_import.setEnabled(False)
-            self.btn_mkdir.setEnabled(False)
-            self.log_msg("Volume mounted @ offset %d (read-only: %s)" % (offset, e))
+            self.writer_fh = None
+            self._set_write_enabled(False)
+            self.log_msg("Volume is read-only here (%s)" % e)
+            return
+        self.writer_fh = fh
+        self._set_write_enabled(True)
+        self.log_msg("FAT32 write support enabled (offset %d)" % offset)
 
     def _close_writer(self):
         if self.writer_fh:
@@ -337,9 +354,25 @@ class MainWindow(QMainWindow):
         self.writer_fh = None
         self.writer = None
 
+    def _unmount(self):
+        """Release the writer and the current provider."""
+        self._close_writer()
+        provider, self.provider = self.provider, None
+        self.backend = None
+        self.model = None
+        if provider is not None and hasattr(provider, "close"):
+            try:
+                provider.close()
+            except OSError:
+                pass
+        self.tree.setModel(None)
+        self.hex_view.clear()
+        self.info.setPlainText("")
+
+    # -------------------------------------------------------- selection
     def on_selection(self, current, previous):
         node = self.model.node_for(current) if self.model else None
-        if node is None or node.is_dir:
+        if node is None or node.is_dir or self.provider is None:
             self.hex_view.clear()
             self.info.setPlainText("")
             return
@@ -363,10 +396,25 @@ class MainWindow(QMainWindow):
         idx = self.tree.currentIndex()
         return self.model.node_for(idx) if self.model else None
 
+    # ---------------------------------------------------------- actions
     def extract_selected(self):
         node = self._current_node()
-        if node is None or node.is_dir:
-            QMessageBox.information(self, "Extract", "Select a file in the tree first.")
+        if node is None or self.provider is None:
+            QMessageBox.information(
+                self, "Extract", "Select a file or folder in the tree first."
+            )
+            return
+        if node.is_dir:
+            dst = QFileDialog.getExistingDirectory(self, "Extract folder into…")
+            if not dst:
+                return
+            try:
+                count = extract_path(self.provider, node.path, dst)
+                self.log_msg(
+                    "Extracted %d file(s) from %s -> %s" % (count, node.path, dst)
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Extract failed", str(e))
             return
         dst, _ = QFileDialog.getSaveFileName(self, "Extract file as…", node.name)
         if not dst:
@@ -381,9 +429,9 @@ class MainWindow(QMainWindow):
 
     def import_file(self):
         node = self._current_node()
-        if node is None:
+        if node is None or self.writer is None:
             return
-        target_dir = node.path if node.is_dir else os.path.dirname(node.path) or "/"
+        target_dir = node.path if node.is_dir else (os.path.dirname(node.path) or "/")
         src, _ = QFileDialog.getOpenFileName(self, "Import file", "")
         if not src:
             return
@@ -416,9 +464,9 @@ class MainWindow(QMainWindow):
 
     def make_dir(self):
         node = self._current_node()
-        if node is None:
+        if node is None or self.writer is None:
             return
-        target_dir = node.path if node.is_dir else os.path.dirname(node.path) or "/"
+        target_dir = node.path if node.is_dir else (os.path.dirname(node.path) or "/")
         name, ok = QInputDialog.getText(
             self, "New folder", "Folder name in %s:" % target_dir
         )
@@ -430,6 +478,46 @@ class MainWindow(QMainWindow):
             self._refresh_dir(target_dir)
         except Exception as e:
             QMessageBox.critical(self, "mkdir failed", str(e))
+
+    def rename_selected(self):
+        node = self._current_node()
+        if node is None or node.path == "/" or self.writer is None:
+            return
+        parent = os.path.dirname(node.path) or "/"
+        new_name, ok = QInputDialog.getText(
+            self, "Rename", "New name for %s:" % node.name, text=node.name
+        )
+        if not ok or not new_name.strip():
+            return
+        try:
+            self.writer.rename(node.path, new_name.strip())
+            self.log_msg("Renamed %s -> %s" % (node.path, new_name.strip()))
+            self._refresh_dir(parent)
+        except Exception as e:
+            QMessageBox.critical(self, "Rename failed", str(e))
+
+    def delete_selected(self):
+        node = self._current_node()
+        if node is None or node.path == "/" or self.writer is None:
+            return
+        parent = os.path.dirname(node.path) or "/"
+        what = "folder" if node.is_dir else "file"
+        extra = "\n(and everything inside it)" if node.is_dir else ""
+        ret = QMessageBox.warning(
+            self,
+            "Confirm delete",
+            "Delete this %s from the image?\n\n  %s%s\n\n"
+            "This rewrites the image in place. Continue?" % (what, node.path, extra),
+            MB_Yes | MB_No,
+        )
+        if ret != MB_Yes:
+            return
+        try:
+            self.writer.delete(node.path, recursive=node.is_dir)
+            self.log_msg("Deleted %s" % node.path)
+            self._refresh_dir(parent)
+        except Exception as e:
+            QMessageBox.critical(self, "Delete failed", str(e))
 
     def _refresh_dir(self, path):
         if not self.model:
@@ -449,19 +537,5 @@ class MainWindow(QMainWindow):
             self.model.reload(node)
 
     def closeEvent(self, e):
-        self._close_writer()
+        self._unmount()
         super().closeEvent(e)
-
-
-class _PartitionVolume:
-    """Adapter presenting a Partition as a FoundVolume-like object."""
-
-    def __init__(self, p):
-        self.offset = p.offset
-        self.desc = "%d  %s  %s  %.1f MB @ LBA %d" % (
-            p.index,
-            p.name,
-            p.type_name,
-            p.size_mb,
-            p.start_lba,
-        )
