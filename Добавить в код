@@ -1021,7 +1021,7 @@ def install(root: Path, *, dry: bool) -> int:
 
 
 def check_all(root: Path) -> int:
-    print(f"Проверка синтаксиса...")
+    print("Проверка синтаксиса...")
     bad = 0
     for p in [root / "mountfile" / "olma" / n
               for n in ("learn.py", "github.py", "cli.py", "__init__.py")]:
