@@ -50,13 +50,12 @@ from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
                         QDockWidget, QEvent_KeyPress, QFileDialog, QFormLayout,
                         QHBoxLayout, QInputDialog, QKeySequence, QLabel,
                         QLineEdit, QMainWindow, QMenu, QMessageBox,
-                        QPlainTextEdit, QPushButton, QSize,
-                        QSpinBox, QSplitter, QTabBar, QTableWidget,
-                        QTableWidgetItem, QToolBar, QToolButton, QVBoxLayout,
-                        QWidget, SelectRows, SizePolicyExpanding,
-                        SizePolicyFixed, Stretch, TableExtendedSelection,
-                        TB_IconOnly, TB_InstantPopup, exec_dialog,
-                        standard_icon)
+                        QPlainTextEdit, QPushButton, QSize, QSpinBox,
+                        QSplitter, QTabBar, QTableWidget, QTableWidgetItem,
+                        QToolBar, QToolButton, QVBoxLayout, QWidget,
+                        SelectRows, SizePolicyExpanding, SizePolicyFixed,
+                        Stretch, TableExtendedSelection, TB_IconOnly,
+                        TB_InstantPopup, exec_dialog, standard_icon)
 from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
 from .updater import is_frozen
