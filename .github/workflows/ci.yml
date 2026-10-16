@@ -27,6 +27,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      # system tools used by tests/test_build_ci.py to build a FAT32
+      # fixture on the fly (skipped automatically when not installed)
+      - name: Install system tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y dosfstools mtools
+
       - name: Install pytest with coverage
         run: python -m pip install --upgrade pip pytest pytest-cov
 
@@ -47,6 +53,83 @@ jobs:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}
           path: coverage.xml
           if-no-files-found: ignore
+          retention-days: 14
+
+  integration:
+    name: Integration (pytsk3 + mkfs.vfat, Linux)
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # pytsk3 builds bundled libtsk from source; the build tools ship
+      # with ubuntu-latest but must be present for pip to compile it
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dosfstools mtools build-essential
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-cov
+          python -m pip install -r requirements.txt
+
+      - name: Run the full suite with pytsk3 available
+        run: python -m pytest tests/ -v --cov=mountfile --cov-report=term
+
+      - name: Entry-point diagnostics
+        run: |
+          python main.py --version
+          python main.py --diag
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: MountFile.exe
+          - os: ubuntu-latest
+            artifact: MountFile
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -r requirements.txt
+
+      - name: Build the standalone binary (PyInstaller)
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed \
+            --collect-submodules pytsk3 \
+            --name MountFile main.py
+          test -f "dist/${{ matrix.artifact }}"
+
+      - name: Smoke-check the binary
+        if: runner.os == 'Linux'
+        run: QT_QPA_PLATFORM=offscreen ./dist/MountFile --version
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: MountFile-${{ matrix.os }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
           retention-days: 14
 
   gui-import:
