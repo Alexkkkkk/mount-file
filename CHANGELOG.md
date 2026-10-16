@@ -6,6 +6,11 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- Дампы RT809H: расшифровка дампов eMMC MStar/MTK по XOR-таблицам и разбиение дампа
+  на партиции по файлу udev — команды `decode` и `split` в CLI, пункты меню
+  «Инструменты» в GUI, модуль `mountfile/rt809.py` (таблицы XOR встроены в
+  `mountfile/data/`), тесты `tests/test_rt809.py`.
+
 - Сборки Windows в релизе снова собираются и публикуются: проба
   `import pytsk3` в задании установки зависимостей возвращала ненулевой код
   и валила задания `exe (win7)` и `exe (universal)`, из-за чего `publish`
