@@ -150,6 +150,7 @@ python -m ruff check . --select E9,F63,F7,F82
 | `mountfile/vfs.py` | Просмотр и извлечение через The Sleuth Kit |
 | `mountfile/fat32.py` | Чтение и запись FAT32 |
 | `mountfile/tc_window.py` | Основное двухпанельное окно |
+| `mountfile.py` | Отдельный одностраничный инструмент: монтирование образов (GUI + CLI) |
 | `tests/` | Автоматические тесты |
 
 
@@ -192,6 +193,50 @@ make sample                     # тестовые образы для полн�
 make sample          # → dump.img, dump.bin, udev.txt
 python mountfile_all.py --no-gui   # теперь ни один раздел не пропускается
 ```
+## Отдельный инструмент: `mountfile.py`
+
+`mountfile.py` — самостоятельный одностраничный вариант Mount File, решающий
+одну задачу: смонтировать образ диска (`.img`, `.iso`, `.bin`, `.raw`, `.vhd`,
+`.vhdx`) и отдать содержимое системе. Qt для CLI не нужен, интернет не
+используется, телеметрии нет.
+
+```bash
+python mountfile.py                      # графический интерфейс
+python mountfile.py dump.img --to /mnt/x # монтирование без интерфейса
+python mountfile.py dump.img --open      # смонтировать и открыть в файловом менеджере
+python mountfile.py --list               # что смонтировано сейчас
+python mountfile.py --unmount /mnt/x     # отмонтировать
+python mountfile.py --version
+```
+
+В графическом режиме доступны перетаскивание файла в окно, значок в системном
+лотке, палитра команд по `Ctrl+K`, темы system/light/dark и журнал операций.
+Состояние, список последних образов и журнал хранятся в каталоге настроек
+пользователя (`%APPDATA%`, `~/Library/Application Support`, `~/.config`);
+запись атомарная, поэтому обрыв питания не портит файл состояния.
+
+Платформенные механизмы монтирования:
+
+| Система | Механизм | Права |
+|---|---|---|
+| Linux | `udisksctl` (loop-setup + mount) или `mount -o loop,ro` | без root при наличии udisks2 |
+| macOS | `hdiutil attach` / `detach` | без sudo |
+| Windows | PowerShell `Mount-DiskImage` (ISO/VHD/VHDX) | без прав администратора |
+
+Сборка одного исполняемого файла:
+
+```bash
+make mountfile-exe            # то же, через Makefile
+pyinstaller --onefile --windowed --name mountfile mountfile.py
+```
+
+Тесты этого модуля запускаются отдельно и не требуют ни `pytsk3`, ни дисплея:
+
+```bash
+make test-standalone
+python -m pytest tests/test_mountfile_standalone.py -v
+```
+
 ## Ограничения
 
 - Запись поддерживается только для FAT32. Остальные файловые системы доступны для просмотра и извлечения, если их поддерживает установленная сборка `libtsk`.
