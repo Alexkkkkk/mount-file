@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 """
@@ -13,6 +12,7 @@ any machine and in CI: metadata, per-user paths, atomic IO, state migration
 and persistence, mount-point naming, the single-instance lock, logging and the
 whole CLI surface (including its exit codes).
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -302,4 +302,4 @@ def test_cli_routes_positional_arguments_to_the_cli(mf):
     """A bare path must never fall through to the GUI branch."""
     source = TARGET.read_text(encoding="utf-8")
     assert "cli_triggers" in source
-    assert "not a.startswith(\"-\")" in source or "not a.startswith('-')" in source
+    assert 'not a.startswith("-")' in source or "not a.startswith('-')" in source
