@@ -126,8 +126,9 @@ class ViewerDialog(QDialog):
             screen = QApplication.primaryScreen()
             geo = screen.availableGeometry() if screen else None
         if geo is not None:
-            self.resize(max(400, geo.width() * 9 // 10),
-                        max(300, geo.height() * 9 // 10))
+            self.resize(
+                max(400, geo.width() * 9 // 10), max(300, geo.height() * 9 // 10)
+            )
 
 
 class PanelTable(QTableWidget):
