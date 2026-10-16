@@ -1,0 +1,23 @@
+name: dependency-review
+
+# Blocks a pull request that introduces a dependency with a known high or
+# critical vulnerability. Needs Settings -> Code security -> Dependency
+# graph enabled (it is enabled on this repository).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

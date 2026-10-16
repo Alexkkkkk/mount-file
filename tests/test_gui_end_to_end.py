@@ -21,14 +21,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-qt_compat = pytest.importorskip("mountfile.qt_compat",
-                                reason="no Qt bindings installed")
+qt_compat = pytest.importorskip(
+    "mountfile.qt_compat", reason="no Qt bindings installed"
+)
 
-from mountfile.fat32 import Fat32                                   # noqa: E402
-from mountfile.firmware import detect_volumes                       # noqa: E402
-from mountfile.mainwindow import MainWindow                          # noqa: E402
-from mountfile.qt_compat import QApplication, QModelIndex            # noqa: E402
-from test_fat32 import BPS, TOTAL_SECTORS, make_fat32_image          # noqa: E402
+from mountfile.fat32 import Fat32  # noqa: E402
+from mountfile.firmware import detect_volumes  # noqa: E402
+from mountfile.mainwindow import MainWindow  # noqa: E402
+from mountfile.qt_compat import QApplication, QModelIndex  # noqa: E402
+from test_fat32 import BPS, TOTAL_SECTORS, make_fat32_image  # noqa: E402
 
 
 class _Dialogs:
@@ -41,6 +42,7 @@ class _Dialogs:
         def record(*args, **kwargs):
             self.calls.append((name, args))
             return None
+
         return record
 
 
@@ -84,7 +86,9 @@ def _rows(model):
     return [model.data(model.index(r, 0)) for r in range(model.rowCount())]
 
 
-def test_open_mount_write_refresh_delete(tmp_path, app, dialogs):
+def test_open_mount_write_refresh_delete(tmp_path, app, dialogs, monkeypatch):
+    # Exercise the advertised no-TSK fallback even when CI installed pytsk3.
+    monkeypatch.setattr("mountfile.vfs.pytsk3", None)
     disk = build_disk(tmp_path)
     assert [v.fstype for v in detect_volumes(disk)] == ["FAT32"]
 
@@ -96,12 +100,12 @@ def test_open_mount_write_refresh_delete(tmp_path, app, dialogs):
         assert win.cmb_parts.count() == 2
         assert win.cmb_parts.currentData() == 2048 * BPS
         assert win.provider is not None
-        assert win.backend == "built-in FAT32 engine"     # no pytsk3 here
+        assert win.backend == "built-in FAT32 engine"  # forced fallback
         assert win.writer is not None
         assert win.btn_import.isEnabled()
         assert win.btn_rename.isEnabled()
         assert win.btn_delete.isEnabled()
-        assert not dialogs.calls                            # no warnings
+        assert not dialogs.calls  # no warnings
 
         win.model.fetchMore(QModelIndex())
         assert _rows(win.model) == ["PHOTOS/", "HELLO.TXT"]
@@ -143,17 +147,15 @@ def test_volume_without_mountable_filesystem(tmp_path, app, dialogs):
     try:
         win.open_image(disk)
         assert win.provider is None
-        for btn in (win.btn_import, win.btn_mkdir, win.btn_rename,
-                    win.btn_delete):
+        for btn in (win.btn_import, win.btn_mkdir, win.btn_rename, win.btn_delete):
             assert not btn.isEnabled()
-        assert dialogs.calls                              # user was warned
+        assert dialogs.calls  # user was warned
         assert win.tree.model() is None
     finally:
         win.close()
 
 
-def test_write_buttons_disabled_until_a_volume_is_mounted(tmp_path, app,
-                                                          dialogs):
+def test_write_buttons_disabled_until_a_volume_is_mounted(tmp_path, app, dialogs):
     """A failed mount must not leave live write buttons behind."""
     disk = str(tmp_path / "raw.img")
     mbr = bytearray(512)
@@ -185,9 +187,9 @@ def test_switching_volumes_closes_previous_provider(tmp_path, app, dialogs):
         win.open_image(disk)
         first = win.provider
         assert first is not None
-        win.cmb_parts.setCurrentIndex(0)              # "Whole image" @ 0
-        assert win.provider is not first              # old provider released
-        win.cmb_parts.setCurrentIndex(1)              # back to the partition
+        win.cmb_parts.setCurrentIndex(0)  # "Whole image" @ 0
+        assert win.provider is not first  # old provider released
+        win.cmb_parts.setCurrentIndex(1)  # back to the partition
         assert win.provider is not first
         assert win.writer is not None
     finally:

@@ -82,7 +82,11 @@ class Partition:
 
     def __repr__(self):
         return "<Partition %s LBA=%d+%d %s>" % (
-            self.name, self.start_lba, self.sectors, self.type_name)
+            self.name,
+            self.start_lba,
+            self.sectors,
+            self.type_name,
+        )
 
 
 def _parse_ebr_chain(f, ebr_lba, start_index=0):
@@ -105,14 +109,20 @@ def _parse_ebr_chain(f, ebr_lba, start_index=0):
         rel0, size0 = struct.unpack_from("<II", e0, 8)
         if ptype0 and size0 and ptype0 not in _EXTENDED_TYPES:
             idx = start_index + len(parts) + 1
-            parts.append(Partition(idx, "Logical %d" % idx,
-                                   ebr_lba + rel0, size0, ptype0,
-                                   bool(e0[0] & 0x80)))
+            parts.append(
+                Partition(
+                    idx,
+                    "Logical %d" % idx,
+                    ebr_lba + rel0,
+                    size0,
+                    ptype0,
+                    bool(e0[0] & 0x80),
+                )
+            )
         e1 = sector[462:478]
         ptype1 = e1[4]
         rel1 = struct.unpack_from("<I", e1, 8)[0]
-        ebr_lba = (ebr_lba + rel1) if (ptype1 in _EXTENDED_TYPES and rel1) \
-            else 0
+        ebr_lba = (ebr_lba + rel1) if (ptype1 in _EXTENDED_TYPES and rel1) else 0
     return parts
 
 
@@ -124,15 +134,18 @@ def _parse_mbr(f):
     parts = []
     extended_lba = 0
     for i in range(4):
-        e = mbr[446 + 16 * i: 446 + 16 * (i + 1)]
+        e = mbr[446 + 16 * i : 446 + 16 * (i + 1)]
         ptype = e[4]
         start, size = struct.unpack_from("<II", e, 8)
         if ptype == 0 or size == 0:
             continue
         if ptype in _EXTENDED_TYPES and not extended_lba:
             extended_lba = start
-        parts.append(Partition(i + 1, "Partition %d" % (i + 1),
-                               start, size, ptype, bool(e[0] & 0x80)))
+        parts.append(
+            Partition(
+                i + 1, "Partition %d" % (i + 1), start, size, ptype, bool(e[0] & 0x80)
+            )
+        )
     # Logical volumes live inside the extended container and are chained
     # through EBR sectors, so they are appended after the primary entries.
     parts.extend(_parse_ebr_chain(f, extended_lba, start_index=len(parts)))
@@ -164,9 +177,15 @@ def _parse_gpt(f):
         if last < first:
             continue
         name = e[56:128].decode("utf-16-le", "ignore").rstrip("\x00")
-        parts.append(Partition(i + 1, name or "Partition %d" % (i + 1),
-                               first, last - first + 1,
-                               str(type_guid)))
+        parts.append(
+            Partition(
+                i + 1,
+                name or "Partition %d" % (i + 1),
+                first,
+                last - first + 1,
+                str(type_guid),
+            )
+        )
     return parts
 
 

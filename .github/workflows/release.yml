@@ -1,23 +1,176 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2026 Alexkkkkk
-# Licensed under the MIT License - see the LICENSE file for details.
-name: Release
+name: release
+
+# Single release pipeline. Triggered by the "release: published" event so
+# that a tag push (create-release.yml) and a manual tag both land here,
+# exactly once, and never race with a second workflow that also attaches
+# binaries (the old windows-exe.yml / release.yml race is gone).
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to rebuild and attach assets to'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  QT_QPA_PLATFORM: offscreen
+
 jobs:
-  linux:
-    name: linux binary
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -uo pipefail
+          echo "tag: $TAG"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            if gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -q '\.exe$'; then
+              echo "release $TAG already carries binaries - nothing to rebuild."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install pytest
+      - run: python -m pytest tests/ -v
+
+  build:
+    name: exe (${{ matrix.label }})
+    needs: [gate, test]
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: windows-latest
+    continue-on-error: ${{ matrix.legacy }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: universal
+            python: '3.8'
+            spec: requirements-win7.txt
+            qt: PyQt5
+            name: MountFile
+            legacy: false
+          - label: win10
+            python: '3.12'
+            spec: requirements.txt
+            qt: PyQt6
+            name: MountFile-win10-x64
+            legacy: false
+          - label: win7
+            python: '3.8'
+            spec: requirements-win7.txt
+            qt: PyQt5
+            name: MountFile-win7-x64
+            legacy: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -r ${{ matrix.spec }}
+          if ($LASTEXITCODE -ne 0) {
+            $global:LASTEXITCODE = 0
+            Write-Host "::warning title=Optional dependency::requirements install failed, falling back to ${{ matrix.qt }} only"
+            python -m pip install '${{ matrix.qt }}'
+          }
+          python -c "import ${{ matrix.qt }} as m; print('${{ matrix.qt }} OK')"
+          python -c "import pytsk3" 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Host 'pytsk3 OK' } else { Write-Host '::warning title=pytsk3 missing::NTFS/EXT browsing unavailable in this build' }
+
+      - name: Source diagnostics
+        shell: pwsh
+        run: |
+          python main.py --diag
+          if ($LASTEXITCODE -ne 0) { throw "source diagnostics failed (exit $LASTEXITCODE)" }
+
+      - name: Build one-file executable
+        shell: pwsh
+        run: |
+          $name = '${{ matrix.name }}'
+          $flags = @('--noconfirm', '--clean', '--onefile', '--windowed', '--name', $name)
+          python -c "import pytsk3" 2>$null
+          if ($LASTEXITCODE -eq 0) { $flags += @('--collect-submodules', 'pytsk3') }
+          python -m PyInstaller @flags main.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
+
+      - name: Verify the executable + checksum
+        shell: pwsh
+        run: |
+          $exe = "dist\${{ matrix.name }}.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $item = Get-Item $exe
+          $mb = [math]::Round($item.Length / 1MB, 1)
+          Write-Host "artifact: $($item.Name)  size: $mb MB"
+          $magic = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe)[0..1])
+          if ($magic -ne 'MZ') { throw "not a Windows PE binary (magic=$magic)" }
+          if ($item.Length -lt 5MB) { throw "executable suspiciously small ($mb MB)" }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          Write-Host "sha256: $hash"
+          "$hash  $($item.Name)" | Set-Content "$exe.sha256"
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - name: Frozen exe self-check (informational)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          & "dist\${{ matrix.name }}.exe" --diag
+          Write-Host "frozen exe exit code: $LASTEXITCODE"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: exe-${{ matrix.label }}
+          path: |
+            dist/${{ matrix.name }}.exe
+            dist/${{ matrix.name }}.exe.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  linux:
+    name: linux binary
+    needs: [gate, test]
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Qt runtime libraries
@@ -38,47 +191,55 @@ jobs:
         run: |
           ./dist/MountFile-linux-x86-64 --diag
           ./dist/MountFile-linux-x86-64 --version
-      - uses: actions/upload-artifact@v4
+      - name: Checksum
+        run: sha256sum dist/MountFile-linux-x86-64 > dist/MountFile-linux-x86-64.sha256
+      - uses: actions/upload-artifact@v7
         with:
-          name: MountFile-linux-x86-64
-          path: dist/MountFile-linux-x86-64
+          name: exe-linux
+          path: |
+            dist/MountFile-linux-x86-64
+            dist/MountFile-linux-x86-64.sha256
           if-no-files-found: error
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/MountFile-linux-x86-64
 
-  windows:
-    name: windows exe
-    runs-on: windows-latest
+  publish:
+    name: attach binaries to the release
+    needs: [gate, build, linux]
+    if: always() && needs.gate.outputs.proceed == 'true' && needs.build.result == 'success' && needs.linux.result == 'success'
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # gh release create/upload shell out to git, so the job must be inside
+      # a repository - without this checkout the publish job failed with
+      # "fatal: not a git repository (or any of the parent directories): .git".
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
         with:
-          python-version: "3.12"
-      - name: Dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install PyQt6 pyinstaller
-          python -m pip install pytsk3
-          if ($LASTEXITCODE -ne 0) { Write-Host "pytsk3 unavailable - building with the built-in FAT32 engine only" }
-      - name: Build
-        run: cmd /c build_exe.bat --no-pause
-      - name: Smoke test the exe
+          pattern: exe-*
+          merge-multiple: true
+          path: dist
+
+      - name: Inspect artifacts
+        run: ls -lh dist
+
+      - name: Create/verify the release, then upload (retried)
         env:
-          QT_QPA_PLATFORM: offscreen
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          dist\MountFile.exe --diag
-          dist\MountFile.exe --version
-      - uses: actions/upload-artifact@v4
-        with:
-          name: MountFile.exe
-          path: dist/MountFile.exe
-          if-no-files-found: error
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/MountFile.exe
+          set -uo pipefail
+          for i in $(seq 1 10); do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "release $TAG exists"; break
+            fi
+            echo "release $TAG not found yet (attempt $i) - creating it"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes || true
+            sleep 15
+          done
+          for i in 1 2 3 4 5; do
+            if gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" dist/MountFile* --clobber; then
+              echo "upload OK on attempt $i"; break
+            fi
+            echo "upload attempt $i failed, retrying in 15s..."; sleep 15
+          done
+          echo "--- assets now in $TAG ---"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'

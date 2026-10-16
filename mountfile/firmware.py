@@ -37,6 +37,9 @@ _CHUNK = 1 << 20
 
 # (magic, bytes before the magic, required alignment, filesystem name)
 _MAGIC = (
+    # FAT32's extended BPB puts the filesystem label at 82, not the
+    # FAT12/16 offset 54. Retain the legacy location for existing dumps.
+    (b"FAT32   ", 82, 512, "FAT32"),
     (b"FAT32   ", 54, 512, "FAT32"),
     (b"FAT16   ", 54, 512, "FAT16"),
     (b"FAT12   ", 54, 512, "FAT12"),
@@ -57,8 +60,7 @@ class FoundVolume:
 
     __slots__ = ("offset", "fstype", "size", "desc", "source")
 
-    def __init__(self, offset, fstype, desc=None, size=None,
-                 source="signature"):
+    def __init__(self, offset, fstype, desc=None, size=None, source="signature"):
         self.offset = int(offset)
         self.fstype = fstype
         self.size = size
@@ -72,8 +74,7 @@ class FoundVolume:
         return text
 
     def __repr__(self):
-        return "<FoundVolume 0x%X %s (%s)>" % (self.offset, self.fstype,
-                                               self.source)
+        return "<FoundVolume 0x%X %s (%s)>" % (self.offset, self.fstype, self.source)
 
 
 def _classify(buf):
@@ -98,15 +99,23 @@ def _classify(buf):
         spc = buf[13]
         reserved = struct.unpack_from("<H", buf, 14)[0]
         nfats = buf[16]
-        if bps in (512, 1024, 2048, 4096) and spc \
-                and not (spc & (spc - 1)) \
-                and 1 <= reserved <= 64 and 1 <= nfats <= 2:
+        if (
+            bps in (512, 1024, 2048, 4096)
+            and spc
+            and not (spc & (spc - 1))
+            and 1 <= reserved <= 64
+            and 1 <= nfats <= 2
+        ):
             spf16 = struct.unpack_from("<H", buf, 22)[0]
             spf32 = struct.unpack_from("<I", buf, 36)[0]
             label = buf[54:62]
             # The 8-byte label is what a formatter writes, but plenty of
             # factory images leave it empty - fall back to the geometry.
-            if label == b"FAT32   " or (spf32 and not spf16):
+            if (
+                buf[82:90] == b"FAT32   "
+                or label == b"FAT32   "
+                or (spf32 and not spf16)
+            ):
                 return "FAT32"
             if label == b"FAT16   ":
                 return "FAT16"
@@ -185,9 +194,13 @@ def _scan_signatures(f, limit):
             pos = buf.find(magic)
             while pos >= 0:
                 cand = buf_base + pos - back
-                if cand >= 0 and cand < end and cand % align == 0 \
-                        and (cand, name) not in seen \
-                        and _verify(f, cand, name):
+                if (
+                    cand >= 0
+                    and cand < end
+                    and cand % align == 0
+                    and (cand, name) not in seen
+                    and _verify(f, cand, name)
+                ):
                     seen.add((cand, name))
                     hits.append((cand, name))
                 pos = buf.find(magic, pos + 1)
@@ -212,15 +225,16 @@ def detect_volumes(path, scan_limit=DEFAULT_SCAN_LIMIT):
 
         for p in parts:
             fstype = _classify(_probe(f, p.offset))
-            volumes.append(FoundVolume(
-                p.offset,
-                fstype or "raw",
-                desc="%d  %s  %s  %.1f MB @ LBA %d" % (
-                    p.index, p.name, fstype or p.type_name, p.size_mb,
-                    p.start_lba),
-                size=p.size_bytes,
-                source="table",
-            ))
+            volumes.append(
+                FoundVolume(
+                    p.offset,
+                    fstype or "raw",
+                    desc="%d  %s  %s  %.1f MB @ LBA %d"
+                    % (p.index, p.name, fstype or p.type_name, p.size_mb, p.start_lba),
+                    size=p.size_bytes,
+                    source="table",
+                )
+            )
 
         covered = {v.offset for v in volumes}
         found = any(v.source == "table" and v.fstype != "raw" for v in volumes)
@@ -229,8 +243,7 @@ def detect_volumes(path, scan_limit=DEFAULT_SCAN_LIMIT):
                 if offset in covered:
                     continue
                 covered.add(offset)
-                volumes.append(FoundVolume(offset, fstype,
-                                           source="signature"))
+                volumes.append(FoundVolume(offset, fstype, source="signature"))
 
     volumes.sort(key=lambda v: v.offset)
     return volumes

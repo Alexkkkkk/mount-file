@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-from .qt_compat import (
-    QAbstractScrollArea, QColor, QFont, QFontMetrics, MOUSE_LEFT, QPainter,
-    QPen, Qt, FONT_TYPEWRITER, Key_Down, Key_Up, Key_Left, Key_Right,
-    Key_PageDown, Key_PageUp, event_pos,
-)
+from .qt_compat import (FONT_TYPEWRITER, MOUSE_LEFT, Key_Down, Key_Left,
+                        Key_PageDown, Key_PageUp, Key_Right, Key_Up,
+                        QAbstractScrollArea, QColor, QFont, QFontMetrics,
+                        QPainter, QPen, event_pos, font_char_width)
 
 
 class HexView(QAbstractScrollArea):
@@ -23,7 +22,7 @@ class HexView(QAbstractScrollArea):
         font.setStyleHint(FONT_TYPEWRITER)
         self.setFont(font)
         fm = QFontMetrics(font)
-        self._char_w = max(fm.horizontalAdvance("0"), 1)
+        self._char_w = max(font_char_width(fm), 1)
         self._line_h = fm.height() + 4
 
         self._data = b""
@@ -37,8 +36,7 @@ class HexView(QAbstractScrollArea):
         self._sel_start = -1
         self._sel_end = -1
 
-        self.setMinimumSize(self._row_width_px() + 40,
-                            self._line_h * 8 + 24)
+        self.setMinimumSize(self._row_width_px() + 40, self._line_h * 8 + 24)
         self._update_scroll()
 
     def setData(self, data: bytes, base: int = 0):
@@ -53,8 +51,7 @@ class HexView(QAbstractScrollArea):
 
     def _row_width_px(self):
         c = self._char_w
-        return 10 * c + 12 + self.BYTES_PER_ROW * 3 * c + 12 \
-            + self.BYTES_PER_ROW * c
+        return 10 * c + 12 + self.BYTES_PER_ROW * 3 * c + 12 + self.BYTES_PER_ROW * c
 
     def _total_rows(self):
         if not self._data:
@@ -94,7 +91,7 @@ class HexView(QAbstractScrollArea):
             if row_off >= len(self._data):
                 break
             y = (vr + 1) * self._line_h - 6
-            row = self._data[row_off: row_off + self.BYTES_PER_ROW]
+            row = self._data[row_off : row_off + self.BYTES_PER_ROW]
 
             painter.setPen(self._c_addr)
             painter.drawText(x_addr, y, "%08X" % (self._base + row_off))
@@ -103,13 +100,19 @@ class HexView(QAbstractScrollArea):
             for i, b in enumerate(row):
                 abs_off = row_off + i
                 if self._sel_start <= abs_off < self._sel_end:
-                    painter.fillRect(x_hex + i * 3 * c, y - self._line_h + 6,
-                                     2 * c + 2, self._line_h - 2, self._c_sel)
+                    painter.fillRect(
+                        x_hex + i * 3 * c,
+                        y - self._line_h + 6,
+                        2 * c + 2,
+                        self._line_h - 2,
+                        self._c_sel,
+                    )
                 painter.drawText(x_hex + i * 3 * c, y, "%02X" % b)
 
             painter.setPen(self._c_ascii)
-            painter.drawText(x_ascii, y, "".join(
-                chr(b) if 32 <= b < 127 else "." for b in row))
+            painter.drawText(
+                x_ascii, y, "".join(chr(b) if 32 <= b < 127 else "." for b in row)
+            )
 
         painter.setPen(QPen(QColor("#dddddd")))
         painter.drawLine(x_hex - 8, 0, x_hex - 8, self.viewport().height())
@@ -151,7 +154,7 @@ class HexView(QAbstractScrollArea):
 
     def keyPressEvent(self, e):
         step = self.BYTES_PER_ROW
-        cur = self._sel_start if self._sel_start >= 0 else 0
+        cur = max(self._sel_start, 0)
         key = e.key()
         if key == Key_Down:
             cur = min(len(self._data) - 1, cur + step)
@@ -162,12 +165,14 @@ class HexView(QAbstractScrollArea):
         elif key == Key_Left:
             cur = max(0, cur - 1)
         elif key == Key_PageDown:
-            cur = min(len(self._data) - 1,
-                      cur + step * max(1, self.viewport().height()
-                                       // self._line_h - 1))
+            cur = min(
+                len(self._data) - 1,
+                cur + step * max(1, self.viewport().height() // self._line_h - 1),
+            )
         elif key == Key_PageUp:
-            cur = max(0, cur - step * max(1, self.viewport().height()
-                                          // self._line_h - 1))
+            cur = max(
+                0, cur - step * max(1, self.viewport().height() // self._line_h - 1)
+            )
         else:
             super().keyPressEvent(e)
             return

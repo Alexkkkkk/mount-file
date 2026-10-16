@@ -70,6 +70,20 @@ class TestSignatureScan:
         vols = detect_volumes(path)
         assert [(v.offset, v.fstype) for v in vols] == [(1024 * 1024, "FAT32")]
 
+    def test_standard_fat32_label_at_offset_82(self):
+        # A real FAT32 formatter uses EBPB offset 82 (54 is FAT12/16).
+        header = bytearray(fat32_boot_sector())
+        header[54:62] = b"\x00" * 8
+        header[82:90] = b"FAT32   "
+        path = self._img("standard-fat32.img")
+        write_at(path, 0, header)
+        assert [(v.offset, v.fstype) for v in detect_volumes(path)] == [(0, "FAT32")]
+        path = self._img("embedded-standard-fat32.img")
+        write_at(path, 1024 * 1024, header)
+        assert [(v.offset, v.fstype) for v in detect_volumes(path)] == [
+            (1024 * 1024, "FAT32")
+        ]
+
     def test_lookalike_header_is_rejected(self):
         # The FAT32 label at the right place but no boot signature and no
         # plausible BPB: this is file content, not a volume.
@@ -116,7 +130,7 @@ class TestPartitionVolumes:
         dst = os.path.join(self.tmp, "disk.img")
 
         mbr = bytearray(512)
-        mbr[446 + 4] = 0x0B            # FAT32 (LBA)
+        mbr[446 + 4] = 0x0B  # FAT32 (LBA)
         struct.pack_into("<I", mbr, 446 + 8, 2048)
         struct.pack_into("<I", mbr, 446 + 12, TOTAL_SECTORS)
         mbr[510:512] = b"\x55\xaa"
@@ -138,7 +152,7 @@ class TestPartitionVolumes:
     def test_partition_with_unknown_filesystem(self):
         dst = os.path.join(self.tmp, "unknown.img")
         mbr = bytearray(512)
-        mbr[446 + 4] = 0x83            # Linux
+        mbr[446 + 4] = 0x83  # Linux
         struct.pack_into("<I", mbr, 446 + 8, 2048)
         struct.pack_into("<I", mbr, 446 + 12, 4096)
         mbr[510:512] = b"\x55\xaa"

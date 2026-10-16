@@ -5,169 +5,201 @@ Licensed under the MIT License - see the LICENSE file for details.
 -->
 # Mount File
 
-Утилита и файл-менеджер для монтирования образов дисков (raw-дампов NAND/eMMC/дисков) и работы с файлами внутри них — аналог функции **Mount File** из UFPI (MSL Works), реализованный с нуля на Python.
+Файловый менеджер для raw-образов дисков и дампов NAND/eMMC. Позволяет просматривать образы, извлекать файлы и изменять файлы в разделах FAT32 — без записи образа обратно на устройство.
 
-A file manager for raw disk images (NAND/eMMC/disk dumps). Browse, extract and (on FAT32) modify files inside an image without flashing it back to the device.
+A file manager for raw disk images and NAND/eMMC dumps. Browse images, extract files, and modify files in FAT32 partitions without flashing the image back to the device.
 
-## Download / Скачивание
+> ⚠️ Запись изменяет файл образа на диске. Перед импортом файлов сделайте резервную копию.
 
-Готовые сборки доступны на странице релизов: **[Download v1.0.0](https://github.com/Alexkkkkk/mount-file/releases/latest)**
+## Содержание
 
-| Файл | Платформа |
+- [Скачать](#скачать)
+- [Возможности](#возможности)
+- [Быстрый старт](#быстрый-старт)
+- [Использование](#использование)
+- [Командная строка](#командная-строка)
+- [Windows 7](#windows-7)
+- [Автообновление](#автообновление)
+- [Интерфейс и клавиши](#интерфейс-и-клавиши)
+- [Разработка и тесты](#разработка-и-тесты)
+- [Ограничения](#ограничения)
+- [Лицензия](#лицензия)
+
+## Скачать
+
+Список версий и файлов: [GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases).
+
+Последний релиз — **v1.2.0** — опубликован без прикреплённых бинарников. Готовые сборки Windows доступны в [релизе v1.1.1](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.1.1); Linux x86-64 — в [релизе v1.0.0](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.0.0). Проверяйте версию сборки на странице релиза.
+
+| Платформа | Сборка |
 |---|---|
-| [`MountFile.exe`](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile.exe) | Windows 10/11 x64 — автономный exe, Python не нужен |
-| [`MountFile-linux-x86-64`](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile-linux-x86-64) | Linux x86-64 — автономный бинарник |
+| Windows 10/11 x64 | [MountFile-win10-x64.exe](https://github.com/Alexkkkkk/mount-file/releases/download/v1.1.1/MountFile-win10-x64.exe) |
+| Windows 7 x64 | [MountFile-win7-x64.exe](https://github.com/Alexkkkkk/mount-file/releases/download/v1.1.1/MountFile-win7-x64.exe) |
+| Linux x86-64 | [MountFile-linux-x86-64](https://github.com/Alexkkkkk/mount-file/releases/download/v1.0.0/MountFile-linux-x86-64) |
 
-Сборку под Windows 7 (Python 3.8 + PyQt5) соберите сами по инструкции ниже.
+## Возможности
 
-## Возможности / Features
+- **Разметка диска:** автоматическое определение MBR и GPT, выбор раздела или всего образа.
+- **Просмотр файлов:** через The Sleuth Kit (`pytsk3`) для FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+ и ISO9660.
+- **Извлечение:** копирование файлов из образа на диск.
+- **Запись в FAT32:** создание и перезапись файлов, длинные имена (LFN) и имена 8.3, создание каталогов, выделение и освобождение кластеров.
+- **HEX-просмотр:** первые 1 МБ выбранного файла.
+- **Интерфейс в стиле Total Commander:** две панели, вкладки каталогов, светлая и тёмная темы, массовые операции с файлами.
+- **Windows 7:** поддерживается через слой совместимости с PyQt5.
 
-- 🔍 **Разметка**: автодетекция MBR и GPT, выбор раздела из списка; если таблицы разделов нет (типично для дампов NAND/eMMC) — поиск ФС по сигнатурам в сыром потоке (FAT, NTFS, exFAT, ext2/3/4, ISO9660, HFS+, squashfs, UBIFS, JFFS2) с проверкой кандидатов.
-- 📂 **Просмотр**: дерево файлов любой ФС, поддерживаемой The Sleuth Kit — FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 (через `pytsk3`). Если `pytsk3` не установлен, работает встроенный движок FAT32.
-- 📤 **Извлечение** файлов и **целых каталогов** (с подкаталогами) из образа на диск.
-- ✏️ **Запись в FAT32** (собственный движок, без внешних зависимостей):
-  - создание и перезапись файлов (включая файлы больше кластера),
-  - длинные имена (LFN) и короткие 8.3,
-  - создание каталогов (`mkdir`), **переименование** (`mv`) и **удаление** файлов и каталогов — рекурсивно вместе с содержимым (`rm -r`) — с корректным освобождением кластеров,
-  - корректная аллокация/освобождение кластеров (проверено тестами на утечки).
-- 🧮 **HEX-просмотр** первого мегабайта выбранного файла, выделение мышью.
-- ⌨️ **CLI** (`python -m mountfile`) для скриптов и сборки образов без графики.
-- 🪟 **Windows 7** поддерживается через слой совместимости (PyQt5).
-
-## Установка / Installation
+## Быстрый старт
 
 ```bash
 git clone https://github.com/Alexkkkkk/mount-file.git
 cd mount-file
-pip install -r requirements.txt        # Win10+/Linux/macOS (PyQt6)
+pip install -r requirements.txt
+python main.py
 ```
 
-> `pytsk3` предоставляет готовые wheel для Windows/Linux/macOS. Если на вашей платформе wheel нет — соберите libtsk из исходников. Без `pytsk3` программа всё равно запускается и умеет читать/писать FAT32 встроенным движком.
-
-## Запуск / Usage
-
-### Графический интерфейс
+Чтобы сразу открыть образ:
 
 ```bash
-python main.py                 # затем File → Open image…
-python main.py dump.img        # сразу открыть образ
-python main.py --diag          # диагностика окружения (что установлено)
+python main.py dump.img
 ```
 
-1. **Open image…** — выберите raw-образ (`.img`, `.bin`, `.dump`…).
-2. В списке **Volume** выберите раздел (или «Whole image»).
-3. Двойной клик по файлу — извлечь; кнопка **Extract…** — то же самое (для каталога выбирается папка назначения и выгружается всё поддерево).
-4. Если том — FAT32, активируются **Import file…**, **New folder**, **Rename** и **Delete**.
+Для Windows 10/11 и Linux/macOS используется PyQt6 из `requirements.txt`. Инструкции для Windows 7 приведены ниже.
 
-> ⚠️ **Внимание**: запись изменяет файл образа на диске. Делайте бэкап перед импортом/удалением.
+## Использование
 
-### Командная строка
+1. Откройте образ через **File → Open image…**.
+2. В списке **Volume** выберите раздел или **Whole image**.
+3. Дважды щёлкните файл, чтобы открыть его в HEX-просмотрщике; для извлечения используйте **Extract…**.
+4. Для тома FAT32 доступны **Import file…** и **New folder**.
+
+Импорт изменяет исходный файл образа. Перед записью сохраните его резервную копию.
+
+## Командная строка
+
+Команды доступны и через `python main.py`, и через собранный бинарник;
+для CLI установка Qt не требуется. Все пути ниже — примеры.
 
 ```bash
-python -m mountfile volumes dump.img                    # список томов
-python -m mountfile info dump.img                       # сводка по образу
-python -m mountfile ls dump.img /photos                 # листинг каталога
-python -m mountfile get dump.img /boot -o ./out         # выгрузить файл/каталог
-
-python -m mountfile put dump.img hello.txt --dest /docs --yes    # записать файл
-python -m mountfile mkdir dump.img /docs/new
-python -m mountfile mv  dump.img /docs/old.txt new.txt
-python -m mountfile rm  dump.img /docs/old.txt --yes
-python -m mountfile rm  dump.img /docs --recursive --yes
+python -m mountfile --help
+python main.py volumes dump.img
+python main.py ls dump.img /
+python main.py get dump.img /photos -o ./out
+python main.py put dump.img ./hello.txt --dest / --yes
+python main.py mkdir dump.img /new
+python main.py mv dump.img /hello.txt renamed.txt
+python main.py rm dump.img /new --recursive --yes
 ```
 
-То же самое умеет и собранный бинарник — удобно, когда Python на машине нет:
+Без `pytsk3` CLI и классическое дерево используют встроенный провайдер FAT32.
+Запись, переименование и удаление поддерживаются только на FAT32. Команды
+`put` и `rm` требуют `--yes`; перед изменением образа сделайте резервную копию.
+`mv` переименовывает файл в том же каталоге, а не переносит между томами.
 
-```bat
-MountFile.exe volumes dump.img
-MountFile.exe ls dump.img /photos
-MountFile.exe get dump.img /boot -o out\
-MountFile.exe --version
-```
-
-Без аргументов (двойной клик) запускается графический интерфейс; с путём к образу — GUI сразу открывает этот образ.
-
-Том выбирается автоматически (первый распознанный), либо явно: `--volume 2` (номер из `volumes`) или `--offset 0x400000`. Ключ `--backup` делает копию `<image>.bak` перед записью. Разрушающие операции (`put`, `rm`) без `--yes` только печатают предупреждение и ничего не меняют.
+Сборка Linux: `./build_exe.sh`; результат — `dist/MountFile-linux-x86-64`.
+Для запуска Qt на Linux могут потребоваться системные пакеты `libgl1`,
+`libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3` и `libxcb-cursor0`.
 
 ## Windows 7
 
-На Windows 7 работает та же кодовая база через слой совместимости (`mountfile/qt_compat.py`):
-PyQt6 на Win7 не поддерживается, поэтому используется **PyQt5 (Qt 5.15 LTS — последний Qt для Win7)**
-и **Python 3.8.10** (последняя версия Python для Win7).
+Для Windows 7 используется та же кодовая база через `mountfile/qt_compat.py`: PyQt6 не поддерживает Windows 7, поэтому нужны PyQt5 и Python 3.8.10.
 
 ```bat
-:: установка
 py -3.8 -m pip install -r requirements-win7.txt
-
-:: запуск
 py -3.8 main.py dump.img
-
-:: сборка exe (dist\MountFile.exe, работает без установленного Python)
 build_exe.bat
 ```
 
-На Windows 10/11 и Linux/macOS используйте `requirements.txt` (PyQt6) — код тот же.
+Последняя команда собирает автономный `dist\MountFile.exe`.
 
-## Сборка автономного бинарника
+## Автообновление
 
-```bat
-build_exe.bat            :: Windows -> dist\MountFile.exe
-build_exe.bat --no-pause :: то же, без ожидания нажатия клавиши (для CI)
-```
+При запуске программа в фоновом потоке проверяет GitHub Releases. Если доступна более новая версия, приложение предлагает обновление. В собранном `.exe` обновление скачивается, проверяется по SHA-256, устанавливается и запускает программу заново. Если сеть недоступна или URL некорректен, программа продолжает работу.
+
+Проверка из командной строки:
+
 ```bash
-./build_exe.sh           # Linux x86-64 -> dist/MountFile-linux-x86-64
+python main.py --check-updates
 ```
 
-Если `pytsk3` не установлен, сборка всё равно проходит: бинарник получит встроенный движок FAT32, а скрипт об этом предупредит. Сборка на тег (`v*`) автоматически выполняется в CI (`.github/workflows/release.yml`) — готовые файлы прикрепляются к релизу; те же артефакты можно скачать со страницы запуска workflow.
+Код возврата: `10` — найдено обновление, `0` — обновлений нет.
 
-## Архитектура / Architecture
+| Переменная окружения | Действие |
+|---|---|
+| `MOUNTFILE_UPDATE_REPO=owner/repo` | Использовать другой репозиторий с релизами |
+| `MOUNTFILE_NO_UPDATE=1` | Отключить проверку обновлений |
+| `MOUNTFILE_AUTO_UPDATE=1` | Устанавливать обновление и перезапускаться без подтверждения |
+| `MOUNTFILE_GIT_PULL=1` | Разрешить `git pull --ff-only` при запуске из исходников |
+| `MOUNTFILE_UPDATE_URL=…` | Использовать прямой URL JSON последнего релиза |
 
-```
-mount-file/
-├── main.py               # точка входа GUI (PyQt6 → PyQt5 fallback), --diag
-├── mountfile/
-│   ├── __main__.py       # python -m mountfile
-│   ├── cli.py            # командная строка (volumes/ls/get/put/mkdir/mv/rm)
-│   ├── qt_compat.py      # слой совместимости Qt5/Qt6
-│   ├── partition.py      # парсер MBR/GPT
-│   ├── firmware.py       # поиск томов: таблица разделов + сигнатуры ФС
-│   ├── fat32.py          # собственный драйвер FAT32 (чтение, запись, rm, mv)
-│   ├── extract.py        # выгрузка файлов и каталогов из образа
-│   ├── vfs.py            # read-only доступ к ФС через pytsk3 (TSK)
-│   ├── hexview.py        # HEX-просмотрщик
-│   └── mainwindow.py     # главное окно, дерево образа, ленивая загрузка
-├── build_exe.bat         # PyInstaller, Windows
-├── build_exe.sh          # PyInstaller, Linux
-├── .github/workflows/    # CI: тесты + smoke-тест GUI
-└── tests/
-    ├── test_fat32.py         # FAT32 + разметка, синтетические образы
-    ├── test_fat32_write.py   # удаление, переименование, провайдер FAT32
-    ├── test_firmware.py      # поиск томов по таблице и по сигнатурам
-    └── test_gui_smoke.py     # модель дерева и главное окно (offscreen)
+Проверка из Python:
+
+```python
+from mountfile import __version__, updater
+updater.check(__version__)
 ```
 
-## Тесты / Tests
+## Интерфейс и клавиши
+
+| Клавиши | Действие |
+|---|---|
+| `Enter` / двойной щелчок | Открыть каталог или просмотреть файл в HEX |
+| `Backspace` | Перейти на уровень вверх |
+| `Space` / `Insert` | Отметить файл |
+| `Ctrl+A` | Выделить всё |
+| `Tab` / `Ctrl+U` | Переключить панель / поменять панели местами |
+| `Ctrl+T` / `Ctrl+W` | Создать / закрыть вкладку |
+| `F3` / `F4` | Просмотр / редактирование (редактирование файлов внутри образа недоступно) |
+| `F5` / `F6` | Копировать / переместить между панелями |
+| `F7` / `F8` | Создать каталог / удалить локальные файлы |
+| `F9` / `Ctrl+L` | Показать или скрыть меню / журнал окна |
+| `Ctrl+R` / `Ctrl+O` | Обновить панель / открыть образ |
+
+Отмеченные файлы можно копировать, перемещать и удалять группами. Каталоги копируются целиком; запись в образ выполняется движком FAT32. Настройки темы, размера шрифта и журнала доступны в **Конфигурация → Настройки**.
+
+## Разработка и тесты
+
+Запуск полного набора тестов:
 
 ```bash
 python -m pytest tests/ -v
-# или без pytest:
-python tests/test_fat32.py
-python tests/test_firmware.py
-python tests/test_fat32_write.py
 ```
 
-Тесты создают синтетические FAT32/MBR/GPT-образы в temp-каталоге и проверяют round-trip записи/чтения, перезапись, LFN, mkdir, переименование, удаление (с освобождением кластеров), отсутствие утечек и корректность парсинга разметки и сигнатур ФС. Smoke-тесты GUI требуют PyQt6/PyQt5 и без него пропускаются. CI (GitHub Actions) прогоняет тесты на Linux и Windows; GUI-тест запускается в режиме `offscreen`.
+Тесты проверяют FAT32, пользовательский интерфейс, запуск приложения и обновление; для проверки FAT32 без `pytest`:
 
-## Ограничения / Limitations (roadmap)
+```bash
+python tests/test_fat32.py
+```
 
-- Запись пока только в **FAT32** (FAT12/16, exFAT, EXT, UBIFS — чтение через TSK; запись — в планах).
-- eMMC-специфика (OOB/ECC-области NAND-дампов) не обрабатывается — подавайте образ user-раздела без OOB.
-- Автономный бинарник под Linux требует системных библиотек Qt: `sudo apt install libgl1 libxkbcommon-x11-0 libdbus-1-3`.
+Основные модули:
 
-## Лицензия / License
+```text
+mount-file/
+├── main.py
+├── mountfile/
+│   ├── qt_compat.py
+│   ├── partition.py
+│   ├── fat32.py
+│   ├── vfs.py
+│   ├── hexview.py
+│   ├── updater.py
+│   ├── mainwindow.py
+│   ├── tc_window.py
+│   └── tc_style.py
+└── tests/
+    ├── smoke_startup.py
+    ├── test_fat32.py
+    ├── test_tc_ui.py
+    └── test_updater.py
+```
 
-MIT, см. [LICENSE](LICENSE).
+## Ограничения
 
-## Отказ от ответственности / Disclaimer
+- Запись поддерживается только для **FAT32**. FAT12/16, exFAT и другие перечисленные файловые системы доступны для чтения через The Sleuth Kit.
+- Области OOB/ECC в дампах eMMC/NAND не обрабатываются. Используйте образ пользовательского раздела без OOB.
 
-Инструмент предоставляется «как есть». Всегда держите резервную копию образа, в который пишете.
+## Лицензия
+
+MIT. См. файл [LICENSE](LICENSE).
+
+## Отказ от ответственности
+
+Программа предоставляется «как есть». Всегда храните резервную копию образа, в который записываете данные.

@@ -1,0 +1,68 @@
+name: docs
+
+# API documentation for the mountfile package, published to GitHub Pages
+# on every push to main. If pdoc cannot import the GUI modules, a page
+# generated from README.md is published instead, so the deploy stays green.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Build the HTML documentation
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -uo pipefail
+          python -m pip install markdown
+          mkdir -p docs
+          python -m pip install pdoc || true
+          if python -m pdoc -o docs mountfile; then
+            echo "pdoc build OK"
+          else
+            echo "::warning title=docs::pdoc could not import the package - publishing README instead"
+            python - <<'PY'
+          import pathlib, markdown
+          html = markdown.markdown(
+              pathlib.Path("README.md").read_text(encoding="utf-8"),
+              extensions=["fenced_code", "tables"],
+          )
+          pathlib.Path("docs/index.html").write_text(
+              "<!doctype html><html><head><meta charset='utf-8'>"
+              "<title>Mount File</title></head><body>" + html + "</body></html>",
+              encoding="utf-8",
+          )
+          print("wrote docs/index.html from README.md")
+          PY
+          fi
+          ls -R docs | head -40
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

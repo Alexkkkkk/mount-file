@@ -25,8 +25,15 @@ class Fat32Error(Exception):
 
 
 class DirEntry:
-    __slots__ = ("name", "short_raw", "attr", "cluster", "size", "is_dir",
-                 "entry_offset")
+    __slots__ = (
+        "attr",
+        "cluster",
+        "entry_offset",
+        "is_dir",
+        "name",
+        "short_raw",
+        "size",
+    )
 
     def __init__(self, name, short_raw, attr, cluster, size, entry_offset):
         self.name = name
@@ -39,7 +46,10 @@ class DirEntry:
 
     def __repr__(self):
         return "<DirEntry %r %s %d>" % (
-            self.name, "dir " if self.is_dir else "file", self.size)
+            self.name,
+            "dir " if self.is_dir else "file",
+            self.size,
+        )
 
 
 class Fat32:
@@ -66,17 +76,20 @@ class Fat32:
         self.root_cluster = struct.unpack_from("<I", bpb, 44)[0]
         self.fat_start = self.offset + self.reserved * self.bps
         self.fat_size = self.spf * self.bps
-        self.data_start = self.offset + (
-            self.reserved + self.nfats * self.spf) * self.bps
+        self.data_start = (
+            self.offset + (self.reserved + self.nfats * self.spf) * self.bps
+        )
         self.cluster_size = self.spc * self.bps
         self.entries_per_cluster = self.cluster_size // 32
-        total_sectors = struct.unpack_from("<I", bpb, 32)[0] \
-            or struct.unpack_from("<H", bpb, 19)[0]
-        data_sectors = total_sectors - (
-            self.reserved + self.nfats * self.spf)
+        total_sectors = (
+            struct.unpack_from("<I", bpb, 32)[0] or struct.unpack_from("<H", bpb, 19)[0]
+        )
+        data_sectors = total_sectors - (self.reserved + self.nfats * self.spf)
         cluster_count = data_sectors // self.spc
         if cluster_count < 65525:
             raise Fat32Error("not FAT32 (cluster count %d)" % cluster_count)
+        self.cluster_count = cluster_count
+        self._alloc_hint = 2
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):
@@ -91,14 +104,14 @@ class Fat32:
         self.f.write(data)
 
     def _fat_get(self, n):
-        return struct.unpack_from(
-            "<I", self._read(self.fat_start + n * 4, 4))[0]
+        return struct.unpack_from("<I", self._read(self.fat_start + n * 4, 4))[0]
 
     def _fat_set(self, n, val):
         val &= 0x0FFFFFFF
         for i in range(self.nfats):
-            self._write(self.fat_start + i * self.fat_size + n * 4,
-                        struct.pack("<I", val))
+            self._write(
+                self.fat_start + i * self.fat_size + n * 4, struct.pack("<I", val)
+            )
 
     def cluster_offset(self, n):
         return self.data_start + (n - 2) * self.cluster_size
@@ -119,35 +132,81 @@ class Fat32:
             n = nxt
         return chain
 
+    @property
+    def total_bytes(self):
+        """Size of the data area (all clusters) in bytes."""
+        return self.cluster_count * self.cluster_size
+
+    def free_space(self, max_fat_bytes=64 << 20):
+        """Free bytes on the volume, or None when the FAT is too big to scan.
+
+        The whole FAT is read in one call and zeroed entries are counted, so
+        this stays fast on the small volumes (firmware dumps, SD cards) the
+        utility is used on and simply gives up on multi-gigabyte FATs.
+        """
+        if self.fat_size > max_fat_bytes:
+            return None
+        data = self._read(self.fat_start, self.fat_size)
+        free = 0
+        for n in range(2, self.fat_size // 4):
+            if struct.unpack_from("<I", data, n * 4)[0] == 0:
+                free += 1
+        return free * self.cluster_size
+
     def read_cluster(self, n):
         return self._read(self.cluster_offset(n), self.cluster_size)
 
     def read_chain(self, start, size=None):
         if start < 2:
             return b""
-        data = b"".join(self.read_cluster(c)
-                        for c in self.cluster_chain(start))
+        data = b"".join(self.read_cluster(c) for c in self.cluster_chain(start))
         return data if size is None else data[:size]
 
     def _alloc_cluster(self):
-        total = self.fat_size // 4
-        for n in range(2, total):
-            if self._fat_get(n) == FREE:
-                self._fat_set(n, EOC)
-                self._write(self.cluster_offset(n),
-                            b"\x00" * self.cluster_size)
-                return n
+        # Only clusters in the data region are allocatable; FAT padding entries
+        # must never be used, even when the FAT is larger than it needs to be.
+        total = min(self.cluster_count + 2, self.fat_size // 4)
+        start = self._alloc_hint
+        if start < 2 or start >= total:
+            start = 2
+
+        # Continue from the last allocation instead of rescanning the occupied
+        # prefix for every cluster. Without this hint, writing N clusters costs
+        # O(N²) tiny seek/read operations on the image file.
+        for first, last in ((start, total), (2, start)):
+            for n in range(first, last):
+                if self._fat_get(n) == FREE:
+                    self._fat_set(n, EOC)
+                    try:
+                        self._write(self.cluster_offset(n), b"\x00" * self.cluster_size)
+                    except Exception:
+                        self._fat_set(n, FREE)
+                        self._alloc_hint = min(self._alloc_hint, n)
+                        raise
+                    self._alloc_hint = n + 1 if n + 1 < total else 2
+                    return n
         raise Fat32Error("no free clusters left")
 
     def _alloc_chain(self, nclusters):
         first = prev = None
-        for _ in range(nclusters):
-            n = self._alloc_cluster()
-            if prev is not None:
-                self._fat_set(prev, n)
-            else:
-                first = n
-            prev = n
+        allocated = []
+        try:
+            for _ in range(nclusters):
+                n = self._alloc_cluster()
+                allocated.append(n)
+                if prev is not None:
+                    self._fat_set(prev, n)
+                else:
+                    first = n
+                prev = n
+        except Exception:
+            # Allocation may run out of space partway through a request. Free
+            # every cluster allocated so far, including one not yet linked if
+            # updating the previous FAT entry itself failed.
+            for n in allocated:
+                self._fat_set(n, FREE)
+                self._alloc_hint = min(self._alloc_hint, n)
+            raise
         return first
 
     def _free_chain(self, start):
@@ -155,13 +214,14 @@ class Fat32:
             return
         for n in self.cluster_chain(start):
             self._fat_set(n, FREE)
+            self._alloc_hint = min(self._alloc_hint, n)
 
     def _write_chain_data(self, first_cluster, data):
         if first_cluster < 2:
             return
         chain = self.cluster_chain(first_cluster)
         for i, c in enumerate(chain):
-            chunk = data[i * self.cluster_size:(i + 1) * self.cluster_size]
+            chunk = data[i * self.cluster_size : (i + 1) * self.cluster_size]
             if not chunk:
                 break
             if len(chunk) < self.cluster_size:
@@ -209,8 +269,7 @@ class Fat32:
         stem = base[:6]
         for i in range(1, 100000):
             suffix = "~%d" % i
-            candidate = (stem[: 8 - len(suffix)] + suffix).ljust(8) \
-                + ext[:3].ljust(3)
+            candidate = (stem[: 8 - len(suffix)] + suffix).ljust(8) + ext[:3].ljust(3)
             enc = candidate.encode("ascii", "replace")
             if enc not in used:
                 used.add(enc)
@@ -223,7 +282,7 @@ class Fat32:
         chars.append(0x0000)
         while len(chars) % 13:
             chars.append(0xFFFF)
-        return [chars[i:i + 13] for i in range(0, len(chars), 13)]
+        return [chars[i : i + 13] for i in range(0, len(chars), 13)]
 
     def _build_lfn_entry(self, seq, chunk, checksum):
         e = bytearray(32)
@@ -250,12 +309,10 @@ class Fat32:
             return True
         return False
 
-    def _build_entries(self, long_name, short11, first_cluster, size,
-                       attr=0x20):
+    def _build_entries(self, long_name, short11, first_cluster, size, attr=0x20):
         entries = []
         chk = self._short_checksum(short11)
-        chunks = self._lfn_chunks(long_name) if self._needs_lfn(long_name) \
-            else []
+        chunks = self._lfn_chunks(long_name) if self._needs_lfn(long_name) else []
         n = len(chunks)
         for i in range(n - 1, -1, -1):
             seq = i + 1
@@ -266,7 +323,7 @@ class Fat32:
         e[0:11] = short11
         e[11] = attr
         date = ((2026 - 1980) << 9) | (1 << 5) | 1
-        t = (12 << 11)
+        t = 12 << 11
         struct.pack_into("<H", e, 14, t)
         struct.pack_into("<H", e, 16, date)
         struct.pack_into("<H", e, 18, date)
@@ -284,7 +341,7 @@ class Fat32:
         pending = []
         i = 0
         while i + 32 <= len(data):
-            e = data[i:i + 32]
+            e = data[i : i + 32]
             b0 = e[0]
             attr = e[11]
             if b0 == 0x00:
@@ -297,10 +354,8 @@ class Fat32:
                 chars = []
                 for start, count in ((1, 5), (14, 6), (28, 2)):
                     for k in range(count):
-                        chars.append(struct.unpack_from("<H", e,
-                                                        start + 2 * k)[0])
-                part = "".join(chr(c) for c in chars
-                               if c not in (0x0000, 0xFFFF))
+                        chars.append(struct.unpack_from("<H", e, start + 2 * k)[0])
+                part = "".join(chr(c) for c in chars if c not in (0x0000, 0xFFFF))
                 pending.append((seq, chk, part))
                 continue
             if b0 == 0xE5:
@@ -310,8 +365,9 @@ class Fat32:
                 pending.clear()
                 continue
             short = e[0:11]
-            cluster = (struct.unpack_from("<H", e, 20)[0] << 16) \
-                | struct.unpack_from("<H", e, 26)[0]
+            cluster = (struct.unpack_from("<H", e, 20)[0] << 16) | struct.unpack_from(
+                "<H", e, 26
+            )[0]
             size = struct.unpack_from("<I", e, 28)[0]
             is_dir = bool(attr & 0x10)
             if is_dir and short[0:1] == b".":
@@ -326,8 +382,9 @@ class Fat32:
                 pending.clear()
             if name is None:
                 name = self._short_to_name(short)
-            entries.append(DirEntry(name, short, attr, cluster,
-                                    0 if is_dir else size, off))
+            entries.append(
+                DirEntry(name, short, attr, cluster, 0 if is_dir else size, off)
+            )
         return entries
 
     def _dir_stream(self, cluster):
@@ -340,8 +397,9 @@ class Fat32:
             cluster = self.root_cluster
         entries = []
         for c in self.cluster_chain(cluster):
-            entries.extend(self._parse_dir_data(self.read_cluster(c),
-                                                self.cluster_offset(c)))
+            entries.extend(
+                self._parse_dir_data(self.read_cluster(c), self.cluster_offset(c))
+            )
         return entries
 
     def find_dir(self, path):
@@ -425,12 +483,13 @@ class Fat32:
         if any(e.name.upper() == new_name.upper() for e in siblings):
             raise Fat32Error("already exists: %s" % new_name)
         used = {e.short_raw for e in siblings}
-        used |= {self._short_to_name(e.short_raw).encode("ascii", "replace")
-                 for e in siblings}
+        used |= {
+            self._short_to_name(e.short_raw).encode("ascii", "replace")
+            for e in siblings
+        }
         short = self._make_short_name(new_name, used)
         attr = 0x10 if entry.is_dir else 0x20
-        raw = self._build_entries(new_name, short, entry.cluster, entry.size,
-                                  attr=attr)
+        raw = self._build_entries(new_name, short, entry.cluster, entry.size, attr=attr)
         self._delete_entry(parent, entry.entry_offset)
         self._insert_entries(parent, raw)
         self.f.flush()
@@ -457,7 +516,7 @@ class Fat32:
             i = index + k // 32
             c = chain[i // epc]
             off = self.cluster_offset(c) + (i % epc) * 32
-            self._write(off, raw[k:k + 32])
+            self._write(off, raw[k : k + 32])
 
     def _append_dir_cluster(self, chain):
         newc = self._alloc_cluster()
@@ -496,34 +555,39 @@ class Fat32:
         while j >= 0 and data[j * 32 + 11] == 0x0F and data[j * 32] != 0xE5:
             j -= 1
         for k in range(j + 1, i + 1):
-            self._write_slots(chain, k, b"\xE5" + b"\x00" * 31)
+            self._write_slots(chain, k, b"\xe5" + b"\x00" * 31)
 
     def write_file(self, dir_path, filename, data):
         """Create or overwrite `filename` in directory `dir_path`."""
         dir_cluster = self.find_dir(dir_path)
         entries_now = self.list_dir(dir_cluster)
         target = next(
-            (e for e in entries_now
-             if not e.is_dir and e.name.upper() == filename.upper()), None)
-        if target is not None:
-            # Reuse the existing 8.3 name: it is unique by construction and
-            # keeps the directory entry stable across repeated overwrites.
-            short = target.short_raw
-        else:
-            used = {e.short_raw for e in entries_now}
-            used |= {self._short_to_name(e.short_raw).encode("ascii", "replace")
-                     for e in entries_now}
-            short = self._make_short_name(filename, used)
-        nclusters = max(1, math.ceil(len(data) / self.cluster_size)) \
-            if data else 0
-        # Allocate the new chain first: if the volume is full the old file is
-        # still intact and nothing has been destroyed yet.
+            (
+                e
+                for e in entries_now
+                if not e.is_dir and e.name.upper() == filename.upper()
+            ),
+            None,
+        )
+        used = {e.short_raw for e in entries_now}
+        used |= {self._short_to_name(e.short_raw) for e in entries_now}
+        short = (
+            target.short_raw
+            if target is not None
+            else self._make_short_name(filename, used)
+        )
+        nclusters = max(1, math.ceil(len(data) / self.cluster_size)) if data else 0
         first = self._alloc_chain(nclusters) if nclusters else 0
-        self._write_chain_data(first, data)
-        raw = self._build_entries(filename, short, first, len(data))
-        if target is not None:
-            self._delete_entry(dir_cluster, target.entry_offset)
-        self._insert_entries(dir_cluster, raw)
+        try:
+            self._write_chain_data(first, data)
+            raw = self._build_entries(filename, short, first, len(data))
+            if target is not None:
+                self._delete_entry(dir_cluster, target.entry_offset)
+            self._insert_entries(dir_cluster, raw)
+        except Exception:
+            if first >= 2:
+                self._free_chain(first)
+            raise
         if target is not None and target.cluster >= 2:
             self._free_chain(target.cluster)
         self.f.flush()
@@ -531,8 +595,7 @@ class Fat32:
     def mkdir(self, dir_path, name):
         dir_cluster = self.find_dir(dir_path)
         entries_now = self.list_dir(dir_cluster)
-        if any(e.is_dir and e.name.upper() == name.upper()
-               for e in entries_now):
+        if any(e.is_dir and e.name.upper() == name.upper() for e in entries_now):
             raise Fat32Error("directory already exists: %s" % name)
         used = {e.short_raw for e in entries_now}
         used |= {self._short_to_name(e.short_raw) for e in entries_now}
@@ -551,8 +614,10 @@ class Fat32:
         dotdot[11] = 0x10
         struct.pack_into("<H", dotdot, 20, (dir_cluster >> 16) & 0xFFFF)
         struct.pack_into("<H", dotdot, 26, dir_cluster & 0xFFFF)
-        self._write(self.cluster_offset(c), bytes(dot) + bytes(dotdot)
-                    + b"\x00" * (self.cluster_size - 64))
+        self._write(
+            self.cluster_offset(c),
+            bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64),
+        )
         raw = self._build_entries(name, short, c, 0, attr=0x10)
         self._insert_entries(dir_cluster, raw)
         self.f.flush()
@@ -596,8 +661,7 @@ class Fat32Provider:
     # -- provider interface --------------------------------------------
     def list_dir(self, path="/"):
         entries = self.fs.list_dir(self.fs.find_dir(path))
-        out = [{"name": e.name, "is_dir": e.is_dir, "size": e.size}
-               for e in entries]
+        out = [{"name": e.name, "is_dir": e.is_dir, "size": e.size} for e in entries]
         out.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
         return out
 
@@ -627,7 +691,7 @@ class Fat32Provider:
                 continue
             data = self.fs.read_cluster(c)
             start = max(0, offset - pos)
-            out += data[start:start + (length - len(out))]
+            out += data[start : start + (length - len(out))]
             pos += csize
             if len(out) >= length:
                 break

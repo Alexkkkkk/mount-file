@@ -1,0 +1,49 @@
+name: nightly
+
+# Every night: do tests still pass and does main still build into an exe?
+# Catches breakage between releases; the artifact lives for 7 days.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller pytest
+          python -m pip install -r requirements-win7.txt
+
+      - name: Tests
+        run: python -m pytest tests/ -v
+
+      - name: Build MountFile-nightly.exe
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
+            --name MountFile-nightly main.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: MountFile-nightly-${{ github.sha }}
+          path: dist/MountFile-nightly.exe
+          if-no-files-found: error
+          retention-days: 7

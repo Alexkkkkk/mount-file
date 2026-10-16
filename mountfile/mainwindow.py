@@ -8,11 +8,29 @@ from __future__ import annotations
 import os
 
 from .qt_compat import (
-    QAction, QAbstractItemModel, BottomDock, DisplayRole, QComboBox,
-    QDockWidget, QFileDialog, Horizontal, QInputDialog,
-    QLabel, QMainWindow, MB_No, MB_Yes, QMessageBox, QModelIndex,
-    QPlainTextEdit, QPushButton, QSplitter, QTabWidget, QTreeView,
-    SC_Open, SingleSelection, Stretch,
+    QAction,
+    QAbstractItemModel,
+    BottomDock,
+    DisplayRole,
+    QComboBox,
+    QDockWidget,
+    QFileDialog,
+    Horizontal,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    MB_No,
+    MB_Yes,
+    QMessageBox,
+    QModelIndex,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QTreeView,
+    SC_Open,
+    SingleSelection,
+    Stretch,
 )
 
 from .extract import extract_path
@@ -23,8 +41,7 @@ from .vfs import TskImage, TskError
 
 
 class Node:
-    __slots__ = ("name", "path", "is_dir", "size", "parent", "children",
-                 "loaded")
+    __slots__ = ("name", "path", "is_dir", "size", "parent", "children", "loaded")
 
     def __init__(self, name, path, is_dir, size=0, parent=None):
         self.name = name
@@ -53,8 +70,7 @@ class ImageModel(QAbstractItemModel):
     def index(self, row, column, parent=QModelIndex()):
         if not self.hasIndex(row, column, parent):
             return QModelIndex()
-        parent_node = parent.internalPointer() if parent.isValid() \
-            else self.root
+        parent_node = parent.internalPointer() if parent.isValid() else self.root
         if row < len(parent_node.children):
             return self.createIndex(row, column, parent_node.children[row])
         return QModelIndex()
@@ -107,10 +123,14 @@ class ImageModel(QAbstractItemModel):
             return
         self.beginInsertRows(parent, 0, len(items) - 1)
         for it in items:
-            p = (node.path.rstrip("/") + "/" + it["name"]) \
-                if node.path != "/" else "/" + it["name"]
-            node.children.append(Node(it["name"], p, it["is_dir"],
-                                      it.get("size", 0), node))
+            p = (
+                (node.path.rstrip("/") + "/" + it["name"])
+                if node.path != "/"
+                else "/" + it["name"]
+            )
+            node.children.append(
+                Node(it["name"], p, it["is_dir"], it.get("size", 0), node)
+            )
         self.endInsertRows()
 
     # -- data ------------------------------------------------------------
@@ -251,8 +271,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 5000)
 
     def _set_write_enabled(self, on):
-        for w in (self.btn_import, self.btn_mkdir, self.btn_rename,
-                  self.btn_delete):
+        for w in (self.btn_import, self.btn_mkdir, self.btn_rename, self.btn_delete):
             w.setEnabled(bool(on))
 
     def _set_loaded(self, loaded):
@@ -266,8 +285,11 @@ class MainWindow(QMainWindow):
         """Open an image; `path` may come from argv or the File menu."""
         if not isinstance(path, str) or not path:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Open disk image", "",
-                "Disk images (*.img *.bin *.raw *.dump *.dd);;All files (*)")
+                self,
+                "Open disk image",
+                "",
+                "Disk images (*.img *.bin *.raw *.dump *.dd);;All files (*)",
+            )
         if not path:
             return
         self.image_path = path
@@ -310,18 +332,19 @@ class MainWindow(QMainWindow):
             except (Fat32Error, OSError, ValueError) as fat_err:
                 self.provider = None
                 QMessageBox.warning(
-                    self, "Cannot mount volume",
+                    self,
+                    "Cannot mount volume",
                     "No filesystem could be mounted at offset %d.\n\n"
                     "The Sleuth Kit: %s\nBuilt-in FAT32 engine: %s\n\n"
                     "Tip: pick another entry in the Volume list."
-                    % (offset, tsk_err, fat_err))
+                    % (offset, tsk_err, fat_err),
+                )
                 return
         self.model = ImageModel(self.provider)
         self.tree.setModel(self.model)
         self.tree.selectionModel().currentChanged.connect(self.on_selection)
         self.tree.header().setSectionResizeMode(0, Stretch)
-        self.log_msg("Volume mounted @ offset %d via %s"
-                     % (offset, self.backend))
+        self.log_msg("Volume mounted @ offset %d via %s" % (offset, self.backend))
         self._open_writer(offset)
 
     def _open_writer(self, offset):
@@ -378,7 +401,8 @@ class MainWindow(QMainWindow):
             self.hex_view.setData(data)
             self.info.setPlainText(
                 "Path: %s\nSize: %d bytes\nPreview: first %d bytes"
-                % (node.path, node.size, len(data)))
+                % (node.path, node.size, len(data))
+            )
         except Exception as e:
             self.hex_view.clear()
             self.info.setPlainText("Error: %s" % e)
@@ -396,31 +420,30 @@ class MainWindow(QMainWindow):
     def extract_selected(self):
         node = self._current_node()
         if node is None or self.provider is None:
-            QMessageBox.information(self, "Extract",
-                                    "Select a file or folder in the tree first.")
+            QMessageBox.information(
+                self, "Extract", "Select a file or folder in the tree first."
+            )
             return
         if node.is_dir:
-            dst = QFileDialog.getExistingDirectory(
-                self, "Extract folder into…")
+            dst = QFileDialog.getExistingDirectory(self, "Extract folder into…")
             if not dst:
                 return
             try:
                 count = extract_path(self.provider, node.path, dst)
-                self.log_msg("Extracted %d file(s) from %s -> %s"
-                             % (count, node.path, dst))
+                self.log_msg(
+                    "Extracted %d file(s) from %s -> %s" % (count, node.path, dst)
+                )
             except Exception as e:
                 QMessageBox.critical(self, "Extract failed", str(e))
             return
-        dst, _ = QFileDialog.getSaveFileName(self, "Extract file as…",
-                                             node.name)
+        dst, _ = QFileDialog.getSaveFileName(self, "Extract file as…", node.name)
         if not dst:
             return
         try:
             data = self.provider.read_file(node.path)
             with open(dst, "wb") as f:
                 f.write(data)
-            self.log_msg("Extracted %s (%d bytes) -> %s"
-                         % (node.path, len(data), dst))
+            self.log_msg("Extracted %s (%d bytes) -> %s" % (node.path, len(data), dst))
         except Exception as e:
             QMessageBox.critical(self, "Extract failed", str(e))
 
@@ -428,8 +451,7 @@ class MainWindow(QMainWindow):
         node = self._current_node()
         if node is None or self.writer is None:
             return
-        target_dir = node.path if node.is_dir else \
-            (os.path.dirname(node.path) or "/")
+        target_dir = node.path if node.is_dir else (os.path.dirname(node.path) or "/")
         src, _ = QFileDialog.getOpenFileName(self, "Import file", "")
         if not src:
             return
@@ -441,18 +463,21 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Import failed", str(e))
             return
         ret = QMessageBox.warning(
-            self, "Confirm write",
+            self,
+            "Confirm write",
             "This will WRITE into the image:\n\n"
             "  %s\n  -> %s%s\n\n"
             "Make sure you have a backup of the image. Continue?"
             % (src, target_dir, name),
-            MB_Yes | MB_No)
+            MB_Yes | MB_No,
+        )
         if ret != MB_Yes:
             return
         try:
             self.writer.write_file(target_dir, name, data)
-            self.log_msg("Imported %s (%d bytes) -> %s%s"
-                         % (src, len(data), target_dir, name))
+            self.log_msg(
+                "Imported %s (%d bytes) -> %s%s" % (src, len(data), target_dir, name)
+            )
             self._refresh_dir(target_dir)
         except Exception as e:
             QMessageBox.critical(self, "Import failed", str(e))
@@ -461,10 +486,10 @@ class MainWindow(QMainWindow):
         node = self._current_node()
         if node is None or self.writer is None:
             return
-        target_dir = node.path if node.is_dir else \
-            (os.path.dirname(node.path) or "/")
-        name, ok = QInputDialog.getText(self, "New folder",
-                                        "Folder name in %s:" % target_dir)
+        target_dir = node.path if node.is_dir else (os.path.dirname(node.path) or "/")
+        name, ok = QInputDialog.getText(
+            self, "New folder", "Folder name in %s:" % target_dir
+        )
         if not ok or not name.strip():
             return
         try:
@@ -479,9 +504,9 @@ class MainWindow(QMainWindow):
         if node is None or node.path == "/" or self.writer is None:
             return
         parent = os.path.dirname(node.path) or "/"
-        new_name, ok = QInputDialog.getText(self, "Rename",
-                                            "New name for %s:" % node.name,
-                                            text=node.name)
+        new_name, ok = QInputDialog.getText(
+            self, "Rename", "New name for %s:" % node.name, text=node.name
+        )
         if not ok or not new_name.strip():
             return
         try:
@@ -499,11 +524,12 @@ class MainWindow(QMainWindow):
         what = "folder" if node.is_dir else "file"
         extra = "\n(and everything inside it)" if node.is_dir else ""
         ret = QMessageBox.warning(
-            self, "Confirm delete",
+            self,
+            "Confirm delete",
             "Delete this %s from the image?\n\n  %s%s\n\n"
-            "This rewrites the image in place. Continue?" % (what, node.path,
-                                                             extra),
-            MB_Yes | MB_No)
+            "This rewrites the image in place. Continue?" % (what, node.path, extra),
+            MB_Yes | MB_No,
+        )
         if ret != MB_Yes:
             return
         try:

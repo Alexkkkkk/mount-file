@@ -13,10 +13,12 @@ import sys
 import tempfile
 import uuid
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from mountfile.fat32 import Fat32, Fat32Error
 from mountfile.partition import list_partitions
-from mountfile.fat32 import Fat32
 
 BPS, SPC, RESERVED, NFATS, ROOTC = 512, 1, 32, 1, 2
 TOTAL_SECTORS = 70000
@@ -71,8 +73,9 @@ class TestFat32:
         self.fh.close()
 
     def _free(self):
-        return sum(1 for n in range(2, self.fs.fat_size // 4)
-                   if self.fs._fat_get(n) == 0)
+        return sum(
+            1 for n in range(2, self.fs.fat_size // 4) if self.fs._fat_get(n) == 0
+        )
 
     def test_short_name_roundtrip(self):
         self.fs.write_file("/", "HELLO.TXT", b"Hello, FAT32 world!")
@@ -93,19 +96,54 @@ class TestFat32:
         self.fs.write_file("/", name, payload + b"X" * 2000)
         assert self.fs.read_file("/" + name) == payload + b"X" * 2000
 
+    def test_failed_overwrite_keeps_original_and_rolls_back_partial_allocation(self):
+        self.fs.write_file("/", "protected.bin", b"original")
+        target = next(e for e in self.fs.list_dir() if e.name == "protected.bin")
+
+        # Leave exactly one free cluster, then ask for two. The allocator must
+        # roll back its partial allocation without unlinking the old file.
+        self.fs._write(self.fs.fat_start, b"\xff" * self.fs.fat_size)
+        free_cluster = target.cluster + 1
+        self.fs._fat_set(free_cluster, 0)
+        free_before = self._free()
+
+        with pytest.raises(Fat32Error, match="no free clusters left"):
+            self.fs.write_file("/", "protected.bin", b"x" * (2 * self.fs.cluster_size))
+
+        assert self.fs.read_file("/protected.bin") == b"original"
+        assert self._free() == free_before == 1
+
+    def test_cluster_allocation_scans_forward_once(self):
+        original_fat_get = self.fs._fat_get
+        reads = 0
+
+        def counted_fat_get(cluster):
+            nonlocal reads
+            reads += 1
+            return original_fat_get(cluster)
+
+        self.fs._fat_get = counted_fat_get
+        clusters = 128
+        payload = b"x" * (clusters * self.fs.cluster_size)
+        self.fs.write_file("/", "large.bin", payload)
+
+        # Includes the chain walk after allocation; a repeated prefix scan
+        # would require tens of thousands of extra reads for this small file.
+        assert reads < clusters * 4 + 16
+        assert self.fs.read_file("/large.bin") == payload
+
     def test_mkdir_nested(self):
         self.fs.mkdir("/", "CONFIG")
         self.fs.write_file("/CONFIG", "settings.ini", b"[main]\nkey=value\n")
-        assert self.fs.read_file("/CONFIG/settings.ini") == \
-            b"[main]\nkey=value\n"
+        assert self.fs.read_file("/CONFIG/settings.ini") == b"[main]\nkey=value\n"
 
     def test_many_files_no_leak(self):
         for i in range(40):
-            self.fs.write_file("/", "file_%03d.dat" % i,
-                               ("content %d" % i).encode())
+            self.fs.write_file("/", "file_%03d.dat" % i, ("content %d" % i).encode())
         for i in range(40):
-            assert self.fs.read_file("/file_%03d.dat" % i) == \
-                ("content %d" % i).encode()
+            assert (
+                self.fs.read_file("/file_%03d.dat" % i) == ("content %d" % i).encode()
+            )
         self.fs.write_file("/", "temp.tmp", os.urandom(1000))
         base = self._free()
         dirlen = len(self.fs.cluster_chain(self.fs.root_cluster))
@@ -165,7 +203,7 @@ class TestPartitions:
             struct.pack_into("<Q", ent, 32, 2048)
             struct.pack_into("<Q", ent, 40, 2048 + 99999)
             name16 = "RootFS".encode("utf-16-le")
-            ent[56:56 + len(name16)] = name16
+            ent[56 : 56 + len(name16)] = name16
             f.seek(2 * 512)
             f.write(ent)
         parts = list_partitions(path)

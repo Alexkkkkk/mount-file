@@ -1,0 +1,38 @@
+name: Баг
+description: Сообщить о проблеме в Mount File
+title: '[bug] '
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 'Опиши проблему как можно точнее — так её быстрее исправят.'
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Открыл образ disk.img
+        2. Перешёл в раздел ...
+        3. Увидел ошибку
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: ОС и версия Python
+      placeholder: 'Windows 11, Python 3.12.4'
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи / трассировка
+      render: shell
+    validations:
+      required: false

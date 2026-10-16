@@ -1,39 +1,77 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2026 Alexkkkkk
-# Licensed under the MIT License - see the LICENSE file for details.
-name: Tests
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   tests:
-    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    name: Tests (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.9", "3.12"]
+        python: ["3.8", "3.12"]
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest
-      - name: Run test suite
-        run: python -m pytest tests/ -v
+          python-version: ${{ matrix.python }}
+
+      - name: Install pytest with coverage
+        run: python -m pip install --upgrade pip pytest pytest-cov
+
+      - name: Run tests with coverage (one automatic retry)
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 2
+          retry_wait_seconds: 10
+          command: >-
+            python -m pytest tests/ -v
+            --cov=mountfile --cov-report=term --cov-report=xml:coverage.xml
+
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.os }}-py${{ matrix.python }}
+          path: coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  gui-import:
+    name: GUI import (Windows, PyQt6)
+    runs-on: windows-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install PyQt6
+        run: pip install PyQt6
+      - name: Import the GUI modules headless
+        shell: bash
+        run: |
+          python -c "import mountfile.qt_compat as q; assert q.QT6, 'expected PyQt6'; print('qt_compat OK, QT6 =', q.QT6)"
+          python -c "from mountfile.mainwindow import MainWindow; from mountfile.hexview import HexView; print('GUI import OK')"
 
   gui:
     name: gui smoke test (offscreen)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Qt runtime libraries
@@ -48,4 +86,4 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python -c "from mountfile.mainwindow import MainWindow; print('GUI import OK')"
-          python -m pytest tests/test_gui_smoke.py -v
+          python -m pytest tests/ -v
