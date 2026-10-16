@@ -1262,7 +1262,12 @@ class MainWindow(QMainWindow):
         self.log_msg("Декодированный дамп записан: %s" % out)
 
     def tool_split(self):
-        """Split a dump into partitions by a udev file."""
+        """Split a dump into partitions by a udev file.
+
+        The udev file is parsed first, the partition table is written to the
+        log, and nothing is extracted until the confirmation dialog is
+        answered Yes - as in the original RT809H script.
+        """
         path, _ = QFileDialog.getOpenFileName(
             self, "Разбить дамп на партиции", "", IMAGE_FILTER
         )
@@ -1274,15 +1279,44 @@ class MainWindow(QMainWindow):
         if not udev:
             return
         try:
-            from .rt809 import split_by_udev
+            from .rt809 import format_parts_table, parse_udev, split_by_udev
 
-            parts, written = split_by_udev(path, udev)
+            parts = parse_udev(udev)
+        except Exception as e:
+            self.log_msg("Ошибка разбиения: %s" % e)
+            QMessageBox.warning(
+                self, "Разбиение", "Не удалось разобрать файл udev:\n%s" % e
+            )
+            return
+        if not parts:
+            self.log_msg("В файле udev нет партиций: %s" % udev)
+            return
+        self.log_msg("Файл udev: %s (%d партиций)" % (udev, len(parts)))
+        for line in format_parts_table(parts).splitlines():
+            self.log_msg(line)
+        answer = QMessageBox.question(
+            self,
+            "Разбиение дампа",
+            "Извлечь партиции?",
+            MB_Yes | MB_No,
+            MB_No,
+        )
+        if answer != MB_Yes:
+            self.log_msg("Разбиение отменено — файлы не записаны.")
+            return
+        try:
+            _, written = split_by_udev(path, udev)
         except Exception as e:
             self.log_msg("Ошибка разбиения: %s" % e)
             QMessageBox.warning(self, "Разбиение", "Не удалось разбить дамп:\n%s" % e)
             return
+        for out in written:
+            self.log_msg(
+                "Записан: %s (%s) OK"
+                % (os.path.basename(out), tc_style.fmt_kb(os.path.getsize(out)))
+            )
         self.log_msg(
-            "Разбиение: партиций %d, записано файлов %d" % (len(parts), len(written))
+            "Извлечено %d партиций из %s" % (len(written), os.path.basename(path))
         )
 
     def _unsupported(self, what):

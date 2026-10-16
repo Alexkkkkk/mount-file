@@ -45,6 +45,7 @@ __all__ = [
     "load_table",
     "parse_udev",
     "split_by_udev",
+    "format_parts_table",
 ]
 
 BLOCK = 0x100000
@@ -226,6 +227,19 @@ def decode_dump(path, out_path=None, table_dir=None, kind=None):
                 break
             dst.write(chunk)
     return out_path
+
+
+# ------------------------------------------------------------- presentation
+def format_parts_table(parts):
+    """Numbered ``# / Offset / Length / Name`` table, one line per partition.
+
+    The rows use the same layout as the ``split`` command, so the GUI log
+    and the CLI show identical partition lines.
+    """
+    lines = ["  № Offset      Length      Name"]
+    for i, p in enumerate(parts, 1):
+        lines.append("%-3d 0x%08X  0x%08X  %s" % (i, p.offset, p.length, p.name))
+    return "\n".join(lines)
 
 
 # -------------------------------------------------------------- udev split
