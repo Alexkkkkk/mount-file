@@ -39,17 +39,18 @@ import webbrowser
 from . import tc_style
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (AlignRight, AlignVCenter, BottomDock,
-                        ComboAdjustToContents, CtrlModifier, DialogAccepted,
-                        DlgCancel, DlgOk, HVC_ResizeToContents, ItemIsEnabled,
-                        ItemIsSelectable, Key_A, Key_Backspace, Key_Delete,
-                        Key_Enter, Key_Insert, Key_Return, Key_Space, Key_Tab,
-                        MB_No, MB_Yes, NoEditTriggers, QAction, QApplication,
-                        QBrush, QCheckBox, QComboBox, QDialog,
-                        QDialogButtonBox, QDockWidget, QEvent_KeyPress,
-                        QFileDialog, QFormLayout, QHBoxLayout, QInputDialog,
-                        QKeySequence, QLabel, QLineEdit, QMainWindow, QMenu,
-                        QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
+from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
+                        ComboAdjustToContents, CtrlModifier, DescendingOrder,
+                        DialogAccepted, DlgCancel, DlgOk, ElideMiddle,
+                        HVC_Interactive, ItemIsEnabled, ItemIsSelectable,
+                        Key_A, Key_Backspace, Key_Delete, Key_Enter,
+                        Key_Insert, Key_Return, Key_Space, Key_Tab, MB_No,
+                        MB_Yes, NoEditTriggers, QAction, QApplication, QBrush,
+                        QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                        QDockWidget, QEvent_KeyPress, QFileDialog, QFormLayout,
+                        QHBoxLayout, QInputDialog, QKeySequence, QLabel,
+                        QLineEdit, QMainWindow, QMenu, QMessageBox,
+                        QPlainTextEdit, QPushButton, QSize,
                         QSpinBox, QSplitter, QTabBar, QTableWidget,
                         QTableWidgetItem, QToolBar, QToolButton, QVBoxLayout,
                         QWidget, SelectRows, SizePolicyExpanding,
@@ -65,6 +66,23 @@ COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")
 
 #: What Total Commander prints in the size column for a directory.
 DIR_SIZE_TEXT = "<Папка>"
+
+#: What the Имя / Тип / Размер / Дата / Атрибуты header row reads.
+#: The flexible Имя column is `COLUMN_NAME`; the other four keep a width
+#: derived from their own header and reference content (see
+#: :meth:`PanelTable._column_widths`) so no header is ever cut off.
+COLUMN_NAME = 0
+#: Smallest usable column (Qt cuts a section to `minimumSectionSize`, and the
+#: default squeezed the Имя column down to 's..').
+MIN_SECTION_WIDTH = 40
+#: The Имя column never goes below this, the other columns give up width first.
+NAME_MIN_WIDTH = 150
+
+#: One-line reminder of the panel keys, shown under an empty panel.
+PANEL_LEGEND = (
+    "Enter — открыть, Backspace — вверх, Space — отметить, "
+    "Ctrl+T — вкладка, Tab — другая панель"
+)
 
 #: F3..F8 as shown by the function key bar (the F9 menu toggle stays a
 #: shortcut only, exactly like the reference window).
@@ -139,22 +157,89 @@ class PanelTable(QTableWidget):
         self.panel = panel
         self.setHorizontalHeaderLabels(list(COLUMNS))
         hdr = self.horizontalHeader()
-        hdr.setSectionResizeMode(0, Stretch)
+        # Only Имя stretches. The other four get an explicit width, computed
+        # from the header text and the longest value they hold: with
+        # ResizeToContents they sized themselves to their content and, in a
+        # narrow window, pushed Имя below the minimum section, which is why
+        # the listing showed 's..' instead of folder names.
+        hdr.setMinimumSectionSize(MIN_SECTION_WIDTH)
+        hdr.setSectionResizeMode(COLUMN_NAME, Stretch)
         for c in range(1, len(COLUMNS)):
-            hdr.setSectionResizeMode(c, HVC_ResizeToContents)
+            hdr.setSectionResizeMode(c, HVC_Interactive)
+        hdr.setStretchLastSection(False)
         hdr.setSectionsClickable(True)
+        hdr.setSortIndicatorShown(True)
         hdr.sectionClicked.connect(self.panel.on_header_clicked)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
         self.setWordWrap(False)
+        # Total Commander elides in the middle: the tail of 'BACKUP_….bin'
+        # stays visible, which is what tells two dumps apart.
+        self.setTextElideMode(ElideMiddle)
         self.setSelectionBehavior(SelectRows)
         self.setSelectionMode(TableExtendedSelection)
         self.setEditTriggers(NoEditTriggers)
         self.doubleClicked.connect(lambda *_: panel.open_row(panel.table.currentRow()))
-        self.setToolTip(
-            "Enter — открыть, Backspace — вверх, Space — отметить, "
-            "Ctrl+T — вкладка, Tab — другая панель"
+        # A short hint only: the long legend used to pop up as a wide tooltip
+        # that covered both panels. It now lives under an empty panel.
+        self.setToolTip("Enter — открыть, Space — отметить, Tab — другая панель")
+        self._relayout_columns()
+
+    # ------------------------------------------------------- column widths
+    def _text_width(self, text):
+        fm = self.fontMetrics()
+        advance = getattr(fm, "horizontalAdvance", None)
+        return advance(text) if advance is not None else fm.width(text)
+
+    def _column_widths(self):
+        """Width of the four fixed columns, fitted to the current UI font.
+
+        Everything is measured from real text, so the numbers follow the font
+        size switch (Вид → Шрифт крупнее) and the Атрибуты header can never
+        come out clipped at the right edge.
+        """
+        pad = 18
+        return (
+            max(52, self._text_width("Папка") + pad),
+            max(76, self._text_width("7 818 182 656") + pad),
+            max(104, self._text_width("19.01.2021 11:56") + pad),
+            max(64, self._text_width(COLUMNS[4]) + pad),
         )
+
+    def _relayout_columns(self):
+        """Fit the columns to the viewport, protecting the Имя column.
+
+        The fixed columns give width up first (down to `MIN_SECTION_WIDTH`),
+        so a narrow window or a small high-DPI screen still shows readable
+        file names instead of collapsing the name column.
+        """
+        viewport = self.viewport().width()
+        if viewport <= 0:
+            return
+        widths = list(self._column_widths())
+        fixed = sum(widths)
+        if viewport - fixed < NAME_MIN_WIDTH:
+            deficit = NAME_MIN_WIDTH - (viewport - fixed)
+            room = sum(w - MIN_SECTION_WIDTH for w in widths)
+            if room > 0:
+                take = min(deficit, room)
+                widths = [
+                    max(
+                        MIN_SECTION_WIDTH,
+                        w - int(round((w - MIN_SECTION_WIDTH) * take / room)),
+                    )
+                    for w in widths
+                ]
+        for c, width in enumerate(widths, start=1):
+            self.setColumnWidth(c, width)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._relayout_columns()
+
+    def apply_font(self):
+        """Re-fit the columns after the UI font size changed."""
+        self._relayout_columns()
 
     def keyPressEvent(self, e):
         key = e.key()
@@ -491,18 +576,25 @@ class TcPanel(QWidget):
         """The five cells of one row (name, type, size, date, attributes)."""
         name = e["name"]
         if e.get("up"):
-            return name, "", DIR_SIZE_TEXT, "", tc_style.attrs_str("", is_dir=True)
+            return (
+                name,
+                tc_style.DIR_TYPE_TEXT,
+                DIR_SIZE_TEXT,
+                "",
+                tc_style.attrs_str("", is_dir=True),
+            )
         attrs = tc_style.attrs_str(
             name,
             is_dir=e["is_dir"],
             writable=e.get("writable", True),
             fat_attr=e.get("fat_attr"),
         )
+        kind = tc_style.file_type(name, e["is_dir"])
         if e["is_dir"]:
-            return name, "", DIR_SIZE_TEXT, e.get("date") or "", attrs
+            return name, kind, DIR_SIZE_TEXT, e.get("date") or "", attrs
         return (
             name,
-            tc_style.file_type(name, False),
+            kind,
             tc_style.fmt_size(e.get("size") or 0),
             e.get("date") or "",
             attrs,
@@ -515,6 +607,7 @@ class TcPanel(QWidget):
             self.table.setRowCount(1)
             it = QTableWidgetItem(hint)
             it.setFlags(ItemIsEnabled)
+            it.setForeground(QBrush(tc_style.qcolor("text_dim")))
             self.table.setItem(0, 0, it)
             self.table.setSpan(0, 0, 1, len(COLUMNS))
             return
@@ -573,6 +666,7 @@ class TcPanel(QWidget):
 
     def update_header(self):
         """Path line, tab label, free space readout and status line."""
+        self._update_sort_indicator()
         suffix = "*.*"
         if self.mode == "local":
             sep = os.sep
@@ -599,6 +693,13 @@ class TcPanel(QWidget):
         )
         self.populate_drives()
 
+    def _update_sort_indicator(self):
+        """Arrow in the header of the sorted column (Total Commander style)."""
+        hdr = self.table.horizontalHeader()
+        hdr.setSortIndicator(
+            self.sort_col, DescendingOrder if self.sort_rev else AscendingOrder
+        )
+
     def _space_text(self):
         try:
             if self.mode == "img":
@@ -620,18 +721,24 @@ class TcPanel(QWidget):
     def _status_text(self):
         files = [e for e in self.entries if not e["is_dir"]]
         dirs = [e for e in self.entries if e["is_dir"]]
-        if self.entries and len(self.entries) == 1 and self.entries[0].get("up"):
-            return ""
+        if not files and not dirs:
+            # An unopened or empty panel gets the plain key legend instead of
+            # a meaningless '0 Кб из 0 Кб'; the image panel without an image
+            # already carries the «образ не открыт» hint in its list.
+            if self.mode == "img" and self.provider is None:
+                return ""
+            return PANEL_LEGEND
         mfiles = [e for e in files if e["name"] in self.marked]
         mdirs = [e for e in dirs if e["name"] in self.marked]
-        parts = [
-            "%s из %s"
-            % (
-                tc_style.fmt_kb(sum(e.get("size") or 0 for e in mfiles)),
-                tc_style.fmt_kb(sum(e.get("size") or 0 for e in files)),
-            )
-        ]
+        parts = []
         if files:
+            parts.append(
+                "%s из %s"
+                % (
+                    tc_style.fmt_kb(sum(e.get("size") or 0 for e in mfiles)),
+                    tc_style.fmt_kb(sum(e.get("size") or 0 for e in files)),
+                )
+            )
             parts.append("файлов: %d из %d" % (len(mfiles), len(files)))
         if dirs:
             parts.append("папок: %d из %d" % (len(mdirs), len(dirs)))
@@ -905,6 +1012,7 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Панель инструментов", self)
         tb.setMovable(False)
         tb.setToolButtonStyle(TB_IconOnly)
+        tb.setIconSize(QSize(18, 18))
         self.addToolBar(tb)
         self._bind_fkeys()
 
@@ -1043,7 +1151,7 @@ class MainWindow(QMainWindow):
             self.fbtns.append(btn)
         btn_exit = QPushButton("Alt+F4 Выход")
         btn_exit.clicked.connect(self.close)
-        btn_exit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn_exit.setSizePolicy(SizePolicyExpanding, SizePolicyFixed)
         fk_row.addWidget(btn_exit)
         self.fbtns.append(btn_exit)
 
@@ -1192,6 +1300,7 @@ class MainWindow(QMainWindow):
             act.setChecked(key == name)
         for p in getattr(self, "panels", {}).values():
             p.refresh()
+            p.table.apply_font()
         self.log_msg("Тема интерфейса: %s" % tc_style.THEME_LABEL.get(name, name))
 
     def bump_font(self, delta):
@@ -1201,6 +1310,7 @@ class MainWindow(QMainWindow):
         tc_style.apply_theme(QApplication.instance(), tc_style.theme())
         for p in self.panels.values():
             p.refresh()
+            p.table.apply_font()
 
     def open_settings(self):
         dlg = SettingsDialog(self)
@@ -1738,7 +1848,7 @@ class MainWindow(QMainWindow):
             return
         target_dir = other.path
         listing = "\n".join(
-            "  %s -> %s%s" % (panel.join(e["name"]), target_dir, e["name"])
+            "  %s -> %s" % (panel.join(e["name"]), other.join(e["name"]))
             for e in entries[:8]
         )
         if len(entries) > 8:
@@ -1820,7 +1930,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Создание папки не удалось", str(e))
             return
         p.refresh()
-        self.log_msg("Создана папка %s%s" % (p.path, name))
+        self.log_msg("Создана папка %s" % p.join(name))
 
     def f8_delete(self):
         p = self.active_panel()

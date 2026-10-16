@@ -285,14 +285,21 @@ def attrs_str(name="", is_dir=False, writable=True, fat_attr=None):
     )
 
 
-def file_type(name, is_dir, up=False):
-    """The 'Тип' column: the extension for files, empty for directories.
+#: What the Тип column prints for a directory (the size column reads
+#: '<Папка>').
+DIR_TYPE_TEXT = "Папка"
 
-    Directories do not carry a type in the reference window - their kind is
-    shown by '<Папка>' in the size column instead.
+
+def file_type(name, is_dir, up=False):
+    """The 'Тип' column: the extension for files, 'Папка' for directories.
+
+    The reference Total Commander window prints the kind in this column as
+    well, so a directory row reads 'Папка' here and '<Папка>' in the size
+    column. Leaving the whole column blank for a folder listing (every row
+    a directory) made the pane look broken, which is what it used to do.
     """
     if is_dir:
-        return ""
+        return DIR_TYPE_TEXT
     stem, dot, ext = str(name).rpartition(".")
     return ext.upper() if dot and stem else ""
 
