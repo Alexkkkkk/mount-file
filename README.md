@@ -206,6 +206,46 @@ mount-file/
     └── test_updater.py
 ```
 
+
+### Единый запуск всего функционала
+
+`mountfile_all.py` прогоняет весь функционал проекта за один запуск: окружение и
+версию, CLI-команды, Python API и тесты, а по флагу `--build` — ещё и сборку
+бинарника.
+
+```bash
+python mountfile_all.py                     # CLI + API + тесты + GUI
+python mountfile_all.py --no-gui --no-tests # без интерфейса и тестов
+python mountfile_all.py --cli-only          # только CLI-команды
+python mountfile_all.py --api-only          # только Python API
+python mountfile_all.py --tests-only        # только тесты
+python mountfile_all.py --diag              # диагностика main.py --diag
+python mountfile_all.py --check-updates     # 10 = есть обновление, 0 = нет
+python mountfile_all.py --build             # + сборка бинарника
+python mountfile_all.py --cheatsheet        # карта команд и переменных окружения
+```
+
+Скрипт принимает `--img`, `--dump` и `--udev` (по умолчанию `dump.img`,
+`dump.bin`, `udev.txt`). Если файла нет, соответствующий раздел пропускается с
+предупреждением, а не завершается ошибкой.
+
+Через `make`:
+
+```bash
+make all-in-one                 # python mountfile_all.py --no-gui
+make all-in-one ARGS=--build    # то же плюс сборка бинарника
+make sample                     # тестовые образы для полного прогона
+```
+
+Тестовые образы (нужны пакеты `dosfstools` и `mtools`) собирает
+`scripts/make_sample_image.sh`: образ FAT32 через `mkfs.vfat` + `mcopy`, дамп с
+маркером `MBOT` и флагом `JC` по смещению `0x200090` и таблицу `[PARTITIONS]`
+для команд `decode` и `split`.
+
+```bash
+make sample          # → dump.img, dump.bin, udev.txt
+python mountfile_all.py --no-gui   # теперь ни один раздел не пропускается
+```
 ## Ограничения
 
 - Запись поддерживается только для **FAT32**. FAT12/16, exFAT и другие перечисленные файловые системы доступны для чтения через The Sleuth Kit.

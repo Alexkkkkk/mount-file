@@ -502,6 +502,24 @@ def print_cheatsheet() -> None:
 # ============================================================
 # MAIN
 # ============================================================
+def _setup_console() -> None:
+    """Force UTF-8 on stdout/stderr.
+
+    The status markers below are emoji; a Windows console (or a redirected
+    pipe) defaults to cp1252 and printing them would abort the whole run with
+    UnicodeEncodeError. Reconfiguring is a no-op on streams without the method
+    and never raises when the stream is already detached.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # detached or already closed stream
+            pass
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Единый скрипт запуска всего функционала Mount File.",
@@ -527,6 +545,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    _setup_console()
     args = parse_args()
 
     if args.cheatsheet:

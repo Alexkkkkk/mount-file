@@ -18,3 +18,10 @@ venv/
 *.raw
 *.dump
 *.dd
+
+# Sample data produced locally by scripts/make_sample_image.sh / mountfile_all.py
+udev.txt
+out/
+parts/
+vfs_out/
+hello.txt
