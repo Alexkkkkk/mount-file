@@ -29,13 +29,19 @@ A file manager for raw disk images and NAND/eMMC dumps. Browse images, extract f
 
 Список версий и файлов: [GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases).
 
-Последний релиз — **v1.2.0** — опубликован без прикреплённых бинарников. Готовые сборки Windows доступны в [релизе v1.1.1](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.1.1); Linux x86-64 — в [релизе v1.0.0](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.0.0). Проверяйте версию сборки на странице релиза.
+Ссылки ниже ведут на сборки **последнего** релиза, поэтому их не нужно
+править при выпуске новой версии. К каждому `.exe` приложен файл `.sha256`
+с контрольной суммой.
 
 | Платформа | Сборка |
 |---|---|
-| Windows 10/11 x64 | [MountFile-win10-x64.exe](https://github.com/Alexkkkkk/mount-file/releases/download/v1.1.1/MountFile-win10-x64.exe) |
-| Windows 7 x64 | [MountFile-win7-x64.exe](https://github.com/Alexkkkkk/mount-file/releases/download/v1.1.1/MountFile-win7-x64.exe) |
-| Linux x86-64 | [MountFile-linux-x86-64](https://github.com/Alexkkkkk/mount-file/releases/download/v1.0.0/MountFile-linux-x86-64) |
+| Windows 10/11 x64 | [MountFile-win10-x64.exe](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile-win10-x64.exe) |
+| Windows 7 x64 | [MountFile-win7-x64.exe](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile-win7-x64.exe) |
+| Windows, универсальная сборка | [MountFile.exe](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile.exe) |
+| Linux x86-64 | [MountFile-linux-x86-64](https://github.com/Alexkkkkk/mount-file/releases/latest/download/MountFile-linux-x86-64) |
+
+Универсальная сборка `MountFile.exe` собрана на Python 3.8 + PyQt5 и
+работает на Windows 7 SP1 и новее (x64). Именно её выбирает автообновление.
 
 ## Возможности
 
@@ -109,6 +115,12 @@ build_exe.bat
 ```
 
 Последняя команда собирает автономный `dist\MountFile.exe`.
+
+На Python 3.8 `pytsk3` не устанавливается: PyPI публикует её колёса для
+Windows только начиная с Python 3.10, поэтому `requirements-win7.txt`
+пропускает эту зависимость на 3.8. Сборка для Windows 7 работает на
+встроенном движке FAT32 — просмотр, извлечение и запись FAT32 доступны,
+чтение NTFS/EXT требует `pytsk3` и на 3.8 недоступно.
 
 ## Автообновление
 
