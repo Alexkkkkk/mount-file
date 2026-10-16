@@ -89,6 +89,7 @@ class Fat32:
         if cluster_count < 65525:
             raise Fat32Error("not FAT32 (cluster count %d)" % cluster_count)
         self.cluster_count = cluster_count
+        self._alloc_hint = 2
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):
@@ -162,23 +163,52 @@ class Fat32:
         return data if size is None else data[:size]
 
     def _alloc_cluster(self):
-        total = self.fat_size // 4
-        for n in range(2, total):
-            if self._fat_get(n) == FREE:
-                self._fat_set(n, EOC)
-                self._write(self.cluster_offset(n), b"\x00" * self.cluster_size)
-                return n
+        # Only clusters in the data region are allocatable; FAT padding entries
+        # must never be used, even when the FAT is larger than it needs to be.
+        total = min(self.cluster_count + 2, self.fat_size // 4)
+        start = self._alloc_hint
+        if start < 2 or start >= total:
+            start = 2
+
+        # Continue from the last allocation instead of rescanning the occupied
+        # prefix for every cluster. Without this hint, writing N clusters costs
+        # O(N²) tiny seek/read operations on the image file.
+        for first, last in ((start, total), (2, start)):
+            for n in range(first, last):
+                if self._fat_get(n) == FREE:
+                    self._fat_set(n, EOC)
+                    try:
+                        self._write(
+                            self.cluster_offset(n), b"\x00" * self.cluster_size
+                        )
+                    except Exception:
+                        self._fat_set(n, FREE)
+                        self._alloc_hint = min(self._alloc_hint, n)
+                        raise
+                    self._alloc_hint = n + 1 if n + 1 < total else 2
+                    return n
         raise Fat32Error("no free clusters left")
 
     def _alloc_chain(self, nclusters):
         first = prev = None
-        for _ in range(nclusters):
-            n = self._alloc_cluster()
-            if prev is not None:
-                self._fat_set(prev, n)
-            else:
-                first = n
-            prev = n
+        allocated = []
+        try:
+            for _ in range(nclusters):
+                n = self._alloc_cluster()
+                allocated.append(n)
+                if prev is not None:
+                    self._fat_set(prev, n)
+                else:
+                    first = n
+                prev = n
+        except Exception:
+            # Allocation may run out of space partway through a request. Free
+            # every cluster allocated so far, including one not yet linked if
+            # updating the previous FAT entry itself failed.
+            for n in allocated:
+                self._fat_set(n, FREE)
+                self._alloc_hint = min(self._alloc_hint, n)
+            raise
         return first
 
     def _free_chain(self, start):
@@ -186,6 +216,7 @@ class Fat32:
             return
         for n in self.cluster_chain(start):
             self._fat_set(n, FREE)
+            self._alloc_hint = min(self._alloc_hint, n)
 
     def _write_chain_data(self, first_cluster, data):
         if first_cluster < 2:
@@ -473,14 +504,21 @@ class Fat32:
         )
         used = {e.short_raw for e in entries_now}
         used |= {self._short_to_name(e.short_raw) for e in entries_now}
-        short = self._make_short_name(filename, used)
+        short = target.short_raw if target is not None else self._make_short_name(
+            filename, used
+        )
         nclusters = max(1, math.ceil(len(data) / self.cluster_size)) if data else 0
-        if target is not None:
-            self._delete_entry(dir_cluster, target.entry_offset)
         first = self._alloc_chain(nclusters) if nclusters else 0
-        self._write_chain_data(first, data)
-        raw = self._build_entries(filename, short, first, len(data))
-        self._insert_entries(dir_cluster, raw)
+        try:
+            self._write_chain_data(first, data)
+            raw = self._build_entries(filename, short, first, len(data))
+            if target is not None:
+                self._delete_entry(dir_cluster, target.entry_offset)
+            self._insert_entries(dir_cluster, raw)
+        except Exception:
+            if first >= 2:
+                self._free_chain(first)
+            raise
         if target is not None and target.cluster >= 2:
             self._free_chain(target.cluster)
         self.f.flush()
