@@ -3,6 +3,12 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2026 Alexkkkkk
 Licensed under the MIT License - see the LICENSE file for details.
 -->
+[![CI](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml)
+[![Quality](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 # Mount File
 
 Графический файловый менеджер для просмотра raw-образов NAND, eMMC и дисков. Позволяет извлекать файлы, а в образах FAT32 — создавать и перезаписывать файлы и папки.
