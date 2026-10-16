@@ -14,6 +14,11 @@ on:
         description: 'Existing tag to rebuild and attach assets to'
         required: true
         type: string
+      source_ref:
+        description: 'Build from this ref instead of the tag (backfill of an older release)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -54,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.source_ref || inputs.tag }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -92,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.source_ref || inputs.tag }}
 
       - uses: actions/setup-python@v7
         with:
@@ -105,19 +110,36 @@ jobs:
           python -m pip install pyinstaller
           python -m pip install -r ${{ matrix.spec }}
           if ($LASTEXITCODE -ne 0) {
-            $global:LASTEXITCODE = 0
             Write-Host "::warning title=Optional dependency::requirements install failed, falling back to ${{ matrix.qt }} only"
             python -m pip install '${{ matrix.qt }}'
           }
+          # The Qt binding is mandatory - without it the frozen exe is useless.
           python -c "import ${{ matrix.qt }} as m; print('${{ matrix.qt }} OK')"
+          if ($LASTEXITCODE -ne 0) { throw "${{ matrix.qt }} could not be imported" }
+          # pytsk3 is optional: without it the app still browses and writes
+          # FAT32 with the built-in engine. This probe must never leak its
+          # non-zero exit code into the step - that leak (not a real build
+          # error) is what failed the win7 and universal jobs and left the
+          # release without Windows binaries.
           python -c "import pytsk3" 2>$null
-          if ($LASTEXITCODE -eq 0) { Write-Host 'pytsk3 OK' } else { Write-Host '::warning title=pytsk3 missing::NTFS/EXT browsing unavailable in this build' }
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'pytsk3 OK'
+          } else {
+            Write-Host '::warning title=pytsk3 missing::NTFS/EXT browsing unavailable in this build'
+          }
+          exit 0
 
       - name: Source diagnostics
         shell: pwsh
         run: |
           python main.py --diag
           if ($LASTEXITCODE -ne 0) { throw "source diagnostics failed (exit $LASTEXITCODE)" }
+
+      - name: Stamp the release version into the package
+        shell: pwsh
+        run: |
+          python scripts/stamp_version.py "${{ github.event.release.tag_name || inputs.tag }}"
+          if ($LASTEXITCODE -ne 0) { throw 'could not stamp the version into mountfile/__init__.py' }
 
       - name: Build one-file executable
         shell: pwsh
@@ -169,7 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.source_ref || inputs.tag }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -204,7 +226,14 @@ jobs:
   publish:
     name: attach binaries to the release
     needs: [gate, build, linux]
-    if: always() && needs.gate.outputs.proceed == 'true' && needs.build.result == 'success' && needs.linux.result == 'success'
+    # A tolerated failure inside the build matrix (the win7 leg runs with
+    # continue-on-error) must not stop the upload: everything that was built
+    # is attached, and the Linux job stays a hard requirement.
+    if: >-
+      always() &&
+      needs.gate.outputs.proceed == 'true' &&
+      needs.build.result != 'cancelled' &&
+      needs.linux.result == 'success'
     runs-on: ubuntu-latest
     steps:
       # gh release create/upload shell out to git, so the job must be inside

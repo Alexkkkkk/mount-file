@@ -5,5 +5,11 @@
 # Windows 7: Python 3.8.10 (последняя версия Python для Win7) + PyQt5 (Qt 5.15 — последний Qt для Win7)
 # Установка:  py -3.8 -m pip install -r requirements-win7.txt
 PyQt5>=5.15.11,<5.16
-pytsk3>=20260715
+# pytsk3 публикует колёса для Windows только начиная с Python 3.10 (cp310+),
+# поэтому на Windows 7 (Python 3.8.10) ставить её из PyPI нечем: pip пытался
+# собрать sdist без MSVC и весь `pip install -r` падал, из-за чего сборка
+# релиза оставалась без бинарников. На 3.8 зависимость пропускается —
+# приложение работает на встроенном движке FAT32 (чтение NTFS/EXT требует
+# pytsk3 и на Windows 7 недоступно).
+pytsk3>=20260715; python_version >= "3.10"
 pyinstaller>=6.22.3
