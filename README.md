@@ -226,6 +226,7 @@ python mountfile.py --version
 Сборка одного исполняемого файла:
 
 ```bash
+make mountfile-exe            # то же, через Makefile
 pyinstaller --onefile --windowed --name mountfile mountfile.py
 ```
 
