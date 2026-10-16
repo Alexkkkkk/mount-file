@@ -1158,7 +1158,7 @@ def run_smoke(root: Path) -> int:
                 if r.stderr:
                     print("    stderr:", r.stderr.strip().splitlines()[-1])
         except FileNotFoundError:
-            print(f"  [skip] python не найден")
+            print("  [skip] python не найден")
         except subprocess.TimeoutExpired:
             print(f"  [timeout] {' '.join(cmd)}")
             rc = 1
