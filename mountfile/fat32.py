@@ -178,9 +178,7 @@ class Fat32:
                 if self._fat_get(n) == FREE:
                     self._fat_set(n, EOC)
                     try:
-                        self._write(
-                            self.cluster_offset(n), b"\x00" * self.cluster_size
-                        )
+                        self._write(self.cluster_offset(n), b"\x00" * self.cluster_size)
                     except Exception:
                         self._fat_set(n, FREE)
                         self._alloc_hint = min(self._alloc_hint, n)
@@ -504,8 +502,10 @@ class Fat32:
         )
         used = {e.short_raw for e in entries_now}
         used |= {self._short_to_name(e.short_raw) for e in entries_now}
-        short = target.short_raw if target is not None else self._make_short_name(
-            filename, used
+        short = (
+            target.short_raw
+            if target is not None
+            else self._make_short_name(filename, used)
         )
         nclusters = max(1, math.ceil(len(data) / self.cluster_size)) if data else 0
         first = self._alloc_chain(nclusters) if nclusters else 0
