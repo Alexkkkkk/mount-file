@@ -1,0 +1,25 @@
+# Локальные хуки повторяют то, что уже гоняет autofix.yml:
+# ruff (статические ошибки) + black + isort (формат и порядок импортов).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix, --select, "E9,F63,F7,F82"]
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 24.4.2
+    hooks:
+      - id: black
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: mixed-line-ending

@@ -5,6 +5,62 @@
 # Версия проекта живёт в mountfile/__init__.py и обновляется
 # автоматически при каждом релизном прогоне Auto Release.
 
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mountfile"
+version = "0.1.0"
+description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Alexkkkkk" }]
+
+dependencies = [
+    "PyQt6>=6.5",
+    "pytsk3>=20260715",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "ruff>=0.4",
+    "black>=24.4",
+    "isort>=5.13",
+    "pyinstaller>=6.22.3",
+]
+win7 = [
+    "PyQt5>=5.15.11,<5.16",
+]
+
+[project.scripts]
+mountfile = "mountfile.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["mountfile*"]
+
+[tool.setuptools.package-data]
+mountfile = ["data/*.bin"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501", "E402"]
+
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
 [tool.semantic_release]
 # v9: ключ во множественном числе и списком, старое version_variable
 # из v7 больше не поддерживается.

@@ -25,3 +25,11 @@ out/
 parts/
 vfs_out/
 hello.txt
+
+# tidy_repo
+.tidy_backup_*/
+.tidy_report.json
+.tidy_report.html
+.mypy_cache/
+.ruff_cache/
+coverage.xml
