@@ -1,0 +1,71 @@
+# .github/workflows/self-heal.yml
+#
+# При падении основного CI-workflow (name: CI, см. ci.yml) запускается
+# self-healing-cicd: агент скачивает логи упавшего прогона, предлагает
+# патч и открывает PR.
+#
+# Требуемые секреты (Settings -> Secrets and variables -> Actions):
+#   OPENAI_API_KEY     — ключ LLM для анализа падения (обязателен)
+#   AUTOMATION_TOKEN   — PAT с правами repo + workflow (опционально,
+#                        но именно он заставляет CI/CodeQL запуститься
+#                        на созданном PR; PR от GITHUB_TOKEN остаётся
+#                        "молчащим" — без проверок)
+name: Self-Heal on Failure
+
+on:
+  workflow_run:
+    # Должно совпадать с полем name в .github/workflows/ci.yml — там "CI".
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write # создание ветки и коммита с патчем
+  pull-requests: write # открытие PR
+  actions: read # скачивание логов упавшего прогона
+
+# Повторные падения одного и того же ref не должны плодить параллельные
+# агенты, которые перезапишут друг другу ветку с патчем.
+concurrency:
+  group: self-heal-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  self-heal:
+    # Только если основной workflow упал
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout failing ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install self-healing-cicd
+        run: |
+          python -m pip install --upgrade pip
+          pip install self-healing-cicd
+
+      - name: Run self-healing agent
+        env:
+          # AUTOMATION_TOKEN (если задан) вместо GITHUB_TOKEN, иначе
+          # созданный PR не запустит проверки.
+          GITHUB_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # ID упавшего запуска — агент скачает именно его логи
+          GITHUB_RUN_ID: ${{ github.event.workflow_run.id }}
+          # Разрешаем автоматическое создание PR (без ручного подтверждения)
+          AUTO_APPROVE_PATCHES: "true"
+          GIT_ENABLED: "true"
+          # Исключаем сам workflow самолечения, чтобы избежать бесконечного цикла
+          EXCLUDED_WORKFLOW_NAMES: "Self-Heal on Failure"
+        run: |
+          python -m self_healing_cicd \
+            --run-id "$GITHUB_RUN_ID" \
+            --repo "${{ github.repository }}"
