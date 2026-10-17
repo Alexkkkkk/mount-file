@@ -27,16 +27,42 @@ import traceback
 # --- MOUNTFILE_FIX: OLMA CLI -----------------------------------------------
 
 
-# --- MOUNTFILE_FIX: OLMA integration ---------------------------------------
+# --- MOUNTFILE_FIX: startup headroom ---------------------------------------
+# Headroom for the frozen exe: PyQt6 + the OLMA hook chain in a windowed
+# PyInstaller build can hit ~250 frames during bootstrap. Anything below 2000
+# is risky on Python 3.12 frozen, so we bump the limit once at import time.
 try:
-    from mountfile.olma import olma as _olma
-
-    _olma.install(trace_files=True, trace_memory=False)
-except Exception as _olma_err:  # noqa: BLE001
-    _olma = None
     import sys as _sys
 
-    print(f"[OLMA] init warning: {_olma_err}", file=_sys.stderr)
+    if int(_sys.getrecursionlimit()) < 2000:
+        _sys.setrecursionlimit(2000)
+except Exception:
+    pass
+
+
+# --- MOUNTFILE_FIX: OLMA integration ---------------------------------------
+# IMPORTANT: do not install the open() hook at import time. PyInstaller's
+# bootloader and Qt's .pyd init open files for their own plumbing; running
+# a hook that calls traceback.extract_stack() while they are mid-bootstrap
+# is what produces the "Failed to execute script 'main': maximum recursion
+# depth exceeded" splash crash on Windows. The hook is installed in main()
+# after QApplication exists, on a fresh branch.
+_olma = None
+
+
+def _install_olma_runtime() -> None:
+    global _olma
+    if _olma is not None:
+        return
+    try:
+        from mountfile.olma import olma
+
+        olma.install(trace_files=True, trace_memory=False)
+        _olma = olma
+    except Exception as _olma_err:  # noqa: BLE001
+        import sys as _sys
+
+        print(f"[OLMA] init warning: {_olma_err}", file=_sys.stderr)
 
 
 # --- /MOUNTFILE_FIX --------------------------------------------------------
@@ -276,6 +302,7 @@ def main():
     try:
         app = QApplication(sys.argv)
         app.setApplicationName("Mount File")
+        _install_olma_runtime()
         win = MainWindow()
         win.show()
         if argv and not argv[0].startswith("-"):
