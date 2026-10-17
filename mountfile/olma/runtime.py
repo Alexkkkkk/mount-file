@@ -2,15 +2,19 @@
 """Трассировка файловых и memory-операций во время работы программы."""
 
 from __future__ import annotations
-import builtins, io, os, threading, time, traceback
+
+import builtins
+import io
+import threading
+import time
+import traceback
 from collections import deque
-from dataclasses import dataclass, field, asdict
-from typing import Any
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
 class RuntimeEvent:
-    kind: str            # open/read/write/seek/close/error
+    kind: str  # open/read/write/seek/close/error
     path: str
     offset: int = 0
     size: int = 0
@@ -42,7 +46,8 @@ class OlmaRuntime:
 
     # --- install/uninstall ---
     def install(self) -> None:
-        if self._installed: return
+        if self._installed:
+            return
         self._orig_open = builtins.open
         builtins.open = self._patched_open
         if self._trace_memory:
@@ -55,11 +60,16 @@ class OlmaRuntime:
         self._installed = True
 
     def uninstall(self) -> None:
-        if not self._installed: return
-        if self._orig_open: builtins.open = self._orig_open
-        if self._orig_io_read: io.IOBase.read = self._orig_io_read
-        if self._orig_io_write: io.IOBase.write = self._orig_io_write
-        if self._orig_io_close: io.IOBase.close = self._orig_io_close
+        if not self._installed:
+            return
+        if self._orig_open:
+            builtins.open = self._orig_open
+        if self._orig_io_read:
+            io.IOBase.read = self._orig_io_read
+        if self._orig_io_write:
+            io.IOBase.write = self._orig_io_write
+        if self._orig_io_close:
+            io.IOBase.close = self._orig_io_close
         self._installed = False
 
     # --- hooks ---
@@ -76,7 +86,9 @@ class OlmaRuntime:
         self._push(RuntimeEvent("close", str(path)))
 
     def on_error(self, path, err):
-        self._push(RuntimeEvent("error", str(path), error=repr(err), stack=self._stack()))
+        self._push(
+            RuntimeEvent("error", str(path), error=repr(err), stack=self._stack())
+        )
 
     # --- patched functions ---
     def _patched_open(self, file, mode="r", *a, **kw):
@@ -84,8 +96,11 @@ class OlmaRuntime:
         try:
             fh = self._orig_open(file, mode, *a, **kw)
             dt = (time.perf_counter() - t0) * 1000
-            self._push(RuntimeEvent("open", str(file), mode=mode, duration_ms=dt,
-                                    stack=self._stack()))
+            self._push(
+                RuntimeEvent(
+                    "open", str(file), mode=mode, duration_ms=dt, stack=self._stack()
+                )
+            )
             return fh
         except Exception as e:
             self.on_error(file, e)
@@ -130,8 +145,9 @@ class OlmaRuntime:
 
     def _stack(self, depth: int = 6) -> str:
         frames = traceback.extract_stack()[:-2][-depth:]
-        return " | ".join(f"{f.filename.split(chr(47))[-1]}:{f.lineno}:{f.name}"
-                          for f in frames)
+        return " | ".join(
+            f"{f.filename.split(chr(47))[-1]}:{f.lineno}:{f.name}" for f in frames
+        )
 
     # --- queries ---
     def events(self, limit: int = 100) -> list[dict]:
@@ -141,18 +157,32 @@ class OlmaRuntime:
     def stats(self) -> dict:
         with self._lock:
             evs = list(self._events)
-        s = {"total": len(evs), "open": 0, "read": 0, "write": 0,
-             "close": 0, "error": 0, "bytes_read": 0, "bytes_written": 0,
-             "slow_ops": [], "files_touched": set(), "errors": []}
+        s = {
+            "total": len(evs),
+            "open": 0,
+            "read": 0,
+            "write": 0,
+            "close": 0,
+            "error": 0,
+            "bytes_read": 0,
+            "bytes_written": 0,
+            "slow_ops": [],
+            "files_touched": set(),
+            "errors": [],
+        }
         for e in evs:
             s[e.kind] = s.get(e.kind, 0) + 1
             if e.size:
-                if e.kind == "read":  s["bytes_read"] += e.size
-                if e.kind == "write": s["bytes_written"] += e.size
+                if e.kind == "read":
+                    s["bytes_read"] += e.size
+                if e.kind == "write":
+                    s["bytes_written"] += e.size
             if e.duration_ms > 100:
-                s["slow_ops"].append({"path": e.path, "ms": round(e.duration_ms, 1),
-                                      "kind": e.kind})
-            if e.path: s["files_touched"].add(e.path)
+                s["slow_ops"].append(
+                    {"path": e.path, "ms": round(e.duration_ms, 1), "kind": e.kind}
+                )
+            if e.path:
+                s["files_touched"].add(e.path)
             if e.kind == "error":
                 s["errors"].append({"path": e.path, "error": e.error, "stack": e.stack})
         s["files_touched"] = sorted(s["files_touched"])
@@ -168,17 +198,22 @@ class OlmaRuntime:
         opens: dict[str, int] = {}
         closes: dict[str, int] = {}
         for e in evs:
-            if e.kind == "open":   opens[e.path] = opens.get(e.path, 0) + 1
-            if e.kind == "close":  closes[e.path] = closes.get(e.path, 0) + 1
+            if e.kind == "open":
+                opens[e.path] = opens.get(e.path, 0) + 1
+            if e.kind == "close":
+                closes[e.path] = closes.get(e.path, 0) + 1
             if e.kind == "error":
-                anomalies.append({"type": "runtime_error",
-                                  "path": e.path, "detail": e.error})
+                anomalies.append(
+                    {"type": "runtime_error", "path": e.path, "detail": e.error}
+                )
         for p, n in opens.items():
             c = closes.get(p, 0)
             if n > c:
-                anomalies.append({"type": "possible_leak",
-                                  "path": p, "open": n, "close": c})
+                anomalies.append(
+                    {"type": "possible_leak", "path": p, "open": n, "close": c}
+                )
             elif c > n:
-                anomalies.append({"type": "double_close",
-                                  "path": p, "open": n, "close": c})
+                anomalies.append(
+                    {"type": "double_close", "path": p, "open": n, "close": c}
+                )
         return anomalies
