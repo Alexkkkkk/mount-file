@@ -14,7 +14,7 @@ from __future__ import annotations
 import operator
 import shutil
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterator, Optional, Sequence, Tuple, Union
 
 __all__ = [
@@ -217,8 +217,8 @@ class BootImageHeader:
     dtb_addr: Optional[int]
     signature_size: Optional[int]
     reserved: Tuple[int, ...]
-    _name_bytes: bytes = b""
-    _cmdline_bytes: bytes = b""
+    _name_bytes: bytes = field(default=b"", repr=False, compare=False)
+    _cmdline_bytes: bytes = field(default=b"", repr=False, compare=False)
 
     @property
     def header_version(self) -> int:
