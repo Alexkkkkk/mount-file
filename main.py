@@ -309,6 +309,7 @@ def main():
         # и до первого взаимодействия пользователя с окном.
         try:
             from mountfile import olma_watch
+
             olma_watch.install(qt_app=app, log=getattr(win, "log_msg", None))
         except Exception:
             traceback.print_exc()
