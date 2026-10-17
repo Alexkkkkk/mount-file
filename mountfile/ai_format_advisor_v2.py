@@ -32,17 +32,9 @@ import math
 import os
 import urllib.request
 
-from .qt_compat import (
-    DlgActionRole,
-    DlgClose,
-    QDialog,
-    QDialogButtonBox,
-    QLabel,
-    QPlainTextEdit,
-    QPushButton,
-    QVBoxLayout,
-    exec_dialog,
-)
+from .qt_compat import (DlgActionRole, DlgClose, QDialog, QDialogButtonBox,
+                        QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
+                        exec_dialog)
 
 #: Сколько байт файла уходит в «слепок» (сигнатуры + энтропия).
 HEAD_BYTES = 4096
