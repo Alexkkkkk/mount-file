@@ -11,17 +11,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mountfile.nand import (
-    GeometryError,
-    NandBoundsError,
-    NandGeometry,
-    NandPage,
-    iter_nand_pages,
-    parse_nand_page,
-    read_nand_page,
-    scan_bad_block_markers,
-)
-
+from mountfile.nand import (GeometryError, NandBoundsError, NandGeometry,
+                            NandPage, iter_nand_pages, parse_nand_page,
+                            read_nand_page, scan_bad_block_markers)
 
 GEOMETRY = NandGeometry(page_size=4, oob_size=2, block_size=8)
 

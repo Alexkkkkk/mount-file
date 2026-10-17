@@ -12,10 +12,10 @@ from __future__ import annotations
 import hashlib
 import operator
 import sqlite3
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from os import fspath
-from typing import Any, Iterable, Iterator, Optional, Tuple
-
+from typing import Any, Optional, Tuple
 
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 _BITMAP_PAGE_BYTES = 4096
@@ -124,7 +124,9 @@ class _ByteSource:
             try:
                 value = source[offset : offset + length]
             except (TypeError, KeyError, IndexError) as exc:
-                raise TypeError("source must be bytes-like, seekable, sliceable, or callable") from exc
+                raise TypeError(
+                    "source must be bytes-like, seekable, sliceable, or callable"
+                ) from exc
         try:
             value = memoryview(value).cast("B").tobytes()
         except (TypeError, ValueError) as exc:
@@ -238,9 +240,7 @@ class UnallocatedIndexer:
         self._source = source
         self._owns_connection = not isinstance(database, sqlite3.Connection)
         self._connection = (
-            sqlite3.connect(fspath(database))
-            if self._owns_connection
-            else database
+            sqlite3.connect(fspath(database)) if self._owns_connection else database
         )
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._create_schema()
@@ -262,7 +262,7 @@ class UnallocatedIndexer:
             self._connection.close()
             self._connection = None  # type: ignore[assignment]
 
-    def __enter__(self) -> "UnallocatedIndexer":
+    def __enter__(self) -> UnallocatedIndexer:
         return self
 
     def __exit__(self, _exc_type: Any, _exc_value: Any, _traceback: Any) -> None:
@@ -337,7 +337,9 @@ class UnallocatedIndexer:
             raise
 
         result = [self._chunk_for_key(digest, length) for digest, length in affected]
-        return tuple(sorted(result, key=lambda item: (item.offset, item.length, item.sha256)))
+        return tuple(
+            sorted(result, key=lambda item: (item.offset, item.length, item.sha256))
+        )
 
     def records(self) -> Tuple[UnallocatedChunk, ...]:
         """Return unique chunks sorted by offset, length, and SHA-256."""
@@ -346,7 +348,9 @@ class UnallocatedIndexer:
             "SELECT offset, length, sha256 FROM chunks "
             "ORDER BY offset ASC, length ASC, sha256 ASC"
         ).fetchall()
-        return tuple(UnallocatedChunk(int(row[0]), int(row[1]), str(row[2])) for row in rows)
+        return tuple(
+            UnallocatedChunk(int(row[0]), int(row[1]), str(row[2])) for row in rows
+        )
 
     def occurrences(self) -> Tuple[UnallocatedOccurrence, ...]:
         """Return every indexed range, including duplicate-content ranges."""
@@ -356,7 +360,9 @@ class UnallocatedIndexer:
             "FROM occurrences o JOIN chunks c ON c.chunk_id = o.chunk_id "
             "ORDER BY o.offset ASC, o.length ASC, c.sha256 ASC"
         ).fetchall()
-        return tuple(UnallocatedOccurrence(int(row[0]), int(row[1]), str(row[2])) for row in rows)
+        return tuple(
+            UnallocatedOccurrence(int(row[0]), int(row[1]), str(row[2])) for row in rows
+        )
 
     def is_indexed(self, offset: int, length: int) -> bool:
         """Return whether this exact range has been indexed."""
@@ -381,8 +387,7 @@ class UnallocatedIndexer:
         return digest.hexdigest()
 
     def _create_schema(self) -> None:
-        self._connection.executescript(
-            """
+        self._connection.executescript("""
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -406,11 +411,12 @@ class UnallocatedIndexer:
                 bits BLOB NOT NULL
             );
             CREATE INDEX IF NOT EXISTS occurrences_offset_idx ON occurrences(offset, length);
-            """
-        )
+            """)
 
     def _metadata_int(self, key: str) -> Optional[int]:
-        row = self._connection.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+        row = self._connection.execute(
+            "SELECT value FROM metadata WHERE key = ?", (key,)
+        ).fetchone()
         if row is None:
             return None
         try:
@@ -420,7 +426,9 @@ class UnallocatedIndexer:
         return value
 
     def _set_or_check_metadata(self, key: str, value: str) -> None:
-        row = self._connection.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+        row = self._connection.execute(
+            "SELECT value FROM metadata WHERE key = ?", (key,)
+        ).fetchone()
         if row is None:
             self._connection.execute(
                 "INSERT INTO metadata(key, value) VALUES (?, ?)", (key, value)
@@ -451,7 +459,9 @@ class UnallocatedIndexer:
             "SELECT chunk_id FROM chunks WHERE sha256 = ? AND length = ?",
             (digest, length),
         ).fetchone()
-        if row is None:  # pragma: no cover - defensive guard for a broken SQLite connection
+        if (
+            row is None
+        ):  # pragma: no cover - defensive guard for a broken SQLite connection
             raise sqlite3.DatabaseError("unable to create unallocated chunk")
         self._connection.execute(
             "INSERT INTO occurrences(chunk_id, offset, length) VALUES (?, ?, ?)",

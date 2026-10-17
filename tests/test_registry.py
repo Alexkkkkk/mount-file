@@ -62,16 +62,27 @@ class FakeAdapter:
 
 
 def test_identifies_supported_names_and_rejects_guesses(tmp_path):
-    assert registry.identify_registry_file(tmp_path / "SAM").kind is registry.RegistryFileType.SAM
+    assert (
+        registry.identify_registry_file(tmp_path / "SAM").kind
+        is registry.RegistryFileType.SAM
+    )
     assert registry.identify_registry_file("ntuser.dat").is_registry_hive
     usn = registry.identify_registry_file("$UsnJrnl")
     assert usn.kind is registry.RegistryFileType.USN_JOURNAL
     assert not usn.is_registry_hive
-    assert registry.identify_registry_file(b"not-a-hive").kind is registry.RegistryFileType.UNKNOWN
-    assert registry.identify_registry_file(b"regf-rest").kind is registry.RegistryFileType.GENERIC
+    assert (
+        registry.identify_registry_file(b"not-a-hive").kind
+        is registry.RegistryFileType.UNKNOWN
+    )
+    assert (
+        registry.identify_registry_file(b"regf-rest").kind
+        is registry.RegistryFileType.GENERIC
+    )
 
 
-def test_injected_adapter_iterates_structured_keys_and_values_without_optional_packages(tmp_path):
+def test_injected_adapter_iterates_structured_keys_and_values_without_optional_packages(
+    tmp_path,
+):
     source = tmp_path / "SOFTWARE"
     adapter = FakeAdapter()
 
@@ -81,9 +92,9 @@ def test_injected_adapter_iterates_structured_keys_and_values_without_optional_p
 
     assert adapter.opened == [source]
     assert [key.path for key in keys] == [r"\\ROOT", r"\\ROOT\\Software\\Run"]
-    assert [(value.key_path, value.name, value.value_type, value.data) for value in values] == [
-        (r"\\ROOT\\Software\\Run", "Example", "REG_SZ", "read-only")
-    ]
+    assert [
+        (value.key_path, value.name, value.value_type, value.data) for value in values
+    ] == [(r"\\ROOT\\Software\\Run", "Example", "REG_SZ", "read-only")]
     assert adapter.handle.closed is True
 
 
@@ -100,7 +111,9 @@ def test_missing_optional_backend_has_install_guidance(monkeypatch, tmp_path):
         "available_backends",
         lambda: {"python-registry": False, "regipy": False},
     )
-    with pytest.raises(registry.OptionalDependencyError, match="python-registry.*regipy"):
+    with pytest.raises(
+        registry.OptionalDependencyError, match="python-registry.*regipy"
+    ):
         registry.open_registry(tmp_path / "SYSTEM")
 
 
