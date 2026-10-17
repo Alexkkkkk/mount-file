@@ -42,6 +42,7 @@ TRACEBACK_2 = TRACEBACK.replace("ValueError", "KeyError")
 
 # ------------------------------------------------------------ sanitizing
 
+
 def test_sanitize_hides_home_and_user_paths():
     home = os.path.expanduser("~")
     text = "open failed: %s/data/dump.img" % home
@@ -69,6 +70,7 @@ def test_fingerprint_stable_and_sensitive():
 
 # ------------------------------------------------------------ report body
 
+
 def test_compose_report_marks_fingerprint():
     title, body = ow.compose_report(TRACEBACK, context="тест")
     assert title.startswith("OLMA Watch:")
@@ -77,6 +79,7 @@ def test_compose_report_marks_fingerprint():
 
 
 # ------------------------------------------------------------ settings/switch
+
 
 def test_disabled_by_default(monkeypatch):
     monkeypatch.delenv(ow.ENV_ENABLE, raising=False)
@@ -93,6 +96,7 @@ def test_env_override_forces_on(monkeypatch):
 
 
 # ------------------------------------------------------------ delivery
+
 
 def test_new_issue_created(monkeypatch):
     seen = {}
@@ -126,8 +130,7 @@ def test_duplicate_comments_instead_of_new_issue(monkeypatch):
             if created["number"] is None:
                 return 200, [], ""
             fp = ow.fingerprint(TRACEBACK)
-            return 200, [{"number": created["number"],
-                          "body": "olma-fp: %s" % fp}], ""
+            return 200, [{"number": created["number"], "body": "olma-fp: %s" % fp}], ""
         if url.endswith("/issues"):
             created["number"] = 7
             return 201, {"html_url": "https://github.com/o/r/issues/7"}, ""
@@ -170,8 +173,7 @@ def test_offline_report_is_queued_then_flushed(monkeypatch):
 
 
 def test_rate_limit(monkeypatch):
-    monkeypatch.setattr(ow, "_http_json",
-                        lambda *a, **k: (201, {"html_url": "u"}, ""))
+    monkeypatch.setattr(ow, "_http_json", lambda *a, **k: (201, {"html_url": "u"}, ""))
     monkeypatch.setattr(ow, "_ollama_analyze", lambda t: "")
     monkeypatch.setenv(ow.ENV_TOKEN, "test-token")
     monkeypatch.setenv(ow.ENV_ENABLE, "1")
@@ -193,10 +195,12 @@ def test_missing_token_is_reported_readably(monkeypatch):
 
 # ------------------------------------------------------------ no secrets
 
+
 def test_no_leaked_token_in_module_source():
     here = os.path.dirname(__file__)
-    src = open(os.path.join(here, "..", "mountfile", "olma_watch.py"),
-               encoding="utf-8").read()
+    src = open(
+        os.path.join(here, "..", "mountfile", "olma_watch.py"), encoding="utf-8"
+    ).read()
     # The real token leaked in chat must never appear in the code; the
     # _SECRET_RE pattern mentions the prefix only as a sanitizer rule.
     assert "github_pat_FAKE0000FAKE0000FAKE" not in src
