@@ -33,7 +33,10 @@ jobs:
   # JOB 1: Auto-Fix — исправление багов при падении CI
   # ============================================================
   auto-fix:
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' }}
+    if: >-
+      ${{ vars.ENABLE_AI_AUTOMATION == 'true' &&
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout failing ref

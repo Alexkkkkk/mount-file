@@ -27,8 +27,11 @@ jobs:
   # ============================================================
   agentic-triage:
     if: >
+      vars.ENABLE_AI_AUTOMATION == 'true' &&
+      (
       github.event_name == 'issues' && github.event.action == 'opened' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -68,6 +71,7 @@ jobs:
   # ============================================================
   self-heal:
     if: >
+      vars.ENABLE_AI_AUTOMATION == 'true' &&
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
@@ -187,12 +191,16 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Export traces to OpenTelemetry
-        uses: base14/scout-action@v1
-        with:
-          otlp_endpoint: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
-          otlp_headers: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
-          service_name: "${{ github.repository }}/${{ github.workflow }}"
+      - name: Record workflow observability summary
+        env:
+          OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+        run: |
+          echo "workflow=${GITHUB_WORKFLOW} run=${GITHUB_RUN_ID} sha=${GITHUB_SHA}"
+          if [ -n "$OTLP_ENDPOINT" ]; then
+            echo "::notice::OTLP endpoint configured; external scout exporter is disabled because the action is unavailable."
+          else
+            echo "OTLP endpoint is not configured; keeping observability local to GitHub Actions."
+          fi
 
   # ============================================================
   # КОНТУР 6: CLEANUP + ARTIFACTS
