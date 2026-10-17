@@ -346,20 +346,22 @@ def cmd_autopick(args):
         payload = {
             "image": args.image,
             "udev": args.udev,
-            "best": None
-            if best is None
-            else {
-                "offset": best.offset,
-                "offset_hex": "0x%08X" % best.offset,
-                "fstype": best.fstype,
-                "source": best.source,
-                "score": best.score,
-                "size": best.size,
-                "label": best.label,
-                "name": best.name,
-                "backend": best.backend,
-                "reasons": list(best.reasons),
-            },
+            "best": (
+                None
+                if best is None
+                else {
+                    "offset": best.offset,
+                    "offset_hex": "0x%08X" % best.offset,
+                    "fstype": best.fstype,
+                    "source": best.source,
+                    "score": best.score,
+                    "size": best.size,
+                    "label": best.label,
+                    "name": best.name,
+                    "backend": best.backend,
+                    "reasons": list(best.reasons),
+                }
+            ),
             "candidates": [
                 {
                     "offset": c.offset,

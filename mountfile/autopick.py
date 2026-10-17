@@ -328,9 +328,7 @@ def _volume_candidates(path, udev=None, scan_limit=DEFAULT_SCAN_LIMIT):
             from .rt809 import parse_udev
 
             for part in parse_udev(udev):
-                out.append(
-                    Candidate(part.offset, "raw", source="udev", name=part.name)
-                )
+                out.append(Candidate(part.offset, "raw", source="udev", name=part.name))
         except Exception:
             pass
     return out
@@ -384,7 +382,9 @@ def scan_candidates(
                 cand.add(12, "ФС подтверждена на смещении раздела")
             else:
                 cand.add(-6, "по началу раздела ФС не найдена")
-            cand.add(20 if cand.source == "partition" else 16, "смещение из %s" % cand.source)
+            cand.add(
+                20 if cand.source == "partition" else 16, "смещение из %s" % cand.source
+            )
             add(cand)
 
         # 3. глубокий поиск внутри разделов без валидной ФС
@@ -620,7 +620,9 @@ def find_udev_files(dump_path, max_files=200):
         return []
     for name in entries[:max_files]:
         full = os.path.join(folder, name)
-        if not os.path.isfile(full) or os.path.abspath(full) == os.path.abspath(dump_path):
+        if not os.path.isfile(full) or os.path.abspath(full) == os.path.abspath(
+            dump_path
+        ):
             continue
         low = name.lower()
         if "udev" in low:
