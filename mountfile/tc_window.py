@@ -2136,7 +2136,9 @@ class MainWindow(QMainWindow):
             return out
         for entry in entries:
             child = (
-                (path.rstrip("/") + "/" + entry["name"]) if path != "/" else "/" + entry["name"]
+                (path.rstrip("/") + "/" + entry["name"])
+                if path != "/"
+                else "/" + entry["name"]
             )
             r = (rel + "/" + entry["name"]) if rel else entry["name"]
             out.append((child, r, entry["is_dir"]))
