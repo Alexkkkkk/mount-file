@@ -108,10 +108,21 @@ def local_reader(path):
 
 
 def looks_textual(data):
-    """True when ``data`` contains no NUL and is mostly printable bytes."""
+    """True for UTF-8 text (any script) or mostly printable ASCII bytes.
+
+    A plain byte-class check alone misclassifies multi-byte UTF-8 (Cyrillic,
+    CJK): those bytes are outside ``_TEXT_OK`` and push the printable ratio
+    under the threshold, so a Russian text file went to the model as a hex
+    dump. A valid UTF-8 decode of the sniffed sample settles it first.
+    """
     sample = data[:SNIFF]
     if not sample or b"\x00" in sample:
         return False
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        pass
     good = sum(1 for b in sample if b in _TEXT_OK)
     return good / len(sample) >= 0.90
 
@@ -213,6 +224,23 @@ class NullBackend(AiBackend):
         )
 
 
+#: The default local Ollama address; the OpenAI backend must never inherit
+#: it silently (a /v1/chat/completions call against an Ollama server only
+#: produces a confusing error).
+OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
+
+
+def _openai_base_url(settings):
+    """Base URL for the OpenAI backend, never inheriting Ollama's default."""
+    url = (settings.get("ai_base_url_openai") or "").strip()
+    if url:
+        return url
+    generic = (settings.get("ai_base_url") or "").strip()
+    if generic and generic.rstrip("/") != OLLAMA_DEFAULT_URL:
+        return generic
+    return ""  # empty -> the backend's own default (https://api.openai.com)
+
+
 class OllamaBackend(AiBackend):
     """Local Ollama server (``POST /api/generate``)."""
 
@@ -220,7 +248,7 @@ class OllamaBackend(AiBackend):
     label = "Ollama (локально)"
 
     def __init__(
-        self, base_url="http://127.0.0.1:11434", model="llama3", timeout=DEFAULT_TIMEOUT
+        self, base_url=OLLAMA_DEFAULT_URL, model="llama3", timeout=DEFAULT_TIMEOUT
     ):
         self.base_url = (base_url or "http://127.0.0.1:11434").rstrip("/")
         self.model = model or "llama3"
@@ -357,7 +385,7 @@ BACKENDS = {
     "openai": (
         OpenAiCompatBackend.label,
         lambda s: OpenAiCompatBackend(
-            base_url=s.get("ai_base_url"),
+            base_url=_openai_base_url(s),
             model=s.get("ai_model"),
             api_key=s.get("ai_api_key"),
         ),

@@ -27,8 +27,9 @@ from __future__ import annotations
 QT6 = True
 try:  # pragma: no cover - depends on environment
     from PyQt6 import QtCore, QtGui, QtWidgets
-    from PyQt6.QtCore import (QAbstractItemModel, QEvent, QModelIndex, QSize,
-                              Qt, QThread, pyqtSignal, pyqtSlot)
+    from PyQt6.QtCore import (QAbstractItemModel, QEvent, QEventLoop,
+                              QModelIndex, QSize, Qt, QThread, QTimer,
+                              pyqtSignal, pyqtSlot)
     from PyQt6.QtGui import (QAction, QBrush, QColor, QFont, QFontDatabase,
                              QFontMetrics, QIcon, QKeySequence, QPainter,
                              QPalette, QPen)
@@ -47,8 +48,9 @@ except ImportError as _pyqt6_error:  # pragma: no cover
     QT6 = False
     try:
         from PyQt5 import QtCore, QtGui, QtWidgets
-        from PyQt5.QtCore import (QAbstractItemModel, QEvent, QModelIndex,
-                                  QSize, Qt, QThread, pyqtSignal, pyqtSlot)
+        from PyQt5.QtCore import (QAbstractItemModel, QEvent, QEventLoop,
+                                  QModelIndex, QSize, Qt, QThread, QTimer,
+                                  pyqtSignal, pyqtSlot)
         from PyQt5.QtGui import (QBrush, QColor, QFont, QFontDatabase,
                                  QFontMetrics, QIcon, QKeySequence, QPainter,
                                  QPalette, QPen)
