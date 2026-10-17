@@ -32,17 +32,15 @@ import datetime as _dt
 import hashlib
 import logging
 import os
-import platform
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 try:
     import pytsk3
@@ -86,7 +84,7 @@ class FSInfo:
 
 @dataclass
 class WriteOperation:
-    op: str             # write | mkdir | delete | rename
+    op: str  # write | mkdir | delete | rename
     path: str
     extra: dict = field(default_factory=dict)
     ts: str = ""
@@ -119,10 +117,14 @@ class RWJournal:
 
     def log(self, op: WriteOperation) -> None:
         import json
+
         body = {
-            "ts": op.ts, "image": str(self.image),
-            "op": op.op, "path": op.path,
-            "extra": op.extra, "prev": self._prev,
+            "ts": op.ts,
+            "image": str(self.image),
+            "op": op.op,
+            "path": op.path,
+            "extra": op.extra,
+            "prev": self._prev,
         }
         digest = hashlib.sha256(
             json.dumps(body, sort_keys=True, default=str).encode()
@@ -153,7 +155,7 @@ class ImageBackup:
     def _rotate(self) -> None:
         prefix = f"{self.image.name}."
         backups = sorted(self.dir.glob(f"{prefix}*.bak"))
-        for old in backups[:-self.keep]:
+        for old in backups[: -self.keep]:
             try:
                 old.unlink()
             except Exception:
@@ -275,24 +277,29 @@ class Fat32RW(RWBackend):
 
     def _parse_bpb(self) -> None:
         bs = self._read_at(0, 512)
-        if bs[510:512] != b"\x55\xAA":
+        if bs[510:512] != b"\x55\xaa":
             raise ValueError("not a FAT boot sector")
         self.bytes_per_sector = struct.unpack("<H", bs[11:13])[0]
         self.sectors_per_cluster = bs[13]
         self.reserved_sectors = struct.unpack("<H", bs[14:16])[0]
         self.num_fats = bs[16]
         self.root_entries = struct.unpack("<H", bs[17:19])[0]
-        self.total_sectors = (struct.unpack("<H", bs[19:21])[0]
-                              or struct.unpack("<I", bs[32:36])[0])
-        self.fat_size = (struct.unpack("<H", bs[22:24])[0]
-                         or struct.unpack("<I", bs[36:40])[0])
+        self.total_sectors = (
+            struct.unpack("<H", bs[19:21])[0] or struct.unpack("<I", bs[32:36])[0]
+        )
+        self.fat_size = (
+            struct.unpack("<H", bs[22:24])[0] or struct.unpack("<I", bs[36:40])[0]
+        )
 
-        root_secs = ((self.root_entries * 32 + self.bytes_per_sector - 1)
-                     // self.bytes_per_sector)
-        data_secs = (self.total_sectors
-                     - self.reserved_sectors
-                     - self.num_fats * self.fat_size
-                     - root_secs)
+        root_secs = (
+            self.root_entries * 32 + self.bytes_per_sector - 1
+        ) // self.bytes_per_sector
+        data_secs = (
+            self.total_sectors
+            - self.reserved_sectors
+            - self.num_fats * self.fat_size
+            - root_secs
+        )
         self.cluster_count = max(0, data_secs // self.sectors_per_cluster)
 
         if self.cluster_count < 4085:
@@ -304,10 +311,10 @@ class Fat32RW(RWBackend):
 
         self.cluster_size = self.bytes_per_sector * self.sectors_per_cluster
         self.fat_offset = self.reserved_sectors * self.bytes_per_sector
-        self.root_dir_offset = (self.reserved_sectors
-                                + self.num_fats * self.fat_size) * self.bytes_per_sector
-        self.data_start = (self.root_dir_offset
-                           + root_secs * self.bytes_per_sector)
+        self.root_dir_offset = (
+            self.reserved_sectors + self.num_fats * self.fat_size
+        ) * self.bytes_per_sector
+        self.data_start = self.root_dir_offset + root_secs * self.bytes_per_sector
 
         if self.fat_type == 32:
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
@@ -319,11 +326,14 @@ class Fat32RW(RWBackend):
     # ---- FAT ---------------------------------------------------------------
     def _fat_get(self, cluster: int) -> int:
         if self.fat_type == 32:
-            return struct.unpack("<I", self._read_at(
-                self.fat_offset + cluster * 4, 4))[0] & 0x0FFFFFFF
+            return (
+                struct.unpack("<I", self._read_at(self.fat_offset + cluster * 4, 4))[0]
+                & 0x0FFFFFFF
+            )
         if self.fat_type == 16:
-            return struct.unpack("<H", self._read_at(
-                self.fat_offset + cluster * 2, 2))[0]
+            return struct.unpack("<H", self._read_at(self.fat_offset + cluster * 2, 2))[
+                0
+            ]
         raw = self._read_at(self.fat_offset + (cluster * 3) // 2, 2)
         val = struct.unpack("<H", raw)[0]
         return (val >> 4) if (cluster & 1) else (val & 0x0FFF)
@@ -332,11 +342,13 @@ class Fat32RW(RWBackend):
         for i in range(self.num_fats):
             fat_base = self.fat_offset + i * self.fat_size * self.bytes_per_sector
             if self.fat_type == 32:
-                self._write_at(fat_base + cluster * 4,
-                               struct.pack("<I", value & 0x0FFFFFFF))
+                self._write_at(
+                    fat_base + cluster * 4, struct.pack("<I", value & 0x0FFFFFFF)
+                )
             elif self.fat_type == 16:
-                self._write_at(fat_base + cluster * 2,
-                               struct.pack("<H", value & 0xFFFF))
+                self._write_at(
+                    fat_base + cluster * 2, struct.pack("<H", value & 0xFFFF)
+                )
             else:
                 off = fat_base + (cluster * 3) // 2
                 old = struct.unpack("<H", self._read_at(off, 2))[0]
@@ -348,8 +360,7 @@ class Fat32RW(RWBackend):
 
     def _cluster_chain(self, start: int, max_n: int = 100_000) -> list[int]:
         chain, seen, cur = [], set(), start
-        while (2 <= cur < 0x0FFFFFF8 and cur not in seen
-               and len(chain) < max_n):
+        while 2 <= cur < 0x0FFFFFF8 and cur not in seen and len(chain) < max_n:
             chain.append(cur)
             seen.add(cur)
             cur = self._fat_get(cur)
@@ -368,8 +379,7 @@ class Fat32RW(RWBackend):
     def _read_chain(self, start: int, size: int | None = None) -> bytes:
         chain = self._cluster_chain(start)
         if not chain:
-            return self._read_at(self._cluster_offset(start),
-                                 size or self.cluster_size)
+            return self._read_at(self._cluster_offset(start), size or self.cluster_size)
         data = b"".join(self._read_cluster(c) for c in chain)
         return data[:size] if size is not None else data
 
@@ -405,7 +415,7 @@ class Fat32RW(RWBackend):
         if len(clusters) < full:
             raise RuntimeError("not enough clusters allocated")
         for i, c in enumerate(clusters[:full]):
-            chunk = data[i * self.cluster_size:(i + 1) * self.cluster_size]
+            chunk = data[i * self.cluster_size : (i + 1) * self.cluster_size]
             chunk = chunk.ljust(self.cluster_size, b"\x00")
             self._write_cluster(c, chunk)
 
@@ -413,8 +423,7 @@ class Fat32RW(RWBackend):
     def _read_dir_raw(self, cluster: int) -> bytes:
         if self.fat_type == 32 or cluster >= 2:
             return self._read_chain(cluster)
-        return self._read_at(self.root_dir_offset,
-                             self.root_entries * 32)
+        return self._read_at(self.root_dir_offset, self.root_entries * 32)
 
     def _write_dir_raw(self, cluster: int, data: bytes) -> None:
         if self.fat_type == 32 or cluster >= 2:
@@ -422,7 +431,7 @@ class Fat32RW(RWBackend):
             if not chain:
                 raise RuntimeError("empty dir chain")
             for i, c in enumerate(chain):
-                chunk = data[i * self.cluster_size:(i + 1) * self.cluster_size]
+                chunk = data[i * self.cluster_size : (i + 1) * self.cluster_size]
                 if not chunk:
                     break
                 chunk = chunk.ljust(self.cluster_size, b"\x00")
@@ -434,7 +443,7 @@ class Fat32RW(RWBackend):
         entries: list[FSEntry] = []
         lfn: list[str] = []
         for i in range(0, len(data) - 31, 32):
-            raw = data[i:i + 32]
+            raw = data[i : i + 32]
             first = raw[0]
             if first == 0x00:
                 break
@@ -444,7 +453,7 @@ class Fat32RW(RWBackend):
                 chunk = raw[1:11] + raw[14:26] + raw[28:32]
                 chars = []
                 for j in range(0, len(chunk), 2):
-                    c = struct.unpack("<H", chunk[j:j+2])[0]
+                    c = struct.unpack("<H", chunk[j : j + 2])[0]
                     if c in (0, 0xFFFF):
                         break
                     chars.append(chr(c))
@@ -478,17 +487,26 @@ class Fat32RW(RWBackend):
             if date:
                 try:
                     mtime = _dt.datetime(
-                        1980 + ((date >> 9) & 0x7F), (date >> 5) & 0x0F,
-                        date & 0x1F, (tm >> 11) & 0x1F, (tm >> 5) & 0x3F,
+                        1980 + ((date >> 9) & 0x7F),
+                        (date >> 5) & 0x0F,
+                        date & 0x1F,
+                        (tm >> 11) & 0x1F,
+                        (tm >> 5) & 0x3F,
                         (tm & 0x1F) * 2,
                     ).timestamp()
                 except ValueError:
                     pass
-            entries.append(FSEntry(
-                name=name, path=base.rstrip("/") + "/" + name,
-                size=size, is_dir=is_dir, inode=cluster,
-                deleted=deleted, mtime=mtime,
-            ))
+            entries.append(
+                FSEntry(
+                    name=name,
+                    path=base.rstrip("/") + "/" + name,
+                    size=size,
+                    is_dir=is_dir,
+                    inode=cluster,
+                    deleted=deleted,
+                    mtime=mtime,
+                )
+            )
         return entries
 
     def _find_entry_slot(self, data: bytes, need_entries: int) -> int | None:
@@ -510,13 +528,14 @@ class Fat32RW(RWBackend):
                 start = None
         return None
 
-    def _build_dir_entry(self, name: str, cluster: int,
-                        size: int, is_dir: bool) -> bytes:
+    def _build_dir_entry(
+        self, name: str, cluster: int, size: int, is_dir: bool
+    ) -> bytes:
         short = self._short_name(name)
-        attr = (self.ATTR_DIR if is_dir else 0x20)
+        attr = self.ATTR_DIR if is_dir else 0x20
         now = _dt.datetime.now()
-        tm = ((now.hour << 11) | (now.minute << 5) | (now.second // 2))
-        date = (((now.year - 1980) << 9) | (now.month << 5) | now.day)
+        tm = (now.hour << 11) | (now.minute << 5) | (now.second // 2)
+        date = ((now.year - 1980) << 9) | (now.month << 5) | now.day
         entry = bytearray(32)
         entry[0:8] = short[0].ljust(8)
         entry[8:11] = short[1].ljust(3)
@@ -542,7 +561,7 @@ class Fat32RW(RWBackend):
         return base.encode("cp437"), ext.encode("cp437")
 
     def _lfn_entries(self, name: str, short_check: bytes) -> bytes:
-        chunks = [name[i:i + 13] for i in range(0, len(name), 13)]
+        chunks = [name[i : i + 13] for i in range(0, len(name), 13)]
         out = b""
         for i, chunk in enumerate(reversed(chunks)):
             seq = len(chunks) - i
@@ -554,18 +573,22 @@ class Fat32RW(RWBackend):
             encoded = b""
             for ch in chars:
                 encoded += struct.pack("<H", ord(ch) if ch != "\x00" else 0x0000)
-            encoded = encoded.ljust(26, b"\xFF\xFF")
+            encoded = encoded.ljust(26, b"\xff\xff")
             entry[1:11] = encoded[0:10]
             entry[14:26] = encoded[10:22]
             entry[28:32] = encoded[22:26]
             out += bytes(entry)
         return out
 
-    def _create_in_dir(self, dir_cluster: int, name: str,
-                      cluster: int, size: int, is_dir: bool) -> None:
+    def _create_in_dir(
+        self, dir_cluster: int, name: str, cluster: int, size: int, is_dir: bool
+    ) -> None:
         data = bytearray(self._read_dir_raw(dir_cluster))
-        need_lfn = (len(name) > 12 or any(c in name for c in " .") and
-                    not self._is_83_name(name))
+        need_lfn = (
+            len(name) > 12
+            or any(c in name for c in " .")
+            and not self._is_83_name(name)
+        )
         lfn_count = (len(name) + 12) // 13 if need_lfn else 0
         need = lfn_count + 1
         slot = self._find_entry_slot(bytes(data), need)
@@ -573,11 +596,12 @@ class Fat32RW(RWBackend):
             raise RuntimeError(f"no free dir slot for {name}")
         short = self._short_name(name)
         if need_lfn:
-            data[slot:slot + lfn_count * 32] = self._lfn_entries(
+            data[slot : slot + lfn_count * 32] = self._lfn_entries(
                 name, short[0] + short[1]
             )
-        data[slot + lfn_count * 32:slot + (lfn_count + 1) * 32] = \
+        data[slot + lfn_count * 32 : slot + (lfn_count + 1) * 32] = (
             self._build_dir_entry(name, cluster, size, is_dir)
+        )
         self._write_dir_raw(dir_cluster, bytes(data))
 
     @staticmethod
@@ -586,9 +610,12 @@ class Fat32RW(RWBackend):
             base, ext = name.rsplit(".", 1)
         else:
             base, ext = name, ""
-        return (len(base) <= 8 and len(ext) <= 3
-                and base.upper() == base
-                and all(c.isalnum() or c == "_" for c in base + ext))
+        return (
+            len(base) <= 8
+            and len(ext) <= 3
+            and base.upper() == base
+            and all(c.isalnum() or c == "_" for c in base + ext)
+        )
 
     def _walk_to(self, path: str) -> tuple[int, str]:
         """Return (dir_cluster, basename) for the parent of `path`."""
@@ -614,10 +641,12 @@ class Fat32RW(RWBackend):
     # ---- public API -------------------------------------------------------
     def info(self) -> FSInfo:
         return FSInfo(
-            fs_type=f"fat{self.fat_type}", offset=self.offset,
+            fs_type=f"fat{self.fat_type}",
+            offset=self.offset,
             backend="native-fat-rw",
             total_size=self.total_sectors * self.bytes_per_sector,
-            writable=True, write_strategy="native",
+            writable=True,
+            write_strategy="native",
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
@@ -625,8 +654,7 @@ class Fat32RW(RWBackend):
             if self.fat_type == 32:
                 data = self._read_chain(self.root_cluster)
             else:
-                data = self._read_at(self.root_dir_offset,
-                                     self.root_entries * 32)
+                data = self._read_at(self.root_dir_offset, self.root_entries * 32)
             return self._parse_dir_raw(data, "/")
         try:
             parent_cluster, name = self._walk_to(path)
@@ -681,16 +709,15 @@ class Fat32RW(RWBackend):
                 if clusters:
                     struct.pack_into("<H", buf, idx + 26, clusters[0] & 0xFFFF)
                     if self.fat_type == 32:
-                        struct.pack_into("<H", buf, idx + 20,
-                                       (clusters[0] >> 16) & 0xFFFF)
+                        struct.pack_into(
+                            "<H", buf, idx + 20, (clusters[0] >> 16) & 0xFFFF
+                        )
                 self._write_dir_raw(parent_cluster, bytes(buf))
         else:
             first_cluster = clusters[0] if clusters else 0
-            self._create_in_dir(parent_cluster, name, first_cluster,
-                              len(data), False)
+            self._create_in_dir(parent_cluster, name, first_cluster, len(data), False)
 
-    def _find_entry_index(self, raw: bytes, entry: FSEntry,
-                        base: str) -> int | None:
+    def _find_entry_index(self, raw: bytes, entry: FSEntry, base: str) -> int | None:
         lfn: list[str] = []
         for i in range(0, len(raw) - 31, 32):
             first = raw[i]
@@ -698,10 +725,12 @@ class Fat32RW(RWBackend):
             if first == 0x00:
                 break
             if attr == 0x0F:
-                chunk = raw[i + 1:i + 11] + raw[i + 14:i + 26] + raw[i + 28:i + 32]
+                chunk = (
+                    raw[i + 1 : i + 11] + raw[i + 14 : i + 26] + raw[i + 28 : i + 32]
+                )
                 chars = []
                 for j in range(0, len(chunk), 2):
-                    c = struct.unpack("<H", chunk[j:j + 2])[0]
+                    c = struct.unpack("<H", chunk[j : j + 2])[0]
                     if c in (0, 0xFFFF):
                         break
                     chars.append(chr(c))
@@ -711,8 +740,8 @@ class Fat32RW(RWBackend):
                 name = "".join(lfn)
                 lfn = []
             else:
-                n = raw[i:i + 8].rstrip(b" ")
-                ext = raw[i + 8:i + 11].rstrip(b" ")
+                n = raw[i : i + 8].rstrip(b" ")
+                ext = raw[i + 8 : i + 11].rstrip(b" ")
                 name = n.decode("cp437", "replace")
                 if ext:
                     name += "." + ext.decode("cp437", "replace")
@@ -748,8 +777,7 @@ class Fat32RW(RWBackend):
         if not entry:
             raise FileNotFoundError(path)
         if entry.is_dir:
-            sub = self._parse_dir_raw(self._read_dir_raw(entry.inode),
-                                     entry.path)
+            sub = self._parse_dir_raw(self._read_dir_raw(entry.inode), entry.path)
             if sub and not recursive:
                 raise IsADirectoryError("use recursive=True")
             if recursive:
@@ -785,8 +813,9 @@ class Fat32RW(RWBackend):
         if entry.is_dir:
             self._create_in_dir(parent_cluster, dst_name, entry.inode, 0, True)
         else:
-            self._create_in_dir(parent_cluster, dst_name, entry.inode,
-                              entry.size, False)
+            self._create_in_dir(
+                parent_cluster, dst_name, entry.inode, entry.size, False
+            )
 
 
 # =============================================================================
@@ -805,15 +834,16 @@ class Ext234RW(RWBackend):
 
     def _check_ext(self) -> None:
         sb = self._read_at(1024, 1024)
-        if sb[56:58] != b"\x53\xEF":
+        if sb[56:58] != b"\x53\xef":
             raise ValueError("not an ext superblock")
         self.feature_incompat = struct.unpack("<I", sb[96:100])[0]
         self.feature_compat = struct.unpack("<I", sb[92:96])[0]
         self.label = sb[120:136].rstrip(b"\x00").decode("utf-8", "replace")
         self.blocks_count = struct.unpack("<I", sb[4:8])[0]
         self.block_size = 1024 << struct.unpack("<I", sb[24:28])[0]
-        self.is_ext4 = bool(self.feature_incompat & 0x40
-                            or self.feature_incompat & 0x80)
+        self.is_ext4 = bool(
+            self.feature_incompat & 0x40 or self.feature_incompat & 0x80
+        )
         self.is_ext3 = (self.feature_compat & 0x4) and not self.is_ext4
         self._tmp: Path | None = None
 
@@ -855,13 +885,15 @@ class Ext234RW(RWBackend):
 
     # ---- public API -------------------------------------------------------
     def info(self) -> FSInfo:
-        name = ("ext4" if self.is_ext4
-                else "ext3" if self.is_ext3 else "ext2")
+        name = "ext4" if self.is_ext4 else "ext3" if self.is_ext3 else "ext2"
         return FSInfo(
-            fs_type=name, offset=self.offset, backend="debugfs-rw",
+            fs_type=name,
+            offset=self.offset,
+            backend="debugfs-rw",
             label=self.label,
             total_size=self.blocks_count * self.block_size,
-            writable=True, write_strategy="debugfs",
+            writable=True,
+            write_strategy="debugfs",
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
@@ -887,12 +919,16 @@ class Ext234RW(RWBackend):
                 size = int(parts[4])
             except (ValueError, IndexError):
                 size = 0
-            entries.append(FSEntry(
-                name=name,
-                path=path.rstrip("/") + "/" + name,
-                size=size, is_dir=is_dir, inode=inode,
-                mode=mode,
-            ))
+            entries.append(
+                FSEntry(
+                    name=name,
+                    path=path.rstrip("/") + "/" + name,
+                    size=size,
+                    is_dir=is_dir,
+                    inode=inode,
+                    mode=mode,
+                )
+            )
         return entries
 
     def read(self, path: str) -> bytes:
@@ -964,7 +1000,9 @@ class NtfsRW(RWBackend):
 
     def info(self) -> FSInfo:
         return FSInfo(
-            fs_type="ntfs", offset=self.offset, backend="ntfs-3g-rw",
+            fs_type="ntfs",
+            offset=self.offset,
+            backend="ntfs-3g-rw",
             total_size=self.image.stat().st_size,
             writable=sys.platform.startswith("linux"),
             write_strategy="ntfs-3g",
@@ -980,15 +1018,17 @@ class NtfsRW(RWBackend):
             meta = e.info.meta
             if meta is None:
                 continue
-            entries.append(FSEntry(
-                name=name_b.decode("utf-8", "replace"),
-                path=path.rstrip("/") + "/" + name_b.decode(),
-                size=meta.size,
-                is_dir=(meta.type == pytsk3.TSK_FS_META_TYPE_DIR),
-                inode=meta.addr,
-                deleted=bool(meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC),
-                mtime=float(meta.mtime) if meta.mtime else None,
-            ))
+            entries.append(
+                FSEntry(
+                    name=name_b.decode("utf-8", "replace"),
+                    path=path.rstrip("/") + "/" + name_b.decode(),
+                    size=meta.size,
+                    is_dir=(meta.type == pytsk3.TSK_FS_META_TYPE_DIR),
+                    inode=meta.addr,
+                    deleted=bool(meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC),
+                    mtime=float(meta.mtime) if meta.mtime else None,
+                )
+            )
         return entries
 
     def read(self, path: str) -> bytes:
@@ -1007,11 +1047,13 @@ class NtfsRW(RWBackend):
             dst = mp / path.lstrip("/")
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
+
         self._do_mounted(_do)
 
     def mkdir(self, path: str) -> None:
-        self._do_mounted(lambda mp: (mp / path.lstrip("/")).mkdir(
-            parents=True, exist_ok=True))
+        self._do_mounted(
+            lambda mp: (mp / path.lstrip("/")).mkdir(parents=True, exist_ok=True)
+        )
 
     def delete(self, path: str, recursive: bool = False) -> None:
         def _do(mp: Path):
@@ -1020,11 +1062,11 @@ class NtfsRW(RWBackend):
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
                 p.unlink()
+
         self._do_mounted(_do)
 
     def rename(self, src: str, dst: str) -> None:
-        self._do_mounted(
-            lambda mp: (mp / src.lstrip("/")).rename(mp / dst.lstrip("/")))
+        self._do_mounted(lambda mp: (mp / src.lstrip("/")).rename(mp / dst.lstrip("/")))
 
 
 # =============================================================================
@@ -1043,11 +1085,9 @@ class LoopMountRW(RWBackend):
         mp = Path(tempfile.mkdtemp(prefix="mnt_"))
         opts = f"loop,offset={self.offset},rw"
         if self.fs_type in ("vfat", "fat", "fat32", "exfat"):
-            cmd = ["mount", "-t", self.fs_type, "-o", opts,
-                   str(self.image), str(mp)]
+            cmd = ["mount", "-t", self.fs_type, "-o", opts, str(self.image), str(mp)]
         else:
-            cmd = ["mount", "-t", self.fs_type, "-o", opts,
-                   str(self.image), str(mp)]
+            cmd = ["mount", "-t", self.fs_type, "-o", opts, str(self.image), str(mp)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError(f"mount failed: {r.stderr}")
@@ -1066,7 +1106,8 @@ class LoopMountRW(RWBackend):
 
     def info(self) -> FSInfo:
         return FSInfo(
-            fs_type=self.fs_type, offset=self.offset,
+            fs_type=self.fs_type,
+            offset=self.offset,
             backend="loop-mount-rw",
             total_size=self.image.stat().st_size,
             writable=sys.platform.startswith(("linux", "darwin")),
@@ -1081,21 +1122,24 @@ class LoopMountRW(RWBackend):
             entries: list[FSEntry] = []
             for child in p.iterdir():
                 st = child.stat()
-                entries.append(FSEntry(
-                    name=child.name,
-                    path=path.rstrip("/") + "/" + child.name,
-                    size=st.st_size, is_dir=child.is_dir(),
-                    mtime=st.st_mtime,
-                ))
+                entries.append(
+                    FSEntry(
+                        name=child.name,
+                        path=path.rstrip("/") + "/" + child.name,
+                        size=st.st_size,
+                        is_dir=child.is_dir(),
+                        mtime=st.st_mtime,
+                    )
+                )
             return entries
+
         result: list[FSEntry] = []
         self._do(lambda mp: result.extend(_do(mp)))
         return result
 
     def read(self, path: str) -> bytes:
         result: list[bytes] = []
-        self._do(lambda mp: result.append(
-            (mp / path.lstrip("/")).read_bytes()))
+        self._do(lambda mp: result.append((mp / path.lstrip("/")).read_bytes()))
         return result[0]
 
     def write_file(self, path: str, data: bytes) -> None:
@@ -1111,11 +1155,11 @@ class LoopMountRW(RWBackend):
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
                 p.unlink()
+
         self._do(_do)
 
     def rename(self, src: str, dst: str) -> None:
-        self._do(lambda mp: (mp / src.lstrip("/")).rename(
-            mp / dst.lstrip("/")))
+        self._do(lambda mp: (mp / src.lstrip("/")).rename(mp / dst.lstrip("/")))
 
 
 # =============================================================================
@@ -1143,9 +1187,12 @@ class RebuildRW(RWBackend):
     def info(self) -> FSInfo:
         info = self.reader.info()
         return FSInfo(
-            fs_type=info.fs_type, offset=self.offset,
-            backend="rebuild-rw", label=info.label,
-            total_size=info.total_size, writable=True,
+            fs_type=info.fs_type,
+            offset=self.offset,
+            backend="rebuild-rw",
+            label=info.label,
+            total_size=info.total_size,
+            writable=True,
             write_strategy="rebuild",
         )
 
@@ -1181,7 +1228,9 @@ class RebuildRW(RWBackend):
             if not mkfs:
                 raise RuntimeError(f"no mkfs for {self.fs_type}")
             r = subprocess.run(
-                mkfs + [str(new_img)], capture_output=True, text=True,
+                mkfs + [str(new_img)],
+                capture_output=True,
+                text=True,
             )
             if r.returncode != 0:
                 raise RuntimeError(f"mkfs failed: {r.stderr}")
@@ -1195,7 +1244,8 @@ class RebuildRW(RWBackend):
         try:
             r = subprocess.run(
                 ["mount", "-o", "loop", str(image), str(mp)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             if r.returncode != 0:
                 raise RuntimeError(f"mount failed: {r.stderr}")
@@ -1212,15 +1262,16 @@ class RebuildRW(RWBackend):
 
     def write_file(self, path: str, data: bytes) -> None:
         target = path
+
         def _do(stage: Path):
             dst = stage / target.lstrip("/")
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
+
         self._rebuild_with(_do)
 
     def mkdir(self, path: str) -> None:
-        self._rebuild_with(
-            lambda stage: (stage / path.lstrip("/")).mkdir(parents=True))
+        self._rebuild_with(lambda stage: (stage / path.lstrip("/")).mkdir(parents=True))
 
     def delete(self, path: str, recursive: bool = False) -> None:
         def _do(stage: Path):
@@ -1229,12 +1280,13 @@ class RebuildRW(RWBackend):
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
                 p.unlink()
+
         self._rebuild_with(_do)
 
     def rename(self, src: str, dst: str) -> None:
         self._rebuild_with(
-            lambda stage: (stage / src.lstrip("/")).rename(
-                stage / dst.lstrip("/")))
+            lambda stage: (stage / src.lstrip("/")).rename(stage / dst.lstrip("/"))
+        )
 
 
 # =============================================================================
@@ -1250,8 +1302,9 @@ class UniversalFSRW:
     ...     fs.flush()   # fsck + audit
     """
 
-    def __init__(self, image: Path, offset: int | None = None,
-                 auto_backup: bool = True):
+    def __init__(
+        self, image: Path, offset: int | None = None, auto_backup: bool = True
+    ):
         self.image = Path(image)
         self.offset = offset
         self.backend: RWBackend | None = None
@@ -1262,9 +1315,8 @@ class UniversalFSRW:
         self._open()
 
     def _open(self) -> None:
-        from mountfile.universal_fs import (
-            Fat32Backend, Ext234Backend, Autopick, UniversalFS,
-        )
+        from mountfile.universal_fs import UniversalFS
+
         if self.offset is not None:
             candidates = [Fat32RW, Ext234RW, NtfsRW]
             for cls in candidates:
@@ -1277,8 +1329,7 @@ class UniversalFSRW:
             # fallback: loop-mount
             try:
                 base = UniversalFS(self.image, self.offset)
-                self.backend = LoopMountRW(
-                    self.image, self.offset, base.info().fs_type)
+                self.backend = LoopMountRW(self.image, self.offset, base.info().fs_type)
                 base.close()
                 return
             except Exception:
@@ -1373,13 +1424,15 @@ class UniversalFSRW:
         if fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
             r = subprocess.run(
                 ["e2fsck", "-f", "-y", str(self.image)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
         elif fs_type.startswith("fat") and shutil.which("fsck.fat"):
             r = subprocess.run(
                 ["fsck.fat", "-a", str(self.image)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
         if hasattr(os, "sync"):
