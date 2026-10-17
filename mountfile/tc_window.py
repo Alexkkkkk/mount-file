@@ -1594,6 +1594,9 @@ class MainWindow(QMainWindow):
                 lambda: self._auto_pick(quiet=False),
             )
         )
+        m_tool.addAction(
+            self._action("Сводка образа и тома…", self.show_image_info)
+        )
         m_tool.addSeparator()
         m_tool.addAction(self._action("Декодировать дамп RT809…", self.tool_decode))
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
@@ -1819,6 +1822,45 @@ class MainWindow(QMainWindow):
     def open_repo(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file")
 
+    def show_image_info(self):
+        """Display the GUI equivalent of the CLI ``info``/``volumes`` commands."""
+        if not self.image_path:
+            QMessageBox.information(self, "Сводка образа", "Сначала откройте образ (Ctrl+O).")
+            return
+        try:
+            size = os.path.getsize(self.image_path)
+            parts = list_partitions(self.image_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Сводка образа", "Не удалось прочитать образ:\n%s" % exc)
+            return
+        lines = [
+            "Файл: %s" % self.image_path,
+            "Размер: %s (%d байт)" % (tc_style.fmt_kb(size), size),
+            "Томов найдено: %d" % len(parts),
+            "",
+        ]
+        if parts:
+            for part in parts:
+                lines.append(
+                    "%d. %s | offset 0x%X | %s MB | LBA %d"
+                    % (part.index, part.name, part.offset, part.size_mb, part.start_lba)
+                )
+        else:
+            lines.append("Таблица разделов не найдена — доступен целый образ (offset 0).")
+        lines.extend(["", "Открытые панели:"])
+        for panel in self.panels.values():
+            if panel.mode == "img":
+                lines.append(
+                    "%s: offset 0x%X, путь %s, запись %s"
+                    % (
+                        panel.side,
+                        panel.volume_offset,
+                        panel.path,
+                        "доступна" if panel.writer is not None else "только чтение",
+                    )
+                )
+        QMessageBox.information(self, "Сводка образа и тома", "\n".join(lines))
+
     # ------------------------------------------------------ rt809 tools
     # ------------------------------------------------------- auto pick
     def _find_udev(self):
@@ -1972,6 +2014,32 @@ class MainWindow(QMainWindow):
 
     def _unsupported(self, what):
         self.log_msg("%s: не поддерживается в этой сборке" % what)
+
+    def _backup_before_write(self, panel):
+        """Offer the CLI-equivalent ``--backup`` safeguard for GUI writes."""
+        if panel.mode != "img" or not self.image_path:
+            return True
+        backup = self.image_path + ".bak"
+        answer = QMessageBox.question(
+            self,
+            "Резервная копия образа",
+            "Перед записью создать резервную копию?\n\n%s" % backup,
+            MB_Yes | MB_No,
+            MB_Yes,
+        )
+        if answer != MB_Yes:
+            return True
+        try:
+            shutil.copy2(self.image_path, backup)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Резервная копия не создана",
+                "Операция отменена, образ не изменён:\n%s" % exc,
+            )
+            return False
+        self.log_msg("Резервная копия создана: %s" % backup)
+        return True
 
     def _mask(self, on):
         p = self.active_panel()
@@ -2424,6 +2492,8 @@ class MainWindow(QMainWindow):
         )
         if ret != MB_Yes:
             return
+        if not self._backup_before_write(other):
+            return
         counter = {"files": 0, "dirs": 0}
         for e in entries:
             src = panel.join(e["name"])
@@ -2485,6 +2555,8 @@ class MainWindow(QMainWindow):
             if p.mode == "img":
                 if p.writer is None:
                     raise RuntimeError("том открыт только для чтения")
+                if not self._backup_before_write(p):
+                    return
                 p.writer.mkdir(p.path, name)
             else:
                 os.mkdir(p.join(name))
@@ -2527,6 +2599,8 @@ class MainWindow(QMainWindow):
             return
         try:
             if p.mode == "img":
+                if not self._backup_before_write(p):
+                    return
                 p.writer.rename(p.join(entry["name"]), new_name)
             else:
                 os.rename(p.join(entry["name"]), p.join(new_name))
