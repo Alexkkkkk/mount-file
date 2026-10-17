@@ -305,6 +305,13 @@ def main():
         _install_olma_runtime()
         win = MainWindow()
         win.show()
+        # OLMA Watch: слежение за ошибками (opt-in) - после QApplication
+        # и до первого взаимодействия пользователя с окном.
+        try:
+            from mountfile import olma_watch
+            olma_watch.install(qt_app=app, log=getattr(win, "log_msg", None))
+        except Exception:
+            traceback.print_exc()
         if argv and not argv[0].startswith("-"):
             win.open_image(argv[0])
         sys.exit(exec_app(app))
