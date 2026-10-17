@@ -36,13 +36,14 @@ import os
 import shutil
 import webbrowser
 
-from . import autopick, tc_style
+from . import ai, autopick, tc_style
 from .hexview import HexView
 from .partition import list_partitions
 from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
                         ComboAdjustToContents, CtrlModifier, DescendingOrder,
-                        DialogAccepted, DlgCancel, DlgOk, ElideMiddle,
-                        HVC_Interactive, ItemIsEnabled, ItemIsSelectable,
+                        DialogAccepted, DlgActionRole, DlgCancel, DlgClose,
+                        DlgOk, EchoPassword, ElideMiddle, HVC_Interactive,
+                        ItemIsEnabled, ItemIsSelectable,
                         Key_A, Key_Backspace, Key_Delete, Key_Enter,
                         Key_Insert, Key_Return, Key_Space, Key_Tab, MB_No,
                         MB_Yes, NoEditTriggers, QAction, QApplication, QBrush,
@@ -52,8 +53,8 @@ from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
                         QLineEdit, QMainWindow, QMenu, QMessageBox,
                         QPlainTextEdit, QProgressBar, QPushButton, QSize,
                         QSpinBox, QSplitter, QTabBar, QTableWidget,
-                        QTableWidgetItem, QToolBar, QToolButton, QVBoxLayout,
-                        QWidget, SelectRows, SizePolicyExpanding,
+                        QTableWidgetItem, QTextEdit, QToolBar, QToolButton,
+                        QVBoxLayout, QWidget, SelectRows, SizePolicyExpanding,
                         SizePolicyFixed, Stretch, TableExtendedSelection,
                         TB_IconOnly, TB_InstantPopup, exec_dialog,
                         standard_icon)
@@ -78,6 +79,9 @@ MIN_SECTION_WIDTH = 40
 #: The Имя column never goes below this, the other columns give up width first.
 NAME_MIN_WIDTH = 150
 
+#: How many bytes the F3 viewer shows, and the chunk one AI read pulls.
+PREVIEW_LIMIT = 1 << 20
+
 #: One-line reminder of the panel keys, shown under an empty panel.
 PANEL_LEGEND = (
     "Enter — открыть, Backspace — вверх, Space — отметить, "
@@ -96,6 +100,13 @@ FKEYS = (
 )
 
 IMAGE_FILTER = "Образы дисков (*.img *.bin *.raw *.dump *.dd);;" "Все файлы (*)"
+
+#: Filter of the «AI → файл с диска» picker: any file first, images after.
+AI_FILE_FILTER = (
+    "Все файлы (*);;"
+    "Образы дисков (*.img *.bin *.raw *.dump *.dd);;"
+    "Текстовые файлы (*.txt *.log *.json *.csv *.xml)"
+)
 
 
 def local_drives():
@@ -825,6 +836,167 @@ class TcPanel(QWidget):
             self.win.f3_view()
 
 
+class AiDialog(QDialog):
+    """Кнопка «AI»: добавить файл для анализа и показать ответ модели.
+
+    Источником может быть файл, выбранный в активной панели (в том числе
+    внутри образа), либо произвольный файл на диске. Оба читаются через
+    :func:`mountfile.ai.collect`, поэтому усечение видно прямо в интерфейсе,
+    а результат одинаков для образа и локального диска. Ключ API в журнал
+    не попадает - в журнал идёт только имя файла, бэкенд и итог.
+    """
+
+    def __init__(self, parent, panel, log=None):
+        super().__init__(parent)
+        self.panel = panel
+        self.log = log or (lambda msg: None)
+        self.setWindowTitle("AI — анализ файла")
+        self.resize(780, 560)
+        self._entry = None
+        self._mode = None
+        self._path = None
+        self._size = 0
+
+        lay = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.lbl_source = QLabel("Файл не выбран")
+        top.addWidget(self.lbl_source, 1)
+        btn_disk = QPushButton("Файл с диска…")
+        btn_disk.clicked.connect(self.pick_file)
+        top.addWidget(btn_disk)
+        btn_panel = QPushButton("Из активной панели")
+        btn_panel.clicked.connect(self.use_panel)
+        top.addWidget(btn_panel)
+        lay.addLayout(top)
+
+        self.lbl_info = QLabel("")
+        lay.addWidget(self.lbl_info)
+
+        self.ed_prompt = QLineEdit()
+        self.ed_prompt.setPlaceholderText("Что спросить у модели (необязательно)")
+        lay.addWidget(self.ed_prompt)
+
+        self.txt = QTextEdit()
+        self.txt.setReadOnly(True)
+        lay.addWidget(self.txt, 1)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 0)
+        self.bar.hide()
+        lay.addWidget(self.bar)
+
+        buttons = QDialogButtonBox()
+        self.btn_run = buttons.addButton("Анализировать", DlgActionRole)
+        self.btn_run.clicked.connect(self.run_analysis)
+        buttons.addButton(DlgClose)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+        # Активная панель - источник по умолчанию: чаще всего анализируют
+        # именно файл, на котором стоит курсор.
+        self.use_panel()
+
+    # ---------------------------------------------------------- источник
+    def use_panel(self):
+        """Взять файл, выбранный в активной панели (может быть в образе)."""
+        entry = self.panel.selected_entry()
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            self.lbl_source.setText("В активной панели файл не выбран")
+            return
+        self._entry = entry
+        self._mode = self.panel.mode
+        self._path = None
+        self._size = int(entry.get("size") or 0)
+        self.lbl_source.setText(
+            "Из панели: %s (%s)" % (entry["name"], tc_style.fmt_size(self._size))
+        )
+        self.lbl_info.setText("")
+
+    def pick_file(self):
+        """Взять произвольный файл с диска."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Файл для анализа", "", AI_FILE_FILTER
+        )
+        if not path:
+            return
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = 0
+        self._entry = None
+        self._mode = None
+        self._path = path
+        self._size = size
+        self.lbl_source.setText(
+            "С диска: %s (%s)" % (os.path.basename(path), tc_style.fmt_size(size))
+        )
+        self.lbl_info.setText("")
+
+    def _name(self):
+        if self._entry is not None:
+            return self._entry["name"]
+        return os.path.basename(self._path or "")
+
+    def _reader(self):
+        """``reader(offset, length)`` - одинаковый для образа и для диска."""
+        if self._entry is not None:
+            full = self.panel.join(self._entry["name"])
+            if self._mode == "img":
+                provider = self.panel.provider
+                return lambda off, ln: provider.read_file_range(full, off, ln)
+            return ai.local_reader(full)
+        return ai.local_reader(self._path)
+
+    # ------------------------------------------------------------ анализ
+    def run_analysis(self):
+        """Прочитать файл чанками и отдать его выбранному бэкенду."""
+        if self._entry is None and not self._path:
+            QMessageBox.information(self, "AI", "Сначала выберите файл для анализа.")
+            return
+        settings = tc_style.SETTINGS
+        backend = ai.build_backend(settings)
+        limit = ai.max_bytes(settings)
+        name = self._name()
+        self.bar.show()
+        self.btn_run.setEnabled(False)
+        try:
+            data, truncated = ai.collect(self._reader(), max_bytes=limit)
+            result = backend.analyze(
+                name,
+                data,
+                prompt=self.ed_prompt.text().strip() or None,
+                truncated=truncated,
+                size=self._size,
+            )
+        except Exception as e:
+            result = ai.AiResult(ok=False, backend=backend.name, error=str(e))
+        finally:
+            self.bar.hide()
+            self.btn_run.setEnabled(True)
+        self._show(name, result)
+
+    def _show(self, name, result):
+        """Результат в поле диалога + одна строка в журнал окна."""
+        head = "Файл: %s\nРазмер: %s байт · прочитано: %d байт%s\nБэкенд: %s" % (
+            name,
+            tc_style.fmt_size(self._size),
+            result.bytes_read or 0,
+            " · данные усечены" if result.truncated else "",
+            result.backend,
+        )
+        if result.model:
+            head += " (%s)" % result.model
+        if result.ok:
+            self.txt.setPlainText(head + "\n\n" + result.text)
+            self.log("AI-анализ: %s — готово (%s)" % (name, result.backend))
+        else:
+            self.txt.setPlainText(head + "\n\nОшибка: " + result.error)
+            self.log(
+                "AI-анализ: %s — ошибка: %s"
+                % (name, result.error.splitlines()[0] if result.error else "?")
+            )
+
+
 class SettingsDialog(QDialog):
     """Конфигурация → Настройки: theme, font size, log visibility."""
 
@@ -845,6 +1017,25 @@ class SettingsDialog(QDialog):
         self.chk_log = QCheckBox("Показывать журнал внизу окна")
         self.chk_log.setChecked(bool(tc_style.SETTINGS["show_log"]))
         lay.addRow("", self.chk_log)
+        # --- AI: бэкенд анализа для кнопки «AI» (ключ не пишется в журнал)
+        self.cmb_ai = QComboBox()
+        for key, (label, _factory) in sorted(ai.BACKENDS.items()):
+            self.cmb_ai.addItem(label, key)
+        idx = self.cmb_ai.findData(tc_style.SETTINGS.get("ai_backend") or "none")
+        self.cmb_ai.setCurrentIndex(max(0, idx))
+        lay.addRow("AI-бэкенд:", self.cmb_ai)
+        self.ed_ai_url = QLineEdit(str(tc_style.SETTINGS.get("ai_base_url") or ""))
+        lay.addRow("Адрес сервера:", self.ed_ai_url)
+        self.ed_ai_model = QLineEdit(str(tc_style.SETTINGS.get("ai_model") or ""))
+        lay.addRow("Модель:", self.ed_ai_model)
+        self.ed_ai_key = QLineEdit(str(tc_style.SETTINGS.get("ai_api_key") or ""))
+        self.ed_ai_key.setEchoMode(EchoPassword)
+        lay.addRow("Ключ API:", self.ed_ai_key)
+        self.spn_ai_bytes = QSpinBox()
+        self.spn_ai_bytes.setRange(4, 65536)
+        self.spn_ai_bytes.setSuffix(" Кб")
+        self.spn_ai_bytes.setValue(int(tc_style.SETTINGS.get("ai_max_bytes") or 262144) // 1024)
+        lay.addRow("Читать до:", self.spn_ai_bytes)
         buttons = QDialogButtonBox(DlgOk | DlgCancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -1133,6 +1324,15 @@ class MainWindow(QMainWindow):
                 "О программе (F1)",
             )
         )
+        # Кнопка AI — последняя на панели, сразу за «Справкой».
+        self.act_ai = self._action(
+            "AI",
+            self.ai_analyze,
+            "Ctrl+I",
+            "SP_ComputerIcon",
+            "AI: добавить файл для анализа (Ctrl+I)",
+        )
+        tb.addAction(self.act_ai)
 
         act_menu = QAction(self)
         act_menu.setShortcut(QKeySequence("F9"))
@@ -1270,6 +1470,8 @@ class MainWindow(QMainWindow):
         m_tool.addSeparator()
         m_tool.addAction(self._action("Декодировать дамп RT809…", self.tool_decode))
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
+        m_tool.addSeparator()
+        m_tool.addAction(self.act_ai)
 
         m_net = mb.addMenu("Сеть")
         m_net.addAction(
@@ -1368,6 +1570,11 @@ class MainWindow(QMainWindow):
             return
         tc_style.SETTINGS["font_size"] = int(dlg.spn_font.value())
         tc_style.SETTINGS["show_log"] = bool(dlg.chk_log.isChecked())
+        tc_style.SETTINGS["ai_backend"] = dlg.cmb_ai.currentData() or "none"
+        tc_style.SETTINGS["ai_base_url"] = dlg.ed_ai_url.text().strip()
+        tc_style.SETTINGS["ai_model"] = dlg.ed_ai_model.text().strip()
+        tc_style.SETTINGS["ai_api_key"] = dlg.ed_ai_key.text().strip()
+        tc_style.SETTINGS["ai_max_bytes"] = int(dlg.spn_ai_bytes.value()) * 1024
         self.dock.setVisible(bool(dlg.chk_log.isChecked()))
         tc_style.save_settings()
         self._apply_theme(dlg.cmb_theme.currentData() or tc_style.theme())
@@ -1389,6 +1596,16 @@ class MainWindow(QMainWindow):
             "Обновления: %s"
             % (app_version(), "выключены" if updates_disabled() else "при старте"),
         )
+
+    def ai_analyze(self):
+        """«AI»: диалог анализа файла из панели или с диска.
+
+        Диалог модальный: анализ синхронный, поэтому кнопка «Анализировать»
+        блокируется и показывается полоса хода, чтобы окно не выглядело
+        зависшим. Результат диалог сам кладёт в журнал через ``log_msg``.
+        """
+        dlg = AiDialog(self, self.active_panel(), log=self.log_msg)
+        exec_dialog(dlg)
 
     def open_releases(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file/releases/latest")
@@ -1824,10 +2041,10 @@ class MainWindow(QMainWindow):
         try:
             full = p.join(entry["name"])
             if p.mode == "img":
-                data = p.provider.read_file_range(full, 0, 1 << 20)
+                data = p.provider.read_file_range(full, 0, PREVIEW_LIMIT)
             else:
                 with open(full, "rb") as f:
-                    data = f.read(1 << 20)
+                    data = f.read(PREVIEW_LIMIT)
         except Exception as e:
             QMessageBox.critical(self, "Просмотр", str(e))
             return

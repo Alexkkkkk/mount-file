@@ -6,6 +6,19 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- Кнопка «AI» на панели инструментов: диалог добавляет файл для анализа —
+  выбранный в активной панели (в том числе **внутри образа**) или с диска —
+  и показывает ответ модели; результат дублируется строкой в журнал окна.
+  Новый слой `mountfile/ai/` (без Qt и без сети на импорте): `OllamaBackend`,
+  `OpenAiCompatBackend`, `NullBackend` с понятным сообщением, чтение файла
+  чанками через `collect()` с признаком усечения. В `qt_compat` добавлены
+  `QTextEdit`, `DlgClose`, `DlgActionRole`, `EchoPassword`; настройки
+  (`ai_backend`, `ai_base_url`, `ai_model`, `ai_api_key`, `ai_max_bytes`) —
+  в диалоге «Настройки», ключ вводится как пароль и в журнал не пишется.
+  Лимит чтения F3 вынесен в `PREVIEW_LIMIT`. Тесты — `tests/test_ai_backend.py`,
+  `tests/test_ai_ui.py`, дополнен `tests/test_tc_ui.py` (кнопка AI в тулбаре
+  и в меню «Инструменты»).
+
 - Обновление программы: индикатор хода в строке состояния окна — этапы (скачивание → контрольная сумма → установка) текстом и полоса прогресса скачивания (проценты по Content-Length, режим «занят», если размер неизвестен; скрывается по завершении/ошибке). Исправлено падение `AttributeError` при подключении сигнала прогресса установщика: сигналы `progress`/`stage`/`failed` подняты на `StartupUpdater` (`mountfile/updater.py`), постоянные виджеты статуса — `MainWindow._build_update_status()` (`mountfile/tc_window.py`), `QProgressBar` добавлен в `mountfile/qt_compat.py`. Тесты — `tests/test_updater.py`.
 
 - Добавлен самостоятельный одностраничный инструмент `mountfile.py`: монтирование образов (`GUI` на PyQt6 + `CLI`), палитра команд `Ctrl+K`, значок в лотке, перетаскивание файлов, темы system/light/dark; атомарная запись состояния, ротация журналов, отчёт о падении, единственный экземпляр приложения. Платформенные механизмы: `udisksctl`/`mount -o loop` (Linux), `hdiutil` (macOS), `Mount-DiskImage` (Windows). Тесты — `tests/test_mountfile_standalone.py`, цель `make test-standalone`.

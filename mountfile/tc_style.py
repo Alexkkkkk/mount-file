@@ -90,6 +90,13 @@ SETTINGS = {
     "theme": "dark",
     "font_size": 9,
     "show_log": False,
+    # AI analysis (the «AI» toolbar button). The API key lives here but is
+    # never written to the log, the report or the repository.
+    "ai_backend": "none",
+    "ai_base_url": "http://127.0.0.1:11434",
+    "ai_model": "",
+    "ai_api_key": "",
+    "ai_max_bytes": 262144,
 }
 
 _FAMILY = []
@@ -331,6 +338,13 @@ def load_settings():
     for key in ("theme", "font_size", "show_log"):
         if key in data:
             SETTINGS[key] = data[key]
+    for key in ("ai_backend", "ai_base_url", "ai_model", "ai_api_key"):
+        if key in data:
+            SETTINGS[key] = str(data[key] or "")
+    try:
+        SETTINGS["ai_max_bytes"] = int(SETTINGS["ai_max_bytes"])
+    except (TypeError, ValueError):
+        SETTINGS["ai_max_bytes"] = 262144
     if SETTINGS["theme"] not in THEMES:
         SETTINGS["theme"] = "dark"
     try:
@@ -338,6 +352,7 @@ def load_settings():
     except (TypeError, ValueError):
         SETTINGS["font_size"] = 9
     SETTINGS["show_log"] = bool(SETTINGS["show_log"])
+    SETTINGS["ai_max_bytes"] = max(4096, min(SETTINGS["ai_max_bytes"], 64 << 20))
     return dict(SETTINGS)
 
 

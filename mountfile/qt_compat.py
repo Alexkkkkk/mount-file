@@ -41,8 +41,8 @@ try:  # pragma: no cover - depends on environment
                                  QPlainTextEdit, QProgressBar, QPushButton,
                                  QSizePolicy, QSpinBox, QSplitter, QStyle,
                                  QTabBar, QTableWidget, QTableWidgetItem,
-                                 QTabWidget, QToolBar, QToolButton, QTreeView,
-                                 QVBoxLayout, QWidget)
+                                 QTabWidget, QTextEdit, QToolBar, QToolButton,
+                                 QTreeView, QVBoxLayout, QWidget)
 except ImportError as _pyqt6_error:  # pragma: no cover
     QT6 = False
     try:
@@ -62,8 +62,9 @@ except ImportError as _pyqt6_error:  # pragma: no cover
                                      QPlainTextEdit, QProgressBar, QPushButton,
                                      QSizePolicy, QSpinBox, QSplitter, QStyle,
                                      QTabBar, QTableWidget, QTableWidgetItem,
-                                     QTabWidget, QToolBar, QToolButton,
-                                     QTreeView, QVBoxLayout, QWidget)
+                                     QTabWidget, QTextEdit, QToolBar,
+                                     QToolButton, QTreeView, QVBoxLayout,
+                                     QWidget)
     except ImportError as _pyqt5_error:
         raise ImportError(
             "no usable Qt bindings: PyQt6 -> %s; PyQt5 -> %s"
@@ -122,6 +123,9 @@ if QT6:  # pragma: no branch
     ComboAdjustToContents = QComboBox.SizeAdjustPolicy.AdjustToContents
     DlgOk = QDialogButtonBox.StandardButton.Ok
     DlgCancel = QDialogButtonBox.StandardButton.Cancel
+    DlgClose = QDialogButtonBox.StandardButton.Close
+    DlgActionRole = QDialogButtonBox.ButtonRole.ActionRole
+    EchoPassword = QLineEdit.EchoMode.Password
     DialogAccepted = QDialog.DialogCode.Accepted
     TB_IconOnly = Qt.ToolButtonStyle.ToolButtonIconOnly
     TB_TextBesideIcon = Qt.ToolButtonStyle.ToolButtonTextBesideIcon
@@ -189,6 +193,9 @@ else:  # pragma: no cover - PyQt5 / Windows 7
     ComboAdjustToContents = QComboBox.AdjustToContents
     DlgOk = QDialogButtonBox.Ok
     DlgCancel = QDialogButtonBox.Cancel
+    DlgClose = QDialogButtonBox.Close
+    DlgActionRole = QDialogButtonBox.ActionRole
+    EchoPassword = QLineEdit.Password
     DialogAccepted = QDialog.Accepted
     TB_IconOnly = Qt.ToolButtonIconOnly
     TB_TextBesideIcon = Qt.ToolButtonTextBesideIcon
@@ -334,6 +341,7 @@ __all__ = [
     "QTableWidget",
     "QTableWidgetItem",
     "QTabWidget",
+    "QTextEdit",
     "QToolBar",
     "QToolButton",
     "QTreeView",
@@ -388,6 +396,9 @@ __all__ = [
     "ComboAdjustToContents",
     "DlgOk",
     "DlgCancel",
+    "DlgClose",
+    "DlgActionRole",
+    "EchoPassword",
     "DialogAccepted",
     "TB_IconOnly",
     "TB_TextBesideIcon",
