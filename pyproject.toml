@@ -81,3 +81,9 @@ prerelease = false
 # а не перезаписывает его целиком.
 changelog_file = "CHANGELOG.md"
 mode = "update"
+
+[tool.ruff.lint.per-file-ignores]
+# Re-export layer: these imports *are* the public API of the module.
+# ruff --fix (autofix workflow) must never strip them again - the
+# OLMA rewrite did exactly that and broke every GUI import in CI.
+"mountfile/qt_compat.py" = ["F401"]

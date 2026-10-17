@@ -1,5 +1,5 @@
 # MOUNTFILE_FIX — OLMA package
-"""OLMA — Object-Level Memory Analysis & Access.
+"""OLMA — Object-Level Memory Analysis & Access + self-learning.
 
 Единая точка входа:
     from mountfile.olma import olma
@@ -8,18 +8,37 @@
     olma.fix(dry_run=True)        # автоисправление
     olma.report(fmt="html")       # отчёт
     olma.trace_stats()            # статистика runtime-трассировки
+    olma.learn()                  # цикл самообучения
 """
 
 from __future__ import annotations
 
 from .analyzer import Issue, OlmaAnalyzer
 from .cli import olma_main
-from .core import (FAT32_BAD, FAT32_EOC_MIN, FAT32_MAX_CLUSTER, SECTOR,
-                   OlmaBoundsError, OlmaBuffer, OlmaChain, OlmaCluster,
-                   OlmaError, OlmaHandle, OlmaIntegrityError, OlmaPartition,
-                   OlmaPartitionTable, OlmaStateError, OlmaTransaction,
-                   OlmaView, OlmaXorDecoder, safe_download, verify_sha256)
+from .core import (
+    FAT32_BAD,
+    FAT32_EOC_MIN,
+    FAT32_MAX_CLUSTER,
+    SECTOR,
+    OlmaBoundsError,
+    OlmaBuffer,
+    OlmaChain,
+    OlmaCluster,
+    OlmaError,
+    OlmaHandle,
+    OlmaIntegrityError,
+    OlmaPartition,
+    OlmaPartitionTable,
+    OlmaStateError,
+    OlmaTransaction,
+    OlmaView,
+    OlmaXorDecoder,
+    safe_download,
+    verify_sha256,
+)
 from .fixer import FixResult, OlmaFixer
+from .github import GhResult, OlmaGitHub, OlmaGitHubError, from_env
+from .learn import OlmaKnowledgeBase, OlmaLearner
 from .reporter import OlmaReporter
 from .rules import RULES, Rule, Severity
 from .runtime import OlmaRuntime, RuntimeEvent
@@ -31,6 +50,7 @@ class Olma:
     def __init__(self) -> None:
         self._runtime: OlmaRuntime | None = None
         self._analyzer: OlmaAnalyzer | None = None
+        self._learner: OlmaLearner | None = None
 
     # --- runtime ---
     def install(self, *, trace_files: bool = True, trace_memory: bool = False) -> None:
@@ -83,6 +103,50 @@ class Olma:
         rep = OlmaReporter(issues, self.trace_stats())
         return rep.render(fmt=fmt, out=out)
 
+    # --- self-learning ---
+    def learner(self, root: str | None = None) -> OlmaLearner:
+        if self._learner is None:
+            from pathlib import Path
+
+            base = Path(root) if root else Path(__file__).resolve().parents[1]
+            self._learner = OlmaLearner(base)
+        return self._learner
+
+    def learn(self, root: str | None = None, *, smoke_ok: bool = True) -> None:
+        issues = self.analyze(root)
+        fixes = self.fix(dry_run=True, root=root)
+        self.learner(root).learn(issues, fixes, smoke_ok=smoke_ok)
+
+    def suggest(self, issue, root: str | None = None) -> list:
+        return self.learner(root).suggest(issue)
+
+    # --- github publishing ---
+    def publish_issue(
+        self, *, repo: str | None = None, dry_run: bool = True, root: str | None = None
+    ) -> GhResult:
+        from .github import from_env
+
+        issues = self.analyze(root)
+        gh = from_env(repo, dry_run=dry_run)
+        return gh.publish_analysis(issues, self.trace_stats())
+
+    def publish_pr(
+        self, *, repo: str | None = None, dry_run: bool = True, root: str | None = None
+    ) -> GhResult:
+        from pathlib import Path
+
+        from .github import from_env
+
+        fixes = [r for r in self.fix(dry_run=False, root=root) if r.applied]
+        base = Path(root) if root else Path(__file__).resolve().parents[1]
+        changes: dict[str, bytes] = {}
+        for r in fixes:
+            p = base / r.file
+            if p.exists() and r.file not in changes:
+                changes[r.file] = p.read_bytes()
+        gh = from_env(repo, dry_run=dry_run)
+        return gh.publish_fixes_pr(fixes, changes)
+
 
 olma = Olma()
 
@@ -103,9 +167,16 @@ __all__ = [
     "OlmaTransaction",
     "OlmaXorDecoder",
     "OlmaRuntime",
+    "RuntimeEvent",
     "OlmaAnalyzer",
     "OlmaFixer",
     "OlmaReporter",
+    "OlmaLearner",
+    "OlmaKnowledgeBase",
+    "OlmaGitHub",
+    "OlmaGitHubError",
+    "GhResult",
+    "from_env",
     "Issue",
     "Rule",
     "Severity",

@@ -58,10 +58,15 @@ def _mf_diag() -> int:
     print(f"  python:   {_sys.version.split()[0]}")
     print(f"  platform: {platform.platform()}")
     print(f"  version:  {_v}")
+    if _v != "unknown":
+        print(f"  mountfile package: OK (v{_v})")
+    else:
+        print("  mountfile package: FAIL")
     try:
         from mountfile import qt_compat
 
         print(f"  qt:       {qt_compat.QT_VERSION}")
+        print(f"  qt_compat: OK (QT6={qt_compat.QT6})")
     except Exception as e:
         print(f"  qt:       NOT AVAILABLE ({e!r})")
     try:
