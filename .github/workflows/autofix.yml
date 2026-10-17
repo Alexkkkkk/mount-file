@@ -10,7 +10,10 @@ name: autofix
 # auto-merge then waits for the checks and squash-merges it.
 #
 # Loop protection: the merge commit message contains "autofix" and the
-# job refuses to run on such commits.
+# job refuses to run on such commits. The workflow is opt-in because the
+# formatter's collections.abc rewrite is not Python 3.8-compatible.
+# Enable it only after validating the formatter configuration with the
+# repository variable ENABLE_AUTOFIX=true.
 
 on:
   push:
@@ -25,7 +28,8 @@ jobs:
   autofix:
     runs-on: ubuntu-latest
     if: >-
-      ${{ !startsWith(github.event.head_commit.message || '', 'chore: autofix') }}
+      ${{ vars.ENABLE_AUTOFIX == 'true' &&
+          !startsWith(github.event.head_commit.message || '', 'chore: autofix') }}
     steps:
       - uses: actions/checkout@v7
 
