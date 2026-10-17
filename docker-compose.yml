@@ -1,0 +1,31 @@
+# Example usage:
+#   mkdir -p evidence output
+#   docker compose run --rm mountfile info /evidence/dump.img
+# The default command is a safe configuration smoke check; override it with a
+# supported mountfile CLI command as shown above.
+# Keep evidence read-only. For a write command, first work on a copy and
+# intentionally change only that bind mount to read_only: false.
+services:
+  mountfile:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_FORENSIC_TOOLS: "${INSTALL_FORENSIC_TOOLS:-0}"
+    image: mountfile:local
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    volumes:
+      - type: bind
+        source: ./evidence
+        target: /evidence
+        read_only: true
+      - type: bind
+        source: ./output
+        target: /output
+    command: ["--version"]

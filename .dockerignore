@@ -1,0 +1,14 @@
+# Send only the Docker metadata and the runtime Python package. This keeps
+# local evidence, tests, docs, GUI scripts, and development caches out of the
+# build context. Do not add a broad binary-file rule: the bundled data files in
+# mountfile/data/ are runtime package data for the RT809 decoder.
+**
+!Dockerfile
+!.dockerignore
+!docker-compose.yml
+!mountfile/
+!mountfile/**
+
+# Re-apply common generated-file exclusions after re-including the package.
+mountfile/**/__pycache__/
+mountfile/**/*.py[cod]
