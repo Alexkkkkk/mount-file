@@ -32,7 +32,9 @@ concurrency:
 jobs:
   self-heal:
     # Только если основной workflow упал
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    if: >-
+      ${{ vars.ENABLE_AI_AUTOMATION == 'true' &&
+          github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
 
     steps:
