@@ -174,7 +174,9 @@ def cmd_ls(args):
     except (Fat32Error, TskError) as e:
         # A missing directory is an expected, user-level error: report it as a
         # one-line message (exit code 1) instead of a raw TSK backtrace.
-        print("error: cannot list '%s': %s" % (_abs_path(args.path), e), file=sys.stderr)
+        print(
+            "error: cannot list '%s': %s" % (_abs_path(args.path), e), file=sys.stderr
+        )
         return ERROR
     finally:
         if hasattr(provider, "close"):

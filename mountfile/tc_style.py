@@ -324,7 +324,7 @@ SETTINGS_PATH = os.path.join(
 def load_settings():
     """Read theme/font/log switches; a missing or broken file is ignored."""
     try:
-        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return dict(SETTINGS)
