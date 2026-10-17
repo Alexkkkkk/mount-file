@@ -17,13 +17,8 @@ import struct
 
 # --- MOUNTFILE_FIX: OLMA FAT32 helpers -------------------------------------
 try:
-    from mountfile.olma.core import (
-        FAT32_BAD,
-        FAT32_EOC_MIN,
-        FAT32_MAX_CLUSTER,
-        OlmaChain,
-        OlmaCluster,
-    )
+    from mountfile.olma.core import (FAT32_BAD, FAT32_EOC_MIN,
+                                     FAT32_MAX_CLUSTER, OlmaChain, OlmaCluster)
 except Exception:
     OlmaChain = None
 
