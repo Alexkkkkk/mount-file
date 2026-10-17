@@ -332,9 +332,9 @@ class OlmaPartitionTable:
             if self._buf.slice(off, 16) == b"\x00" * 16:
                 continue
             f = int.from_bytes(self._buf.slice(off + 32, 8), "little")
-            l = int.from_bytes(self._buf.slice(off + 40, 8), "little")
-            if l >= f:
-                self._parts.append(OlmaPartition(i, f, l - f + 1, 0, ""))
+            last = int.from_bytes(self._buf.slice(off + 40, 8), "little")
+            if last >= f:
+                self._parts.append(OlmaPartition(i, f, last - f + 1, 0, ""))
 
 
 class OlmaTransaction:

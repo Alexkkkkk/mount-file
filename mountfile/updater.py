@@ -163,11 +163,11 @@ def parse_version(text):
 
 def is_newer(remote, local):
     """Числовое сравнение версий: (1,10,0) > (1,9,9), (1,2) == (1,2,0)."""
-    r, l = parse_version(remote), parse_version(local)
-    size = max(len(r), len(l))
+    r, loc = parse_version(remote), parse_version(local)
+    size = max(len(r), len(loc))
     r = r + (0,) * (size - len(r))
-    l = l + (0,) * (size - len(l))
-    return r > l
+    loc = loc + (0,) * (size - len(loc))
+    return r > loc
 
 
 def _short(exc):
