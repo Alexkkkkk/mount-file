@@ -166,7 +166,7 @@ def test_max_bytes_is_clamped():
     assert max_bytes({}) > 0
     assert max_bytes({"ai_max_bytes": "nonsense"}) > 0
     assert max_bytes({"ai_max_bytes": 1}) >= 4096
-    assert max_bytes({"ai_max_bytes": 10 ** 12}) <= 64 * 1024 * 1024
+    assert max_bytes({"ai_max_bytes": 10**12}) <= 64 * 1024 * 1024
 
 
 def test_result_to_dict_has_no_api_key_field():

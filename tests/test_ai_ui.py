@@ -36,11 +36,13 @@ class FakeProvider:
     """A two-file image: README.TXT plus one binary blob."""
 
     def __init__(self):
-        self.blobs = {"/README.TXT": b"Mount File demo image\n" * 8,
-                      "/blob.bin": bytes(range(256)) * 4}
+        self.blobs = {
+            "/README.TXT": b"Mount File demo image\n" * 8,
+            "/blob.bin": bytes(range(256)) * 4,
+        }
 
     def read_file_range(self, path, offset=0, length=1 << 20):
-        return self.blobs.get(path, b"")[offset:offset + length]
+        return self.blobs.get(path, b"")[offset : offset + length]
 
 
 class FakePanel:
@@ -87,8 +89,9 @@ def test_ai_entry_duplicated_in_tools_menu(win):
     """Пункт-дубль в меню «Инструменты» — то же самое действие act_ai."""
     titles = [m.title() for m in win.menuBar().findChildren(QMenu)]
     assert "Инструменты" in titles, titles
-    tools = next(m for m in win.menuBar().findChildren(QMenu)
-                 if m.title() == "Инструменты")
+    tools = next(
+        m for m in win.menuBar().findChildren(QMenu) if m.title() == "Инструменты"
+    )
     assert win.act_ai in tools.actions(), "нет пункта AI в меню Инструменты"
 
 
@@ -138,9 +141,17 @@ def test_dialog_without_any_file_does_nothing(app):
 def test_result_is_rendered_with_backend_and_truncation(app):
     panel = FakePanel(entry={"name": "blob.bin", "is_dir": False, "size": 2048})
     dlg = AiDialog(None, panel, log=lambda m: None)
-    dlg._show("blob.bin", AiResult(ok=True, backend="ollama", model="llama3",
-                                   text="это дамп", bytes_read=2048,
-                                   truncated=True))
+    dlg._show(
+        "blob.bin",
+        AiResult(
+            ok=True,
+            backend="ollama",
+            model="llama3",
+            text="это дамп",
+            bytes_read=2048,
+            truncated=True,
+        ),
+    )
     text = dlg.txt.toPlainText()
     assert "это дамп" in text
     assert "данные усечены" in text
@@ -151,7 +162,9 @@ def test_result_is_rendered_with_backend_and_truncation(app):
 def test_dialog_shows_error_text_on_failure(app):
     panel = FakePanel(entry={"name": "blob.bin", "is_dir": False, "size": 4})
     dlg = AiDialog(None, panel, log=lambda m: None)
-    dlg._show("blob.bin", AiResult(ok=False, backend="openai",
-                                   error="Нет соединения: refused"))
+    dlg._show(
+        "blob.bin",
+        AiResult(ok=False, backend="openai", error="Нет соединения: refused"),
+    )
     assert "Нет соединения" in dlg.txt.toPlainText()
     dlg.deleteLater()

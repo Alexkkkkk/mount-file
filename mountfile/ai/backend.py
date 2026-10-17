@@ -76,6 +76,7 @@ class AiResult:
 # Reading the file
 # --------------------------------------------------------------------------- #
 
+
 def collect(reader, max_bytes=DEFAULT_MAX_BYTES, chunk=CHUNK):
     """Read up to ``max_bytes`` through ``reader(offset, length)``.
 
@@ -129,7 +130,7 @@ def summarize_bytes(name, data, truncated=False, size=None):
     lines = []
     view = data[:HEX_PREVIEW]
     for off in range(0, len(view), 16):
-        row = view[off:off + 16]
+        row = view[off : off + 16]
         hexpart = " ".join("%02X" % b for b in row)
         ascii_part = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in row)
         lines.append("%08X  %-47s  %s" % (off, hexpart, ascii_part))
@@ -177,6 +178,7 @@ def _post_json(url, payload, headers=None, timeout=DEFAULT_TIMEOUT):
 # Backends
 # --------------------------------------------------------------------------- #
 
+
 class AiBackend:
     """Base class: one backend answers one ``analyze`` call."""
 
@@ -217,8 +219,9 @@ class OllamaBackend(AiBackend):
     name = "ollama"
     label = "Ollama (локально)"
 
-    def __init__(self, base_url="http://127.0.0.1:11434", model="llama3",
-                 timeout=DEFAULT_TIMEOUT):
+    def __init__(
+        self, base_url="http://127.0.0.1:11434", model="llama3", timeout=DEFAULT_TIMEOUT
+    ):
         self.base_url = (base_url or "http://127.0.0.1:11434").rstrip("/")
         self.model = model or "llama3"
         self.timeout = timeout
@@ -277,8 +280,13 @@ class OpenAiCompatBackend(AiBackend):
     name = "openai"
     label = "OpenAI-совместимый эндпоинт"
 
-    def __init__(self, base_url="https://api.openai.com", model="gpt-4o-mini",
-                 api_key="", timeout=DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        base_url="https://api.openai.com",
+        model="gpt-4o-mini",
+        api_key="",
+        timeout=DEFAULT_TIMEOUT,
+    ):
         self.base_url = (base_url or "https://api.openai.com").rstrip("/")
         self.model = model or "gpt-4o-mini"
         self.api_key = api_key or ""
@@ -342,12 +350,18 @@ class OpenAiCompatBackend(AiBackend):
 #: Registry of the selectable backends: key -> (label, factory).
 BACKENDS = {
     "none": (NullBackend.label, lambda s: NullBackend()),
-    "ollama": (OllamaBackend.label, lambda s: OllamaBackend(
-        base_url=s.get("ai_base_url"), model=s.get("ai_model"))),
-    "openai": (OpenAiCompatBackend.label, lambda s: OpenAiCompatBackend(
-        base_url=s.get("ai_base_url"),
-        model=s.get("ai_model"),
-        api_key=s.get("ai_api_key"))),
+    "ollama": (
+        OllamaBackend.label,
+        lambda s: OllamaBackend(base_url=s.get("ai_base_url"), model=s.get("ai_model")),
+    ),
+    "openai": (
+        OpenAiCompatBackend.label,
+        lambda s: OpenAiCompatBackend(
+            base_url=s.get("ai_base_url"),
+            model=s.get("ai_model"),
+            api_key=s.get("ai_api_key"),
+        ),
+    ),
 }
 
 
