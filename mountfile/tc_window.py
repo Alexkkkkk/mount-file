@@ -34,6 +34,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import shutil
+import threading
 import webbrowser
 
 from . import ai, autopick, tc_style
@@ -48,10 +49,12 @@ from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
                         Key_Space, Key_Tab, MB_No, MB_Yes, NoEditTriggers,
                         QAction, QApplication, QBrush, QCheckBox, QComboBox,
                         QDialog, QDialogButtonBox, QDockWidget,
-                        QEvent_KeyPress, QFileDialog, QFormLayout, QHBoxLayout,
+                        QEventLoop, QEvent_KeyPress, QFileDialog, QFormLayout,
+                        QHBoxLayout,
                         QInputDialog, QKeySequence, QLabel, QLineEdit,
                         QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-                        QProgressBar, QPushButton, QSize, QSpinBox, QSplitter,
+                        QProgressBar, QPushButton, QSize, QTimer, QSpinBox,
+                        QSplitter,
                         QTabBar, QTableWidget, QTableWidgetItem, QTextEdit,
                         QToolBar, QToolButton, QVBoxLayout, QWidget,
                         SelectRows, SizePolicyExpanding, SizePolicyFixed,
@@ -948,7 +951,12 @@ class AiDialog(QDialog):
 
     # ------------------------------------------------------------ анализ
     def run_analysis(self):
-        """Прочитать файл чанками и отдать его выбранному бэкенду."""
+        """Прочитать файл чанками и отдать его выбранному бэкенду.
+
+        Сеть живёт в рабочем потоке, а диалог крутит локальный цикл
+        событий: окно остаётся отзывчивым, но метод возвращается только
+        после готовности результата (синхронная семантика для тестов).
+        """
         if self._entry is None and not self._path:
             QMessageBox.information(self, "AI", "Сначала выберите файл для анализа.")
             return
@@ -956,22 +964,48 @@ class AiDialog(QDialog):
         backend = ai.build_backend(settings)
         limit = ai.max_bytes(settings)
         name = self._name()
+        prompt = self.ed_prompt.text().strip() or None
+        box = []
+
+        def worker():
+            try:
+                data, truncated = ai.collect(self._reader(), max_bytes=limit)
+                result = backend.analyze(
+                    name,
+                    data,
+                    prompt=prompt,
+                    truncated=truncated,
+                    size=self._size,
+                )
+            except Exception as e:
+                result = ai.AiResult(ok=False, backend=backend.name, error=str(e))
+            box.append(result)
+
         self.bar.show()
         self.btn_run.setEnabled(False)
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        # Локальный цикл событий вместо блокировки GUI-потока: запрос к
+        # бэкенду может занять до минуты таймаута, окно не должно «замерзать».
+        loop = QEventLoop()
+        timer = QTimer(self)
+        timer.setInterval(50)
+        timer.timeout.connect(lambda: None if t.is_alive() else loop.quit())
+        timer.start()
         try:
-            data, truncated = ai.collect(self._reader(), max_bytes=limit)
-            result = backend.analyze(
-                name,
-                data,
-                prompt=self.ed_prompt.text().strip() or None,
-                truncated=truncated,
-                size=self._size,
-            )
-        except Exception as e:
-            result = ai.AiResult(ok=False, backend=backend.name, error=str(e))
+            loop.exec()
         finally:
+            timer.stop()
+            t.join(timeout=1)
             self.bar.hide()
             self.btn_run.setEnabled(True)
+        result = (
+            box[0]
+            if box
+            else ai.AiResult(
+                ok=False, backend=backend.name, error="Анализ не завершился."
+            )
+        )
         self._show(name, result)
 
     def _show(self, name, result):
@@ -1025,6 +1059,13 @@ class SettingsDialog(QDialog):
         lay.addRow("AI-бэкенд:", self.cmb_ai)
         self.ed_ai_url = QLineEdit(str(tc_style.SETTINGS.get("ai_base_url") or ""))
         lay.addRow("Адрес сервера:", self.ed_ai_url)
+        # Отдельный адрес OpenAI-бэкенда: локальный адрес Ollama по умолчанию
+        # не должен «протекать» в облачный эндпоинт.
+        self.ed_ai_url_openai = QLineEdit(
+            str(tc_style.SETTINGS.get("ai_base_url_openai") or "")
+        )
+        self.ed_ai_url_openai.setPlaceholderText("пусто = https://api.openai.com")
+        lay.addRow("Адрес OpenAI-сервера:", self.ed_ai_url_openai)
         self.ed_ai_model = QLineEdit(str(tc_style.SETTINGS.get("ai_model") or ""))
         lay.addRow("Модель:", self.ed_ai_model)
         self.ed_ai_key = QLineEdit(str(tc_style.SETTINGS.get("ai_api_key") or ""))
@@ -1037,6 +1078,24 @@ class SettingsDialog(QDialog):
             int(tc_style.SETTINGS.get("ai_max_bytes") or 262144) // 1024
         )
         lay.addRow("Читать до:", self.spn_ai_bytes)
+        # --- AI-советник v2: авто-разбор формата + отчёт на GitHub (opt-in)
+        self.chk_advise = QCheckBox(
+            "AI-советник: предлагать разбор формата при открытии файла"
+        )
+        self.chk_advise.setChecked(
+            bool(tc_style.SETTINGS.get("ai_format_autohook"))
+        )
+        lay.addRow("", self.chk_advise)
+        self.ed_advise_repo = QLineEdit(
+            str(tc_style.SETTINGS.get("ai_github_repo") or "")
+        )
+        self.ed_advise_repo.setPlaceholderText("owner/name")
+        lay.addRow("Репозиторий отчётов:", self.ed_advise_repo)
+        self.ed_advise_token = QLineEdit(
+            str(tc_style.SETTINGS.get("ai_github_token") or "")
+        )
+        self.ed_advise_token.setEchoMode(EchoPassword)
+        lay.addRow("Токен GitHub (отчёты):", self.ed_advise_token)
         # --- OLMA Watch: слежение за ошибками + отчёт на GitHub (opt-in)
         self.chk_olma = QCheckBox(
             "Следить за ошибками и отправлять отчёт на GitHub (OLMA Watch)"
@@ -1485,6 +1544,17 @@ class MainWindow(QMainWindow):
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
         m_tool.addSeparator()
         m_tool.addAction(self.act_ai)
+        # «AI-советник v2» живёт только в меню: тулбар-тесты закрепляют
+        # кнопку AI последней иконкой панели, лишняя кнопка на тулбаре
+        # сломала бы позиционные проверки (tests/test_ai_ui.py).
+        self.act_advise = self._action(
+            "AI-советник v2 (multi-hypothesis)",
+            self._on_advise,
+            "Ctrl+Shift+I",
+            "SP_ComputerIcon",
+            "Мульти-гипотезный разбор формата файла (Ctrl+Shift+I)",
+        )
+        m_tool.addAction(self.act_advise)
 
         m_net = mb.addMenu("Сеть")
         m_net.addAction(
@@ -1588,6 +1658,10 @@ class MainWindow(QMainWindow):
         tc_style.SETTINGS["ai_model"] = dlg.ed_ai_model.text().strip()
         tc_style.SETTINGS["ai_api_key"] = dlg.ed_ai_key.text().strip()
         tc_style.SETTINGS["ai_max_bytes"] = int(dlg.spn_ai_bytes.value()) * 1024
+        tc_style.SETTINGS["ai_base_url_openai"] = dlg.ed_ai_url_openai.text().strip()
+        tc_style.SETTINGS["ai_format_autohook"] = bool(dlg.chk_advise.isChecked())
+        tc_style.SETTINGS["ai_github_repo"] = dlg.ed_advise_repo.text().strip()
+        tc_style.SETTINGS["ai_github_token"] = dlg.ed_advise_token.text().strip()
         tc_style.SETTINGS["olma_watch"] = bool(dlg.chk_olma.isChecked())
         tc_style.SETTINGS["olma_token"] = dlg.ed_olma_token.text().strip()
         self.dock.setVisible(bool(dlg.chk_log.isChecked()))
@@ -1621,6 +1695,56 @@ class MainWindow(QMainWindow):
         """
         dlg = AiDialog(self, self.active_panel(), log=self.log_msg)
         exec_dialog(dlg)
+
+    def _on_advise(self):
+        """«AI-советник v2»: мульти-гипотезный разбор формата файла.
+
+        Советник ставит гипотезы по сигнатурам, затем опрашивает модель;
+        при включённом консенсусе и доступном втором бэкенде голосуют двое.
+        Отчёт на GitHub уходит только при заполненных настройках репозитория
+        и токена (токен никогда не попадает в журнал и в отчёт).
+        """
+        from mountfile.ai_format_advisor_v2 import GitHubReporter, advise_and_show
+
+        p = self.active_panel()
+        entry = p.selected_entry()
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            QMessageBox.information(
+                self, "AI-советник", "Сначала выберите файл в активной панели."
+            )
+            return
+        backends = [ai.build_backend(tc_style.SETTINGS)]
+        if tc_style.SETTINGS.get("ai_consensus"):
+            for key in ("ollama", "openai"):
+                extra = ai.build_backend({**tc_style.SETTINGS, "ai_backend": key})
+                if extra.name != backends[0].name and extra.available():
+                    backends.append(extra)
+        github = None
+        repo = tc_style.SETTINGS.get("ai_github_repo") or ""
+        token = tc_style.SETTINGS.get("ai_github_token") or ""
+        if repo and token:
+            try:
+                github = GitHubReporter(repo, token)
+            except ValueError:
+                github = None
+        advise_and_show(
+            p.join(entry["name"]), backends, github=github, parent=self
+        )
+
+    def _maybe_advise(self, path):
+        """Autohook: при открытии файла с неуверенным форматом — советник.
+
+        Включается галочкой «ai_format_autohook» в Настройках; никак не
+        может сломать открытие файла — все ошибки глушатся в журнал.
+        """
+        if not tc_style.SETTINGS.get("ai_format_autohook"):
+            return
+        try:
+            from mountfile.ai_format_advisor_v2 import maybe_advise
+
+            maybe_advise(tc_style.SETTINGS, path, parent=self, log=self.log_msg)
+        except Exception as e:  # the hook must never break opening a file
+            self.log_msg("AI-советник: %s" % e)
 
     def open_releases(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file/releases/latest")
@@ -2064,6 +2188,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Просмотр", str(e))
             return
         exec_dialog(ViewerDialog(self, entry["name"], entry.get("size") or 0, data))
+        self._maybe_advise(full)
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):

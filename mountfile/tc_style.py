@@ -97,6 +97,16 @@ SETTINGS = {
     "ai_model": "",
     "ai_api_key": "",
     "ai_max_bytes": 262144,
+    # Отдельный адрес OpenAI-совместимого бэкенда: локальный адрес Ollama
+    # не должен протекать в облачный эндпоинт (пусто = https://api.openai.com).
+    "ai_base_url_openai": "",
+    # AI-советник v2 (ai_format_advisor_v2): авто-разбор формата при открытии
+    # файла и отчёт в GitHub Issues. Токен никогда не пишется в журнал.
+    "ai_format_autohook": False,
+    "ai_github_repo": "",
+    "ai_github_token": "",
+    # Консенсус советника: при наличии второго доступного бэкенда — голосование.
+    "ai_consensus": False,
     # OLMA Watch: opt-in crash monitoring (see mountfile/olma_watch.py).
     # olma_token is read from the MOUNTFILE_OLMA_TOKEN environment variable
     # or this key, and never appears in the log or in any report.
@@ -343,7 +353,10 @@ def load_settings():
     for key in ("theme", "font_size", "show_log"):
         if key in data:
             SETTINGS[key] = data[key]
-    for key in ("ai_backend", "ai_base_url", "ai_model", "ai_api_key", "olma_token"):
+    for key in (
+        "ai_backend", "ai_base_url", "ai_base_url_openai", "ai_model",
+        "ai_api_key", "ai_github_repo", "ai_github_token", "olma_token",
+    ):
         if key in data:
             SETTINGS[key] = str(data[key] or "")
     try:
@@ -358,6 +371,8 @@ def load_settings():
         SETTINGS["font_size"] = 9
     SETTINGS["show_log"] = bool(SETTINGS["show_log"])
     SETTINGS["olma_watch"] = bool(SETTINGS["olma_watch"])
+    SETTINGS["ai_format_autohook"] = bool(SETTINGS.get("ai_format_autohook"))
+    SETTINGS["ai_consensus"] = bool(SETTINGS.get("ai_consensus"))
     SETTINGS["ai_max_bytes"] = max(4096, min(SETTINGS["ai_max_bytes"], 64 << 20))
     return dict(SETTINGS)
 
