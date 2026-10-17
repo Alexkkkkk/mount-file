@@ -2,7 +2,9 @@
 """Автоисправление кода: безопасные AST-трансформации."""
 
 from __future__ import annotations
-import ast, shutil, textwrap
+
+import ast
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,8 +52,9 @@ class OlmaFixer:
         for issue in sorted(issues, key=lambda i: -i.line):
             handler = getattr(self, f"_fix_{issue.rule_id.lower()}", None)
             if handler is None:
-                results.append(FixResult(rel, issue.line, issue.rule_id, False,
-                                         "нет обработчика"))
+                results.append(
+                    FixResult(rel, issue.line, issue.rule_id, False, "нет обработчика")
+                )
                 continue
             try:
                 before = "".join(lines)
@@ -59,13 +62,23 @@ class OlmaFixer:
                 after = "".join(lines) if new_lines is None else "".join(new_lines)
                 if new_lines is not None and after != before:
                     lines = new_lines
-                    results.append(FixResult(rel, issue.line, issue.rule_id, True, detail))
+                    results.append(
+                        FixResult(rel, issue.line, issue.rule_id, True, detail)
+                    )
                 else:
-                    results.append(FixResult(rel, issue.line, issue.rule_id, False,
-                                             detail or "без изменений"))
+                    results.append(
+                        FixResult(
+                            rel,
+                            issue.line,
+                            issue.rule_id,
+                            False,
+                            detail or "без изменений",
+                        )
+                    )
             except Exception as e:
-                results.append(FixResult(rel, issue.line, issue.rule_id, False,
-                                         f"ошибка: {e}"))
+                results.append(
+                    FixResult(rel, issue.line, issue.rule_id, False, f"ошибка: {e}")
+                )
 
         new_src = "".join(lines)
         if new_src != src:
@@ -75,8 +88,13 @@ class OlmaFixer:
             except SyntaxError as e:
                 for k, r in enumerate(results):
                     if r.applied and r.file == rel:
-                        results[k] = FixResult(rel, r.line, r.rule_id, False,
-                                               f"{r.detail} (откат: синтаксис: {e.msg})")
+                        results[k] = FixResult(
+                            rel,
+                            r.line,
+                            r.rule_id,
+                            False,
+                            f"{r.detail} (откат: синтаксис: {e.msg})",
+                        )
                 new_src = src
         if new_src != src and not self.dry_run:
             bak = Path(str(p) + ".olma.bak")
@@ -94,8 +112,10 @@ class OlmaFixer:
         файлом, а для строк `with open(...) as f:` даёт синтаксический
         мусор из-за split("=").
         """
-        return None, ("требует ручной правки: перенос тела в with "
-                      "(авто-обёртка одной строки ломает тело)")
+        return None, (
+            "требует ручной правки: перенос тела в with "
+            "(авто-обёртка одной строки ломает тело)"
+        )
 
     def _fix_ol002(self, lines, issue):
         """read() без размера — только рекомендация.
@@ -103,8 +123,9 @@ class OlmaFixer:
         Слепая замена на read(1 << 20) усекает чтение файлов больше
         1 МиБ — при работе с образами это потеря данных.
         """
-        return None, ("требует ручной оценки: read(1 << 20) усекает чтение "
-                      "файлов больше 1 МиБ")
+        return None, (
+            "требует ручной оценки: read(1 << 20) усекает чтение " "файлов больше 1 МиБ"
+        )
 
     def _fix_ol005(self, lines, issue):
         return self._fix_ol001(lines, issue)

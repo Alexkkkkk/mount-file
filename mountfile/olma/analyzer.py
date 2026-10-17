@@ -2,12 +2,14 @@
 """Статический AST-анализ проекта на 20 правил."""
 
 from __future__ import annotations
-import ast, os, re
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Iterator
 
-from .rules import RULES, Rule, Severity
+import ast
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+
+from .rules import RULES, Severity
 
 
 @dataclass
@@ -24,11 +26,16 @@ class Issue:
 
     def to_dict(self) -> dict:
         return {
-            "rule_id": self.rule_id, "title": self.title,
+            "rule_id": self.rule_id,
+            "title": self.title,
             "severity": self.severity,
             "severity_label": Severity(self.severity).label(),
-            "file": self.file, "line": self.line, "col": self.col,
-            "snippet": self.snippet, "hint": self.hint, "fixable": self.fixable,
+            "file": self.file,
+            "line": self.line,
+            "col": self.col,
+            "snippet": self.snippet,
+            "hint": self.hint,
+            "fixable": self.fixable,
         }
 
 
@@ -42,12 +49,22 @@ class _Visitor(ast.NodeVisitor):
         r = RULES[rule_id]
         ln = getattr(node, "lineno", 1)
         col = getattr(node, "col_offset", 0)
-        snip = snippet or (self.lines[ln - 1].strip() if 0 < ln <= len(self.lines) else "")
-        self.issues.append(Issue(
-            rule_id=r.id, title=r.title, severity=int(r.severity),
-            file=self.path, line=ln, col=col,
-            snippet=snip[:160], hint=r.hint, fixable=r.fixable,
-        ))
+        snip = snippet or (
+            self.lines[ln - 1].strip() if 0 < ln <= len(self.lines) else ""
+        )
+        self.issues.append(
+            Issue(
+                rule_id=r.id,
+                title=r.title,
+                severity=int(r.severity),
+                file=self.path,
+                line=ln,
+                col=col,
+                snippet=snip[:160],
+                hint=r.hint,
+                fixable=r.fixable,
+            )
+        )
 
     # --- visitors ---
     def visit_Call(self, node: ast.Call) -> None:
@@ -119,7 +136,11 @@ class _Visitor(ast.NodeVisitor):
                 if " " not in s:
                     self._emit("OL006", node, snippet=repr(s))
         if isinstance(node.value, int) and not isinstance(node.value, bool):
-            if 0x1000 <= node.value <= 0xFFFFFF and node.value not in (1000, 10000, 100000):
+            if 0x1000 <= node.value <= 0xFFFFFF and node.value not in (
+                1000,
+                10000,
+                100000,
+            ):
                 # вероятный offset
                 self._emit("OL018", node, snippet=str(node.value))
         self.generic_visit(node)
@@ -134,11 +155,13 @@ class _Visitor(ast.NodeVisitor):
     # --- helpers ---
     def _call_name(self, node: ast.Call) -> str:
         f = node.func
-        if isinstance(f, ast.Name): return f.id
+        if isinstance(f, ast.Name):
+            return f.id
         if isinstance(f, ast.Attribute):
             parts, cur = [], f
             while isinstance(cur, ast.Attribute):
-                parts.append(cur.attr); cur = cur.value
+                parts.append(cur.attr)
+                cur = cur.value
             if isinstance(cur, ast.Name):
                 parts.append(cur.id)
             return ".".join(reversed(parts))
@@ -162,8 +185,16 @@ def _mark_parents(tree: ast.AST) -> None:
 class OlmaAnalyzer:
     """Сканирует проект и возвращает список Issue."""
 
-    SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules",
-                 "dist", "build", ".pytest_cache"}
+    SKIP_DIRS = {
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules",
+        "dist",
+        "build",
+        ".pytest_cache",
+    }
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).resolve()
@@ -175,8 +206,14 @@ class OlmaAnalyzer:
             if p.name == "mountfile_fix.py":
                 continue
             if "olma" in p.parts and p.name in {
-                "core.py", "runtime.py", "rules.py", "analyzer.py",
-                "fixer.py", "reporter.py", "cli.py", "__init__.py"
+                "core.py",
+                "runtime.py",
+                "rules.py",
+                "analyzer.py",
+                "fixer.py",
+                "reporter.py",
+                "cli.py",
+                "__init__.py",
             }:
                 continue  # не анализируем сам OLMA
             yield p
