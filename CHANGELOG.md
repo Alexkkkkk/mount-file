@@ -6,6 +6,8 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- Обновление программы: индикатор хода в строке состояния окна — этапы (скачивание → контрольная сумма → установка) текстом и полоса прогресса скачивания (проценты по Content-Length, режим «занят», если размер неизвестен; скрывается по завершении/ошибке). Исправлено падение `AttributeError` при подключении сигнала прогресса установщика: сигналы `progress`/`stage`/`failed` подняты на `StartupUpdater` (`mountfile/updater.py`), постоянные виджеты статуса — `MainWindow._build_update_status()` (`mountfile/tc_window.py`), `QProgressBar` добавлен в `mountfile/qt_compat.py`. Тесты — `tests/test_updater.py`.
+
 - Добавлен самостоятельный одностраничный инструмент `mountfile.py`: монтирование образов (`GUI` на PyQt6 + `CLI`), палитра команд `Ctrl+K`, значок в лотке, перетаскивание файлов, темы system/light/dark; атомарная запись состояния, ротация журналов, отчёт о падении, единственный экземпляр приложения. Платформенные механизмы: `udisksctl`/`mount -o loop` (Linux), `hdiutil` (macOS), `Mount-DiskImage` (Windows). Тесты — `tests/test_mountfile_standalone.py`, цель `make test-standalone`.
 
 - GUI «Разбить дамп по udev…»: перед записью файлов в журнал выводится
