@@ -97,6 +97,11 @@ SETTINGS = {
     "ai_model": "",
     "ai_api_key": "",
     "ai_max_bytes": 262144,
+    # OLMA Watch: opt-in crash monitoring (see mountfile/olma_watch.py).
+    # olma_token is read from the MOUNTFILE_OLMA_TOKEN environment variable
+    # or this key, and never appears in the log or in any report.
+    "olma_watch": False,
+    "olma_token": "",
 }
 
 _FAMILY = []
@@ -338,7 +343,8 @@ def load_settings():
     for key in ("theme", "font_size", "show_log"):
         if key in data:
             SETTINGS[key] = data[key]
-    for key in ("ai_backend", "ai_base_url", "ai_model", "ai_api_key"):
+    for key in ("ai_backend", "ai_base_url", "ai_model", "ai_api_key",
+                "olma_token"):
         if key in data:
             SETTINGS[key] = str(data[key] or "")
     try:
@@ -352,6 +358,7 @@ def load_settings():
     except (TypeError, ValueError):
         SETTINGS["font_size"] = 9
     SETTINGS["show_log"] = bool(SETTINGS["show_log"])
+    SETTINGS["olma_watch"] = bool(SETTINGS["olma_watch"])
     SETTINGS["ai_max_bytes"] = max(4096, min(SETTINGS["ai_max_bytes"], 64 << 20))
     return dict(SETTINGS)
 
