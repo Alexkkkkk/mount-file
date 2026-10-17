@@ -28,11 +28,11 @@ CLI:
     python -m mountfile.turbo sig   a.img
     python -m mountfile.turbo verify a.img b.img
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import mmap
 import os
 import random
@@ -43,15 +43,16 @@ import threading
 import time
 import traceback
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Optional
 
 # --------------------------------------------------------------------------
 # Optional accelerators
 # --------------------------------------------------------------------------
 
 try:
-    import zstandard as _zstd           # type: ignore
+    import zstandard as _zstd  # type: ignore
 
     def _compress(b: bytes) -> bytes:
         return _zstd.ZstdCompressor(level=3).compress(b)
@@ -60,7 +61,8 @@ try:
         return _zstd.ZstdDecompressor().decompress(b)
 
     _CODEC = b"Z"
-except Exception:                       # pragma: no cover - optional
+except Exception:  # pragma: no cover - optional
+
     def _compress(b: bytes) -> bytes:
         return zlib.compress(b, 6)
 
@@ -72,13 +74,15 @@ except Exception:                       # pragma: no cover - optional
 
 try:
     from PyQt6 import QtCore, QtGui, QtWidgets  # type: ignore
+
     _QT = "PyQt6"
-except Exception:                       # pragma: no cover
+except Exception:  # pragma: no cover
     try:
         from PyQt5 import QtCore, QtGui, QtWidgets  # type: ignore
+
         _QT = "PyQt5"
     except Exception:
-        QtCore = QtGui = QtWidgets = None   # type: ignore
+        QtCore = QtGui = QtWidgets = None  # type: ignore
         _QT = None
 
 QT_BINDING = _QT
@@ -92,16 +96,16 @@ SIG_MAGIC = b"MFSIG\x02"
 SIG_VERSION = 2
 
 # CDC parameters (bytes)
-CHUNK_MIN = 1 << 12      # 4 KiB
-CHUNK_AVG = 1 << 16      # 64 KiB
-CHUNK_MAX = 1 << 20      # 1 MiB
-MASK_BITS = 13           # ~1/8192 hit → avg 64 KiB
+CHUNK_MIN = 1 << 12  # 4 KiB
+CHUNK_AVG = 1 << 16  # 64 KiB
+CHUNK_MAX = 1 << 20  # 1 MiB
+MASK_BITS = 13  # ~1/8192 hit → avg 64 KiB
 WINDOW = 48
 
 # literal-run cap before flushing (see diff())
 LITERAL_FLUSH = 1 << 20  # 1 MiB
 
-COPY_BUF = 1 << 20       # 1 MiB copy buffer
+COPY_BUF = 1 << 20  # 1 MiB copy buffer
 
 Progress = Optional[Callable[[int, int, str], None]]
 
@@ -110,10 +114,11 @@ Progress = Optional[Callable[[int, int, str], None]]
 # 1. Cache
 # ==========================================================================
 
+
 class TTLCache:
     """Bounded, thread-safe, per-entry TTL."""
 
-    __slots__ = ("maxsize", "ttl", "_data", "_lock", "hits", "misses")
+    __slots__ = ("_data", "_lock", "hits", "maxsize", "misses", "ttl")
 
     def __init__(self, maxsize: int = 1024, ttl: float = 30.0):
         self.maxsize, self.ttl = maxsize, ttl
@@ -164,14 +169,18 @@ class TTLCache:
 
     def stats(self) -> dict:
         total = self.hits + self.misses
-        return {"size": len(self._data), "hits": self.hits,
-                "misses": self.misses,
-                "hit_rate": self.hits / total if total else 0.0}
+        return {
+            "size": len(self._data),
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": self.hits / total if total else 0.0,
+        }
 
 
 # ==========================================================================
 # 2. Cached pytsk3 wrapper
 # ==========================================================================
+
 
 class CachedFS:
     """Memoises directory listings of a pytsk3.FS_Info instance."""
@@ -192,19 +201,21 @@ class CachedFS:
         for entry in self._fs.open_dir(path):
             try:
                 meta = entry.info.meta
-                rows.append({
-                    "name": entry.info.name.name.decode("utf-8", "replace"),
-                    "size": meta.size if meta else 0,
-                    "type": meta.type if meta else None,
-                    "inode": meta.addr if meta else None,
-                    "mtime": meta.mtime if meta else None,
-                })
+                rows.append(
+                    {
+                        "name": entry.info.name.name.decode("utf-8", "replace"),
+                        "size": meta.size if meta else 0,
+                        "type": meta.type if meta else None,
+                        "inode": meta.addr if meta else None,
+                        "mtime": meta.mtime if meta else None,
+                    }
+                )
             except Exception:
                 continue
         self._listing.put(path, rows)
         return rows
 
-    def invalidate(self, path: Optional[str] = None) -> None:
+    def invalidate(self, path: str | None = None) -> None:
         self._listing.clear() if path is None else self._listing.invalidate(path)
 
     def stats(self) -> dict:
@@ -215,7 +226,7 @@ class CachedFS:
 # 3. Content-defined chunking (buzhash)
 # ==========================================================================
 
-_rng = random.Random(0x4D6F756E74)            # "Mount"
+_rng = random.Random(0x4D6F756E74)  # "Mount"
 _BUZ = [_rng.getrandbits(64) for _ in range(256)]
 
 
@@ -227,7 +238,7 @@ def _rol(x: int, n: int) -> int:
 class Buzhash:
     """Streaming CDC: yields (offset, length) chunk boundaries."""
 
-    __slots__ = ("mask", "h", "size", "start", "pos")
+    __slots__ = ("h", "mask", "pos", "size", "start")
 
     def __init__(self, mask_bits: int = MASK_BITS):
         self.mask = (1 << mask_bits) - 1
@@ -257,7 +268,7 @@ class Buzhash:
         self.h, self.size, self.start, self.pos = h, size, start, pos
         return out
 
-    def finish(self) -> Optional[tuple[int, int]]:
+    def finish(self) -> tuple[int, int] | None:
         if self.size:
             chunk = (self.start, self.size)
             self.reset()
@@ -268,6 +279,7 @@ class Buzhash:
 # ==========================================================================
 # 4. Signature
 # ==========================================================================
+
 
 @dataclass
 class BlockRef:
@@ -282,17 +294,21 @@ class Signature:
     file_size: int = 0
     mtime: float = 0.0
     block_refs: list[BlockRef] = field(default_factory=list)
-    by_strong: dict = field(default_factory=dict)   # strong -> BlockRef
+    by_strong: dict = field(default_factory=dict)  # strong -> BlockRef
 
     # ---------- serialisation ----------
     def to_bytes(self) -> bytes:
         header = struct.pack(
             "<6sBQQQIIII",
-            SIG_MAGIC, SIG_VERSION,
+            SIG_MAGIC,
+            SIG_VERSION,
             self.file_size,
             int(self.mtime * 1000),
             len(self.block_refs),
-            CHUNK_MIN, CHUNK_AVG, CHUNK_MAX, MASK_BITS,
+            CHUNK_MIN,
+            CHUNK_AVG,
+            CHUNK_MAX,
+            MASK_BITS,
         )
         body = bytearray()
         for r in self.block_refs:
@@ -301,7 +317,7 @@ class Signature:
         return header + bytes(body)
 
     @classmethod
-    def from_bytes(cls, blob: bytes) -> "Signature":
+    def from_bytes(cls, blob: bytes) -> Signature:
         if not blob.startswith(SIG_MAGIC):
             raise ValueError("not a Mount File signature")
         off = len(SIG_MAGIC)
@@ -315,7 +331,7 @@ class Signature:
         for _ in range(count):
             offset, length, weak = struct.unpack_from("<QII", blob, off)
             off += 16
-            strong = blob[off:off + 16]
+            strong = blob[off : off + 16]
             off += 16
             ref = BlockRef(offset, length, weak, strong)
             sig.block_refs.append(ref)
@@ -331,6 +347,7 @@ class Signature:
 # 5. Disk signature cache (.mfsig)
 # ==========================================================================
 
+
 class SignatureStore:
     """Persists signatures next to images; invalidates on mtime/size change."""
 
@@ -339,7 +356,7 @@ class SignatureStore:
         return image_path + ".mfsig"
 
     @classmethod
-    def load(cls, image_path: str) -> Optional[Signature]:
+    def load(cls, image_path: str) -> Signature | None:
         sp = cls._path(image_path)
         if not os.path.exists(sp):
             return None
@@ -366,6 +383,7 @@ class SignatureStore:
 # ==========================================================================
 # 6. DeltaSync — CDC + mmap + zstd + atomic
 # ==========================================================================
+
 
 class DeltaSync:
     """Content-defined delta transfer for raw disk images.
@@ -426,8 +444,9 @@ class DeltaSync:
         sig.add(BlockRef(off, length, weak, strong))
 
     # ---------- diff ----------
-    def diff(self, source: str, sig: Signature,
-             progress: Progress = None) -> list[tuple[str, bytes, int, int]]:
+    def diff(
+        self, source: str, sig: Signature, progress: Progress = None
+    ) -> list[tuple[str, bytes, int, int]]:
         """Return ops: ('copy', b'', target_off, target_len) or
         ('data', payload, 0, payload_len). Payload is zstd/zlib-compressed."""
         ops: list[tuple[str, bytes, int, int]] = []
@@ -480,8 +499,7 @@ class DeltaSync:
         return ops
 
     @staticmethod
-    def _match(source: str, off: int, length: int,
-               sig: Signature) -> Optional[BlockRef]:
+    def _match(source: str, off: int, length: int, sig: Signature) -> BlockRef | None:
         with open(source, "rb") as fh:
             fh.seek(off)
             data = fh.read(length)
@@ -495,8 +513,7 @@ class DeltaSync:
         return None
 
     # ---------- patch ----------
-    def patch(self, base: str, ops, out_path: str,
-              progress: Progress = None) -> int:
+    def patch(self, base: str, ops, out_path: str, progress: Progress = None) -> int:
         written = 0
         total = len(ops)
         with open(base, "rb") as src, open(out_path, "wb") as dst:
@@ -508,7 +525,7 @@ class DeltaSync:
                 for i, (kind, payload, off, length) in enumerate(ops, 1):
                     if kind == "copy":
                         if mm is not None:
-                            dst.write(mm[off:off + length])
+                            dst.write(mm[off : off + length])
                             written += length
                         else:
                             src.seek(off)
@@ -532,8 +549,7 @@ class DeltaSync:
         return written
 
     # ---------- high-level ----------
-    def sync(self, source: str, target: str,
-             progress: Progress = None) -> dict:
+    def sync(self, source: str, target: str, progress: Progress = None) -> dict:
         if not os.path.exists(target):
             _copy_file(source, target, progress)
             return {"mode": "full", "bytes_written": os.path.getsize(source)}
@@ -560,13 +576,16 @@ class DeltaSync:
             "saving": 1 - written / max(1, full),
         }
 
-    def verify(self, a: str, b: str,
-               progress: Progress = None) -> dict:
+    def verify(self, a: str, b: str, progress: Progress = None) -> dict:
         """Compare two images by blake2b over 4 MiB windows."""
         sa, sb = os.path.getsize(a), os.path.getsize(b)
         if sa != sb:
-            return {"equal": False, "reason": "size mismatch",
-                    "size_a": sa, "size_b": sb}
+            return {
+                "equal": False,
+                "reason": "size mismatch",
+                "size_a": sa,
+                "size_b": sb,
+            }
         h1, h2 = hashlib.blake2b(digest_size=32), hashlib.blake2b(digest_size=32)
         total = sa
         done = 0
@@ -577,16 +596,18 @@ class DeltaSync:
                 if not ca and not cb:
                     break
                 if ca != cb:
-                    return {"equal": False, "reason": "byte mismatch",
-                            "offset": done}
+                    return {"equal": False, "reason": "byte mismatch", "offset": done}
                 h1.update(ca)
                 h2.update(cb)
                 done += len(ca)
                 if progress:
                     progress(done, total, "Проверка")
-        return {"equal": h1.digest() == h2.digest(),
-                "digest_a": h1.hexdigest(), "digest_b": h2.hexdigest(),
-                "size": sa}
+        return {
+            "equal": h1.digest() == h2.digest(),
+            "digest_a": h1.hexdigest(),
+            "digest_b": h2.hexdigest(),
+            "size": sa,
+        }
 
 
 def _copy_file(src: str, dst: str, progress: Progress = None) -> None:
@@ -606,6 +627,7 @@ def _copy_file(src: str, dst: str, progress: Progress = None) -> None:
 # ==========================================================================
 # 7. SQLite journal
 # ==========================================================================
+
 
 class SqliteJournal:
     """Append-only change log persisted to SQLite; safe from threads."""
@@ -630,29 +652,52 @@ class SqliteJournal:
         self._conn.executescript(self.SCHEMA)
         self._conn.commit()
 
-    def record(self, op: str, path: str, size: int = 0,
-               digest: str = "", extra: Optional[dict] = None) -> int:
+    def record(
+        self,
+        op: str,
+        path: str,
+        size: int = 0,
+        digest: str = "",
+        extra: dict | None = None,
+    ) -> int:
         import json
+
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO changes(ts, op, path, size, digest, extra) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (time.time(), op, path, size, digest,
-                 json.dumps(extra or {}, ensure_ascii=False)),
+                (
+                    time.time(),
+                    op,
+                    path,
+                    size,
+                    digest,
+                    json.dumps(extra or {}, ensure_ascii=False),
+                ),
             )
             self._conn.commit()
             return cur.lastrowid
 
     def tail(self, since_ts: float = 0.0, limit: int = 1000) -> list[dict]:
         import json
+
         with self._lock:
             rows = self._conn.execute(
                 "SELECT ts, op, path, size, digest, extra "
                 "FROM changes WHERE ts > ? ORDER BY ts LIMIT ?",
                 (since_ts, limit),
             ).fetchall()
-        return [{"ts": r[0], "op": r[1], "path": r[2], "size": r[3],
-                 "digest": r[4], "extra": json.loads(r[5])} for r in rows]
+        return [
+            {
+                "ts": r[0],
+                "op": r[1],
+                "path": r[2],
+                "size": r[3],
+                "digest": r[4],
+                "extra": json.loads(r[5]),
+            }
+            for r in rows
+        ]
 
     def count(self) -> int:
         with self._lock:
@@ -718,20 +763,32 @@ if HAS_QT:
     class TaskRunner(QtCore.QObject):
         """Pool of workers bound to a window; cancels all on close."""
 
-        def __init__(self, parent=None, max_threads: Optional[int] = None):
+        def __init__(self, parent=None, max_threads: int | None = None):
             super().__init__(parent)
             self.pool = QtCore.QThreadPool.globalInstance()
             if max_threads:
                 self.pool.setMaxThreadCount(max_threads)
             self._workers: list[Worker] = []
 
-        def submit(self, fn, *args, on_result=None, on_error=None,
-                   on_progress=None, on_finished=None, **kwargs) -> Worker:
+        def submit(
+            self,
+            fn,
+            *args,
+            on_result=None,
+            on_error=None,
+            on_progress=None,
+            on_finished=None,
+            **kwargs,
+        ) -> Worker:
             w = Worker(fn, *args, **kwargs)
-            if on_result:   w.signals.result.connect(on_result)
-            if on_error:    w.signals.error.connect(on_error)
-            if on_progress: w.signals.progress.connect(on_progress)
-            if on_finished: w.signals.finished.connect(on_finished)
+            if on_result:
+                w.signals.result.connect(on_result)
+            if on_error:
+                w.signals.error.connect(on_error)
+            if on_progress:
+                w.signals.progress.connect(on_progress)
+            if on_finished:
+                w.signals.finished.connect(on_finished)
             self._workers.append(w)
             w.signals.finished.connect(
                 lambda: self._workers.remove(w) if w in self._workers else None
@@ -782,17 +839,22 @@ if HAS_QT:
             if role != QtCore.Qt.DisplayRole:
                 return None
             col = index.column()
-            if col == 0: return row.get("name", "")
-            if col == 1: return _human_size(row.get("size") or 0)
-            if col == 2: return "Папка" if row.get("type") == 2 else "Файл"
+            if col == 0:
+                return row.get("name", "")
+            if col == 1:
+                return _human_size(row.get("size") or 0)
+            if col == 2:
+                return "Папка" if row.get("type") == 2 else "Файл"
             if col == 3:
                 ts = row.get("mtime")
                 if not ts:
                     return ""
                 try:
                     import datetime
+
                     return datetime.datetime.fromtimestamp(ts).strftime(
-                        "%Y-%m-%d %H:%M")
+                        "%Y-%m-%d %H:%M"
+                    )
                 except Exception:
                     return str(ts)
             return None
@@ -806,8 +868,8 @@ if HAS_QT:
             )
             self.layoutChanged.emit()
 
-else:                                            # pragma: no cover
-    Worker = TaskRunner = DirTableModel = None    # type: ignore
+else:  # pragma: no cover
+    Worker = TaskRunner = DirTableModel = None  # type: ignore
 
 
 def _sortable(v):
@@ -828,6 +890,7 @@ def _human_size(n: int) -> str:
 # 9. TurboController — one-call integration
 # ==========================================================================
 
+
 class TurboController:
     """Wraps a MainWindow with async I/O, cache, journal and delta sync.
 
@@ -836,8 +899,9 @@ class TurboController:
     `turbo.attach(window)` is enough — no other code changes.
     """
 
-    def __init__(self, window, fs=None, journal_path: str = "changes.sqlite",
-                 workers: int = 4):
+    def __init__(
+        self, window, fs=None, journal_path: str = "changes.sqlite", workers: int = 4
+    ):
         if not HAS_QT:
             raise RuntimeError("TurboController requires PyQt5/PyQt6")
         self.win = window
@@ -848,7 +912,7 @@ class TurboController:
         raw = fs if fs is not None else getattr(window, "fs", None)
         self.fs = CachedFS(raw) if raw is not None else None
         if self.fs is not None:
-            window.fs = self.fs       # existing code keeps working
+            window.fs = self.fs  # existing code keeps working
 
         window.turbo = self
         self._patch_close_event(window)
@@ -867,20 +931,22 @@ class TurboController:
             else:
                 event.accept()
 
-        window.closeEvent = closeEvent    # type: ignore[assignment]
+        window.closeEvent = closeEvent  # type: ignore[assignment]
 
     # ---------- public ----------
     def open_dir(self, path: str, on_result=None, on_error=None) -> None:
         if self.fs is None:
             return
         self.runner.submit(
-            lambda w, p: self.fs.list_dir(p), path,
+            lambda w, p: self.fs.list_dir(p),
+            path,
             on_result=on_result,
             on_error=on_error or self._default_error,
         )
 
-    def sync_to(self, target: str, progress_ui=None,
-                on_done=None, on_error=None) -> None:
+    def sync_to(
+        self, target: str, progress_ui=None, on_done=None, on_error=None
+    ) -> None:
         source = getattr(self.win, "image_path", "")
         if not source:
             raise RuntimeError("window.image_path is empty")
@@ -888,15 +954,19 @@ class TurboController:
         def job(worker):
             def cb(done, total, label):
                 worker.signals.progress.emit(
-                    int(done * 100 / max(1, total)), 100, label)
+                    int(done * 100 / max(1, total)), 100, label
+                )
+
             info = self.sync.sync(source, target, progress=cb)
             return info
 
         def on_result(info):
             self.journal.record(
-                op="sync", path=source,
+                op="sync",
+                path=source,
                 size=info.get("bytes_written", 0),
-                extra={"target": target, **info})
+                extra={"target": target, **info},
+            )
             if on_done:
                 on_done(info)
 
@@ -908,31 +978,36 @@ class TurboController:
         )
 
     def stats(self) -> dict:
-        return {"cache": self.fs.stats() if self.fs else {},
-                "journal": self.journal.count()}
+        return {
+            "cache": self.fs.stats() if self.fs else {},
+            "journal": self.journal.count(),
+        }
 
     def _default_error(self, exc):
         _t, e, tb = exc
         sys.stderr.write(f"[turbo] {e}\n{tb}\n")
 
 
-def attach(window, fs=None, journal_path: str = "changes.sqlite",
-           workers: int = 4) -> TurboController:
+def attach(
+    window, fs=None, journal_path: str = "changes.sqlite", workers: int = 4
+) -> TurboController:
     """One-call integration; returns the TurboController."""
-    return TurboController(window, fs=fs, journal_path=journal_path,
-                           workers=workers)
+    return TurboController(window, fs=fs, journal_path=journal_path, workers=workers)
 
 
 # ==========================================================================
 # 10. CLI
 # ==========================================================================
 
+
 def _cli_sig(args) -> int:
     sync = DeltaSync()
     sig = sync.build_signature(args.image, progress=_cli_progress)
     SignatureStore.save(args.image, sig)
-    print(f"\nПодпись: {len(sig.block_refs)} чанков "
-          f"({SignatureStore._path(args.image)})")
+    print(
+        f"\nПодпись: {len(sig.block_refs)} чанков "
+        f"({SignatureStore._path(args.image)})"
+    )
     return 0
 
 
@@ -942,8 +1017,10 @@ def _cli_diff(args) -> int:
     ops = sync.diff(args.source, sig)
     total = os.path.getsize(args.source)
     literal = sum(l for k, _p, _o, l in ops if k == "data")
-    print(f"\nops={len(ops)}  literal={literal:,} B  full={total:,} B  "
-          f"saving≈{(1 - literal / max(1, total)) * 100:.1f}%")
+    print(
+        f"\nops={len(ops)}  literal={literal:,} B  full={total:,} B  "
+        f"saving≈{(1 - literal / max(1, total)) * 100:.1f}%"
+    )
     return 0
 
 
@@ -954,9 +1031,11 @@ def _cli_sync(args) -> int:
     print(f"\nГотово за {time.time() - t0:.2f}s → {info}")
     if args.journal:
         SqliteJournal(args.journal).record(
-            op="sync", path=args.source,
+            op="sync",
+            path=args.source,
             size=info.get("bytes_written", 0),
-            extra={"target": args.target, **info})
+            extra={"target": args.target, **info},
+        )
     return 0
 
 
@@ -981,9 +1060,9 @@ def _cli_progress(done: int, total: int, label: str) -> None:
 
 
 COMMANDS = {
-    "sig":    _cli_sig,
-    "diff":   _cli_diff,
-    "sync":   _cli_sync,
+    "sig": _cli_sig,
+    "diff": _cli_diff,
+    "sync": _cli_sync,
     "verify": _cli_verify,
 }
 
@@ -991,7 +1070,8 @@ COMMANDS = {
 def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="python -m mountfile.turbo",
-        description="Mount File Turbo — CDC delta sync for raw images")
+        description="Mount File Turbo — CDC delta sync for raw images",
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("sig", help="build & cache signature for an image")
@@ -1018,7 +1098,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def cli_main(argv: Optional[list[str]] = None) -> int:
+def cli_main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return args.func(args)
@@ -1031,8 +1111,10 @@ def cli_main(argv: Optional[list[str]] = None) -> int:
 # 11. Self-test / demo
 # ==========================================================================
 
+
 def _selftest() -> int:
     import tempfile
+
     print("Mount File Turbo — self-test")
     with tempfile.TemporaryDirectory() as td:
         a = os.path.join(td, "a.img")
@@ -1047,7 +1129,7 @@ def _selftest() -> int:
             fh.write(os.urandom(8 << 10))
         sync = DeltaSync(use_disk_cache=False)
         t0 = time.time()
-        info = sync.sync(b, a, progress=_cli_progress)   # b → a
+        info = sync.sync(b, a, progress=_cli_progress)  # b → a
         sys.stderr.write("\n")
         print(f"sync: {info}  ({time.time() - t0:.2f}s)")
         v = sync.verify(a, b)
