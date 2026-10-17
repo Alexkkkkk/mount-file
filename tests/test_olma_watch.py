@@ -53,10 +53,10 @@ def test_sanitize_hides_home_and_user_paths():
 
 def test_sanitize_hides_tokens_and_emails():
     out = ow.sanitize(
-        "token github_pat_11AYPIY3A0KrYiJ6kKZagV leaked, "
+        "token github_pat_FAKE0000FAKE0000FAKE leaked, "
         "authorization: Bearer abcdef123456, mail me@example.com"
     )
-    assert "github_pat_11AYPIY3A0KrYiJ6kKZagV" not in out
+    assert "github_pat_FAKE0000FAKE0000FAKE" not in out
     assert "abcdef123456" not in out
     assert "me@example.com" not in out
     assert "<secret>" in out
@@ -199,5 +199,5 @@ def test_no_leaked_token_in_module_source():
                encoding="utf-8").read()
     # The real token leaked in chat must never appear in the code; the
     # _SECRET_RE pattern mentions the prefix only as a sanitizer rule.
-    assert "github_pat_11AYPIY3A0KrYiJ6kKZagV" not in src
+    assert "github_pat_FAKE0000FAKE0000FAKE" not in src
     assert ow.ENV_TOKEN in src  # the token comes from the env var only
