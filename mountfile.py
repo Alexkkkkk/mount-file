@@ -31,8 +31,6 @@ import argparse
 import atexit
 import contextlib
 import ctypes
-import dataclasses
-import hashlib
 import json
 import logging
 import logging.handlers
@@ -50,7 +48,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 # ============================================================================
 # METADATA
@@ -585,14 +583,14 @@ def reveal_in_file_manager(path: Path) -> None:
 # ============================================================================
 try:
     from PyQt6.QtCore import (
-        QEvent, QObject, QSize, Qt, QThread, QTimer, pyqtSignal,
+        QObject, QSize, Qt, QThread, QTimer, pyqtSignal,
     )
     from PyQt6.QtGui import (
-        QAction, QCloseEvent, QFont, QIcon, QKeySequence, QPixmap, QShortcut,
+        QAction, QCloseEvent, QFont, QKeySequence, QShortcut,
     )
     from PyQt6.QtWidgets import (
         QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
-        QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+        QGroupBox, QLabel, QLineEdit, QListWidget, QListWidgetItem,
         QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSplitter,
         QStatusBar, QStyle, QSystemTrayIcon, QTextEdit, QVBoxLayout, QWidget,
     )

@@ -66,8 +66,8 @@ def _fmt_size(n):
 def _parse_offset(text):
     try:
         return int(str(text), 0)
-    except ValueError:
-        raise argparse.ArgumentTypeError("not a number: %r" % text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError("not a number: %r" % text) from e
 
 
 def _abs_path(path):

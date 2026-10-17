@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
-import fnmatch
 import html
 import importlib.util
 import json
@@ -31,7 +30,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Optional
 
 # ─────────────────────────────────────────── ANSI
 
@@ -597,7 +596,7 @@ def a_ci(ctx: Ctx) -> None:
             steps:
               - uses: actions/checkout@v4
               - uses: actions/setup-python@v5
-                with: {{ python-version: "3.11", cache: pip }}
+                with: {{ python-version: "{py}", cache: pip }}
               - run: pip install -e ".[dev]"
               - run: ruff check .
               - run: ruff format --check .

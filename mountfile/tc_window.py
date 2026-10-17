@@ -2134,13 +2134,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_msg("Пропущен каталог %s: %s" % (path, e))
             return out
-        for e in entries:
+        for entry in entries:
             child = (
-                (path.rstrip("/") + "/" + e["name"]) if path != "/" else "/" + e["name"]
+                (path.rstrip("/") + "/" + entry["name"]) if path != "/" else "/" + entry["name"]
             )
-            r = (rel + "/" + e["name"]) if rel else e["name"]
-            out.append((child, r, e["is_dir"]))
-            if e["is_dir"]:
+            r = (rel + "/" + entry["name"]) if rel else entry["name"]
+            out.append((child, r, entry["is_dir"]))
+            if entry["is_dir"]:
                 out.extend(self._image_tree(provider, child, r))
         return out
 
