@@ -2,7 +2,8 @@
 """Автоисправление кода: безопасные AST-трансформации."""
 
 from __future__ import annotations
-import ast, shutil, textwrap
+
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,20 +51,31 @@ class OlmaFixer:
         for issue in sorted(issues, key=lambda i: -i.line):
             handler = getattr(self, f"_fix_{issue.rule_id.lower()}", None)
             if handler is None:
-                results.append(FixResult(rel, issue.line, issue.rule_id, False,
-                                         "нет обработчика"))
+                results.append(
+                    FixResult(rel, issue.line, issue.rule_id, False, "нет обработчика")
+                )
                 continue
             try:
                 new_lines, detail = handler(lines, issue)
                 if new_lines is not None and new_lines != lines:
                     lines = new_lines
-                    results.append(FixResult(rel, issue.line, issue.rule_id, True, detail))
+                    results.append(
+                        FixResult(rel, issue.line, issue.rule_id, True, detail)
+                    )
                 else:
-                    results.append(FixResult(rel, issue.line, issue.rule_id, False,
-                                             detail or "без изменений"))
+                    results.append(
+                        FixResult(
+                            rel,
+                            issue.line,
+                            issue.rule_id,
+                            False,
+                            detail or "без изменений",
+                        )
+                    )
             except Exception as e:
-                results.append(FixResult(rel, issue.line, issue.rule_id, False,
-                                         f"ошибка: {e}"))
+                results.append(
+                    FixResult(rel, issue.line, issue.rule_id, False, f"ошибка: {e}")
+                )
 
         new_src = "".join(lines)
         if new_src != src and not self.dry_run:
@@ -83,7 +95,7 @@ class OlmaFixer:
         line = lines[idx]
         # Простейший случай: var = open(...)
         stripped = line.lstrip()
-        indent = line[:len(line) - len(stripped)]
+        indent = line[: len(line) - len(stripped)]
         if "=" in stripped and "open(" in stripped:
             var, expr = stripped.split("=", 1)
             var = var.strip()
@@ -115,12 +127,14 @@ class OlmaFixer:
         if idx < 0 or idx >= len(lines):
             return None, ""
         line = lines[idx]
-        indent = line[:len(line) - len(line.lstrip())]
-        body = line[len(indent):]
-        new = (f"{indent}try:\n"
-               f"{indent}    {body}"
-               f"{indent}except OSError as _e:\n"
-               f"{indent}    raise  # OLMA: обработайте ошибку\n")
+        indent = line[: len(line) - len(line.lstrip())]
+        body = line[len(indent) :]
+        new = (
+            f"{indent}try:\n"
+            f"{indent}    {body}"
+            f"{indent}except OSError as _e:\n"
+            f"{indent}    raise  # OLMA: обработайте ошибку\n"
+        )
         lines[idx] = new
         return lines, "добавлен try/except OSError"
 
@@ -144,12 +158,14 @@ class OlmaFixer:
         if idx < 0 or idx >= len(lines):
             return None, ""
         line = lines[idx]
-        indent = line[:len(line) - len(line.lstrip())]
-        body = line[len(indent):]
-        new = (f"{indent}try:\n"
-               f"{indent}    {body}"
-               f"{indent}finally:\n"
-               f"{indent}    pass  # OLMA: убедитесь, что ресурс закрыт\n")
+        indent = line[: len(line) - len(line.lstrip())]
+        body = line[len(indent) :]
+        new = (
+            f"{indent}try:\n"
+            f"{indent}    {body}"
+            f"{indent}finally:\n"
+            f"{indent}    pass  # OLMA: убедитесь, что ресурс закрыт\n"
+        )
         lines[idx] = new
         return lines, "добавлен try/finally"
 

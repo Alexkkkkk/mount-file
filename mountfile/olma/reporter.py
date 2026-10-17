@@ -2,6 +2,7 @@
 """Отчёты: json / markdown / html / text."""
 
 from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -58,35 +59,46 @@ class OlmaReporter:
         if self.trace:
             lines.append("")
             lines.append("Runtime trace:")
-            lines.append(f"  events={self.trace.get('total', 0)} "
-                         f"read={self.trace.get('read', 0)} "
-                         f"write={self.trace.get('write', 0)} "
-                         f"errors={self.trace.get('error', 0)}")
+            lines.append(
+                f"  events={self.trace.get('total', 0)} "
+                f"read={self.trace.get('read', 0)} "
+                f"write={self.trace.get('write', 0)} "
+                f"errors={self.trace.get('error', 0)}"
+            )
         return "\n".join(lines)
 
     def _render_json(self) -> str:
-        return json.dumps({
-            "ts": self.ts,
-            "summary": self._summary(),
-            "issues": [i.to_dict() for i in self.issues],
-            "trace": self.trace,
-        }, indent=2, ensure_ascii=False)
+        return json.dumps(
+            {
+                "ts": self.ts,
+                "summary": self._summary(),
+                "issues": [i.to_dict() for i in self.issues],
+                "trace": self.trace,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
 
     def _render_markdown(self) -> str:
         s = self._summary()
-        out = [f"# OLMA report ({self.ts})", "",
-               f"**Всего:** {s['total']}  "]
+        out = [f"# OLMA report ({self.ts})", "", f"**Всего:** {s['total']}  "]
         for k, v in s["by_severity"].items():
             out.append(f"**{k}:** {v}  ")
         out += ["", "## По правилам", ""]
         for r, n in sorted(s["by_rule"].items(), key=lambda x: -x[1]):
             out.append(f"- `{r}` — {n}")
-        out += ["", "## Проблемы", "",
-                "| Sev | Rule | File | Line | Title |",
-                "|-----|------|------|------|-------|"]
+        out += [
+            "",
+            "## Проблемы",
+            "",
+            "| Sev | Rule | File | Line | Title |",
+            "|-----|------|------|------|-------|",
+        ]
         for i in self.issues[:200]:
-            out.append(f"| {Severity(i.severity).label()} | `{i.rule_id}` | "
-                       f"`{i.file}` | {i.line} | {i.title} |")
+            out.append(
+                f"| {Severity(i.severity).label()} | `{i.rule_id}` | "
+                f"`{i.file}` | {i.line} | {i.title} |"
+            )
         return "\n".join(out)
 
     def _render_html(self) -> str:
@@ -134,4 +146,4 @@ code{{background:#f0f0f0;padding:.1rem .3rem;border-radius:3px}}
 
 
 def _html(s: str) -> str:
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

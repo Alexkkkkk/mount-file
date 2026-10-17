@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import time
 
-
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
-    from mountfile.olma.core import OlmaHandle, OlmaError
+    from mountfile.olma.core import OlmaError, OlmaHandle
 except Exception:
     OlmaHandle = None
+
 
 def safe_read(fh, offset, size, *, chunk=1 << 20):
     if OlmaHandle is not None and isinstance(fh, OlmaHandle):
@@ -29,16 +29,23 @@ def safe_read(fh, offset, size, *, chunk=1 << 20):
     remaining = size
     while remaining > 0:
         part = fh.read(min(chunk, remaining))
-        if not part: break
-        out.extend(part); remaining -= len(part)
+        if not part:
+            break
+        out.extend(part)
+        remaining -= len(part)
     return bytes(out)
+
 
 def safe_read_exact(fh, offset, size):
     if OlmaHandle is not None and isinstance(fh, OlmaHandle):
-        try: return fh.read_at(offset, size)
-        except OlmaError: return None
+        try:
+            return fh.read_at(offset, size)
+        except OlmaError:
+            return None
     d = safe_read(fh, offset, size)
     return d if len(d) == size else None
+
+
 # --- /MOUNTFILE_FIX --------------------------------------------------------
 try:
     import pytsk3

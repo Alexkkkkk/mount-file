@@ -12,21 +12,17 @@
 
 from __future__ import annotations
 
-from .core import (
-    OlmaError, OlmaBoundsError, OlmaIntegrityError, OlmaStateError,
-    OlmaHandle, OlmaView, OlmaBuffer,
-    OlmaCluster, OlmaChain,
-    OlmaPartition, OlmaPartitionTable,
-    OlmaTransaction, OlmaXorDecoder,
-    safe_download, verify_sha256,
-    SECTOR, FAT32_MAX_CLUSTER, FAT32_EOC_MIN, FAT32_BAD,
-)
-from .runtime import OlmaRuntime, RuntimeEvent
-from .analyzer import OlmaAnalyzer, Issue
-from .rules import RULES, Rule, Severity
-from .fixer import OlmaFixer, FixResult
-from .reporter import OlmaReporter
+from .analyzer import Issue, OlmaAnalyzer
 from .cli import olma_main
+from .core import (FAT32_BAD, FAT32_EOC_MIN, FAT32_MAX_CLUSTER, SECTOR,
+                   OlmaBoundsError, OlmaBuffer, OlmaChain, OlmaCluster,
+                   OlmaError, OlmaHandle, OlmaIntegrityError, OlmaPartition,
+                   OlmaPartitionTable, OlmaStateError, OlmaTransaction,
+                   OlmaView, OlmaXorDecoder, safe_download, verify_sha256)
+from .fixer import FixResult, OlmaFixer
+from .reporter import OlmaReporter
+from .rules import RULES, Rule, Severity
+from .runtime import OlmaRuntime, RuntimeEvent
 
 
 class Olma:
@@ -41,7 +37,8 @@ class Olma:
         if self._runtime is not None:
             return
         self._runtime = OlmaRuntime(
-            trace_files=trace_files, trace_memory=trace_memory,
+            trace_files=trace_files,
+            trace_memory=trace_memory,
         )
         self._runtime.install()
 
@@ -60,6 +57,7 @@ class Olma:
     def analyzer(self, root: str | None = None) -> OlmaAnalyzer:
         if self._analyzer is None:
             from pathlib import Path
+
             base = Path(root) if root else Path(__file__).resolve().parents[1]
             self._analyzer = OlmaAnalyzer(base)
         return self._analyzer
@@ -70,14 +68,17 @@ class Olma:
     # --- fix ---
     def fix(self, *, dry_run: bool = True, root: str | None = None) -> list:
         from .fixer import OlmaFixer
+
         issues = self.analyze(root)
         fixer = OlmaFixer(self.analyzer(root).root, dry_run=dry_run)
         return fixer.apply(issues)
 
     # --- report ---
-    def report(self, *, fmt: str = "html", out: str | None = None,
-               root: str | None = None) -> str:
+    def report(
+        self, *, fmt: str = "html", out: str | None = None, root: str | None = None
+    ) -> str:
         from .reporter import OlmaReporter
+
         issues = self.analyze(root)
         rep = OlmaReporter(issues, self.trace_stats())
         return rep.render(fmt=fmt, out=out)
@@ -86,14 +87,35 @@ class Olma:
 olma = Olma()
 
 __all__ = [
-    "olma", "Olma",
-    "OlmaError", "OlmaBoundsError", "OlmaIntegrityError", "OlmaStateError",
-    "OlmaHandle", "OlmaView", "OlmaBuffer",
-    "OlmaCluster", "OlmaChain",
-    "OlmaPartition", "OlmaPartitionTable",
-    "OlmaTransaction", "OlmaXorDecoder",
-    "OlmaRuntime", "OlmaAnalyzer", "OlmaFixer", "OlmaReporter",
-    "Issue", "Rule", "Severity", "RULES", "FixResult",
-    "safe_download", "verify_sha256", "olma_main",
-    "SECTOR", "FAT32_MAX_CLUSTER", "FAT32_EOC_MIN", "FAT32_BAD",
+    "olma",
+    "Olma",
+    "OlmaError",
+    "OlmaBoundsError",
+    "OlmaIntegrityError",
+    "OlmaStateError",
+    "OlmaHandle",
+    "OlmaView",
+    "OlmaBuffer",
+    "OlmaCluster",
+    "OlmaChain",
+    "OlmaPartition",
+    "OlmaPartitionTable",
+    "OlmaTransaction",
+    "OlmaXorDecoder",
+    "OlmaRuntime",
+    "OlmaAnalyzer",
+    "OlmaFixer",
+    "OlmaReporter",
+    "Issue",
+    "Rule",
+    "Severity",
+    "RULES",
+    "FixResult",
+    "safe_download",
+    "verify_sha256",
+    "olma_main",
+    "SECTOR",
+    "FAT32_MAX_CLUSTER",
+    "FAT32_EOC_MIN",
+    "FAT32_BAD",
 ]

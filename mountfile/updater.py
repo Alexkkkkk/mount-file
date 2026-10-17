@@ -49,31 +49,38 @@ import urllib.error
 import urllib.request
 import webbrowser
 
-
 # --- MOUNTFILE_FIX: OLMA safe updater --------------------------------------
 try:
-    from mountfile.olma.core import (
-        safe_download as _olma_dl, verify_sha256 as _olma_sha,
-        OlmaTransaction as _OlmaTx,
-    )
+    from mountfile.olma.core import OlmaTransaction as _OlmaTx
+    from mountfile.olma.core import safe_download as _olma_dl
+    from mountfile.olma.core import verify_sha256 as _olma_sha
 except Exception:
     _olma_dl = _olma_sha = _OlmaTx = None
+
 
 def _safe_download(url, *, timeout=30.0, max_size=512 * 1024 * 1024):
     if _olma_dl is None:
         import urllib.request
+
         return urllib.request.urlopen(url, timeout=timeout).read()
     return _olma_dl(url, timeout=timeout, max_size=max_size)
 
+
 def _verify_sha256(data, expected):
-    if _olma_sha is None: return True
+    if _olma_sha is None:
+        return True
     return _olma_sha(data, expected)
+
 
 def _atomic_write(path, data):
     if _OlmaTx is None:
-        with open(path, "wb") as f: f.write(data)
+        with open(path, "wb") as f:
+            f.write(data)
         return
-    with _OlmaTx(path) as tx: tx.write_all(data)
+    with _OlmaTx(path) as tx:
+        tx.write_all(data)
+
+
 # --- /MOUNTFILE_FIX --------------------------------------------------------
 try:  # Qt нужен только фоновым классам внизу файла
     from .qt_compat import QThread, pyqtSignal

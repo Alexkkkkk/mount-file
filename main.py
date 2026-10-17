@@ -24,28 +24,32 @@ The GUI checks GitHub Releases for a newer build on every start; see
 import sys
 import traceback
 
-
-
-
 # --- MOUNTFILE_FIX: OLMA CLI -----------------------------------------------
 
 
 # --- MOUNTFILE_FIX: OLMA integration ---------------------------------------
 try:
     from mountfile.olma import olma as _olma
+
     _olma.install(trace_files=True, trace_memory=False)
 except Exception as _olma_err:  # noqa: BLE001
     _olma = None
     import sys as _sys
+
     print(f"[OLMA] init warning: {_olma_err}", file=_sys.stderr)
+
+
 # --- /MOUNTFILE_FIX --------------------------------------------------------
 def _olma_main(argv=None) -> int:
     from mountfile.olma.cli import olma_main
+
     return olma_main(argv)
 
 
 def _mf_diag() -> int:
-    import platform, sys as _sys
+    import platform
+    import sys as _sys
+
     try:
         from mountfile import __version__ as _v
     except Exception:
@@ -56,20 +60,22 @@ def _mf_diag() -> int:
     print(f"  version:  {_v}")
     try:
         from mountfile import qt_compat
+
         print(f"  qt:       {qt_compat.QT_VERSION}")
     except Exception as e:
         print(f"  qt:       NOT AVAILABLE ({e!r})")
     try:
-        from mountfile.olma import olma
-        print(f"  olma:     OK")
+        print("  olma:     OK")
     except Exception as e:
         print(f"  olma:     FAIL ({e!r})")
     try:
         import pytsk3
+
         print(f"  pytsk3:   {getattr(pytsk3, '__version__', 'ok')}")
     except Exception:
         print("  pytsk3:   NOT AVAILABLE")
     return 0
+
 
 # --- /MOUNTFILE_FIX --------------------------------------------------------
 def _pause_on_windows():
@@ -278,9 +284,10 @@ def main():
 
 if __name__ == "__main__":
     import sys as _sys
+
     if "--diag" in _sys.argv:
         raise SystemExit(_mf_diag())
     if "--olma" in _sys.argv:
         idx = _sys.argv.index("--olma")
-        raise SystemExit(_olma_main(_sys.argv[idx + 1:]))
+        raise SystemExit(_olma_main(_sys.argv[idx + 1 :]))
     main()
