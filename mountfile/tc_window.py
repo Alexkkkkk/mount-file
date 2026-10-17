@@ -40,26 +40,80 @@ import webbrowser
 from . import ai, autopick, tc_style
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
-                        ComboAdjustToContents, CtrlModifier, DescendingOrder,
-                        DialogAccepted, DlgActionRole, DlgCancel, DlgClose,
-                        DlgOk, EchoPassword, ElideMiddle, HVC_Interactive,
-                        ItemIsEnabled, ItemIsSelectable, Key_A, Key_Backspace,
-                        Key_Delete, Key_Enter, Key_Insert, Key_Return,
-                        Key_Space, Key_Tab, MB_No, MB_Yes, NoEditTriggers,
-                        QAction, QApplication, QBrush, QCheckBox, QComboBox,
-                        QDialog, QDialogButtonBox, QDockWidget,
-                        QEventLoop, QEvent_KeyPress, QFileDialog, QFormLayout,
-                        QHBoxLayout,
-                        QInputDialog, QKeySequence, QLabel, QLineEdit,
-                        QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-                        QProgressBar, QPushButton, QSize, QTimer, QSpinBox,
-                        QSplitter,
-                        QTabBar, QTableWidget, QTableWidgetItem, QTextEdit,
-                        QToolBar, QToolButton, QVBoxLayout, QWidget,
-                        SelectRows, SizePolicyExpanding, SizePolicyFixed,
-                        Stretch, TableExtendedSelection, TB_IconOnly,
-                        TB_InstantPopup, exec_dialog, standard_icon)
+from .qt_compat import (
+    AlignRight,
+    AlignVCenter,
+    AscendingOrder,
+    BottomDock,
+    ComboAdjustToContents,
+    CtrlModifier,
+    DescendingOrder,
+    DialogAccepted,
+    DlgActionRole,
+    DlgCancel,
+    DlgClose,
+    DlgOk,
+    EchoPassword,
+    ElideMiddle,
+    HVC_Interactive,
+    ItemIsEnabled,
+    ItemIsSelectable,
+    Key_A,
+    Key_Backspace,
+    Key_Delete,
+    Key_Enter,
+    Key_Insert,
+    Key_Return,
+    Key_Space,
+    Key_Tab,
+    MB_No,
+    MB_Yes,
+    NoEditTriggers,
+    QAction,
+    QApplication,
+    QBrush,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDockWidget,
+    QEvent_KeyPress,
+    QEventLoop,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QKeySequence,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSize,
+    QSpinBox,
+    QSplitter,
+    QTabBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QTimer,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+    SelectRows,
+    SizePolicyExpanding,
+    SizePolicyFixed,
+    Stretch,
+    TableExtendedSelection,
+    TB_IconOnly,
+    TB_InstantPopup,
+    exec_dialog,
+    standard_icon,
+)
 from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
 from .updater import is_frozen
@@ -1082,9 +1136,7 @@ class SettingsDialog(QDialog):
         self.chk_advise = QCheckBox(
             "AI-советник: предлагать разбор формата при открытии файла"
         )
-        self.chk_advise.setChecked(
-            bool(tc_style.SETTINGS.get("ai_format_autohook"))
-        )
+        self.chk_advise.setChecked(bool(tc_style.SETTINGS.get("ai_format_autohook")))
         lay.addRow("", self.chk_advise)
         self.ed_advise_repo = QLineEdit(
             str(tc_style.SETTINGS.get("ai_github_repo") or "")
@@ -1728,10 +1780,19 @@ class MainWindow(QMainWindow):
             except ValueError:
                 github = None
         advise_and_show(
-            p.join(entry["name"]), backends, github=github, parent=self
+            p.join(entry["name"]),
+            backends,
+            github=github,
+            parent=self,
+            # Файл внутри образа нельзя открыть по пути — байты уже здесь.
+            head=(
+                p.provider.read_file_range(p.join(entry["name"]), 0, 4096)
+                if p.mode == "img"
+                else None
+            ),
         )
 
-    def _maybe_advise(self, path):
+    def _maybe_advise(self, path, head=None):
         """Autohook: при открытии файла с неуверенным форматом — советник.
 
         Включается галочкой «ai_format_autohook» в Настройках; никак не
@@ -1742,7 +1803,9 @@ class MainWindow(QMainWindow):
         try:
             from mountfile.ai_format_advisor_v2 import maybe_advise
 
-            maybe_advise(tc_style.SETTINGS, path, parent=self, log=self.log_msg)
+            maybe_advise(
+                tc_style.SETTINGS, path, parent=self, log=self.log_msg, head=head
+            )
         except Exception as e:  # the hook must never break opening a file
             self.log_msg("AI-советник: %s" % e)
 
@@ -2188,7 +2251,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Просмотр", str(e))
             return
         exec_dialog(ViewerDialog(self, entry["name"], entry.get("size") or 0, data))
-        self._maybe_advise(full)
+        self._maybe_advise(full, head=data[:4096] if p.mode == "img" else None)
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):

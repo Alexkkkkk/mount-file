@@ -20,10 +20,24 @@ import json
 import os
 import time
 
-from .qt_compat import (P_ALTERNATEBASE, P_BASE, P_BUTTON, P_BUTTONTEXT,
-                        P_HIGHLIGHT, P_HIGHLIGHTEDTEXT, P_TEXT, P_TOOLTIPBASE,
-                        P_TOOLTIPTEXT, P_WINDOW, P_WINDOWTEXT, CG_Disabled,
-                        QColor, QFont, QFontDatabase, QPalette)
+from .qt_compat import (
+    P_ALTERNATEBASE,
+    P_BASE,
+    P_BUTTON,
+    P_BUTTONTEXT,
+    P_HIGHLIGHT,
+    P_HIGHLIGHTEDTEXT,
+    P_TEXT,
+    P_TOOLTIPBASE,
+    P_TOOLTIPTEXT,
+    P_WINDOW,
+    P_WINDOWTEXT,
+    CG_Disabled,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QPalette,
+)
 
 # Two skins: the dark one the interface is modelled on and the classic
 # light grey one people know from Total Commander on Windows.
@@ -353,9 +367,20 @@ def load_settings():
     for key in ("theme", "font_size", "show_log"):
         if key in data:
             SETTINGS[key] = data[key]
+    # Булевы переключатели: без этой ветки сохранённые значения (включая
+    # olma_watch) после перезапуска всегда откатывались к дефолту.
+    for key in ("show_log", "olma_watch", "ai_format_autohook", "ai_consensus"):
+        if key in data:
+            SETTINGS[key] = bool(data[key])
     for key in (
-        "ai_backend", "ai_base_url", "ai_base_url_openai", "ai_model",
-        "ai_api_key", "ai_github_repo", "ai_github_token", "olma_token",
+        "ai_backend",
+        "ai_base_url",
+        "ai_base_url_openai",
+        "ai_model",
+        "ai_api_key",
+        "ai_github_repo",
+        "ai_github_token",
+        "olma_token",
     ):
         if key in data:
             SETTINGS[key] = str(data[key] or "")

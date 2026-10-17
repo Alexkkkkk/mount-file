@@ -11,8 +11,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
+# exc_type=ImportError is required: mountfile.qt_compat raises its own
+# ImportError when neither PyQt6 nor PyQt5 is importable, and pytest >= 9
+# only skips on the requested exception type (same pattern as test_ai_ui.py;
+# without the guard the CI runners without libEGL die on collection).
+pytest.importorskip(
+    "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
+)
+
 from mountfile.ai_format_advisor_v2 import (
-    Calibration, GitHubReporter, HypothesisEngine, build_fingerprint,
+    Calibration,  # noqa: E402
+    GitHubReporter,
+    HypothesisEngine,
+    build_fingerprint,
 )
 
 

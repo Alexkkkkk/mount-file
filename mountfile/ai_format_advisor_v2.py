@@ -33,8 +33,15 @@ import os
 import urllib.request
 
 from .qt_compat import (
-    QDialog, QDialogButtonBox, DlgActionRole, DlgClose, QPlainTextEdit,
-    QPushButton, QVBoxLayout, QLabel, exec_dialog,
+    DlgActionRole,
+    DlgClose,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    exec_dialog,
 )
 
 #: Сколько байт файла уходит в «слепок» (сигнатуры + энтропия).
@@ -49,16 +56,23 @@ GITHUB_TIMEOUT = 15
 # ------------------------------------------------------------ fingerprint
 
 
-def build_fingerprint(path):
-    """Слепок файла: имя, размер, первые байты, sha1 и грубая энтропия."""
+def build_fingerprint(path, head=None, size=None):
+    """Слепок файла: имя, размер, первые байты, sha1 и грубая энтропия.
+
+    ``head``/``size`` позволяют передать уже прочитанные байты — для файла
+    внутри смонтированного образа, который нельзя открыть по пути.
+    """
     data = b""
-    size = 0
-    try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as f:
-            data = f.read(HEAD_BYTES)
-    except OSError:
-        pass
+    if head is None:
+        try:
+            if size is None:
+                size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                data = f.read(HEAD_BYTES)
+        except OSError:
+            pass
+    else:
+        data = head[:HEAD_BYTES]
     return {
         "path": path,
         "name": os.path.basename(path),
@@ -88,7 +102,7 @@ def _entropy(data):
 
 #: (смещение, сигнатура, название гипотезы, базовая уверенность)
 _SIGNATURES = (
-    (0, b"\x55\xAA" , None, 0.0),      # placeholder, MBR checked separately
+    (0, b"\x55\xaa", None, 0.0),  # placeholder, MBR checked separately
     (0, b"PK\x03\x04", "ZIP-контейнер (архив/docx/apk)", 0.95),
     (0, b"\x1f\x8b", "gzip-поток", 0.9),
     (0, b"\x89PNG", "PNG-изображение", 0.95),
@@ -117,7 +131,7 @@ _EXTENSIONS = {
 def _mbr_like(fp):
     """Классическая загрузочная подпись MBR в конце первого сектора."""
     head = fp.get("head") or b""
-    if len(head) >= 512 and head[510:512] == b"\x55\xAA":
+    if len(head) >= 512 and head[510:512] == b"\x55\xaa":
         return "Загрузочная подпись MBR (0x55AA в конце сектора)", 0.7
     return "", 0.0
 
@@ -135,30 +149,35 @@ class HypothesisEngine:
         head = fp.get("head") or b""
         for offset, magic, name, score in _SIGNATURES:
             if name and head[offset : offset + len(magic)] == magic:
-                hyps.append(
-                    {"name": name, "score": score, "evidence": "сигнатура"}
-                )
+                hyps.append({"name": name, "score": score, "evidence": "сигнатура"})
         mbr_evidence, mbr_score = _mbr_like(fp)
         if mbr_evidence:
             hyps.append(
-                {"name": "Образ диска с MBR", "score": mbr_score,
-                 "evidence": mbr_evidence}
+                {
+                    "name": "Образ диска с MBR",
+                    "score": mbr_score,
+                    "evidence": mbr_evidence,
+                }
             )
         ext = os.path.splitext(fp.get("name") or "")[1].lower()
         if ext in _EXTENSIONS:
             name, score = _EXTENSIONS[ext]
-            hyps.append(
-                {"name": name, "score": score, "evidence": "расширение"}
-            )
+            hyps.append({"name": name, "score": score, "evidence": "расширение"})
         if fp.get("entropy", 0.0) > 7.5 and not hyps:
             hyps.append(
-                {"name": "Сжатые или зашифрованные данные",
-                 "score": 0.45, "evidence": "высокая энтропия"}
+                {
+                    "name": "Сжатые или зашифрованные данные",
+                    "score": 0.45,
+                    "evidence": "высокая энтропия",
+                }
             )
         if not hyps:
             hyps.append(
-                {"name": "Неизвестный формат", "score": 0.2,
-                 "evidence": "совпадений не найдено"}
+                {
+                    "name": "Неизвестный формат",
+                    "score": 0.2,
+                    "evidence": "совпадений не найдено",
+                }
             )
         hyps.sort(key=lambda h: h["score"], reverse=True)
         return hyps
@@ -193,15 +212,18 @@ class LLMBackendAdapter:
             "Гипотезы о формате: %s\n"
             "Энтропия: %s бит/байт, размер: %s байт.\n"
             "Подтверди или опровергни гипотезы, укажи наиболее вероятный "
-            "формат и как его проверить." % (
-                "; ".join("%s (%.2f)" % (h["name"], h["score"])
-                          for h in hypotheses) or "нет",
+            "формат и как его проверить."
+            % (
+                "; ".join("%s (%.2f)" % (h["name"], h["score"]) for h in hypotheses)
+                or "нет",
                 fp.get("entropy"),
                 fp.get("size"),
             )
         )
         result = self.backend.analyze(
-            fp.get("name") or "file", head, prompt=prompt,
+            fp.get("name") or "file",
+            head,
+            prompt=prompt,
             size=fp.get("size"),
         )
         return result
@@ -225,8 +247,7 @@ class GitHubReporter:
         """``(ok, url|error)`` — никогда не бросает исключений наружу."""
         url = "https://api.github.com/repos/%s/issues" % self.repo
         payload = json.dumps(
-            {"title": title[:200], "body": body[:6000],
-             "labels": ["ai-advisor"]}
+            {"title": title[:200], "body": body[:6000], "labels": ["ai-advisor"]}
         ).encode("utf-8")
         req = urllib.request.Request(url, data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
@@ -238,6 +259,7 @@ class GitHubReporter:
         except Exception as e:
             # Токен в текст ошибки не попадает.
             return False, str(e)[:200]
+
 
 # ------------------------------------------------------------ dialog
 
@@ -255,11 +277,12 @@ class FormatAdvisorDialog(QDialog):
         self.github = github
 
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(
-            "Файл: %s · %s байт · энтропия %s бит/байт" % (
-                fp.get("name"), fp.get("size"), fp.get("entropy")
+        lay.addWidget(
+            QLabel(
+                "Файл: %s · %s байт · энтропия %s бит/байт"
+                % (fp.get("name"), fp.get("size"), fp.get("entropy"))
             )
-        ))
+        )
         self.txt = QPlainTextEdit()
         self.txt.setReadOnly(True)
         lay.addWidget(self.txt, 1)
@@ -278,14 +301,16 @@ class FormatAdvisorDialog(QDialog):
         if hyps is not None:
             lines.append("Гипотезы:")
             lines += [
-                "  · %s — уверенность %.2f (%s)" % (
-                    h["name"], h["score"], h["evidence"])
+                "  · %s — уверенность %.2f (%s)"
+                % (h["name"], h["score"], h["evidence"])
                 for h in hyps
             ]
             confident = self.calibration.is_confident(hyps)
             lines.append(
-                "Оценка: %s" % (
-                    "формат распознан уверенно" if confident
+                "Оценка: %s"
+                % (
+                    "формат распознан уверенно"
+                    if confident
                     else "уверенности нет — стоит спросить модель"
                 )
             )
@@ -319,14 +344,18 @@ class FormatAdvisorDialog(QDialog):
             return
         ok, info = self.github.create_issue(
             "AI-советник: неизвестный формат — %s" % (self.fp.get("name"),),
-            "Файл: %s\nРазмер: %s байт\nЭнтропия: %s\nsha1(head): %s\n\n%s" % (
-                self.fp.get("name"), self.fp.get("size"),
-                self.fp.get("entropy"), self.fp.get("sha1"),
+            "Файл: %s\nРазмер: %s байт\nЭнтропия: %s\nsha1(head): %s\n\n%s"
+            % (
+                self.fp.get("name"),
+                self.fp.get("size"),
+                self.fp.get("entropy"),
+                self.fp.get("sha1"),
                 self.txt.toPlainText()[:3000],
             ),
         )
         self.txt.appendPlainText(
-            "\nIssue создан: %s" % info if ok
+            "\nIssue создан: %s" % info
+            if ok
             else "\nНе удалось создать issue: %s" % info
         )
 
@@ -334,20 +363,18 @@ class FormatAdvisorDialog(QDialog):
 # ------------------------------------------------------------ entry points
 
 
-def advise_and_show(path, backends, github=None, parent=None):
+def advise_and_show(path, backends, github=None, parent=None, head=None):
     """Меню «AI-советник v2»: слепок, гипотезы, ответы моделей, issue."""
-    fp = build_fingerprint(path)
+    fp = build_fingerprint(path, head=head)
     adapters = [LLMBackendAdapter(b) for b in backends]
-    dlg = FormatAdvisorDialog(
-        fp, adapters, Calibration(), github=github, parent=parent
-    )
+    dlg = FormatAdvisorDialog(fp, adapters, Calibration(), github=github, parent=parent)
     return exec_dialog(dlg)
 
 
-def maybe_advise(settings, path, parent=None, log=None):
+def maybe_advise(settings, path, parent=None, log=None, head=None):
     """Авто-хук: диалог только для файлов с неуверенными гипотезами."""
     log = log or (lambda msg: None)
-    fp = build_fingerprint(path)
+    fp = build_fingerprint(path, head=head)
     calibration = Calibration()
     # Бэкенд берётся тем же построителем, что и кнопка «AI».
     from .ai import build_backend
