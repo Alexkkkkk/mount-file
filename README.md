@@ -11,7 +11,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 # Mount File
 
-**Актуальный релиз: [v1.24.1](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.24.1).**
+**Актуальный релиз: [v1.24.2](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.24.2).**
 
 Файловый менеджер для raw-образов дисков и дампов NAND/eMMC: просмотр и
 извлечение файлов, чтение таблиц разделов, а в образах FAT32 — создание,
