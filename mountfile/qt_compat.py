@@ -79,6 +79,8 @@ if QT6:  # pragma: no branch
     DisplayRole = Qt.ItemDataRole.DisplayRole
     Horizontal = Qt.Orientation.Horizontal
     MOUSE_LEFT = Qt.MouseButton.LeftButton
+    MOUSE_RIGHT = Qt.MouseButton.RightButton
+    CustomContextMenu = Qt.ContextMenuPolicy.CustomContextMenu
     Key_Up = Qt.Key.Key_Up
     Key_Down = Qt.Key.Key_Down
     Key_Left = Qt.Key.Key_Left
@@ -149,6 +151,8 @@ else:  # pragma: no cover - PyQt5 / Windows 7
     DisplayRole = Qt.DisplayRole
     Horizontal = Qt.Horizontal
     MOUSE_LEFT = Qt.LeftButton
+    MOUSE_RIGHT = Qt.RightButton
+    CustomContextMenu = Qt.CustomContextMenu
     Key_Up = Qt.Key_Up
     Key_Down = Qt.Key_Down
     Key_Left = Qt.Key_Left
@@ -352,6 +356,8 @@ __all__ = [
     "DisplayRole",
     "Horizontal",
     "MOUSE_LEFT",
+    "MOUSE_RIGHT",
+    "CustomContextMenu",
     "Key_Up",
     "Key_Down",
     "Key_Left",
