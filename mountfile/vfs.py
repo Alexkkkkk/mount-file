@@ -78,7 +78,7 @@ class TskImage:
             self.img = pytsk3.Img_Info(image_path)
             self.fs = pytsk3.FS_Info(self.img, offset=offset)
         except Exception as e:
-            raise TskError(str(e))
+            raise TskError(str(e)) from e
         self.root_name = image_path
 
     def list_dir(self, path="/"):
@@ -86,14 +86,14 @@ class TskImage:
         try:
             d = self.fs.open_dir(path)
         except Exception as e:
-            raise TskError("cannot open directory %r: %s" % (path, e))
-        for e in d:
-            name = e.info.name.name
+            raise TskError("cannot open directory %r: %s" % (path, e)) from e
+        for entry in d:
+            name = entry.info.name.name
             if isinstance(name, bytes):
                 name = name.decode("utf-8", "replace")
             if name in (".", ".."):
                 continue
-            meta = e.info.meta
+            meta = entry.info.meta
             if meta is None:
                 continue
             is_dir = meta.type == pytsk3.TSK_FS_META_TYPE_DIR
@@ -112,7 +112,7 @@ class TskImage:
         try:
             return self.fs.open(path)
         except Exception as e:
-            raise TskError("cannot open file %r: %s" % (path, e))
+            raise TskError("cannot open file %r: %s" % (path, e)) from e
 
     def file_size(self, path):
         return int(self._open(path).info.meta.size)
