@@ -14,7 +14,8 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import rt809
-from mountfile.rt809 import Part, Rt809Error, decode_dump, detect, format_parts_table, parse_udev
+from mountfile.rt809 import (Part, Rt809Error, decode_dump, detect,
+                             format_parts_table, parse_udev)
 
 
 def make_encrypted_dump(path, kind="MTK", plain_check=True):

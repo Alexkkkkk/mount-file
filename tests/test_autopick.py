@@ -24,16 +24,9 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import autopick, cli
-from mountfile.autopick import (
-    Candidate,
-    auto_select,
-    find_udev_files,
-    format_candidates,
-    format_choice,
-    looks_like_udev,
-    scan_candidates,
-    verify_mount,
-)
+from mountfile.autopick import (Candidate, auto_select, find_udev_files,
+                                format_candidates, format_choice,
+                                looks_like_udev, scan_candidates, verify_mount)
 
 BPS, SPC, RESERVED, NFATS, ROOTC = 512, 1, 32, 1, 2
 TOTAL_SECTORS = 70000
