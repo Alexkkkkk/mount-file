@@ -20,24 +20,10 @@ import json
 import os
 import time
 
-from .qt_compat import (
-    P_ALTERNATEBASE,
-    P_BASE,
-    P_BUTTON,
-    P_BUTTONTEXT,
-    P_HIGHLIGHT,
-    P_HIGHLIGHTEDTEXT,
-    P_TEXT,
-    P_TOOLTIPBASE,
-    P_TOOLTIPTEXT,
-    P_WINDOW,
-    P_WINDOWTEXT,
-    CG_Disabled,
-    QColor,
-    QFont,
-    QFontDatabase,
-    QPalette,
-)
+from .qt_compat import (P_ALTERNATEBASE, P_BASE, P_BUTTON, P_BUTTONTEXT,
+                        P_HIGHLIGHT, P_HIGHLIGHTEDTEXT, P_TEXT, P_TOOLTIPBASE,
+                        P_TOOLTIPTEXT, P_WINDOW, P_WINDOWTEXT, CG_Disabled,
+                        QColor, QFont, QFontDatabase, QPalette)
 
 # Two skins: the dark one the interface is modelled on and the classic
 # light grey one people know from Total Commander on Windows.
