@@ -58,6 +58,7 @@ from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
                         QToolButton, QVBoxLayout, QWidget, SelectRows,
                         SizePolicyExpanding, SizePolicyFixed, Stretch,
                         TableExtendedSelection, TB_IconOnly, TB_InstantPopup,
+                        CustomContextMenu,
                         exec_dialog, standard_icon)
 from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
@@ -192,6 +193,8 @@ class PanelTable(QTableWidget):
         self.setSelectionMode(TableExtendedSelection)
         self.setEditTriggers(NoEditTriggers)
         self.doubleClicked.connect(lambda *_: panel.open_row(panel.table.currentRow()))
+        self.setContextMenuPolicy(CustomContextMenu)
+        self.customContextMenuRequested.connect(panel.show_context_menu)
         # A short hint only: the long legend used to pop up as a wide tooltip
         # that covered both panels. It now lives under an empty panel.
         self.setToolTip("Enter — открыть, Space — отметить, Tab — другая панель")
@@ -396,6 +399,61 @@ class TcPanel(QWidget):
         if not text:
             return
         self.win.try_cd(self, text)
+
+    # ------------------------------------------------------ context menu
+    def show_context_menu(self, pos):
+        """Show file operations for the row under the right mouse button.
+
+        A right click also makes this panel active and moves the cursor to the
+        clicked row, matching the Total Commander interaction model. Existing
+        Space-marked rows are preserved, so Copy/Move/Delete can still work on
+        a batch selected by the user.
+        """
+        row = self.table.rowAt(pos.y())
+        if row >= 0:
+            self.table.setCurrentCell(row, -1)
+            self.win.set_active(self.side)
+
+        entry = self.selected_entry()
+        menu = QMenu(self.table)
+
+        def add(text, slot, enabled=True):
+            action = menu.addAction(text, slot)
+            action.setEnabled(bool(enabled))
+            return action
+
+        is_real_entry = bool(entry and not entry.get("up"))
+        is_file = bool(is_real_entry and not entry.get("is_dir"))
+        can_write_image = self.mode != "img" or self.writer is not None
+
+        add("Открыть" if entry and entry.get("is_dir") else "Просмотр (F3)",
+            lambda: self.open_row(self.table.currentRow()), bool(entry))
+        add("AI-анализ", self.win.ai_analyze, is_file)
+        menu.addSeparator()
+        add("Копировать в другую панель (F5)", self.win.f5_copy, is_real_entry)
+        add("Переместить в другую панель (F6)", self.win.f6_move, is_real_entry)
+        add("Переименовать", self.win.rename_selected, is_real_entry and can_write_image)
+        add("Удалить (F8)", self.win.f8_delete, is_real_entry and self.mode != "img")
+        add("Копировать путь", self.copy_selected_path, is_real_entry)
+        menu.addSeparator()
+        add("Новая папка (F7)", self.win.f7_mkdir, can_write_image)
+        add("Обновить", self.refresh)
+        menu.addSeparator()
+        add("Выделить всё (Ctrl+A)", self.mark_all)
+        add("Снять выделение", self.unmark_all, bool(self.marked))
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def copy_selected_path(self):
+        """Copy the selected local path or image-internal path to clipboard."""
+        entry = self.selected_entry()
+        if not entry or entry.get("up"):
+            return
+        path = self.join(entry["name"])
+        if self.mode == "img" and self.win.image_path:
+            path = "%s::%s" % (self.win.image_path, path)
+        QApplication.clipboard().setText(path)
+        self.win.log_msg("Путь скопирован: %s" % path)
 
     # ---------------------------------------------------------------- tabs
     def _rebuild_tabs(self):
@@ -2435,6 +2493,49 @@ class MainWindow(QMainWindow):
             return
         p.refresh()
         self.log_msg("Создана папка %s" % p.join(name))
+
+    def rename_selected(self):
+        """Rename the cursor entry from the context menu.
+
+        FAT32 uses its native writer; local panels use ``os.rename``. The
+        operation intentionally targets one cursor entry, while batch actions
+        continue to use the Space-marked set.
+        """
+        p = self.active_panel()
+        entry = p.selected_entry()
+        if not entry or entry.get("up"):
+            return
+        if p.mode == "img" and p.writer is None:
+            QMessageBox.information(
+                self,
+                "Переименование",
+                "Том открыт только для чтения: переименование доступно "
+                "только в FAT32.",
+            )
+            return
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Переименовать",
+            "Новое имя для %s:" % entry["name"],
+            text=entry["name"],
+        )
+        new_name = new_name.strip()
+        if not ok or not new_name or new_name == entry["name"]:
+            return
+        if new_name in (".", "..") or any(sep in new_name for sep in ("/", "\\")):
+            QMessageBox.warning(self, "Переименование", "Имя не должно содержать / или \\")
+            return
+        try:
+            if p.mode == "img":
+                p.writer.rename(p.join(entry["name"]), new_name)
+            else:
+                os.rename(p.join(entry["name"]), p.join(new_name))
+        except Exception as exc:
+            QMessageBox.critical(self, "Переименование не удалось", str(exc))
+            return
+        p.marked.discard(entry["name"])
+        p.refresh()
+        self.log_msg("Переименовано: %s → %s" % (entry["name"], new_name))
 
     def f8_delete(self):
         p = self.active_panel()
