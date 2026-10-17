@@ -21,10 +21,10 @@ import os
 import re
 import tempfile
 from collections import OrderedDict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
-
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 DEFAULT_REMEMBER_PATH = Path("~/.mountfile/ai_kb.json")
 MAX_MAGIC_SUMMARY_LENGTH = 256
@@ -144,7 +144,9 @@ class FileFingerprint:
         object.__setattr__(self, "filename", display_name)
         object.__setattr__(self, "size", size)
         object.__setattr__(self, "extension", normalised_extension)
-        object.__setattr__(self, "magic_summary", _normalise_magic_summary(magic_summary))
+        object.__setattr__(
+            self, "magic_summary", _normalise_magic_summary(magic_summary)
+        )
 
     @property
     def name(self) -> str:
@@ -190,7 +192,7 @@ class FileFingerprint:
         extension: Optional[Union[str, os.PathLike]] = None,
         magic_summary: Any = "",
         **aliases: Any,
-    ) -> "FileFingerprint":
+    ) -> FileFingerprint:
         """Construct a fingerprint without doing any filesystem I/O."""
 
         return cls(filename, size, extension, magic_summary, **aliases)
@@ -237,27 +239,179 @@ class FormatSpec:
 # intentionally broad enough for a useful first-pass advisor while remaining
 # deterministic and offline.
 _FORMAT_SPECS: Tuple[FormatSpec, ...] = (
-    FormatSpec("png", "PNG image", (".png",), ("89504e47", "png"), "Portable lossless image.", ("Check the PNG signature and inspect dimensions with a read-only metadata tool.", "If the image is trusted, render a copy rather than modifying the original.")),
-    FormatSpec("jpeg", "JPEG image", (".jpg", ".jpeg", ".jpe"), ("ffd8ff", "jpeg", "jpg"), "Compressed photographic image.", ("Check the JPEG marker sequence and read dimensions without rewriting the file.", "Keep the original read-only while testing a decoder.")),
-    FormatSpec("gif", "GIF image", (".gif",), ("47494638", "gif"), "Indexed or animated image.", ("Check the GIF header and version with a metadata-only parser.", "If animation matters, inspect frame count on a working copy.")),
-    FormatSpec("webp", "WebP image", (".webp",), ("52494646", "webp"), "RIFF-based WebP image.", ("Confirm the RIFF/WebP markers and query image dimensions read-only.", "Use an isolated decoder for an untrusted image.")),
-    FormatSpec("pdf", "PDF document", (".pdf",), ("25504446", "%pdf", "pdf"), "Portable document container.", ("Confirm the PDF header and inspect page metadata with a sandboxed reader.", "Do not enable active content or scripts from an untrusted document.")),
-    FormatSpec("zip", "ZIP archive", (".zip", ".docx", ".xlsx", ".pptx", ".jar", ".apk"), ("504b0304", "504b0506", "504b0708", "pk"), "ZIP container used by archives and office packages.", ("List the archive entries without extracting them first.", "Extract only into a disposable directory after checking the source.")),
-    FormatSpec("gzip", "gzip stream", (".gz", ".tgz"), ("1f8b", "gzip"), "Gzip-compressed stream.", ("Check the gzip header and compression metadata without overwriting the source.", "Decompress into a new destination and verify the result separately.")),
-    FormatSpec("tar", "tar archive", (".tar",), ("ustar", "tar"), "Tape archive, often paired with compression.", ("Inspect the archive listing and member names before extraction.", "Extract into a directory with path traversal protections enabled.")),
-    FormatSpec("7z", "7-Zip archive", (".7z",), ("377abcaf271c", "7z"), "7-Zip compressed container.", ("List 7z entries without extracting untrusted data.", "Use a current read-only archive tool and a disposable output directory.")),
-    FormatSpec("rar", "RAR archive", (".rar",), ("526172211a0700", "526172211a0701", "rar"), "RAR compressed container.", ("List RAR entries and headers before extracting.", "Extract only to a disposable directory and reject unsafe paths.")),
-    FormatSpec("elf", "ELF executable", (".elf", ".so"), ("7f454c46", "elf"), "Unix executable or shared object.", ("Inspect ELF class, architecture, and sections without executing it.", "Analyze an untrusted executable in an isolated environment.")),
-    FormatSpec("pe", "PE/Windows executable", (".exe", ".dll", ".sys"), ("4d5a", "mz", "pe"), "Windows executable or library.", ("Inspect PE headers and architecture without launching the file.", "Use an isolated analysis environment for untrusted binaries.")),
-    FormatSpec("sqlite", "SQLite database", (".sqlite", ".sqlite3", ".db"), ("53514c69746520666f726d6174203300", "sqlite"), "SQLite database file.", ("Open a copy read-only and run an integrity check before queries.", "Do not run application extensions or triggers from an untrusted database.")),
-    FormatSpec("mp3", "MP3 audio", (".mp3",), ("494433", "mp3", "fffb"), "MPEG audio stream.", ("Check the ID3/audio frame markers and read duration with a metadata parser.", "Keep the source unchanged while validating playback.")),
-    FormatSpec("wav", "WAV audio", (".wav",), ("52494646", "wav"), "RIFF/WAVE audio container.", ("Confirm RIFF/WAVE markers and inspect sample metadata read-only.", "Decode a copy if playback validation is required.")),
+    FormatSpec(
+        "png",
+        "PNG image",
+        (".png",),
+        ("89504e47", "png"),
+        "Portable lossless image.",
+        (
+            "Check the PNG signature and inspect dimensions with a read-only metadata tool.",
+            "If the image is trusted, render a copy rather than modifying the original.",
+        ),
+    ),
+    FormatSpec(
+        "jpeg",
+        "JPEG image",
+        (".jpg", ".jpeg", ".jpe"),
+        ("ffd8ff", "jpeg", "jpg"),
+        "Compressed photographic image.",
+        (
+            "Check the JPEG marker sequence and read dimensions without rewriting the file.",
+            "Keep the original read-only while testing a decoder.",
+        ),
+    ),
+    FormatSpec(
+        "gif",
+        "GIF image",
+        (".gif",),
+        ("47494638", "gif"),
+        "Indexed or animated image.",
+        (
+            "Check the GIF header and version with a metadata-only parser.",
+            "If animation matters, inspect frame count on a working copy.",
+        ),
+    ),
+    FormatSpec(
+        "webp",
+        "WebP image",
+        (".webp",),
+        ("52494646", "webp"),
+        "RIFF-based WebP image.",
+        (
+            "Confirm the RIFF/WebP markers and query image dimensions read-only.",
+            "Use an isolated decoder for an untrusted image.",
+        ),
+    ),
+    FormatSpec(
+        "pdf",
+        "PDF document",
+        (".pdf",),
+        ("25504446", "%pdf", "pdf"),
+        "Portable document container.",
+        (
+            "Confirm the PDF header and inspect page metadata with a sandboxed reader.",
+            "Do not enable active content or scripts from an untrusted document.",
+        ),
+    ),
+    FormatSpec(
+        "zip",
+        "ZIP archive",
+        (".zip", ".docx", ".xlsx", ".pptx", ".jar", ".apk"),
+        ("504b0304", "504b0506", "504b0708", "pk"),
+        "ZIP container used by archives and office packages.",
+        (
+            "List the archive entries without extracting them first.",
+            "Extract only into a disposable directory after checking the source.",
+        ),
+    ),
+    FormatSpec(
+        "gzip",
+        "gzip stream",
+        (".gz", ".tgz"),
+        ("1f8b", "gzip"),
+        "Gzip-compressed stream.",
+        (
+            "Check the gzip header and compression metadata without overwriting the source.",
+            "Decompress into a new destination and verify the result separately.",
+        ),
+    ),
+    FormatSpec(
+        "tar",
+        "tar archive",
+        (".tar",),
+        ("ustar", "tar"),
+        "Tape archive, often paired with compression.",
+        (
+            "Inspect the archive listing and member names before extraction.",
+            "Extract into a directory with path traversal protections enabled.",
+        ),
+    ),
+    FormatSpec(
+        "7z",
+        "7-Zip archive",
+        (".7z",),
+        ("377abcaf271c", "7z"),
+        "7-Zip compressed container.",
+        (
+            "List 7z entries without extracting untrusted data.",
+            "Use a current read-only archive tool and a disposable output directory.",
+        ),
+    ),
+    FormatSpec(
+        "rar",
+        "RAR archive",
+        (".rar",),
+        ("526172211a0700", "526172211a0701", "rar"),
+        "RAR compressed container.",
+        (
+            "List RAR entries and headers before extracting.",
+            "Extract only to a disposable directory and reject unsafe paths.",
+        ),
+    ),
+    FormatSpec(
+        "elf",
+        "ELF executable",
+        (".elf", ".so"),
+        ("7f454c46", "elf"),
+        "Unix executable or shared object.",
+        (
+            "Inspect ELF class, architecture, and sections without executing it.",
+            "Analyze an untrusted executable in an isolated environment.",
+        ),
+    ),
+    FormatSpec(
+        "pe",
+        "PE/Windows executable",
+        (".exe", ".dll", ".sys"),
+        ("4d5a", "mz", "pe"),
+        "Windows executable or library.",
+        (
+            "Inspect PE headers and architecture without launching the file.",
+            "Use an isolated analysis environment for untrusted binaries.",
+        ),
+    ),
+    FormatSpec(
+        "sqlite",
+        "SQLite database",
+        (".sqlite", ".sqlite3", ".db"),
+        ("53514c69746520666f726d6174203300", "sqlite"),
+        "SQLite database file.",
+        (
+            "Open a copy read-only and run an integrity check before queries.",
+            "Do not run application extensions or triggers from an untrusted database.",
+        ),
+    ),
+    FormatSpec(
+        "mp3",
+        "MP3 audio",
+        (".mp3",),
+        ("494433", "mp3", "fffb"),
+        "MPEG audio stream.",
+        (
+            "Check the ID3/audio frame markers and read duration with a metadata parser.",
+            "Keep the source unchanged while validating playback.",
+        ),
+    ),
+    FormatSpec(
+        "wav",
+        "WAV audio",
+        (".wav",),
+        ("52494646", "wav"),
+        "RIFF/WAVE audio container.",
+        (
+            "Confirm RIFF/WAVE markers and inspect sample metadata read-only.",
+            "Decode a copy if playback validation is required.",
+        ),
+    ),
 )
 
 # Public mapping is useful for callers that want to inspect or extend the
 # offline knowledge base.  ``FORMAT_KNOWLEDGE_BASE`` is an explicit alias for
 # users who prefer a descriptive name.
-KNOWLEDGE_BASE: Mapping[str, FormatSpec] = OrderedDict((spec.key, spec) for spec in _FORMAT_SPECS)
+KNOWLEDGE_BASE: Mapping[str, FormatSpec] = OrderedDict(
+    (spec.key, spec) for spec in _FORMAT_SPECS
+)
 FORMAT_KNOWLEDGE_BASE = KNOWLEDGE_BASE
 FORMAT_SPECS = _FORMAT_SPECS
 
@@ -265,7 +419,10 @@ FORMAT_SPECS = _FORMAT_SPECS
 class KnowledgeBase:
     """Small deterministic wrapper around format specifications."""
 
-    def __init__(self, specs: Optional[Union[Mapping[str, FormatSpec], Iterable[FormatSpec]]] = None) -> None:
+    def __init__(
+        self,
+        specs: Optional[Union[Mapping[str, FormatSpec], Iterable[FormatSpec]]] = None,
+    ) -> None:
         if specs is None:
             self._specs = OrderedDict(KNOWLEDGE_BASE)
         elif isinstance(specs, Mapping):
@@ -282,7 +439,9 @@ class KnowledgeBase:
     def __contains__(self, key: object) -> bool:
         return key in self._specs
 
-    def get(self, key: str, default: Optional[FormatSpec] = None) -> Optional[FormatSpec]:
+    def get(
+        self, key: str, default: Optional[FormatSpec] = None
+    ) -> Optional[FormatSpec]:
         return self._specs.get(key, default)
 
     def values(self):
@@ -314,22 +473,34 @@ _GENERIC_RECIPES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     (
         "metadata check",
         "Unknown format",
-        ("Compare the supplied extension with a trusted magic summary.", "Keep the file read-only until its type is established."),
+        (
+            "Compare the supplied extension with a trusted magic summary.",
+            "Keep the file read-only until its type is established.",
+        ),
     ),
     (
         "text check",
         "Text or structured data candidate",
-        ("Use a bounded, offline text/encoding probe on a copy if content inspection is authorized.", "Treat parser errors as evidence, not as a reason to modify the source."),
+        (
+            "Use a bounded, offline text/encoding probe on a copy if content inspection is authorized.",
+            "Treat parser errors as evidence, not as a reason to modify the source.",
+        ),
     ),
     (
         "container check",
         "Binary or container candidate",
-        ("Use a format-specific listing or metadata command without extraction or execution.", "Work in a disposable directory for any later validation."),
+        (
+            "Use a format-specific listing or metadata command without extraction or execution.",
+            "Work in a disposable directory for any later validation.",
+        ),
     ),
     (
         "sandbox check",
         "Untrusted binary candidate",
-        ("If the file must be opened, use an isolated environment with execution disabled.", "Preserve the original and record only the resulting metadata."),
+        (
+            "If the file must be opened, use an isolated environment with execution disabled.",
+            "Preserve the original and record only the resulting metadata.",
+        ),
     ),
 )
 
@@ -353,17 +524,31 @@ class HypothesisEngine:
     def __init__(
         self,
         knowledge_base: Optional[Any] = None,
-        remember: Optional["Remember"] = None,
+        remember: Optional[Remember] = None,
         fingerprint: Optional[Union[FileFingerprint, Mapping[str, Any]]] = None,
     ) -> None:
         # ``None`` also keeps construction compatible with the earlier v2
         # engine, whose first argument was an adapter.
-        self._fingerprint = knowledge_base if isinstance(knowledge_base, FileFingerprint) else fingerprint
-        self.knowledge_base = knowledge_base if isinstance(knowledge_base, KnowledgeBase) else KnowledgeBase(knowledge_base if isinstance(knowledge_base, (Mapping, list, tuple)) else None)
+        self._fingerprint = (
+            knowledge_base
+            if isinstance(knowledge_base, FileFingerprint)
+            else fingerprint
+        )
+        self.knowledge_base = (
+            knowledge_base
+            if isinstance(knowledge_base, KnowledgeBase)
+            else KnowledgeBase(
+                knowledge_base
+                if isinstance(knowledge_base, (Mapping, list, tuple))
+                else None
+            )
+        )
         self.remember = remember
 
     @staticmethod
-    def _coerce_fingerprint(value: Union[FileFingerprint, Mapping[str, Any]]) -> FileFingerprint:
+    def _coerce_fingerprint(
+        value: Union[FileFingerprint, Mapping[str, Any]],
+    ) -> FileFingerprint:
         if isinstance(value, FileFingerprint):
             return value
         if isinstance(value, Mapping):
@@ -373,12 +558,17 @@ class HypothesisEngine:
                 value.get("extension", value.get("ext")),
                 value.get(
                     "magic_summary",
-                    value.get("magic", value.get("magic_bytes", value.get("magic_bytes_summary", ""))),
+                    value.get(
+                        "magic",
+                        value.get("magic_bytes", value.get("magic_bytes_summary", "")),
+                    ),
                 ),
             )
         raise TypeError("expected FileFingerprint or metadata mapping")
 
-    def suggest(self, fingerprint: Optional[Union[FileFingerprint, Mapping[str, Any]]] = None) -> List[ActionableRecipe]:
+    def suggest(
+        self, fingerprint: Optional[Union[FileFingerprint, Mapping[str, Any]]] = None
+    ) -> List[ActionableRecipe]:
         if fingerprint is None:
             fingerprint = self._fingerprint
         if fingerprint is None:
@@ -422,7 +612,9 @@ class HypothesisEngine:
             )
 
         if not candidates:
-            candidates.extend(self._generic_recipe(item, fp) for item in _GENERIC_RECIPES)
+            candidates.extend(
+                self._generic_recipe(item, fp) for item in _GENERIC_RECIPES
+            )
         else:
             # Fill the shortlist with safe alternatives so callers always have
             # several next actions, while keeping the detected format first.
@@ -439,15 +631,26 @@ class HypothesisEngine:
         # Four is the normal result; this guard protects custom knowledge bases
         # with unusual input while preserving the documented 3–5 range.
         if len(candidates) < 3:
-            candidates.extend(self._generic_recipe(item, fp) for item in _GENERIC_RECIPES[: 3 - len(candidates)])
+            candidates.extend(
+                self._generic_recipe(item, fp)
+                for item in _GENERIC_RECIPES[: 3 - len(candidates)]
+            )
         candidates = candidates[:5]
         for rank, item in enumerate(candidates, 1):
             item["rank"] = rank
         return candidates
 
-    def _recipe_from_remembered(self, remembered: Mapping[str, Any]) -> ActionableRecipe:
-        steps = remembered.get("steps") or [str(remembered.get("action") or "Apply the remembered read-only check.")]
-        action = str(remembered.get("action") or remembered.get("recipe") or "Apply the remembered read-only check.")
+    def _recipe_from_remembered(
+        self, remembered: Mapping[str, Any]
+    ) -> ActionableRecipe:
+        steps = remembered.get("steps") or [
+            str(remembered.get("action") or "Apply the remembered read-only check.")
+        ]
+        action = str(
+            remembered.get("action")
+            or remembered.get("recipe")
+            or "Apply the remembered read-only check."
+        )
         return ActionableRecipe(
             {
                 "id": "remembered",
@@ -466,7 +669,9 @@ class HypothesisEngine:
         )
 
     @staticmethod
-    def _generic_recipe(item: Tuple[str, str, Tuple[str, ...]], fp: FileFingerprint) -> ActionableRecipe:
+    def _generic_recipe(
+        item: Tuple[str, str, Tuple[str, ...]], fp: FileFingerprint
+    ) -> ActionableRecipe:
         recipe_id, name, steps = item
         evidence = "no matching extension or magic summary"
         if fp.extension:
@@ -521,7 +726,9 @@ def _json_safe(value: Any) -> Any:
 
 
 def _fingerprint_key(fingerprint: FileFingerprint) -> str:
-    payload = json.dumps(fingerprint.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        fingerprint.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -549,10 +756,14 @@ class Remember:
             raise ValueError("max_entries must be positive")
         if path is not None and (storage_path is not None or kb_path is not None):
             raise TypeError("provide only one Remember path")
-        path = path if path is not None else (storage_path if storage_path is not None else kb_path)
+        path = (
+            path
+            if path is not None
+            else (storage_path if storage_path is not None else kb_path)
+        )
         self.path = Path(path if path is not None else self.DEFAULT_PATH).expanduser()
         self.max_entries = int(max_entries)
-        self._entries: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._entries: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self.last_error: Optional[str] = None
         self.load()
 
@@ -649,7 +860,9 @@ class Remember:
                     pass
         return self.path
 
-    def remember(self, fingerprint: Union[FileFingerprint, Mapping[str, Any]], recipe: Any) -> Dict[str, Any]:
+    def remember(
+        self, fingerprint: Union[FileFingerprint, Mapping[str, Any]], recipe: Any
+    ) -> Dict[str, Any]:
         fp = HypothesisEngine._coerce_fingerprint(fingerprint)
         key = _fingerprint_key(fp)
         entry = {"key": key, "fingerprint": fp.to_dict(), "recipe": _json_safe(recipe)}

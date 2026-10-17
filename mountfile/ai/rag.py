@@ -29,10 +29,10 @@ import ast
 import math
 import re
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
-
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _TOKEN_RE = re.compile(r"(?u)\b[\w]+\b")
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
@@ -243,7 +243,9 @@ def _markdown_chunks(source: str, text: str) -> Iterable[DocumentationChunk]:
     for line_number, line in enumerate(lines, start=1):
         heading = _HEADING_RE.match(line)
         if heading:
-            previous = _make_chunk(source, section, start, line_number - 1, "\n".join(buffer))
+            previous = _make_chunk(
+                source, section, start, line_number - 1, "\n".join(buffer)
+            )
             if previous is not None:
                 yield previous
             section = heading.group(2).strip()
@@ -277,7 +279,9 @@ def _walk_documented_nodes(tree: ast.Module) -> Iterable[Tuple[str, ast.AST]]:
 
     yield "module", tree
 
-    def visit(body: Iterable[ast.stmt], parent: str = "") -> Iterable[Tuple[str, ast.AST]]:
+    def visit(
+        body: Iterable[ast.stmt], parent: str = ""
+    ) -> Iterable[Tuple[str, ast.AST]]:
         for node in body:
             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 qualified = "%s.%s" % (parent, node.name) if parent else node.name
@@ -323,7 +327,9 @@ def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
     right_norm = math.sqrt(sum(value * value for value in right_values))
     if left_norm == 0.0 or right_norm == 0.0:
         return 0.0
-    return sum(a * b for a, b in zip(left_values, right_values)) / (left_norm * right_norm)
+    return sum(a * b for a, b in zip(left_values, right_values)) / (
+        left_norm * right_norm
+    )
 
 
 class DocumentationRetriever:
@@ -370,7 +376,7 @@ class DocumentationRetriever:
         if root is not None:
             self.build(root)
 
-    def build(self, root: Path) -> "DocumentationRetriever":
+    def build(self, root: Path) -> DocumentationRetriever:
         """(Re)build the index and return ``self`` for convenient setup."""
 
         selected_root = Path(root).expanduser().resolve()
@@ -378,13 +384,18 @@ class DocumentationRetriever:
             raise ValueError("documentation root must be a directory")
 
         chunks: List[DocumentationChunk] = []
-        approved_markdown = (selected_root / "README.md", selected_root / "CHANGELOG.md")
+        approved_markdown = (
+            selected_root / "README.md",
+            selected_root / "CHANGELOG.md",
+        )
         for path in approved_markdown:
             if not _safe_child(selected_root, path, ".md"):
                 continue
             text = _read_text(path, self.max_file_bytes)
             if text is not None:
-                chunks.extend(_markdown_chunks(_relative_source(selected_root, path), text))
+                chunks.extend(
+                    _markdown_chunks(_relative_source(selected_root, path), text)
+                )
 
         python_paths: List[Path] = []
         try:
@@ -397,7 +408,9 @@ class DocumentationRetriever:
         for path in python_paths:
             text = _read_text(path, self.max_file_bytes)
             if text is not None:
-                chunks.extend(_docstring_chunks(_relative_source(selected_root, path), text))
+                chunks.extend(
+                    _docstring_chunks(_relative_source(selected_root, path), text)
+                )
 
         indexed = []
         frequencies: Counter[str] = Counter()
@@ -438,7 +451,8 @@ class DocumentationRetriever:
                     continue
                 document_frequency = self._document_frequency.get(token, 0)
                 inverse_frequency = math.log(
-                    1.0 + (count - document_frequency + 0.5) / (document_frequency + 0.5)
+                    1.0
+                    + (count - document_frequency + 0.5) / (document_frequency + 0.5)
                 )
                 denominator = frequency + self.k1 * (
                     1.0 - self.b + self.b * item.length / max(self._average_length, 1.0)
@@ -455,8 +469,7 @@ class DocumentationRetriever:
             embed = getattr(backend, "embed", backend)
             query_vector = embed(query)
             return [
-                _cosine(query_vector, embed(item.chunk.text))
-                for item in self._indexed
+                _cosine(query_vector, embed(item.chunk.text)) for item in self._indexed
             ]
         except Exception:  # pragma: no cover - depends on the injected backend
             # A broken optional backend must not make ordinary lexical search
@@ -464,7 +477,9 @@ class DocumentationRetriever:
             # escape from a user-facing documentation search either.
             return None
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> List[RetrievedSnippet]:
+    def retrieve(
+        self, query: str, top_k: Optional[int] = None
+    ) -> List[RetrievedSnippet]:
         """Return ranked evidence with positive lexical or semantic scores."""
 
         if not isinstance(query, str):
@@ -479,7 +494,9 @@ class DocumentationRetriever:
 
         lexical_scores = self._bm25_scores(query_tokens)
         semantic_scores = self._embedding_scores(normalized_query)
-        if semantic_scores is not None and any(score > 0.0 for score in semantic_scores):
+        if semantic_scores is not None and any(
+            score > 0.0 for score in semantic_scores
+        ):
             scores = semantic_scores
         else:
             scores = lexical_scores

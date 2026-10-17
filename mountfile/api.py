@@ -29,9 +29,9 @@ import inspect
 import ipaddress
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Optional, Protocol, Sequence, Union
+from typing import Any, Optional, Protocol, Union
 
 try:  # Optional by design: importing mountfile must not require FastAPI.
     from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
@@ -68,19 +68,15 @@ class ServiceUnavailableError(RuntimeError):
 class ServiceRegistry(Protocol):
     """Minimal documentation protocol for an injected API service registry."""
 
-    def list_images(self) -> Any:
-        ...
+    def list_images(self) -> Any: ...
 
-    def filesystem_ls(self, image: str, path: str, offset: int = 0) -> Any:
-        ...
+    def filesystem_ls(self, image: str, path: str, offset: int = 0) -> Any: ...
 
-    def filesystem_read(self, image: str, path: str, offset: int = 0) -> Any:
-        ...
+    def filesystem_read(self, image: str, path: str, offset: int = 0) -> Any: ...
 
     def timeline(
         self, image: Optional[str] = None, limit: int = 100, path: Optional[str] = None
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
 
 # These are intentionally small and explicit.  A registry can expose a
@@ -116,7 +112,9 @@ def _json_value(value: Any) -> Any:
         # Binary values in metadata must not be decoded as arbitrary text.
         return {"base64": base64.b64encode(value).decode("ascii")}
     if dataclasses.is_dataclass(value):
-        return {key: _json_value(item) for key, item in dataclasses.asdict(value).items()}
+        return {
+            key: _json_value(item) for key, item in dataclasses.asdict(value).items()
+        }
     for method_name in ("model_dump", "to_dict"):
         method = getattr(value, method_name, None)
         if callable(method):
@@ -159,7 +157,9 @@ def _normalise_roots(
         try:
             values = tuple(image_roots)
         except TypeError as exc:
-            raise APIConfigurationError("image_roots must be a path or a sequence of paths") from exc
+            raise APIConfigurationError(
+                "image_roots must be a path or a sequence of paths"
+            ) from exc
     if not values:
         return ()
     roots = []
@@ -168,7 +168,9 @@ def _normalise_roots(
             raise APIConfigurationError("image_roots must contain only path values")
         raw = os.fspath(value)
         if isinstance(raw, bytes) or "\x00" in raw:
-            raise APIConfigurationError("image roots must be text paths without NUL bytes")
+            raise APIConfigurationError(
+                "image roots must be text paths without NUL bytes"
+            )
         try:
             root = Path(raw).expanduser().resolve()
         except OSError as exc:
@@ -261,24 +263,35 @@ def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> A
     if not callable(operation):
         if operation_name == "images":
             return operation
-        raise ServiceUnavailableError("service operation %r is not callable" % operation_name)
+        raise ServiceUnavailableError(
+            "service operation %r is not callable" % operation_name
+        )
 
     try:
         signature = inspect.signature(operation)
     except (TypeError, ValueError):
         # A small number of extension callables do not expose a signature.
-        ordered = [values[key] for key in ("image", "path", "offset", "limit", "query") if key in values]
+        ordered = [
+            values[key]
+            for key in ("image", "path", "offset", "limit", "query")
+            if key in values
+        ]
         return operation(*ordered)
 
     parameters = list(signature.parameters.values())
-    accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    )
     kwargs: dict[str, Any] = {}
     positional: list[Any] = []
     positional_index = 0
     ordered_keys = ("image", "path", "offset", "limit", "query")
 
     for parameter in parameters:
-        if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+        if parameter.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
             continue
         canonical = _canonical_parameter(parameter.name)
         if canonical is not None and canonical in values:
@@ -291,7 +304,10 @@ def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> A
             continue
         # Unnamed required positional arguments are uncommon, but deterministic
         # positional fallback is safer than silently omitting them.
-        while positional_index < len(ordered_keys) and ordered_keys[positional_index] not in values:
+        while (
+            positional_index < len(ordered_keys)
+            and ordered_keys[positional_index] not in values
+        ):
             positional_index += 1
         if positional_index >= len(ordered_keys):
             raise ServiceUnavailableError(
@@ -370,7 +386,9 @@ def _configured_images(roots: Sequence[Path]) -> list[dict[str, str]]:
                 )
             except OSError:
                 children = []
-            result.extend({"name": child.name, "path": str(child)} for child in children)
+            result.extend(
+                {"name": child.name, "path": str(child)} for child in children
+            )
     return result
 
 
@@ -378,24 +396,34 @@ def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, APIPathError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if isinstance(exc, (FileNotFoundError, KeyError)):
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="resource not found")
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
+        )
     if isinstance(exc, PermissionError):
-        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="operation forbidden")
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="operation forbidden"
+        )
     if isinstance(exc, ServiceUnavailableError):
         return HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="service operation unavailable"
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="service operation unavailable",
         )
     if isinstance(exc, ValueError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     logger.exception("injected mount-file API service failed")
-    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="service operation failed")
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="service operation failed",
+    )
 
 
 def create_app(
     service_registry: Any = None,
     *,
     registry: Any = None,
-    image_roots: Optional[Union[os.PathLike, str, Sequence[Union[os.PathLike, str]]]] = None,
+    image_roots: Optional[
+        Union[os.PathLike, str, Sequence[Union[os.PathLike, str]]]
+    ] = None,
     image_root: Optional[Union[os.PathLike, str]] = None,
     host: str = "127.0.0.1",
     auth_token: Optional[str] = None,
@@ -411,7 +439,9 @@ def create_app(
     """
 
     if not FASTAPI_AVAILABLE:
-        raise APIUnavailableError("FastAPI is unavailable; install the optional 'fastapi' package")
+        raise APIUnavailableError(
+            "FastAPI is unavailable; install the optional 'fastapi' package"
+        )
     if service_registry is not None and registry is not None:
         raise APIConfigurationError("provide only one service_registry or registry")
     service_registry = service_registry if service_registry is not None else registry
@@ -510,12 +540,16 @@ def create_app(
 
     def _ls_impl(image: Optional[str], path: str, offset: int) -> Any:
         try:
-            image_path, virtual_path, partition_offset = _filesystem_context(image, path, offset)
+            image_path, virtual_path, partition_offset = _filesystem_context(
+                image, path, offset
+            )
         except Exception as exc:
             raise _http_error(exc)
         operation = _find_operation(service_registry, "ls")
         if operation is None:
-            raise _http_error(ServiceUnavailableError("filesystem listing is unavailable"))
+            raise _http_error(
+                ServiceUnavailableError("filesystem listing is unavailable")
+            )
         values = {"image": image_path, "path": virtual_path, "offset": partition_offset}
         try:
             return _json_value(_invoke(operation, values, "ls"))
@@ -524,14 +558,21 @@ def create_app(
 
     def _read_impl(image: Optional[str], path: str, offset: int) -> Any:
         try:
-            image_path, virtual_path, partition_offset = _filesystem_context(image, path, offset)
+            image_path, virtual_path, partition_offset = _filesystem_context(
+                image, path, offset
+            )
         except Exception as exc:
             raise _http_error(exc)
         if virtual_path == "/":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="a file path is required")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="a file path is required",
+            )
         operation = _find_operation(service_registry, "read")
         if operation is None:
-            raise _http_error(ServiceUnavailableError("filesystem reading is unavailable"))
+            raise _http_error(
+                ServiceUnavailableError("filesystem reading is unavailable")
+            )
         values = {"image": image_path, "path": virtual_path, "offset": partition_offset}
         try:
             value = _invoke(operation, values, "read")
@@ -579,7 +620,11 @@ def create_app(
         path: Optional[str],
         offset: int,
     ) -> Any:
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= MAX_LIMIT
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="limit must be between 1 and %d" % MAX_LIMIT,
@@ -599,7 +644,12 @@ def create_app(
         operation = _find_operation(service_registry, "timeline")
         if operation is None:
             raise _http_error(ServiceUnavailableError("timeline is unavailable"))
-        values = {"image": image_path, "limit": limit, "path": filter_path, "offset": offset}
+        values = {
+            "image": image_path,
+            "limit": limit,
+            "path": filter_path,
+            "offset": offset,
+        }
         try:
             return _json_value(_invoke(operation, values, "timeline"))
         except Exception as exc:
