@@ -19,11 +19,13 @@ that modify the image (put, mkdir, mv, rm) refuse to run without --yes.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
 
 from . import __version__
+from .autopick import auto_select, format_candidates, format_choice
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
@@ -38,6 +40,7 @@ COMMANDS = (
     "volumes",
     "info",
     "ls",
+    "autopick",
     "get",
     "put",
     "mkdir",
@@ -87,6 +90,14 @@ def _select(image, args):
             probe_filesystem(image, args.offset) or "unknown",
             "offset 0x%X" % args.offset,
         )
+    if getattr(args, "auto", False):
+        # Automatic choice: partition table, udev offsets and filesystem
+        # signatures are all tried, and the winner is confirmed by a real
+        # mount, so a broken table cannot produce the TSK FS_Info_Con error.
+        best, _candidates = auto_select(image, udev=getattr(args, "udev", None))
+        if best is None:
+            raise Fat32Error("no mountable volume found in %s (--auto)" % image)
+        return best.offset, best.fstype, best.desc
     try:
         vols = detect_volumes(image, scan_limit=args.scan_limit)
     except OSError as e:
@@ -311,6 +322,85 @@ def cmd_split(args):
     return OK
 
 
+def cmd_autopick(args):
+    """`autopick`: choose the working volume of an image automatically.
+
+    Prints every candidate with its score, the reason the winner was chosen,
+    and optionally extracts the whole volume. Exit code 1 when no mountable
+    filesystem was found.
+    """
+    if not os.path.isfile(args.image):
+        raise Fat32Error("no such file: %s" % args.image)
+    if args.udev and not os.path.isfile(args.udev):
+        raise Rt809Error("no such udev file: %s" % args.udev)
+
+    best, candidates = auto_select(
+        args.image,
+        udev=args.udev,
+        hint=args.hint,
+        scan_limit=args.scan_limit,
+        verify=not args.no_verify,
+    )
+
+    if args.json:
+        payload = {
+            "image": args.image,
+            "udev": args.udev,
+            "best": None
+            if best is None
+            else {
+                "offset": best.offset,
+                "offset_hex": "0x%08X" % best.offset,
+                "fstype": best.fstype,
+                "source": best.source,
+                "score": best.score,
+                "size": best.size,
+                "label": best.label,
+                "name": best.name,
+                "backend": best.backend,
+                "reasons": list(best.reasons),
+            },
+            "candidates": [
+                {
+                    "offset": c.offset,
+                    "offset_hex": "0x%08X" % c.offset,
+                    "fstype": c.fstype,
+                    "source": c.source,
+                    "score": c.score,
+                    "backend": c.backend,
+                    "error": c.error,
+                    "name": c.name,
+                    "label": c.label,
+                }
+                for c in candidates
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print("Image: %s (%s)" % (args.image, _fmt_size(os.path.getsize(args.image))))
+        if args.udev:
+            print("udev:  %s" % args.udev)
+        print(format_candidates(candidates))
+        print()
+        print(format_choice(best))
+
+    if best is None:
+        return ERROR
+
+    if args.extract:
+        provider, backend = _provider(args.image, best.offset)
+        try:
+            count = extract_path(provider, "/", args.extract)
+        finally:
+            if hasattr(provider, "close"):
+                provider.close()
+        print(
+            "\nExtracted %d file(s) from 0x%08X [%s] to %s"
+            % (count, best.offset, backend, args.extract)
+        )
+    return OK
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -333,6 +423,11 @@ def _add_target(sp):
         type=_parse_offset,
         default=DEFAULT_SCAN_LIMIT,
         help="bytes scanned for filesystem signatures",
+    )
+    sp.add_argument(
+        "--auto",
+        action="store_true",
+        help="pick the working volume automatically (same as the `autopick` command)",
     )
     sp.add_argument(
         "--backup",
@@ -425,6 +520,35 @@ def build_parser():
         help="output directory (default: <dump name>_/ next to the dump)",
     )
     sp.set_defaults(func=cmd_split)
+
+    sp = sub.add_parser(
+        "autopick",
+        help="pick the working volume (offset + filesystem) automatically",
+    )
+    _add_target(sp)
+    sp.add_argument(
+        "-u",
+        "--udev",
+        default=None,
+        help="udev file with a [PARTITIONS] section, if one is available",
+    )
+    sp.add_argument(
+        "--hint",
+        default=None,
+        help="prefer the volume whose udev/partition name or label matches this",
+    )
+    sp.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="skip the real mount check (faster, but a broken offset is possible)",
+    )
+    sp.add_argument("--json", action="store_true", help="print the result as JSON")
+    sp.add_argument(
+        "--extract",
+        default=None,
+        help="extract the whole chosen volume into this host directory",
+    )
+    sp.set_defaults(func=cmd_autopick)
     return p
 
 

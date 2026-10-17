@@ -36,7 +36,7 @@ import os
 import shutil
 import webbrowser
 
-from . import tc_style
+from . import autopick, tc_style
 from .hexview import HexView
 from .partition import list_partitions
 from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
@@ -1217,6 +1217,13 @@ class MainWindow(QMainWindow):
         m_cmd.addAction(self._action("Выход", self.close, "Alt+F4"))
 
         m_tool = mb.addMenu("Инструменты")
+        m_tool.addAction(
+            self._action(
+                "Подобрать том автоматически…",
+                lambda: self._auto_pick(quiet=False),
+            )
+        )
+        m_tool.addSeparator()
         m_tool.addAction(self._action("Декодировать дамп RT809…", self.tool_decode))
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
 
@@ -1346,6 +1353,72 @@ class MainWindow(QMainWindow):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file")
 
     # ------------------------------------------------------ rt809 tools
+    # ------------------------------------------------------- auto pick
+    def _find_udev(self):
+        """A udev file lying next to the image, if there is one."""
+        if not self.image_path:
+            return None
+        try:
+            found = autopick.find_udev_files(self.image_path)
+        except OSError:
+            return None
+        return found[0] if found else None
+
+    def _auto_pick(self, panel=None, quiet=False):
+        """Pick the working volume automatically and mount it.
+
+        Candidates come from the partition table, from a udev file next to the
+        image and from filesystem signatures (including a search *inside* a
+        partition). Every candidate is confirmed by a real mount, so the
+        ``FS_Info_Con ... invalid bytes-per-sector`` error is answered with a
+        working offset instead of a message box.
+        """
+        if not self.image_path:
+            if not quiet:
+                QMessageBox.information(
+                    self, "Авто-подбор", "Сначала откройте образ (Ctrl+O)."
+                )
+            return False
+
+        panel = panel or self.active_panel()
+        udev = self._find_udev()
+        self._autopick_busy = True
+        try:
+            best, candidates = autopick.auto_select(self.image_path, udev=udev)
+        except Exception as e:
+            self.log_msg("Авто-подбор не удался: %s" % e)
+            if not quiet:
+                QMessageBox.warning(self, "Авто-подбор", "Не удалось выполнить:\n%s" % e)
+            return False
+        finally:
+            self._autopick_busy = False
+
+        if udev:
+            self.log_msg("Авто-подбор: файл udev — %s" % udev)
+        for line in autopick.format_candidates(candidates, limit=12).splitlines():
+            self.log_msg(line)
+        if best is None:
+            self.log_msg("Авто-подбор: рабочий том не найден: %s" % self.image_path)
+            if not quiet:
+                QMessageBox.warning(
+                    self,
+                    "Авто-подбор",
+                    "Рабочий том не найден.\n"
+                    "Проверены разделы MBR/GPT, смещения udev и сигнатуры ФС.\n"
+                    "Попробуйте указать смещение вручную или выбрать другой файл udev.",
+                )
+            return False
+
+        for line in autopick.format_choice(best).splitlines():
+            self.log_msg(line)
+        mounted = self.mount_volume(panel, best.offset)
+        if mounted:
+            self.log_msg(
+                "Авто-подбор: открыт том @ 0x%X (%s, вес %d)"
+                % (best.offset, best.fstype, best.score)
+            )
+        return mounted
+
     def tool_decode(self):
         """Decode an RT809H-encrypted MST/MTK dump into <dump>_decode.bin."""
         path, _ = QFileDialog.getOpenFileName(
@@ -1578,12 +1651,30 @@ class MainWindow(QMainWindow):
                 panel.provider = Fat32Provider(self.image_path, offset=offset)
             except (Fat32Error, OSError, ValueError) as fat_error:
                 panel.provider = None
+                self.log_msg(
+                    "Том @ offset %d не открылся — The Sleuth Kit: %s; FAT32: %s"
+                    % (offset, tsk_error, fat_error)
+                )
+                panel.refresh()
+                # A partition table (or a udev offset) that does not point at a
+                # filesystem is the normal case in NAND/eMMC dumps: pick the
+                # working volume automatically instead of stopping on an error.
+                if getattr(self, "_autopick_busy", False):
+                    QMessageBox.warning(
+                        self,
+                        "Не удалось смонтировать том",
+                        "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
+                    )
+                    return False
+                if self._auto_pick(panel, quiet=True):
+                    return True
                 QMessageBox.warning(
                     self,
                     "Не удалось смонтировать том",
-                    "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
+                    "The Sleuth Kit: %s\nFAT32: %s\n\n"
+                    "Авто-подбор не нашёл рабочий том — подробности в журнале."
+                    % (tsk_error, fat_error),
                 )
-                panel.refresh()
                 return False
 
         panel.mode = "img"

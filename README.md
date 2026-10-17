@@ -79,6 +79,30 @@ python main.py rm dump.img /new --recursive --yes
 python main.py decode dump.bin                # расшифровка дампа RT809H (MST/MTK) -> dump.bin_decode.bin
 python main.py split dump.bin udev.txt -o ./parts   # разбиение дампа на партиции по udev
 
+### Авто-подбор рабочего тома
+
+В дампах NAND/eMMC таблица разделов часто отсутствует или указывает на
+контейнер, а не на файловую систему — тогда появляются ошибки
+`The Sleuth Kit: FS_Info_Con … FAT32: invalid bytes-per-sector (not a FAT BPB?)`
+и `FAT32: image too small`. Авто-подбор (`mountfile/autopick.py`) решает это
+без ручного перебора смещений:
+
+- собирает кандидатов из MBR/GPT, из файла `udev` и из сигнатур файловых систем;
+- строго проверяет каждого кандидата (BPB FAT, суперблок ext, NTFS, exFAT,
+  ISO9660, HFS+, squashfs, UBIFS, JFFS2) и ищет ФС **внутри** раздела, если по
+  его началу ФС нет;
+- подтверждает победителя реальным монтированием (pytsk3 или встроенный FAT32);
+- файл `udev` ищется рядом с образом автоматически.
+
+python main.py autopick dump.bin                # таблица кандидатов + выбор
+python main.py autopick dump.bin --json         # то же в JSON
+python main.py autopick dump.bin --extract ./out
+python main.py ls dump.bin / --auto             # авто-подбор для любой команды
+python -m mountfile autopick dump.bin --hint system
+
+В графическом интерфейсе авто-подбор запускается сам, если том не открылся,
+и вручную — через меню **Инструменты → Подобрать том автоматически…**.
+
 Без `pytsk3` CLI и классическое дерево используют встроенный провайдер FAT32.
 Запись, переименование и удаление поддерживаются только на FAT32. Команды
 Команды `put`, `mkdir`, `mv` и `rm` требуют `--yes`; перед изменением образа сделайте резервную копию.

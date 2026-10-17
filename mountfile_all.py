@@ -459,6 +459,9 @@ def print_cheatsheet() -> None:
     python main.py rm <img> /new -r --yes
     python main.py decode <dump.bin>     # RT809H (MST/MTK)
     python main.py split <dump.bin> <udev.txt> -o parts
+    python main.py autopick <img>        # авто-подбор рабочего тома (offset + ФС)
+    python main.py autopick <img> --json --extract out
+    python main.py ls <img> / --auto     # авто-подбор для любой команды
     python main.py --check-updates       # 10=есть апдейт, 0=нет
 
   Общие флаги у команд с образом:
@@ -466,6 +469,8 @@ def print_cheatsheet() -> None:
     -O/--offset 0x…   смещение файловой системы вручную
     --scan-limit N    сколько байт сканировать на сигнатуры
     --backup          копия <img>.bak перед записью
+    --auto            авто-подбор тома: MBR/GPT + udev + сигнатуры ФС,
+                      победитель подтверждается реальным монтированием
 
   Переменные окружения:
     MOUNTFILE_NO_UPDATE=1                # отключить проверку обновлений
