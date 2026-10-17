@@ -17,7 +17,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-pytest.importorskip("mountfile.qt_compat", reason="no Qt bindings installed")
+# exc_type=ImportError is required: mountfile.qt_compat raises its own
+# ImportError when neither PyQt6 nor PyQt5 is importable, and pytest >= 9
+# only skips on the requested exception type (a plain ModuleNotFoundError
+# from the import machinery would still fail collection, as seen on CI
+# runners without libEGL).
+pytest.importorskip(
+    "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
+)
 
 from mountfile import ai  # noqa: E402
 from mountfile.ai import AiResult  # noqa: E402
