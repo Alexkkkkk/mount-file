@@ -5,12 +5,8 @@
 
 from concurrent.futures import Future
 
-from mountfile.ai.copilot import (
-    SECTION_NAMES,
-    CopilotSummaryBuilder,
-    build_summary,
-    build_summary_background,
-)
+from mountfile.ai.copilot import (SECTION_NAMES, CopilotSummaryBuilder,
+                                  build_summary, build_summary_background)
 
 
 def test_empty_inputs_keep_all_sections_without_running_analysis():

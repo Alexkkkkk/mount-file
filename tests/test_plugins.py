@@ -29,11 +29,19 @@ def test_registry_lifecycle_is_ordered_and_events_are_read_only():
 
     registry = PluginRegistry([Recorder()])
     source = bytearray(b"immutable")
-    registry.on_open({"path": "disk.img", "size": len(source), "metadata": {"kind": "raw"}})
-    event = registry.on_file({"path": "a.txt", "data": source, "metadata": {"kind": "file"}})
+    registry.on_open(
+        {"path": "disk.img", "size": len(source), "metadata": {"kind": "raw"}}
+    )
+    event = registry.on_file(
+        {"path": "a.txt", "data": source, "metadata": {"kind": "file"}}
+    )
     registry.on_close()
 
-    assert calls == [("open", "disk.img", len(source)), ("file", "a.txt", b"immutable"), ("close",)]
+    assert calls == [
+        ("open", "disk.img", len(source)),
+        ("file", "a.txt", b"immutable"),
+        ("close",),
+    ]
     assert event.data == b"immutable"
     source[:] = b"unchanged"
     assert event.data == b"immutable"
@@ -99,8 +107,12 @@ def test_path_discovery_is_sorted_and_import_is_explicit(tmp_path):
 
 
 def test_optional_adapters_import_without_optional_dependencies():
-    yara_path = importlib.util.spec_from_file_location("example_yara", "examples/plugins/yara.py")
-    timeline_path = importlib.util.spec_from_file_location("example_timeline", "examples/plugins/timeline.py")
+    yara_path = importlib.util.spec_from_file_location(
+        "example_yara", "examples/plugins/yara.py"
+    )
+    timeline_path = importlib.util.spec_from_file_location(
+        "example_timeline", "examples/plugins/timeline.py"
+    )
     yara_module = importlib.util.module_from_spec(yara_path)
     timeline_module = importlib.util.module_from_spec(timeline_path)
     yara_path.loader.exec_module(yara_module)

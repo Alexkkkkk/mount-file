@@ -27,7 +27,9 @@ def test_workflow_order_and_deterministic_execution_ids():
         assert executions[0].execution_id == claim.execution_id
         return True
 
-    result = InvestigationOrchestrator(planner, executor, analyst, skeptic).run("find FS")
+    result = InvestigationOrchestrator(planner, executor, analyst, skeptic).run(
+        "find FS"
+    )
 
     assert events == [
         ("planner", "find FS"),
@@ -36,7 +38,10 @@ def test_workflow_order_and_deterministic_execution_ids():
         ("analyst", "find FS"),
         ("skeptic", "exec_0001"),
     ]
-    assert [item.execution_id for item in result.executions] == ["exec_0001", "exec_0002"]
+    assert [item.execution_id for item in result.executions] == [
+        "exec_0001",
+        "exec_0002",
+    ]
     assert [item.statement for item in result.accepted_claims] == ["signature found"]
 
 
@@ -58,7 +63,9 @@ def test_claim_without_known_execution_is_rejected_before_skeptic():
     ).investigate("check")
 
     assert result.accepted_claims == []
-    assert [claim.statement for claim in result.rejected_claims] == ["invented evidence"]
+    assert [claim.statement for claim in result.rejected_claims] == [
+        "invented evidence"
+    ]
     assert skeptic_calls == []
 
 
@@ -78,4 +85,7 @@ def test_supported_claims_can_be_accepted_or_rejected_by_skeptic():
     ).run("check")
 
     assert [claim.statement for claim in result.accepted_claims] == ["keep"]
-    assert [claim.statement for claim in result.rejected_claims] == ["discard", "missing"]
+    assert [claim.statement for claim in result.rejected_claims] == [
+        "discard",
+        "missing",
+    ]

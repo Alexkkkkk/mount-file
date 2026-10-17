@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Mapping
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
-
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 SECTION_NAMES = ("image", "timeline", "anomalies")
 DEFAULT_MAX_ITEMS = 100
@@ -64,7 +64,10 @@ class CopilotSummaryBuilder:
             anomalies_provider, anomaly_provider, "anomalies"
         )
         self.anomaly_findings_provider = anomaly_findings_provider
-        if self.anomalies_provider is not None and self.anomaly_findings_provider is not None:
+        if (
+            self.anomalies_provider is not None
+            and self.anomaly_findings_provider is not None
+        ):
             raise ValueError("provide only one anomalies provider")
         if self.anomalies_provider is None:
             self.anomalies_provider = self.anomaly_findings_provider
@@ -84,9 +87,7 @@ class CopilotSummaryBuilder:
         replaced with a redaction marker before they can leave this module.
         """
 
-        image_value, image_error = _resolve(
-            self.image_provider, image_fingerprint
-        )
+        image_value, image_error = _resolve(self.image_provider, image_fingerprint)
         timeline_value, timeline_error = _resolve(
             self.timeline_provider, timeline_events
         )
@@ -220,18 +221,26 @@ def summary_to_markdown(summary: Mapping[str, Mapping[str, Any]]) -> str:
         if section.get("status") == "error":
             lines.append("Provider unavailable (%s)." % section.get("error", "unknown"))
             continue
-        field = "fingerprint" if key == "image" else ("events" if key == "timeline" else "findings")
+        field = (
+            "fingerprint"
+            if key == "image"
+            else ("events" if key == "timeline" else "findings")
+        )
         value = section.get(field)
         if not value:
             lines.append("No data.")
         else:
             lines.append("```json")
-            lines.append(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
+            lines.append(
+                json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+            )
             lines.append("```")
     return "\n".join(lines)
 
 
-def _coalesce_provider(primary: Optional[Provider], alias: Optional[Provider], name: str) -> Optional[Provider]:
+def _coalesce_provider(
+    primary: Optional[Provider], alias: Optional[Provider], name: str
+) -> Optional[Provider]:
     if primary is not None and alias is not None:
         raise ValueError("provide only one %s provider" % name)
     return primary if primary is not None else alias
@@ -284,9 +293,21 @@ def _collection_section(
     max_items: int,
 ) -> Dict[str, Any]:
     if error is not None:
-        return {"status": "error", field: [], "count": 0, "truncated": False, "error": error}
+        return {
+            "status": "error",
+            field: [],
+            "count": 0,
+            "truncated": False,
+            "error": error,
+        }
     if value is None or value == "":
-        return {"status": "empty", field: [], "count": 0, "truncated": False, "error": None}
+        return {
+            "status": "empty",
+            field: [],
+            "count": 0,
+            "truncated": False,
+            "error": None,
+        }
     try:
         items, truncated, iteration_error = _bounded_items(value, max_items)
     except Exception as exc:  # defensive boundary for hostile iterables
@@ -315,7 +336,9 @@ def _collection_section(
 
 
 def _bounded_items(value: Any, max_items: int) -> Tuple[List[Any], bool, Optional[str]]:
-    if isinstance(value, Mapping) or isinstance(value, (str, bytes, bytearray, memoryview)):
+    if isinstance(value, Mapping) or isinstance(
+        value, (str, bytes, bytearray, memoryview)
+    ):
         return [_safe_value(_object_to_value(value))], False, None
     if isinstance(value, (set, frozenset)):
         ordered = sorted(
@@ -391,7 +414,11 @@ def _safe_value(value: Any, depth: int = 0) -> Any:
     if value is None or isinstance(value, (bool, int, str)):
         return _safe_text(value) if isinstance(value, str) else value
     if isinstance(value, float):
-        return value if value == value and value not in (float("inf"), float("-inf")) else str(value)
+        return (
+            value
+            if value == value and value not in (float("inf"), float("-inf"))
+            else str(value)
+        )
     if depth >= MAX_NESTED_DEPTH:
         return "<nested value truncated>"
 
@@ -416,7 +443,9 @@ def _safe_value(value: Any, depth: int = 0) -> Any:
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
 
 
 def _submit_background(
