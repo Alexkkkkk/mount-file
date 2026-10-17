@@ -110,7 +110,6 @@ def _head(path, size):
 def detect(path):
     """Return ``(kind, encrypted)`` for a dump; kind is ``"MTK"``, ``"MST"``
     or ``None`` when no known marker is present."""
-    size = os.path.getsize(path)
     with open(path, "rb") as f:
         mtk_zone = f.read(0x114)
         if len(mtk_zone) >= 0x114 and mtk_zone[0x100:0x114] == MARKER_MTK:

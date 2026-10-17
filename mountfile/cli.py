@@ -7,13 +7,13 @@
     python -m mountfile ls dump.img /
     python -m mountfile get dump.img /photos/holiday.jpg -o ./out
     python -m mountfile put dump.img ./hello.txt --dest /docs --yes
-    python -m mountfile mkdir dump.img /docs/new
-    python -m mountfile mv  dump.img /docs/old.txt new.txt
+    python -m mountfile mkdir dump.img /docs/new --yes
+    python -m mountfile mv  dump.img /docs/old.txt new.txt --yes
     python -m mountfile rm  dump.img /docs/old.txt --yes
 
 Read commands use The Sleuth Kit when available and fall back to the built-in
 FAT32 engine; write commands always use the built-in FAT32 engine. Commands
-that destroy data (put, rm) refuse to run without --yes.
+that modify the image (put, mkdir, mv, rm) refuse to run without --yes.
 """
 
 from __future__ import annotations
@@ -170,15 +170,21 @@ def cmd_ls(args):
     offset, fstype, desc = _select(args.image, args)
     provider, backend = _provider(args.image, offset)
     try:
-        print("# %s  [%s, %s]" % (desc, fstype, backend))
-        for item in provider.list_dir(_abs_path(args.path)):
-            if item["is_dir"]:
-                print("  %-10s  %s/" % ("<DIR>", item["name"]))
-            else:
-                print("  %-10s  %s" % (_fmt_size(item["size"]), item["name"]))
+        items = provider.list_dir(_abs_path(args.path))
+    except (Fat32Error, TskError) as e:
+        # A missing directory is an expected, user-level error: report it as a
+        # one-line message (exit code 1) instead of a raw TSK backtrace.
+        print("error: cannot list '%s': %s" % (_abs_path(args.path), e), file=sys.stderr)
+        return ERROR
     finally:
         if hasattr(provider, "close"):
             provider.close()
+    print("# %s  [%s, %s]" % (desc, fstype, backend))
+    for item in items:
+        if item["is_dir"]:
+            print("  %-10s  %s/" % ("<DIR>", item["name"]))
+        else:
+            print("  %-10s  %s" % (_fmt_size(item["size"]), item["name"]))
     return OK
 
 
@@ -222,6 +228,9 @@ def cmd_put(args):
 
 
 def cmd_mkdir(args):
+    if not args.yes:
+        _warn(args.image)
+        return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
     parent, name = _split_dir(args.path)
     fh, fs = _open_write(args.image, offset, backup=args.backup)
@@ -234,6 +243,9 @@ def cmd_mkdir(args):
 
 
 def cmd_mv(args):
+    if not args.yes:
+        _warn(args.image)
+        return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
     fh, fs = _open_write(args.image, offset, backup=args.backup)
     try:
@@ -364,12 +376,14 @@ def build_parser():
     sp = sub.add_parser("mkdir", help="create a directory (FAT32)")
     _add_target(sp)
     sp.add_argument("path", help="directory to create, e.g. /docs/new")
+    sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_mkdir)
 
     sp = sub.add_parser("mv", help="rename an entry (FAT32)")
     _add_target(sp)
     sp.add_argument("path", help="path of the file or directory to rename")
     sp.add_argument("new_name", help="new name inside the same directory")
+    sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_mv)
 
     sp = sub.add_parser("rm", help="delete a file or directory (FAT32)")
@@ -419,6 +433,11 @@ def main(argv=None):
     except _READ_ERRORS as e:
         print("error: %s" % e, file=sys.stderr)
         return ERROR
+    except KeyboardInterrupt:
+        # Ctrl+C is a normal way to abort a long scan: exit cleanly instead of
+        # dumping a multi-frame traceback from deep inside pytsk3.
+        print("\ninterrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -1463,19 +1463,19 @@ class MainWindow(QMainWindow):
         self.active_panel().table.setFocus()
 
     def swap_panels(self):
-        l, r = self.panelL, self.panelR
-        if l.mode != r.mode:
+        left, right = self.panelL, self.panelR
+        if left.mode != right.mode:
             self.log_msg(
                 "Смена панелей: панели показывают разные источники "
                 "(образ и локальные файлы) — переключите диски в списке"
             )
             return
-        l_path, r_path = l.path, r.path
-        l.tabs[l.tab_index] = r_path
-        r.tabs[r.tab_index] = l_path
-        l.path, r.path = r_path, l_path
-        l._rebuild_tabs()
-        r._rebuild_tabs()
+        l_path, r_path = left.path, right.path
+        left.tabs[left.tab_index] = r_path
+        right.tabs[right.tab_index] = l_path
+        left.path, right.path = r_path, l_path
+        left._rebuild_tabs()
+        right._rebuild_tabs()
         self.refresh_all()
         self.log_msg("Панели поменяны местами")
 
