@@ -343,8 +343,7 @@ def load_settings():
     for key in ("theme", "font_size", "show_log"):
         if key in data:
             SETTINGS[key] = data[key]
-    for key in ("ai_backend", "ai_base_url", "ai_model", "ai_api_key",
-                "olma_token"):
+    for key in ("ai_backend", "ai_base_url", "ai_model", "ai_api_key", "olma_token"):
         if key in data:
             SETTINGS[key] = str(data[key] or "")
     try:

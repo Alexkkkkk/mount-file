@@ -85,6 +85,7 @@ ANALYSIS_PROMPT = (
 
 # ------------------------------------------------------------ state file
 
+
 def state_path():
     """Same config directory the UI settings live in."""
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
@@ -106,11 +107,13 @@ def _load_state():
                 with open(state_path(), encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    _STATE.update({
-                        "sent": [float(t) for t in data.get("sent", [])],
-                        "pending": list(data.get("pending", [])),
-                        "issues": dict(data.get("issues", {})),
-                    })
+                    _STATE.update(
+                        {
+                            "sent": [float(t) for t in data.get("sent", [])],
+                            "pending": list(data.get("pending", [])),
+                            "issues": dict(data.get("issues", {})),
+                        }
+                    )
             except (OSError, ValueError, TypeError):
                 pass
         return dict(_STATE)
@@ -137,6 +140,7 @@ def reset_state_for_tests():
 
 # ------------------------------------------------------------ switches
 
+
 def enabled():
     """The watcher is opt-in: a settings toggle or the environment flag."""
     force = os.environ.get(ENV_ENABLE, "").strip().lower()
@@ -146,6 +150,7 @@ def enabled():
         return True
     try:
         from mountfile import tc_style
+
         return bool(tc_style.SETTINGS.get("olma_watch"))
     except Exception:
         return False
@@ -162,6 +167,7 @@ def github_token():
         return token
     try:
         from mountfile import tc_style
+
         return str(tc_style.SETTINGS.get("olma_token") or "").strip()
     except Exception:
         return ""
@@ -177,6 +183,7 @@ def _ollama_settings():
     model = ""
     try:
         from mountfile import tc_style
+
         settings = tc_style.SETTINGS
         if settings.get("ai_backend") == "openai":
             return None
@@ -215,9 +222,7 @@ def sanitize(text):
 def fingerprint(tb_text):
     """Stable short hash of a traceback: frames plus the exception line."""
     frames = re.findall(r'File "([^"]+)", line (\d+)', tb_text or "")
-    tail = " | ".join(
-        "%s:%s" % (os.path.basename(f), n) for f, n in frames[-6:]
-    )
+    tail = " | ".join("%s:%s" % (os.path.basename(f), n) for f, n in frames[-6:])
     lines = (tb_text or "").strip().splitlines()
     exc_line = lines[-1] if lines else ""
     return hashlib.sha1(
@@ -226,6 +231,7 @@ def fingerprint(tb_text):
 
 
 # ------------------------------------------------------------ HTTP helper
+
 
 def _http_json(method, url, payload=None, token=None, timeout=HTTP_TIMEOUT):
     """One JSON request; returns ``(status, data, error)``, never raises."""
@@ -256,6 +262,7 @@ def _http_json(method, url, payload=None, token=None, timeout=HTTP_TIMEOUT):
 
 # ------------------------------------------------------------ Ollama triage
 
+
 def _ollama_analyze(tb_text):
     """Local model triage of the traceback; '' when unavailable."""
     settings = _ollama_settings()
@@ -277,6 +284,7 @@ def _ollama_analyze(tb_text):
 
 
 # ------------------------------------------------------------ report body
+
 
 def compose_report(tb_text, context="", occurrences=1, analysis=""):
     """``(title, body)`` for the issue; everything passed is sanitized."""
@@ -314,6 +322,7 @@ def compose_report(tb_text, context="", occurrences=1, analysis=""):
 
 # ------------------------------------------------------------ delivery
 
+
 def _repo():
     return os.environ.get(ENV_REPO, "").strip() or DEFAULT_REPO
 
@@ -321,7 +330,9 @@ def _repo():
 def _find_issue(repo, fp, token):
     """Number of the open labelled issue holding this fingerprint, or None."""
     url = "%s/repos/%s/issues?state=open&labels=%s&per_page=100" % (
-        GITHUB_API, repo, ISSUE_LABEL,
+        GITHUB_API,
+        repo,
+        ISSUE_LABEL,
     )
     status, data, _err = _http_json("GET", url, token=token)
     if status != 200 or not isinstance(data, list):
@@ -334,13 +345,11 @@ def _find_issue(repo, fp, token):
 
 
 def _deliver(tb_text, context, state, analysis=""):
-    """Send one report (create or comment). Returns the issue URL or ''. """
+    """Send one report (create or comment). Returns the issue URL or ''."""
     fp = fingerprint(tb_text)
     known = state["issues"].get(fp) or {}
     occurrences = int(known.get("count", 0)) + 1
-    title, body = compose_report(
-        tb_text, context, occurrences, analysis=analysis
-    )
+    title, body = compose_report(tb_text, context, occurrences, analysis=analysis)
     repo, token = _repo(), github_token()
     if not token:
         return "", "нет токена (%s не задан)" % ENV_TOKEN
@@ -348,9 +357,10 @@ def _deliver(tb_text, context, state, analysis=""):
     number = known.get("number") or _find_issue(repo, fp, token)
     if number:
         url = "%s/repos/%s/issues/%s/comments" % (GITHUB_API, repo, number)
-        comment = (
-            "Повтор №%d того же исключения (olma-fp: %s).\n\nКонтекст: %s"
-            % (occurrences, fp, sanitize(context) or "неизвестно")
+        comment = "Повтор №%d того же исключения (olma-fp: %s).\n\nКонтекст: %s" % (
+            occurrences,
+            fp,
+            sanitize(context) or "неизвестно",
         )
         status, _data, err = _http_json(
             "POST", url, payload={"body": comment}, token=token
@@ -407,11 +417,13 @@ def report_text(tb_text, context="", wait=True):
         _save_state(state)
         return url, ""
     # Network down / token missing: keep the report for the next start.
-    state["pending"].append({
-        "traceback": tb_text[:20000],
-        "context": context,
-        "time": now,
-    })
+    state["pending"].append(
+        {
+            "traceback": tb_text[:20000],
+            "context": context,
+            "time": now,
+        }
+    )
     _save_state(state)
     return None, err or "отчёт отложен"
 
@@ -424,9 +436,7 @@ def flush_pending(log=None):
     sent = 0
     still = []
     for item in state["pending"]:
-        url, _err = _deliver(
-            item.get("traceback", ""), item.get("context", ""), state
-        )
+        url, _err = _deliver(item.get("traceback", ""), item.get("context", ""), state)
         if url:
             sent += 1
             fp = fingerprint(item.get("traceback", ""))
@@ -451,6 +461,7 @@ def flush_pending(log=None):
 
 
 # ------------------------------------------------------------ the watcher
+
 
 def _handle_text(tb_text, context="", wait=True):
     """Worker behind all hooks; never raises."""
@@ -483,9 +494,7 @@ def install(qt_app=None, log=None):
     def sys_hook(exc_type, exc_value, exc_tb):
         try:
             if exc_type not in (KeyboardInterrupt, SystemExit):
-                text = "".join(
-                    traceback.format_exception(exc_type, exc_value, exc_tb)
-                )
+                text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
                 _handle_text(text, context="основной поток", wait=True)
         except Exception:
             pass
@@ -498,9 +507,11 @@ def install(qt_app=None, log=None):
     def thread_hook(args):
         try:
             if args.exc_type not in (SystemExit, KeyboardInterrupt):
-                text = "".join(traceback.format_exception(
-                    args.exc_type, args.exc_value, args.exc_traceback
-                ))
+                text = "".join(
+                    traceback.format_exception(
+                        args.exc_type, args.exc_value, args.exc_traceback
+                    )
+                )
                 name = getattr(args.thread, "name", "") or "поток"
                 _handle_text(text, context="фоновый поток (%s)" % name)
         except Exception:
@@ -513,6 +524,7 @@ def install(qt_app=None, log=None):
     if qt_app is not None:
         try:
             from mountfile import qt_compat
+
             QtCore = qt_compat.QtCore
 
             def qt_handler(mode, _context, message):

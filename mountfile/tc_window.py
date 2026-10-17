@@ -1038,12 +1038,16 @@ class SettingsDialog(QDialog):
         )
         lay.addRow("Читать до:", self.spn_ai_bytes)
         # --- OLMA Watch: слежение за ошибками + отчёт на GitHub (opt-in)
-        self.chk_olma = QCheckBox("Следить за ошибками и отправлять отчёт на GitHub (OLMA Watch)")
+        self.chk_olma = QCheckBox(
+            "Следить за ошибками и отправлять отчёт на GitHub (OLMA Watch)"
+        )
         self.chk_olma.setChecked(bool(tc_style.SETTINGS.get("olma_watch")))
         lay.addRow("", self.chk_olma)
         self.ed_olma_token = QLineEdit(str(tc_style.SETTINGS.get("olma_token") or ""))
         self.ed_olma_token.setEchoMode(EchoPassword)
-        self.ed_olma_token.setPlaceholderText("пусто = брать из переменной MOUNTFILE_OLMA_TOKEN")
+        self.ed_olma_token.setPlaceholderText(
+            "пусто = брать из переменной MOUNTFILE_OLMA_TOKEN"
+        )
         lay.addRow("GitHub-токен:", self.ed_olma_token)
         buttons = QDialogButtonBox(DlgOk | DlgCancel)
         buttons.accepted.connect(self.accept)
