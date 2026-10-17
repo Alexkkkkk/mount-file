@@ -300,6 +300,51 @@ def main():
         assert dlg.cmb_theme.count() == 2, dlg.cmb_theme.count()
         dlg.deleteLater()
 
+        # ---- the «AI» toolbar button and its dialog -------------------
+        from mountfile import ai
+        from mountfile.qt_compat import QToolBar
+
+        assert hasattr(win, "act_ai"), "нет действия act_ai"
+        assert win.act_ai.text() == "AI", win.act_ai.text()
+        assert win.act_ai.toolTip(), "у кнопки AI нет подсказки"
+        assert win.act_ai.shortcut().toString() == "Ctrl+I", win.act_ai.shortcut()
+        bar = win.findChild(QToolBar)
+        acts = list(bar.actions())
+        assert win.act_ai in acts, "кнопка AI не попала в тулбар"
+        # сразу за «Справкой» (последняя иконка перед AI)
+        idx = acts.index(win.act_ai)
+        assert idx == len(acts) - 1, "AI должна быть последней кнопкой тулбара"
+        assert acts[idx - 1].text() == "Справка", acts[idx - 1].text()
+
+        from mountfile.ai import AiResult
+        from mountfile.tc_window import AiDialog
+
+        ai_dlg = AiDialog(win, left, log=win.log_msg)
+        # курсор на README.TXT в панели образа -> источник по умолчанию
+        assert ai_dlg._entry is not None, "файл из панели не подхватился"
+        assert ai_dlg._name() == "README.TXT", ai_dlg._name()
+        # анализ без настроенного бэкенда: сообщение, а не трейсбек
+        ai_dlg.run_analysis()
+        assert "не настроен" in ai_dlg.txt.toPlainText().lower(), \
+            ai_dlg.txt.toPlainText()[:200]
+        assert ai_dlg.btn_run.isEnabled(), "кнопка не разблокировалась"
+        # чтение идёт через collect() и видит усечение
+        data, truncated = ai.collect(ai_dlg._reader(), max_bytes=8)
+        assert len(data) == 8 and truncated is True, (len(data), truncated)
+        # результат кладётся в журнал окна одной строкой
+        assert "AI-анализ" in win.log.toPlainText(), win.log.toPlainText()[-200:]
+        ai_dlg._show("t.bin", AiResult(ok=True, backend="fake", text="ok"))
+        assert "ok" in ai_dlg.txt.toPlainText()
+        ai_dlg.deleteLater()
+
+        # ---- AI dialog without any selected file ----------------------
+        right.table.clearSelection()
+        right.table.setCurrentCell(-1, -1)
+        empty = AiDialog(win, right, log=lambda m: None)
+        empty.run_analysis()  # без файла — только сообщение
+        assert empty.txt.toPlainText() == "", empty.txt.toPlainText()[:100]
+        empty.deleteLater()
+
         win._close_writer()
         win.close()
 
