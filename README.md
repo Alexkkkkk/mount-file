@@ -5,10 +5,13 @@ Licensed under the MIT License - see the LICENSE file for details.
 -->
 [![CI](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml)
 [![Quality](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml)
+[![Latest release](https://img.shields.io/github/v/release/Alexkkkkk/mount-file?sort=semver)](https://github.com/Alexkkkkk/mount-file/releases/latest)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 # Mount File
+
+**Актуальный релиз: [v1.24.1](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.24.1).**
 
 Файловый менеджер для raw-образов дисков и дампов NAND/eMMC: просмотр и
 извлечение файлов, чтение таблиц разделов, а в образах FAT32 — создание,
@@ -82,15 +85,17 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 | Компонент | Версия |
 |---|---|
-| Python | 3.8+ (рекомендуется 3.10–3.12) |
+| Python | 3.10–3.12 для основной установки; 3.8.10 — только для Windows 7 |
 | Qt | PyQt6 ≥ 6.11 (Windows 10/11, Linux, macOS) или PyQt5 5.15 (Windows 7) |
 | `pytsk3` | необязательно; нужен для чтения NTFS/EXT и прочих ФС |
+| REST API (необязательно) | `fastapi`, `uvicorn`, `httpx` |
 | Системные инструменты (по желанию) | `dosfstools`, `mtools` — только для сборки тестовых образов |
 
-На Python 3.8 `pytsk3` не устанавливается: PyPI публикует колёса для Windows
-начиная с Python 3.10, поэтому в `requirements-win7.txt` зависимость помечена
-маркером `python_version >= "3.10"`. Без `pytsk3` приложение работает на
-встроенном движке FAT32.
+Основные зависимости (`requirements.txt`) рассчитаны на Python 3.10–3.12.
+Для Windows 7 используйте отдельный `requirements-win7.txt` с Python 3.8.10 и
+PyQt5. На Python 3.8 `pytsk3` обычно недоступен как готовое колесо, поэтому
+зависимость там пропускается; приложение продолжает работать со встроенным
+движком FAT32.
 
 ## Установка
 
@@ -121,13 +126,27 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+Для установки проекта как Python-пакета с консольной командой `mountfile`:
+
+```bash
+python -m pip install .
+mountfile --help
+```
+
+REST API является необязательным extra. Для разработки или запуска API
+установите его явно:
+
+```bash
+python -m pip install '.[api]'
+```
+
 Чтобы сразу открыть образ, передайте путь к нему:
 
 ```bash
 python main.py path/to/image.img
 ```
 
-Готовые сборки лежат на странице
+Готовые сборки последнего стабильного релиза лежат на странице
 [GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases); к каждому
 `.exe` приложен файл `.sha256` с контрольной суммой.
 
@@ -135,6 +154,7 @@ python main.py path/to/image.img
 
 ```bat
 py -3.8 -m venv .venv
+.venv\Scripts\activate.bat
 python -m pip install -r requirements-win7.txt
 python main.py path\to\image.img
 ```
