@@ -18,9 +18,10 @@ tool through ``executor``.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 
 @dataclass(frozen=True, init=False)
@@ -246,9 +247,7 @@ class InvestigationOrchestrator:
             claim for claim in candidates if _claim_key(claim) in accepted_keys
         ]
         rejected = [
-            claim
-            for claim in candidates
-            if _claim_key(claim) not in accepted_keys
+            claim for claim in candidates if _claim_key(claim) not in accepted_keys
         ]
 
         return InvestigationResult(
@@ -288,9 +287,9 @@ def _coerce_tool_call(raw: Any) -> ToolCall:
         tool = raw.get("tool", raw.get("name"))
         return ToolCall(tool=tool, args=raw.get("args", {}))
     if hasattr(raw, "tool"):
-        return ToolCall(tool=getattr(raw, "tool"), args=getattr(raw, "args", {}))
+        return ToolCall(tool=raw.tool, args=getattr(raw, "args", {}))
     if hasattr(raw, "name"):
-        return ToolCall(tool=getattr(raw, "name"), args=getattr(raw, "args", {}))
+        return ToolCall(tool=raw.name, args=getattr(raw, "args", {}))
     raise TypeError("each planned step must be a ToolCall or mapping")
 
 
@@ -321,15 +320,17 @@ def _coerce_claim(raw: Any) -> Claim:
         )
     if hasattr(raw, "statement") and hasattr(raw, "execution_id"):
         return Claim(
-            statement=getattr(raw, "statement"),
-            execution_id=getattr(raw, "execution_id"),
+            statement=raw.statement,
+            execution_id=raw.execution_id,
             confidence=getattr(raw, "confidence", 0.5),
             type=getattr(raw, "type", "claim"),
         )
     raise TypeError("each analyst output must be a Claim or mapping")
 
 
-def _call_analyst(analyst: Analyst, query: str, executions: Sequence[ExecutionRecord]) -> Any:
+def _call_analyst(
+    analyst: Analyst, query: str, executions: Sequence[ExecutionRecord]
+) -> Any:
     """Call the canonical two-argument analyst, with a narrow one-arg form."""
 
     if _can_bind(analyst, query, executions):
@@ -365,7 +366,9 @@ def _skeptic_filter(
     return kept
 
 
-def _call_with_supported_arity(role: Callable[..., Any], first: Any, second: Any) -> Any:
+def _call_with_supported_arity(
+    role: Callable[..., Any], first: Any, second: Any
+) -> Any:
     if _can_bind(role, first, second):
         return role(first, second)
     if _can_bind(role, first):
