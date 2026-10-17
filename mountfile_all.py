@@ -188,9 +188,9 @@ def run_all_cli(img: str, dump: str, udev: str) -> None:
         if not demo.exists():
             demo.write_text("Hello Mount File!\n", encoding="utf-8")
         run_cli(main + ["put", img, str(demo), "--dest", "/", "--yes"])
-        run_cli(main + ["mkdir", img, "/new"])
+        run_cli(main + ["mkdir", img, "/new", "--yes"])
         # mv переименовывает запись в ТОМ ЖЕ каталоге: вторым аргументом имя, не путь.
-        run_cli(main + ["mv", img, "/hello.txt", "renamed.txt"])
+        run_cli(main + ["mv", img, "/hello.txt", "renamed.txt", "--yes"])
         run_cli(main + ["rm", img, "/new", "--recursive", "--yes"])
     else:
         warn(f"Образ {img} не найден — команды volumes/ls/get/put/mkdir/mv/rm пропущены.")

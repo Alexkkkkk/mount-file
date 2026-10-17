@@ -73,15 +73,15 @@ python main.py volumes dump.img
 python main.py ls dump.img /
 python main.py get dump.img /photos -o ./out
 python main.py put dump.img ./hello.txt --dest / --yes
-python main.py mkdir dump.img /new
-python main.py mv dump.img /hello.txt renamed.txt
+python main.py mkdir dump.img /new --yes
+python main.py mv dump.img /hello.txt renamed.txt --yes
 python main.py rm dump.img /new --recursive --yes
 python main.py decode dump.bin                # расшифровка дампа RT809H (MST/MTK) -> dump.bin_decode.bin
 python main.py split dump.bin udev.txt -o ./parts   # разбиение дампа на партиции по udev
 
 Без `pytsk3` CLI и классическое дерево используют встроенный провайдер FAT32.
 Запись, переименование и удаление поддерживаются только на FAT32. Команды
-`put` и `rm` требуют `--yes`; перед изменением образа сделайте резервную копию.
+Команды `put`, `mkdir`, `mv` и `rm` требуют `--yes`; перед изменением образа сделайте резервную копию.
 `mv` переименовывает файл в том же каталоге, а не переносит между томами.
 
 Сборка Linux: `./build_exe.sh`; результат — `dist/MountFile-linux-x86-64`.

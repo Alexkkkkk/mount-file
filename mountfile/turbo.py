@@ -1016,7 +1016,7 @@ def _cli_diff(args) -> int:
     sig = sync.build_signature(args.target)
     ops = sync.diff(args.source, sig)
     total = os.path.getsize(args.source)
-    literal = sum(l for k, _p, _o, l in ops if k == "data")
+    literal = sum(length for k, _p, _o, length in ops if k == "data")
     print(
         f"\nops={len(ops)}  literal={literal:,} B  full={total:,} B  "
         f"saving≈{(1 - literal / max(1, total)) * 100:.1f}%"
