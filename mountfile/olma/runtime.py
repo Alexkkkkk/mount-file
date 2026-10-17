@@ -43,6 +43,13 @@ class OlmaRuntime:
         self._orig_io_read = None
         self._orig_io_write = None
         self._orig_io_close = None
+        # Re-entrancy guard: traceback.extract_stack() can itself allocate
+        # or load modules that call open() again. A second call inside the
+        # hook would loop forever, which is exactly the "maximum recursion
+        # depth exceeded" we see when the bootloader opens resource files
+        # during startup. The hook short-circuits to the real open in that
+        # case instead of re-recording and risking a stack blow.
+        self._reentrant = 0
 
     # --- install/uninstall ---
     def install(self) -> None:
@@ -92,9 +99,19 @@ class OlmaRuntime:
 
     # --- patched functions ---
     def _patched_open(self, file, mode="r", *a, **kw):
-        t0 = time.perf_counter()
+        # Short-circuit if we are already inside the hook; this both breaks
+        # recursion and protects against any code path (Qt, importlib,
+        # traceback itself) that legitimately opens a file under the hook.
+        if self._reentrant:
+            return self._orig_open(file, mode, *a, **kw)
+        self._reentrant += 1
         try:
-            fh = self._orig_open(file, mode, *a, **kw)
+            t0 = time.perf_counter()
+            try:
+                fh = self._orig_open(file, mode, *a, **kw)
+            except Exception as e:
+                self.on_error(file, e)
+                raise
             dt = (time.perf_counter() - t0) * 1000
             self._push(
                 RuntimeEvent(
@@ -102,9 +119,8 @@ class OlmaRuntime:
                 )
             )
             return fh
-        except Exception as e:
-            self.on_error(file, e)
-            raise
+        finally:
+            self._reentrant -= 1
 
     def _patched_read(self, self_, *a, **kw):
         t0 = time.perf_counter()
