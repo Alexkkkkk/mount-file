@@ -1,3 +1,4 @@
+# MOUNTFILE_FIX — auto-patched + OLMA
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
@@ -14,6 +15,46 @@ from __future__ import annotations
 import math
 import struct
 
+
+# --- MOUNTFILE_FIX: OLMA FAT32 helpers -------------------------------------
+try:
+    from mountfile.olma.core import (
+        OlmaChain, OlmaCluster, FAT32_MAX_CLUSTER, FAT32_EOC_MIN, FAT32_BAD,
+        OlmaBoundsError, OlmaIntegrityError,
+    )
+except Exception:
+    OlmaChain = None
+
+def _check_cluster_range(c, mc=FAT32_MAX_CLUSTER):
+    try:
+        OlmaCluster(c, mc); return True
+    except Exception:
+        return False
+
+def _is_eoc(v): return v >= FAT32_EOC_MIN
+def _is_bad(v): return v == FAT32_BAD
+
+def _iter_chain(start, fat_get, mc=FAT32_MAX_CLUSTER):
+    if OlmaChain is None:
+        cur = start
+        while _check_cluster_range(cur, mc):
+            yield cur
+            cur = fat_get(cur)
+            if _is_eoc(cur) or _is_bad(cur) or cur == 0:
+                break
+        return
+    for c in OlmaChain(start, fat_get, mc):
+        yield c.value
+
+def _safe_free_chain(fat_get, fat_set, start, mc=FAT32_MAX_CLUSTER):
+    freed = 0
+    try:
+        for v in _iter_chain(start, fat_get, mc):
+            fat_set(v, 0); freed += 1
+    except Exception:
+        pass
+    return freed
+# --- /MOUNTFILE_FIX --------------------------------------------------------
 EOC = 0x0FFFFFF8
 BAD = 0x0FFFFFF7
 FREE = 0x00000000

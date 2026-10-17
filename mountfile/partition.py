@@ -1,3 +1,4 @@
+# MOUNTFILE_FIX — auto-patched + OLMA
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
@@ -8,6 +9,43 @@ from __future__ import annotations
 import struct
 import uuid
 
+
+# --- MOUNTFILE_FIX: OLMA partition helpers ---------------------------------
+try:
+    from mountfile.olma.core import (
+        OlmaPartitionTable, OlmaBuffer, OlmaPartition, OlmaError,
+    )
+except Exception:
+    OlmaPartitionTable = None
+
+def _validate_mbr(buf):
+    if OlmaPartitionTable is None:
+        return len(buf) >= 512 and buf[510:512] == b"\x55\xAA"
+    try:
+        return OlmaPartitionTable(OlmaBuffer(buf)).kind in ("mbr", "gpt")
+    except OlmaError:
+        return False
+
+def _validate_gpt(buf):
+    if OlmaPartitionTable is None:
+        return len(buf) >= 1024 and buf[512:520] == b"EFI PART"
+    try:
+        return OlmaPartitionTable(OlmaBuffer(buf)).kind == "gpt"
+    except OlmaError:
+        return False
+
+def parse_partitions_safe(buf):
+    if OlmaPartitionTable is None:
+        return []
+    try:
+        return OlmaPartitionTable(OlmaBuffer(buf)).partitions
+    except OlmaError:
+        return []
+
+def _clamp_partition(start, size, total):
+    p = OlmaPartition(0, start, size).clamp(total)
+    return p.start_sector, p.size_sectors
+# --- /MOUNTFILE_FIX --------------------------------------------------------
 SECTOR_SIZE = 512
 
 # Extended partition types (MBR); their contents are chained through EBRs.

@@ -33,3 +33,6 @@ hello.txt
 .mypy_cache/
 .ruff_cache/
 coverage.xml
+# OLMA upgrade
+*.bak
+.olma/

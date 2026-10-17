@@ -1,3 +1,4 @@
+# MOUNTFILE_FIX — auto-patched + OLMA
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
@@ -11,6 +12,34 @@ from __future__ import annotations
 
 import time
 
+
+# --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
+try:
+    from mountfile.olma.core import OlmaHandle, OlmaError
+except Exception:
+    OlmaHandle = None
+
+def safe_read(fh, offset, size, *, chunk=1 << 20):
+    if OlmaHandle is not None and isinstance(fh, OlmaHandle):
+        return fh.read_upto(offset, size)
+    if size <= 0 or offset < 0:
+        return b""
+    out = bytearray()
+    fh.seek(offset)
+    remaining = size
+    while remaining > 0:
+        part = fh.read(min(chunk, remaining))
+        if not part: break
+        out.extend(part); remaining -= len(part)
+    return bytes(out)
+
+def safe_read_exact(fh, offset, size):
+    if OlmaHandle is not None and isinstance(fh, OlmaHandle):
+        try: return fh.read_at(offset, size)
+        except OlmaError: return None
+    d = safe_read(fh, offset, size)
+    return d if len(d) == size else None
+# --- /MOUNTFILE_FIX --------------------------------------------------------
 try:
     import pytsk3
 except ImportError:  # pragma: no cover

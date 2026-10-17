@@ -74,11 +74,31 @@ def insert_header(t: str, h: str) -> str:
 
 def insert_after_imports(t: str, block: str) -> str:
     lines = t.splitlines(keepends=True)
-    last = 0
-    for i, ln in enumerate(lines):
-        s = ln.strip()
+    n = len(lines)
+    i = 0
+    # шебанг, coding-строка, начальные комментарии и пустые строки
+    while i < n and (lines[i].lstrip().startswith("#") or not lines[i].strip()):
+        i += 1
+    # докстринг модуля, если он есть
+    if i < n:
+        s = lines[i].lstrip()
+        for q in ('"""', "'''"):
+            if s.startswith(q):
+                if s.count(q) >= 2 and s.strip() != q:
+                    i += 1  # закрыт в той же строке
+                else:
+                    i += 1
+                    while i < n and q not in lines[i]:
+                        i += 1
+                    i += 1
+                break
+    # импорты (включая from __future__), комментарии и пустые строки
+    last = max(i - 1, 0)
+    while i < n:
+        s = lines[i].strip()
         if s.startswith(("import ", "from ")) or s.startswith("#") or not s:
             last = i
+            i += 1
         else:
             break
     lines.insert(last + 1, block)
