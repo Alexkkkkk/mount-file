@@ -43,21 +43,20 @@ from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
                         ComboAdjustToContents, CtrlModifier, DescendingOrder,
                         DialogAccepted, DlgActionRole, DlgCancel, DlgClose,
                         DlgOk, EchoPassword, ElideMiddle, HVC_Interactive,
-                        ItemIsEnabled, ItemIsSelectable,
-                        Key_A, Key_Backspace, Key_Delete, Key_Enter,
-                        Key_Insert, Key_Return, Key_Space, Key_Tab, MB_No,
-                        MB_Yes, NoEditTriggers, QAction, QApplication, QBrush,
-                        QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                        QDockWidget, QEvent_KeyPress, QFileDialog, QFormLayout,
-                        QHBoxLayout, QInputDialog, QKeySequence, QLabel,
-                        QLineEdit, QMainWindow, QMenu, QMessageBox,
-                        QPlainTextEdit, QProgressBar, QPushButton, QSize,
-                        QSpinBox, QSplitter, QTabBar, QTableWidget,
-                        QTableWidgetItem, QTextEdit, QToolBar, QToolButton,
-                        QVBoxLayout, QWidget, SelectRows, SizePolicyExpanding,
-                        SizePolicyFixed, Stretch, TableExtendedSelection,
-                        TB_IconOnly, TB_InstantPopup, exec_dialog,
-                        standard_icon)
+                        ItemIsEnabled, ItemIsSelectable, Key_A, Key_Backspace,
+                        Key_Delete, Key_Enter, Key_Insert, Key_Return,
+                        Key_Space, Key_Tab, MB_No, MB_Yes, NoEditTriggers,
+                        QAction, QApplication, QBrush, QCheckBox, QComboBox,
+                        QDialog, QDialogButtonBox, QDockWidget,
+                        QEvent_KeyPress, QFileDialog, QFormLayout, QHBoxLayout,
+                        QInputDialog, QKeySequence, QLabel, QLineEdit,
+                        QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
+                        QProgressBar, QPushButton, QSize, QSpinBox, QSplitter,
+                        QTabBar, QTableWidget, QTableWidgetItem, QTextEdit,
+                        QToolBar, QToolButton, QVBoxLayout, QWidget,
+                        SelectRows, SizePolicyExpanding, SizePolicyFixed,
+                        Stretch, TableExtendedSelection, TB_IconOnly,
+                        TB_InstantPopup, exec_dialog, standard_icon)
 from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
 from .updater import is_frozen
@@ -1034,7 +1033,9 @@ class SettingsDialog(QDialog):
         self.spn_ai_bytes = QSpinBox()
         self.spn_ai_bytes.setRange(4, 65536)
         self.spn_ai_bytes.setSuffix(" Кб")
-        self.spn_ai_bytes.setValue(int(tc_style.SETTINGS.get("ai_max_bytes") or 262144) // 1024)
+        self.spn_ai_bytes.setValue(
+            int(tc_style.SETTINGS.get("ai_max_bytes") or 262144) // 1024
+        )
         lay.addRow("Читать до:", self.spn_ai_bytes)
         buttons = QDialogButtonBox(DlgOk | DlgCancel)
         buttons.accepted.connect(self.accept)

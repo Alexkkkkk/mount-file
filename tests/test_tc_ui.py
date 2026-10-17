@@ -325,8 +325,9 @@ def main():
         assert ai_dlg._name() == "README.TXT", ai_dlg._name()
         # анализ без настроенного бэкенда: сообщение, а не трейсбек
         ai_dlg.run_analysis()
-        assert "не настроен" in ai_dlg.txt.toPlainText().lower(), \
-            ai_dlg.txt.toPlainText()[:200]
+        assert (
+            "не настроен" in ai_dlg.txt.toPlainText().lower()
+        ), ai_dlg.txt.toPlainText()[:200]
         assert ai_dlg.btn_run.isEnabled(), "кнопка не разблокировалась"
         # чтение идёт через collect() и видит усечение
         data, truncated = ai.collect(ai_dlg._reader(), max_bytes=8)
