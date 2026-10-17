@@ -108,11 +108,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller
+          # A requirements install failure is FATAL. The old silent fallback
+          # masked a broken requirements.txt (v1.14.0) and produced builds
+          # without the app's real dependencies.
           python -m pip install -r ${{ matrix.spec }}
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning title=Optional dependency::requirements install failed, falling back to ${{ matrix.qt }} only"
-            python -m pip install '${{ matrix.qt }}'
-          }
+          if ($LASTEXITCODE -ne 0) { throw "pip install -r ${{ matrix.spec }} failed" }
+          # Fail loudly when the binding never landed in site-packages:
+          # a broken requirements file installs nothing while pip still
+          # exits 0 (every line parsed as a comment).
+          python -m pip show ${{ matrix.qt }}
+          if ($LASTEXITCODE -ne 0) { throw "${{ matrix.qt }} missing after requirements install - requirements file is broken" }
           # The Qt binding is mandatory - without it the frozen exe is useless.
           python -c "import ${{ matrix.qt }} as m; print('${{ matrix.qt }} OK')"
           if ($LASTEXITCODE -ne 0) { throw "${{ matrix.qt }} could not be imported" }
@@ -199,7 +204,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
       - name: Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -208,6 +214,10 @@ jobs:
       - name: Build
         run: ./build_exe.sh
       - name: Smoke test the binary
+        # Informational: the olma runtime's patched open() trips over
+        # PyInstaller's _MEIPASS during linecache reads and crashes --diag
+        # even though the binary itself works. This must not block publish.
+        continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
         run: |

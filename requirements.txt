@@ -1,1 +1,7 @@
-# MOUNTFILE_FIX — auto-patched + OLMA\n# SPDX-License-Identifier: MIT\n# Copyright (c) 2026 Alexkkkkk\n# Licensed under the MIT License - see the LICENSE file for details.\nPyQt6>=6.11.0\npytsk3>=20231030 ; python_version >= '3.10'\n# OLMA: без внешних зависимостей (stdlib only)\n
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+# Licensed under the MIT License - see the LICENSE file for details.
+
+# Windows 10/11: Python 3.12 + PyQt6
+PyQt6>=6.11.0
+pytsk3>=20231030 ; python_version >= '3.10'
