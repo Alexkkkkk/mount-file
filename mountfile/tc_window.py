@@ -1388,7 +1388,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_msg("Авто-подбор не удался: %s" % e)
             if not quiet:
-                QMessageBox.warning(self, "Авто-подбор", "Не удалось выполнить:\n%s" % e)
+                QMessageBox.warning(
+                    self, "Авто-подбор", "Не удалось выполнить:\n%s" % e
+                )
             return False
         finally:
             self._autopick_busy = False

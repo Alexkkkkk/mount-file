@@ -169,7 +169,9 @@ class TestScan:
         path = _image(os.path.join(self.tmp, "dump.bin"), FAT32_BYTES + 0x200000)
         with open(path, "r+b") as f:
             _fat32_at(f, 0x100000)
-        udev = _write_udev(os.path.join(self.tmp, "udev.txt"), ["0x100000,0x100000,system"])
+        udev = _write_udev(
+            os.path.join(self.tmp, "udev.txt"), ["0x100000,0x100000,system"]
+        )
         cands = scan_candidates(path, udev=udev, deep=False)
         top = cands[0]
         assert top.offset == 0x100000
@@ -182,9 +184,7 @@ class TestUdevHelpers:
         self.tmp = tempfile.mkdtemp()
 
     def test_looks_like_udev(self):
-        udev = _write_udev(
-            os.path.join(self.tmp, "udev.txt"), ["0x0,0x4000,preloader"]
-        )
+        udev = _write_udev(os.path.join(self.tmp, "udev.txt"), ["0x0,0x4000,preloader"])
         assert looks_like_udev(udev)
 
     def test_binary_dump_is_not_udev(self):
