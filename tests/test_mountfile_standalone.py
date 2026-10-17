@@ -70,8 +70,8 @@ def test_metadata(mf):
 def test_platform_flags_are_consistent(mf):
     flags = [mf.IS_WIN, mf.IS_MAC, mf.IS_LINUX]
     assert flags.count(True) <= 1
-    assert mf.IS_WIN == (sys.platform == "win32")
-    assert mf.IS_LINUX == sys.platform.startswith("linux")
+    assert (sys.platform == "win32") == mf.IS_WIN
+    assert sys.platform.startswith("linux") == mf.IS_LINUX
 
 
 # -------------------------------------------------------------------- paths
