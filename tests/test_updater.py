@@ -245,6 +245,34 @@ def test_windows_swap_script_waits_for_pid(tmp_path, monkeypatch):
     assert text.startswith("@echo off")
 
 
+# ------------------------------------------- индикация хода обновления
+def test_startup_updater_reexports_progress_signals():
+    """Сигналы хода установки подняты на StartupUpdater (строка состояния)."""
+    worker = updater.StartupUpdater(current_version="1.0.0")
+    for name in ("progress", "stage", "failed"):
+        signal = getattr(worker, name)
+        seen = []
+        signal.connect(seen.append)
+        signal.emit(7 if name == "progress" else "текст")
+        assert seen, "сигнал %s должен доставлять значения" % name
+
+
+def test_download_progress_indeterminate_without_size(tmp_path, monkeypatch):
+    """Без Content-Length ход отдаётся как -1 (полоса в режиме «занят»)."""
+    payload = b"xyz"
+    release = _release("v2.0.0", [("MountFile.bin", payload)])
+    release["assets"][0].pop("size")
+    monkeypatch.setattr(
+        updater.urllib.request, "urlopen", _fake_urlopen(release, payload)
+    )
+    seen = []
+    path, size = updater.download_asset(
+        release["assets"][0], str(tmp_path), seen.append
+    )
+    assert size == len(payload)
+    assert -1 in seen and seen[-1] == 100
+
+
 if __name__ == "__main__":
     import pytest
 

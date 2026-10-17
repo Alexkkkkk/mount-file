@@ -85,6 +85,7 @@ from .qt_compat import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSize,
     QSpinBox,
@@ -977,6 +978,9 @@ class MainWindow(QMainWindow):
                 "Устанавливаю v%s и перезапускаюсь…" % info.get("version")
             )
         )
+        self.updater.progress.connect(self._update_progress)
+        self.updater.stage.connect(self._update_stage)
+        self.updater.failed.connect(self._update_hide)
         self.updater.restarting.connect(self._on_update_restarting)
         self.updater.installed.connect(self._on_update_installed)
         self.updater.start()
@@ -1016,6 +1020,29 @@ class MainWindow(QMainWindow):
     def _on_update_restarting(self):
         self.statusBar().showMessage("Установка обновления — перезапуск…")
 
+    # --------------------------------------- индикатор хода обновления
+    def _update_stage(self, text):
+        """Этап обновления: текст в статус-баре, полоса — режим «занят»."""
+        self._update_stage_label.setText(text)
+        self._update_stage_label.show()
+        self._update_bar.setRange(0, 0)
+        self._update_bar.show()
+
+    def _update_progress(self, value):
+        """Ход скачивания: 0–100 %; ``-1`` — размер неизвестен («занят»)."""
+        if value < 0:
+            self._update_bar.setRange(0, 0)
+        else:
+            self._update_bar.setRange(0, 100)
+            self._update_bar.setValue(value)
+        self._update_bar.show()
+        self._update_stage_label.show()
+
+    def _update_hide(self):
+        """Скрыть индикатор (нечего показывать / установка провалилась)."""
+        self._update_stage_label.hide()
+        self._update_bar.hide()
+
     def _on_update_installed(self):
         self._close_writer()
         if self.updater is not None:
@@ -1029,7 +1056,24 @@ class MainWindow(QMainWindow):
         self._build_command_area()
         self._build_menus()
         self._build_log()
+        self._build_update_status()
         self.statusBar().showMessage("Откройте образ диска (Ctrl+O), чтобы начать")
+
+    def _build_update_status(self):
+        """Постоянные виджеты хода обновления в строке состояния.
+
+        Скрыты, пока обновление не началось; этап показывается текстом,
+        рядом — полоса прогресса (проценты скачивания, режим «занят»
+        на этапах проверки суммы и установки). Постоянные виджеты
+        (addPermanentWidget) не затираются временными showMessage().
+        """
+        sb = self.statusBar()
+        self._update_stage_label = QLabel(self)
+        self._update_bar = QProgressBar(self)
+        self._update_bar.setFixedWidth(140)
+        sb.addPermanentWidget(self._update_stage_label)
+        sb.addPermanentWidget(self._update_bar)
+        self._update_hide()
 
     def _icon(self, name):
         """Standard Qt icon by name (empty icon when the style has none)."""

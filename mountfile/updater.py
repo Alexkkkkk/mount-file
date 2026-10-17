@@ -297,8 +297,10 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
                 break
             fh.write(chunk)
             got += len(chunk)
-            if progress and total:
-                progress(min(99, int(got * 100 / total)))
+            if progress:
+                # -1 = размер неизвестен (нет Content-Length): индикатор
+                # переходит в режим «занят» вместо процентов
+                progress(min(99, int(got * 100 / total)) if total else -1)
     if total and got != total:
         raise OSError("скачано %d из %d байт" % (got, total))
     if progress:
@@ -449,10 +451,17 @@ class Updater(QThread):
 
 
 class Installer(QThread):
-    """Скачивание, проверка и установка обновления."""
+    """Скачивание, проверка и установка обновления.
+
+    Сигналы для строки состояния GUI: ``stage`` — текст текущего этапа
+    (скачивание → контрольная сумма → установка), ``progress`` — ход
+    скачивания в процентах (0–100 или ``-1``, когда размер файла
+    неизвестен — тогда индикатор работает в режиме «занят»).
+    """
 
     status = pyqtSignal(str)
     progress = pyqtSignal(int)
+    stage = pyqtSignal(str)
     failed = pyqtSignal(str)
     restarting = pyqtSignal()
     installed = pyqtSignal()
@@ -470,10 +479,12 @@ class Installer(QThread):
                     webbrowser.open(self.info["url"])
                     return
                 raise RuntimeError("в релизе нет сборки для этой платформы")
+            self.stage.emit("Скачивание обновления…")
             self.status.emit("Скачивание %s…" % asset.get("name"))
             path, size = download_asset(asset, progress=self.progress.emit)
             wanted = self.info.get("sha256")
             if wanted:
+                self.stage.emit("Проверка контрольной суммы…")
                 actual = sha256_file(path)
                 if actual != wanted:
                     raise RuntimeError("контрольная сумма не совпала (файл повреждён)")
@@ -481,6 +492,7 @@ class Installer(QThread):
             self.status.emit("Скачано %d байт" % size)
 
             if not is_frozen():
+                self.stage.emit("Обновление исходников…")
                 note = None
                 if self.info.get("url"):
                     for root in (
@@ -501,6 +513,7 @@ class Installer(QThread):
                 return
 
             self.progress.emit(100)
+            self.stage.emit("Установка обновления…")
             self.status.emit("Установка v%s и перезапуск…" % self.info.get("version"))
             self.restarting.emit()
             install_and_restart(path)
@@ -522,6 +535,13 @@ class StartupUpdater(Updater):
     installing = pyqtSignal(dict)
     restarting = pyqtSignal()
     installed = pyqtSignal()
+    # Проброс сигналов установщика наверх: GUI подключается только к
+    # StartupUpdater. Раньше сигнала progress не было, и подключение
+    # ``self._installer.progress.connect(self.progress)`` падало с
+    # AttributeError — индикатор хода установки не работал совсем.
+    progress = pyqtSignal(int)
+    stage = pyqtSignal(str)
+    failed = pyqtSignal(str)
 
     def __init__(self, parent=None, current_version=None, installer_factory=None):
         super().__init__(parent, current_version)
@@ -542,7 +562,9 @@ class StartupUpdater(Updater):
         self._installer = self._installer_factory(info, parent or self.parent())
         self._installer.status.connect(self.status)
         self._installer.progress.connect(self.progress)
+        self._installer.stage.connect(self.stage)
         self._installer.installed.connect(self.installed)
+        self._installer.failed.connect(self.failed)
         self._installer.failed.connect(
             lambda msg: self.status.emit("Обновление не установлено: %s" % msg)
         )
