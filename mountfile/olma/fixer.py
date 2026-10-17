@@ -54,8 +54,10 @@ class OlmaFixer:
                                          "нет обработчика"))
                 continue
             try:
+                before = "".join(lines)
                 new_lines, detail = handler(lines, issue)
-                if new_lines is not None and new_lines != lines:
+                after = "".join(lines) if new_lines is None else "".join(new_lines)
+                if new_lines is not None and after != before:
                     lines = new_lines
                     results.append(FixResult(rel, issue.line, issue.rule_id, True, detail))
                 else:
@@ -66,6 +68,16 @@ class OlmaFixer:
                                          f"ошибка: {e}"))
 
         new_src = "".join(lines)
+        if new_src != src:
+            # валидация: файл с синтаксической ошибкой не записываем
+            try:
+                ast.parse(new_src, filename=str(p))
+            except SyntaxError as e:
+                for k, r in enumerate(results):
+                    if r.applied and r.file == rel:
+                        results[k] = FixResult(rel, r.line, r.rule_id, False,
+                                               f"{r.detail} (откат: синтаксис: {e.msg})")
+                new_src = src
         if new_src != src and not self.dry_run:
             bak = Path(str(p) + ".olma.bak")
             if not bak.exists():
@@ -76,53 +88,34 @@ class OlmaFixer:
 
     # --- конкретные fix-хендлеры ---
     def _fix_ol001(self, lines, issue):
-        """open() без with → with open() as _f: ... (оборачиваем одну строку)."""
-        idx = issue.line - 1
-        if idx < 0 or idx >= len(lines):
-            return None, ""
-        line = lines[idx]
-        # Простейший случай: var = open(...)
-        stripped = line.lstrip()
-        indent = line[:len(line) - len(stripped)]
-        if "=" in stripped and "open(" in stripped:
-            var, expr = stripped.split("=", 1)
-            var = var.strip()
-            new = f"{indent}with {expr.strip()} as {var}:\n"
-            # добавляем TODO — надо перенести тело внутрь with
-            new += f"{indent}    pass  # OLMA: перенесите тело сюда\n"
-            new += f"{indent}# OLMA-TODO: закрыть with-блок для {var}\n"
-            lines[idx] = new
-            return lines, "обёрнуто в with (нужно вручную перенести тело)"
-        return None, "не поддержано"
+        """open() без with — только рекомендация.
+
+        Авто-обёртка одной строки оставляет остальное тело с закрытым
+        файлом, а для строк `with open(...) as f:` даёт синтаксический
+        мусор из-за split("=").
+        """
+        return None, ("требует ручной правки: перенос тела в with "
+                      "(авто-обёртка одной строки ломает тело)")
 
     def _fix_ol002(self, lines, issue):
-        """read() → read(size=1<<20)."""
-        idx = issue.line - 1
-        if idx < 0 or idx >= len(lines):
-            return None, ""
-        line = lines[idx]
-        if ".read()" in line:
-            lines[idx] = line.replace(".read()", ".read(1 << 20)", 1)
-            return lines, "добавлен size=1MiB"
-        return None, ""
+        """read() без размера — только рекомендация.
+
+        Слепая замена на read(1 << 20) усекает чтение файлов больше
+        1 МиБ — при работе с образами это потеря данных.
+        """
+        return None, ("требует ручной оценки: read(1 << 20) усекает чтение "
+                      "файлов больше 1 МиБ")
 
     def _fix_ol005(self, lines, issue):
         return self._fix_ol001(lines, issue)
 
     def _fix_ol007(self, lines, issue):
-        """Оборачивает строку в try/except OSError."""
-        idx = issue.line - 1
-        if idx < 0 or idx >= len(lines):
-            return None, ""
-        line = lines[idx]
-        indent = line[:len(line) - len(line.lstrip())]
-        body = line[len(indent):]
-        new = (f"{indent}try:\n"
-               f"{indent}    {body}"
-               f"{indent}except OSError as _e:\n"
-               f"{indent}    raise  # OLMA: обработайте ошибку\n")
-        lines[idx] = new
-        return lines, "добавлен try/except OSError"
+        """try/except OSError — только рекомендация.
+
+        Обёртка `except OSError: raise` ничего не исправляет и лишь
+        засоряет код — обработка ошибки требует ручного решения.
+        """
+        return None, "требует ручной обработки: осмысленный except OSError"
 
     def _fix_ol010(self, lines, issue):
         """Рекомендация — ручная замена на OlmaBuffer."""
@@ -139,19 +132,12 @@ class OlmaFixer:
         return None, "требует ручной замены на OlmaTransaction"
 
     def _fix_ol019(self, lines, issue):
-        """close() → try/finally."""
-        idx = issue.line - 1
-        if idx < 0 or idx >= len(lines):
-            return None, ""
-        line = lines[idx]
-        indent = line[:len(line) - len(line.lstrip())]
-        body = line[len(indent):]
-        new = (f"{indent}try:\n"
-               f"{indent}    {body}"
-               f"{indent}finally:\n"
-               f"{indent}    pass  # OLMA: убедитесь, что ресурс закрыт\n")
-        lines[idx] = new
-        return lines, "добавлен try/finally"
+        """close() → try/finally — только рекомендация.
+
+        Обёртка `finally: pass` не закрывает ресурс и не меняет
+        поведение — нужна ручная гарантия закрытия.
+        """
+        return None, "требует ручной обработки: гарантированное закрытие ресурса"
 
     def _fix_ol020(self, lines, issue):
         """open(..., 'w') → OlmaTransaction (рекомендация)."""
