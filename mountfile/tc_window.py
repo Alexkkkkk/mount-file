@@ -38,6 +38,7 @@ import threading
 import webbrowser
 
 from . import ai, autopick, tc_style
+from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .hexview import HexView
 from .partition import list_partitions
 from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
@@ -160,6 +161,87 @@ class ViewerDialog(QDialog):
             self.resize(
                 max(400, geo.width() * 9 // 10), max(300, geo.height() * 9 // 10)
             )
+
+
+class ForensicTriageDialog(QDialog):
+    """Bounded, read-only forensic helpers for the currently opened image."""
+
+    def __init__(self, parent, image_path):
+        super().__init__(parent)
+        self.image_path = image_path
+        self.setWindowTitle("DFIR triage — только чтение")
+        self.resize(760, 520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Образ: %s" % (image_path or "не открыт")))
+
+        search_row = QHBoxLayout()
+        self.ed_pattern = QLineEdit()
+        self.ed_pattern.setPlaceholderText("Строка или regex для поиска в байтах образа")
+        self.cmb_encoding = QComboBox()
+        for label, value in (("UTF-8", "utf-8"), ("UTF-16LE", "utf-16le"), ("Latin-1", "latin-1"), ("Raw", "raw")):
+            self.cmb_encoding.addItem(label, value)
+        self.chk_regex = QCheckBox("regex")
+        btn_search = QPushButton("Искать")
+        btn_search.clicked.connect(self.search)
+        search_row.addWidget(self.ed_pattern, 1)
+        search_row.addWidget(self.cmb_encoding)
+        search_row.addWidget(self.chk_regex)
+        search_row.addWidget(btn_search)
+        layout.addLayout(search_row)
+
+        action_row = QHBoxLayout()
+        for label, slot in (("SHA-256", self.show_hash), ("Timeline CSV", self.show_timeline), ("Timestomp CSV", self.show_timestomp)):
+            button = QPushButton(label)
+            button.clicked.connect(slot)
+            action_row.addWidget(button)
+        layout.addLayout(action_row)
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        layout.addWidget(self.output, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close, 0, AlignRight)
+
+    def _require_image(self):
+        if self.image_path and os.path.isfile(self.image_path):
+            return True
+        self.output.setPlainText("Откройте raw-образ через Ctrl+O перед DFIR-анализом.")
+        return False
+
+    def show_hash(self):
+        if self._require_image():
+            self.output.setPlainText("SHA-256: %s" % sha256_file(self.image_path))
+
+    def search(self):
+        if not self._require_image():
+            return
+        pattern = self.ed_pattern.text()
+        if not pattern:
+            self.output.setPlainText("Введите строку или regex для поиска.")
+            return
+        hits = list(grep_image(self.image_path, pattern, regex=self.chk_regex.isChecked(), encoding=self.cmb_encoding.currentData(), max_hits=200))
+        if not hits:
+            self.output.setPlainText("Совпадений не найдено.")
+            return
+        self.output.setPlainText("\n".join("0x%X (+%d): %s" % (h["offset"], h["length"], h["context"]) for h in hits))
+
+    def _pick_csv(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Открыть timeline CSV", "", "CSV (*.csv);;Все файлы (*)")
+        return path
+
+    def show_timeline(self):
+        path = self._pick_csv()
+        if not path:
+            return
+        records = list(read_timeline_csv(path))
+        self.output.setPlainText("\n".join("%s\t%s\t%s\t%s" % (r.path, r.mtime or "", r.atime or "", r.ctime or "") for r in records[:1000]) + "\n\nRecords: %d" % len(records))
+
+    def show_timestomp(self):
+        path = self._pick_csv()
+        if not path:
+            return
+        findings = list(detect_timestomp(read_timeline_csv(path)))
+        self.output.setPlainText("\n".join("%s\t%s" % (r.path, ", ".join(reasons)) for r, reasons in findings[:1000]) + "\n\nFindings: %d" % len(findings))
 
 
 class PanelTable(QTableWidget):
@@ -1597,6 +1679,9 @@ class MainWindow(QMainWindow):
         m_tool.addAction(
             self._action("Сводка образа и тома…", self.show_image_info)
         )
+        m_tool.addAction(
+            self._action("DFIR triage (только чтение)…", self.open_forensic_triage)
+        )
         m_tool.addSeparator()
         m_tool.addAction(self._action("Декодировать дамп RT809…", self.tool_decode))
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
@@ -1860,6 +1945,10 @@ class MainWindow(QMainWindow):
                     )
                 )
         QMessageBox.information(self, "Сводка образа и тома", "\n".join(lines))
+
+    def open_forensic_triage(self):
+        """Open bounded read-only hash/search/timeline helpers."""
+        exec_dialog(ForensicTriageDialog(self, self.image_path))
 
     # ------------------------------------------------------ rt809 tools
     # ------------------------------------------------------- auto pick
