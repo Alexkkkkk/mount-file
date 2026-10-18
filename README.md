@@ -11,7 +11,12 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 # Mount File
 
-**Актуальный релиз: [v1.24.2](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.24.2).**
+**Актуальный релиз: [v1.26.0](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.26.0).**
+
+> **Статус:** issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
+> открытый roadmap-эпик, а не заявление о полностью готовой forensic-платформе.
+> Рабочая запись штатно поддерживается FAT32; DFIR, AI, YARA, carving и
+> универсальная запись имеют экспериментальные или частичные реализации.
 
 Файловый менеджер для raw-образов дисков и дампов NAND/eMMC: просмотр и
 извлечение файлов, чтение таблиц разделов, а в образах FAT32 — создание,
@@ -71,6 +76,9 @@ Licensed under the MIT License - see the LICENSE file for details.
 - **Дампы RT809H:** расшифровка зашифрованных дампов eMMC MStar (MST) и
   MediaTek (MTK) по встроенным XOR-таблицам и разбиение дампа на партиции по
   файлу `udev`.
+- **Read-only DFIR CLI:** `grep`, `hash`, `timeline` и `timestomp` доступны
+  через `python -m mountfile`; timeline/timestomp принимают CSV внешнего
+  коллектора и не обещают filesystem-aware сбор или recovery.
 - **HEX-просмотр** первых 1 МБ выбранного файла.
 - **Двухпанельный интерфейс** в стиле Total Commander: вкладки каталогов,
   отметка файлов, массовые операции, светлая и тёмная темы, журнал окна.

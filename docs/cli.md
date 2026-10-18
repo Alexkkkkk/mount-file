@@ -10,6 +10,25 @@ python main.py volumes dump.img
 
 ## Команды
 
+### Read-only DFIR-команды
+
+```bash
+python -m mountfile grep dump.img "password=" --encoding utf-8
+python -m mountfile hash dump.img
+python -m mountfile timeline dump.img --csv timeline.csv
+python -m mountfile timestomp dump.img --csv timeline.csv
+```
+
+`grep` возвращает ограниченные byte offsets и контекст, `hash` вычисляет
+SHA-256, а `timeline` и `timestomp` работают с CSV, полученным внешним
+коллектором. Эти команды не изменяют исходный образ. Полноценный
+filesystem-aware collector, YARA pipeline, carving и slack discovery пока не
+являются частью package CLI.
+
+Отдельные `mountfile_dfir.py` и `mountfile_grep.py` сохраняются как
+экспериментальные standalone-инструменты с расширенными сценариями. Их наличие
+не означает полноценного forensic recovery или гарантии chain of custody.
+
 | Команда | Назначение | Запись в образ |
 |---|---|---:|
 | `volumes` | найденные тома и смещения | нет |
