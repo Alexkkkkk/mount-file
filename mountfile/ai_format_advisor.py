@@ -227,6 +227,7 @@ class FormatSpec:
     magic_prefixes: Tuple[str, ...]
     summary: str
     steps: Tuple[str, ...]
+    tools: Tuple[str, ...] = ("file", "xxd")
 
     @property
     def recipe(self) -> str:
@@ -417,6 +418,7 @@ class HypothesisEngine:
                         "recipe": spec.recipe,
                         "action": spec.recipe,
                         "steps": list(spec.steps),
+                        "tools": list(spec.tools),
                     }
                 )
             )
@@ -462,6 +464,7 @@ class HypothesisEngine:
                 "recipe": action,
                 "action": action,
                 "steps": list(steps),
+                "tools": list(remembered.get("tools", [])),
             }
         )
 
@@ -485,6 +488,7 @@ class HypothesisEngine:
                 "recipe": steps[0],
                 "action": steps[0],
                 "steps": list(steps),
+                "tools": ["file", "xxd"],
             }
         )
 
@@ -688,6 +692,26 @@ class Remember:
 PersistentKnowledgeBase = Remember
 
 
+def advise_from_metadata(
+    filename: Union[str, os.PathLike],
+    size: Optional[int] = None,
+    *,
+    extension: Optional[Union[str, os.PathLike]] = None,
+    magic_summary: Any = "",
+    remember: Optional[Remember] = None,
+) -> Tuple[FileFingerprint, List[ActionableRecipe]]:
+    """Return deterministic format advice from caller-supplied metadata only.
+
+    This entrypoint performs no filesystem reads, model calls, or network
+    requests.  Callers must supply any optional magic summary themselves.
+    """
+
+    fingerprint = build_fingerprint(
+        filename, size=size, extension=extension, magic_summary=magic_summary
+    )
+    return fingerprint, HypothesisEngine(remember=remember).suggest(fingerprint)
+
+
 __all__ = [
     "ActionableRecipe",
     "DEFAULT_REMEMBER_PATH",
@@ -701,5 +725,6 @@ __all__ = [
     "KNOWLEDGE_BASE",
     "PersistentKnowledgeBase",
     "Remember",
+    "advise_from_metadata",
     "build_fingerprint",
 ]

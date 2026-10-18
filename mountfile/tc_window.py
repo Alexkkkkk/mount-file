@@ -1217,9 +1217,9 @@ class SettingsDialog(QDialog):
             int(tc_style.SETTINGS.get("ai_max_bytes") or 262144) // 1024
         )
         lay.addRow("Читать до:", self.spn_ai_bytes)
-        # --- AI-советник v2: авто-разбор формата + отчёт на GitHub (opt-in)
+        # --- Privacy-safe Format Advisor: локальные рекомендации по метаданным
         self.chk_advise = QCheckBox(
-            "AI-советник: предлагать разбор формата при открытии файла"
+            "Format Advisor: показывать локальные советы по метаданным при открытии"
         )
         self.chk_advise.setChecked(bool(tc_style.SETTINGS.get("ai_format_autohook")))
         lay.addRow("", self.chk_advise)
@@ -1687,15 +1687,15 @@ class MainWindow(QMainWindow):
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
         m_tool.addSeparator()
         m_tool.addAction(self.act_ai)
-        # «AI-советник v2» живёт только в меню: тулбар-тесты закрепляют
+        # Format Advisor живёт только в меню: тулбар-тесты закрепляют
         # кнопку AI последней иконкой панели, лишняя кнопка на тулбаре
         # сломала бы позиционные проверки (tests/test_ai_ui.py).
         self.act_advise = self._action(
-            "AI-советник v2 (multi-hypothesis)",
+            "Format Advisor (offline, metadata-only)",
             self._on_advise,
             "Ctrl+Shift+I",
             "SP_ComputerIcon",
-            "Мульти-гипотезный разбор формата файла (Ctrl+Shift+I)",
+            "Локальные рекомендации по имени, расширению и размеру; файл не читается (Ctrl+Shift+I)",
         )
         m_tool.addAction(self.act_advise)
 
@@ -1840,16 +1840,7 @@ class MainWindow(QMainWindow):
         exec_dialog(dlg)
 
     def _on_advise(self):
-        """«AI-советник v2»: мульти-гипотезный разбор формата файла.
-
-        Советник ставит гипотезы по сигнатурам, затем опрашивает модель;
-        при включённом консенсусе и доступном втором бэкенде голосуют двое.
-        Отчёт на GitHub уходит только при заполненных настройках репозитория
-        и токена (токен никогда не попадает в журнал и в отчёт).
-        """
-        from mountfile.ai_format_advisor_v2 import (GitHubReporter,
-                                                    advise_and_show)
-
+        """Show offline, metadata-only format recommendations."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir") or entry.get("up"):
@@ -1857,35 +1848,49 @@ class MainWindow(QMainWindow):
                 self, "AI-советник", "Сначала выберите файл в активной панели."
             )
             return
-        backends = [ai.build_backend(tc_style.SETTINGS)]
-        if tc_style.SETTINGS.get("ai_consensus"):
-            for key in ("ollama", "openai"):
-                extra = ai.build_backend({**tc_style.SETTINGS, "ai_backend": key})
-                if extra.name != backends[0].name and extra.available():
-                    backends.append(extra)
-        github = None
-        repo = tc_style.SETTINGS.get("ai_github_repo") or ""
-        token = tc_style.SETTINGS.get("ai_github_token") or ""
-        if repo and token:
-            try:
-                github = GitHubReporter(repo, token)
-            except ValueError:
-                github = None
-        advise_and_show(
-            p.join(entry["name"]),
-            backends,
-            github=github,
-            parent=self,
-            # Файл внутри образа нельзя открыть по пути — байты уже здесь.
-            head=(
-                p.provider.read_file_range(p.join(entry["name"]), 0, 4096)
-                if p.mode == "img"
-                else None
-            ),
-        )
+        from mountfile.ai_format_advisor import Remember, advise_from_metadata
 
-    def _maybe_advise(self, path, head=None):
-        """Autohook: при открытии файла с неуверенным форматом — советник.
+        filename = entry["name"]
+        remember = Remember()
+        fingerprint, recipes = advise_from_metadata(
+            filename, size=entry.get("size"), remember=remember
+        )
+        text = self._format_metadata_advice(fingerprint, recipes)
+        answer = QMessageBox.question(
+            self,
+            "Format Advisor (offline, metadata-only)",
+            text + "\n\nСохранить верхнюю рекомендацию локально в ~/.mountfile/ai_kb.json?",
+            MB_Yes | MB_No,
+            MB_No,
+        )
+        if answer == MB_Yes:
+            try:
+                remember.remember(fingerprint, recipes[0])
+                self.log_msg("Format Advisor: сохранена локальная рекомендация для %s" % fingerprint.filename)
+            except OSError as exc:
+                QMessageBox.information(self, "Format Advisor", "Не удалось сохранить рекомендацию: %s" % exc)
+
+    @staticmethod
+    def _format_metadata_advice(fingerprint, recipes):
+        lines = [
+            "Использованы только имя, расширение и размер. Файл не открывался; сеть и модель не вызывались.",
+            "Файл: %s | расширение: %s | размер: %s" % (
+                fingerprint.filename,
+                fingerprint.extension or "неизвестно",
+                fingerprint.size if fingerprint.size is not None else "неизвестен",
+            ),
+            "",
+        ]
+        for recipe in recipes:
+            lines.append("%d. %s (уверенность %.0f%%) — %s" % (
+                recipe["rank"], recipe["format"], 100.0 * recipe["confidence"], recipe["evidence"]
+            ))
+            lines.append("   Инструменты (не запускаются автоматически): %s" % ", ".join(recipe.get("tools", [])))
+            lines.extend("   • %s" % step for step in recipe["steps"])
+        return "\n".join(lines)
+
+    def _maybe_advise(self, path, size=None):
+        """Log an offline metadata-only hint for an uncertain opened file.
 
         Включается галочкой «ai_format_autohook» в Настройках; никак не
         может сломать открытие файла — все ошибки глушатся в журнал.
@@ -1893,13 +1898,16 @@ class MainWindow(QMainWindow):
         if not tc_style.SETTINGS.get("ai_format_autohook"):
             return
         try:
-            from mountfile.ai_format_advisor_v2 import maybe_advise
+            from mountfile.ai_format_advisor import advise_from_metadata
 
-            maybe_advise(
-                tc_style.SETTINGS, path, parent=self, log=self.log_msg, head=head
-            )
+            fingerprint, recipes = advise_from_metadata(path, size=size)
+            if recipes[0]["confidence"] < 0.7:
+                self.log_msg(
+                    "Format Advisor (offline): %s — %s; файл и сеть не использовались"
+                    % (fingerprint.filename, recipes[0]["action"])
+                )
         except Exception as e:  # the hook must never break opening a file
-            self.log_msg("AI-советник: %s" % e)
+            self.log_msg("Format Advisor: %s" % e)
 
     def open_releases(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file/releases/latest")
@@ -2412,7 +2420,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Просмотр", str(e))
             return
         exec_dialog(ViewerDialog(self, entry["name"], entry.get("size") or 0, data))
-        self._maybe_advise(full, head=data[:4096] if p.mode == "img" else None)
+        self._maybe_advise(full, size=entry.get("size"))
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):

@@ -15,6 +15,12 @@ file only tracks the releases themselves.
   to GitHub Pages. The Docker workflow keeps build/smoke checks on CI and makes
   GHCR publication an explicit manual action. Added reproducible asciinema
   recordings for timeline, recovery triage and the metadata-only copilot.
+- Added the package MCP stdio entry point `python -m mountfile.ai.cli mcp` and
+  included byte offsets/size metadata in default partition-list results so
+  clients can pass a discovered volume to subsequent MCP tools.
+- The GUI Format Advisor now uses the deterministic metadata-only engine: it
+  never reads or sends file bytes, does not call a model/network, and stores a
+  selected recipe locally only after explicit user confirmation.
 - The first-party YARA and timeline plugin examples now export `PLUGINS` and
   are covered by an explicit-discovery test; loading remains opt-in because
   discovering Python plugins imports executable code.
