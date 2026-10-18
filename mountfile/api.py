@@ -573,6 +573,25 @@ def create_app(
     ) -> Any:
         return _read_impl(image, path, offset)
 
+    # Path-style routes are kept as compatibility aliases for clients that use
+    # an image id in the URL.  The id is still resolved through the exact same
+    # configured-root boundary and never bypasses authentication.
+    @app.get("/fs/{image_id}/ls", include_in_schema=False, dependencies=[_dependency()])
+    def fs_image_ls(
+        image_id: str,
+        path: str = Query(default="/"),
+        offset: int = Query(default=0),
+    ) -> Any:
+        return _ls_impl(image_id, path, offset)
+
+    @app.get("/fs/{image_id}/read", include_in_schema=False, dependencies=[_dependency()])
+    def fs_image_read(
+        image_id: str,
+        path: str = Query(...),
+        offset: int = Query(default=0),
+    ) -> Any:
+        return _read_impl(image_id, path, offset)
+
     def _timeline_impl(
         image: Optional[str],
         limit: int,
@@ -622,6 +641,15 @@ def create_app(
         offset: int = Query(default=0),
     ) -> Any:
         return _timeline_impl(image, limit, path, offset)
+
+    @app.get("/fs/{image_id}/timeline", include_in_schema=False, dependencies=[_dependency()])
+    def fs_image_timeline(
+        image_id: str,
+        limit: int = Query(default=100),
+        path: Optional[str] = Query(default=None),
+        offset: int = Query(default=0),
+    ) -> Any:
+        return _timeline_impl(image_id, limit, path, offset)
 
     return app
 
