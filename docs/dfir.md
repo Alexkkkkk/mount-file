@@ -174,3 +174,84 @@ python mountfile_dfir.py grep evidence.img "http://" --encoding latin-1 --max-hi
 Проверяйте временную шкалу, подпись, хэш и контекст отдельными инструментами.
 `include_deleted=True` видит удалённые записи, доступные через метаданные; он
 не выполняет carving и может не обойти удалённые каталоги.
+
+## Read-only библиотечные API
+
+Дополнительно доступны composable Python API. Они пока не являются командами
+`mountfile_dfir.py` и не подключены к GUI. Примеры ниже работают с явно
+переданными метаданными, диапазонами или образом только для чтения; они не
+определяют allocation map и не доказывают наличие malware или timestomping.
+
+### Timeline и timestamp triage
+
+Нормализатор принимает caller-supplied records и переводит даты в UTC. CSV
+экспорт открывает только явно заданный выходной файл:
+
+```python
+from mountfile.dfir_timeline import normalize_timeline, export_timeline_csv
+from mountfile.dfir_timestomp import TimestampRecord, analyze_timestomp
+
+records = [
+    TimestampRecord(
+        path="/evidence/a.bin",
+        created=1_700_000_000,
+        modified=1_699_999_000,
+        accessed=1_700_000_100,
+        record_id="inode-17",
+    )
+]
+events = normalize_timeline(records)
+export_timeline_csv(records, "timeline-normalized.csv")
+for finding in analyze_timestomp(records):
+    print(finding.as_dict())
+```
+
+Порядок времён — эвристика: файловые системы и collectors могут сообщать
+семантически разные `ctime`/creation times и иметь отличающуюся точность.
+Boundary/range alerts по умолчанию отключены и требуют явных thresholds.
+
+### YARA и сигнатуры в переданных unallocated ranges
+
+YARA доступен через optional `yara-python`; он не нужен для импорта остальных
+DFIR модулей. Правила поставляет пользователь:
+
+```python
+from mountfile.dfir_yara import scan_yara
+from mountfile.dfir_unallocated_scan import scan_unallocated
+
+hits = scan_yara(
+    "evidence.img",
+    'rule marker { strings: $s = "powershell" wide condition: $s }',
+)
+for hit in hits:
+    print(hit["rule"], hit["offsets"])
+
+# Укажите предварительно известные half-open byte ranges (offset, length).
+for hit in scan_unallocated("evidence.img", [(0x100000, 0x200000)]):
+    print(hit.offset, hit.signature)
+```
+
+Сигнатурный поиск читает диапазоны bounded chunks и возвращает только magic
+prefix + абсолютный offset. Это triage, не полноценная проверка формата или
+carving; allocation ranges должны быть найдены вызывающей стороной.
+
+### File slack при уже известном extent
+
+Хелпер читает slack последнего кластера только если вызывающий код уже знает
+его абсолютный offset; он не разрешает путь в inode/cluster chain:
+
+```python
+from mountfile.dfir_slack import read_file_slack
+
+result = read_file_slack(
+    "evidence.img",
+    last_cluster_offset=0x400000,
+    file_size=5000,
+    cluster_size=4096,
+)
+print(result.offset, len(result.bytes))
+```
+
+Для пустого или выровненного по границе кластера файла результат пустой и
+`offset` равен `None`. Проверяйте путь, cluster chain и offset независимо до
+вызова; slack может содержать остатки прежних данных.

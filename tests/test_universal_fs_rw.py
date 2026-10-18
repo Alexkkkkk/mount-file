@@ -5,7 +5,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
-from mountfile.fat32 import Fat32
 from mountfile.universal_fs_rw import Fat32RW, UniversalFSRW
 
 
@@ -102,18 +101,82 @@ def test_rename_preserves_multicluster_file_chain(tmp_path):
         fs.close()
 
 
+def test_long_filename_creation_roundtrips_and_uses_unique_short_aliases(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        files = {
+            "/A LONG SOURCE NAME.BIN": b"first evidence file",
+            "/A LONG SOURCE NAME COPY.BIN": b"second evidence file",
+            "/ABCDEFGHIJKLM": b"exactly thirteen characters",
+            "/Evidence 📄.bin": b"unicode evidence file",
+        }
+        for path, payload in files.items():
+            fs.write_file(path, payload)
+
+        raw = fs._read_dir_raw(fs.root_cluster)
+        short_aliases = []
+        for path, payload in files.items():
+            name = Path(path).name
+            entry = next(item for item in fs.list("/") if item.name == name)
+            index = fs._find_entry_index(raw, entry, "/")
+            assert index is not None
+            short_aliases.append(raw[index : index + 11])
+            assert fs.read(path) == payload
+
+        assert len(set(short_aliases)) == len(files)
+    finally:
+        fs.close()
+
+
+def test_delete_long_filename_tombstones_all_slots_and_allows_reuse(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        removed = "/A LONG FILE TO REMOVE.BIN"
+        retained = "/A DIFFERENT LONG FILE.BIN"
+        replacement = "/A REPLACEMENT LONG FILE.BIN"
+        fs.write_file(removed, b"removed")
+        fs.write_file(retained, b"retained")
+
+        raw_before = fs._read_dir_raw(fs.root_cluster)
+        entry = next(item for item in fs.list("/") if item.name == Path(removed).name)
+        short_index = fs._find_entry_index(raw_before, entry, "/")
+        assert short_index is not None
+        start = short_index
+        while start >= 32 and raw_before[start - 32 + 11] == fs.ATTR_LFN:
+            start -= 32
+        deleted_slots = list(range(start, short_index + 32, 32))
+
+        fs.delete(removed)
+        raw_after = fs._read_dir_raw(fs.root_cluster)
+        assert all(raw_after[offset] == 0xE5 for offset in deleted_slots)
+
+        fs.write_file(replacement, b"replacement")
+        assert fs.read(retained) == b"retained"
+        assert fs.read(replacement) == b"replacement"
+    finally:
+        fs.close()
+
+
+def test_mkdir_writes_valid_dot_entries(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SUBDIR")
+        directory = fs.stat("/SUBDIR")
+        assert directory is not None
+        raw = fs._read_dir_raw(directory.inode)
+        assert raw[:11] == b"." + b" " * 10
+        assert raw[32:43] == b".." + b" " * 9
+    finally:
+        fs.close()
+
+
 def test_long_filename_rename_fails_closed_without_mutation(tmp_path):
-    image, fs = _open_fat_rw(tmp_path)
-    fs.close()
-    with image.open("r+b") as image_file:
-        Fat32(image_file).write_file(
-            "/", "A LONG SOURCE NAME.BIN", b"evidence that must remain reachable"
-        )
-    fs = Fat32RW(image)
+    _, fs = _open_fat_rw(tmp_path)
     try:
         payload = b"evidence that must remain reachable"
         source = "/A LONG SOURCE NAME.BIN"
         destination = "/A LONG DESTINATION NAME.BIN"
+        fs.write_file(source, payload)
 
         with pytest.raises(NotImplementedError, match="only same-directory 8.3"):
             fs.rename(source, destination)
