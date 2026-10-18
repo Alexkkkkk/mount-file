@@ -36,3 +36,9 @@ coverage.xml
 # OLMA upgrade
 *.bak
 .olma/
+
+# coverage / pytest artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

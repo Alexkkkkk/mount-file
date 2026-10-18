@@ -6,6 +6,48 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Исправлены два дефекта записи FAT32**, из-за которых образ, который
+  `WriteEngine.verify()` объявлял проверенным, `fsck.fat` отвергал как
+  повреждённый (из-за этого падал `test_transaction_commit_writes_and_verifies`
+  и весь CI-матрикс был красным):
+  * `mountfile/universal_fs_rw.py` (`Fat32RW`) не обновлял сектор FSINFO —
+    кэш числа свободных кластеров оставался на значении до записи
+    («Free cluster summary wrong»). Добавлены `free_clusters()` и
+    `sync_fsinfo()`, которые **пересчитывают** счётчики по FAT (а не
+    инкрементируют) и вызываются из `write_file`/`mkdir`/`delete`; сектор
+    с неверными сигнатурами не трогается вообще.
+  * `mkdir` записывал в слот `..` каталога, созданного в корне, номер
+    корневого кластера (2) вместо 0, как того требует спецификация Microsoft
+    FAT («Invalid '..' entry in the second slot»).
+  * Те же исправления внесены в `mountfile/fat32.py` (независимый движок
+    FAT32), а синтетический фикстур `tests/test_fat32.py` дополнен до
+    структурно полного тома: media-байт 0xF8, FSINFO, backup boot sector,
+    extended boot signature и метка тома в BPB + корневом каталоге.
+  * Регрессионный тест `test_written_image_leaves_fat_metadata_consistent`
+    сверяет кэш FSINFO с пересчётом по FAT, проверяет `..` и (когда
+    установлен `dosfstools`) требует `fsck.fat -n` с кодом 0.
+
+- **MF-WE — транзакционный движок записи** (`mountfile/write_engine.py`,
+  ТЗ MF-WE-TZ-001). Тонкий фасад над существующими RW-бэкендами
+  (`mountfile/universal_fs_rw.py`), который добавляет обязательный по ТЗ §8
+  слой: RO по умолчанию, авто-бэкап сессии и снапшот перед транзакцией,
+  hash-chain журнал операций (`verify_journal()`), байт-в-байт откат транзакции
+  (в том числе после имитированного краха), `verify()` после коммита с
+  построчным отчётом «что реально проверено», `dry_run` без единой записи и
+  отказ от RW-доступа к образу с признаками повреждения без явного
+  `allow_damaged=True`. Собственный нативный движок NTFS/ext не пишется
+  (ТЗ §15) — операции делегируются уже существующим бэкендам.
+- Исправлены два дефекта в `mountfile/universal_fs_rw.py`, найденные при
+  интеграции: `RWBackend.exists()` всегда возвращал `True`, потому что `stat()`
+  отдаёт `None`, а не бросает исключение; `UniversalFSRW` не распознавал
+  заголовок ФС по смещению 0, когда `detect_volumes()` не находил сигнатуру в
+  окне сканирования (синтетические и маленькие образы), и сравнивал имена ФС
+  от детектора (`FAT32`, `ext2/3/4`) с lowercase-таблицей без нормализации.
+- `mountfile/write_engine.py` покрыт тестами `tests/test_write_engine.py`
+  (31 тест: RO-гейт по каждой мутирующей операции, коммит/откат, dry-run,
+  повреждённый образ, подделка журнала, запрет `..`/относительных путей,
+  реальный ext4-образ через `mkfs.ext4` + `debugfs`).
+
 - Epic #87 roadmap batch: experimental library modules for unallocated-range
   indexing, crypto/Android/macOS/NAND/Registry inspection, AI orchestration and
   metadata-only copilot summaries, MCP/RAG, plugins and the REST API. These
