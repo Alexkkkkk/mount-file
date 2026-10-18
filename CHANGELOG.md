@@ -6,6 +6,18 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **RW-слой (PR #121) доведён до рабочего состояния**: `Fat32Adapter`
+  переведён на реальный контракт `mountfile/fat32.py` (файловый объект,
+  пары «каталог + имя», `entry()` возвращает `(parent_cluster, DirEntry)`);
+  `DryRunMixin` действительно блокирует запись (исправлен порядок базовых
+  классов — раньше `--dry-run` молча писал в образ); `create_rw_full`
+  учитывает `dry_run`; `cmd_put` не пересоздаёт существующий каталог;
+  `cmd_get` и MCP-чтение больше не импортируют несуществующий
+  `mountfile.main`; `VerificationEngine._verify_fat32` читает FAT по смещению
+  из BPB (а не 512) и проверяет media-дескриптор `0x0FFFFFF8`; `detect_fs`
+  распознаёт строку `FAT32` и по смещению 82. Добавлены сквозные тесты
+  `tests/test_rw_layer.py`.
+
 - **Исправлены два дефекта записи FAT32**, из-за которых образ, который
   `WriteEngine.verify()` объявлял проверенным, `fsck.fat` отвергал как
   повреждённый (из-за этого падал `test_transaction_commit_writes_and_verifies`
