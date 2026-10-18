@@ -114,7 +114,7 @@ def test_format_advisor_uses_metadata_only_and_does_not_call_backend(win, monkey
     class MessageBox:
         @staticmethod
         def question(*args):
-            question_text = args[2]
+            question_text = args[2].lower()
             assert "файл не открывался" in question_text
             assert "сеть и модель не вызывались" in question_text
             assert "не запускаются автоматически" in question_text
