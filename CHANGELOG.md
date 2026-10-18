@@ -18,6 +18,9 @@ file only tracks the releases themselves.
 - Added the package MCP stdio entry point `python -m mountfile.ai.cli mcp` and
   included byte offsets/size metadata in default partition-list results so
   clients can pass a discovered volume to subsequent MCP tools.
+- The GUI Format Advisor now uses the deterministic metadata-only engine: it
+  never reads or sends file bytes, does not call a model/network, and stores a
+  selected recipe locally only after explicit user confirmation.
 - Добавлен read-only package DFIR слой `mountfile.dfir`: bounded raw search
   (`grep`), SHA-256 identity (`hash`), импорт timeline CSV и консервативная
   проверка timestomp. Команды доступны через `python -m mountfile`; операции
