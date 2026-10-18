@@ -469,6 +469,14 @@ def print_cheatsheet() -> None:
     python main.py timeline-export --csv timeline.csv --output utc.csv
     python main.py yara <img> --rules user.yar  # optional yara-python
     python main.py unallocated-scan <img> --ranges ranges.json
+    python main.py timeline-build <img> -o t.db --csv t.csv   # timeline из ФС (SQLite+CSV)
+    python main.py timeline-query --db t.db --start 2024-03-12T14:00:00Z \
+                                      --end 2024-03-12T15:00:00Z
+    python main.py search <img> "password=" --encoding utf-16le
+    python main.py yara-scan <img> --rules rules/ --json      # bundled rules/ по умолчанию
+    python main.py timestomp-scan <img> --json
+    python main.py slack-extract <img> -o slack/
+    python main.py live-diff before.img after.img -o diff.md
     python main.py --check-updates       # 10=есть апдейт, 0=нет
 
   Общие флаги у команд с образом:

@@ -6,6 +6,20 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **DFIR-модули этапа 1 эпика #87 реализованы** и подключены к CLI.
+  Добавлены `mountfile/timeline.py` (сбор timestamps из ФС, SQLite + CSV,
+  фильтр по окну времени и типу события), `mountfile/search_content.py`
+  (plain / UTF-16LE / regex, чанки с перекрытием, поиск по файлам и по
+  регионам), `mountfile/yara_scan.py` вместе с набором `rules/`
+  (`pii.yar`, `anti_forensics.yar`, `eicar.yar`), `mountfile/timestomp.py`
+  (future / equal-MAC / SI<FN / zero-nanoseconds), `mountfile/slack.py`
+  (slack по data runs, абсолютные offset), `mountfile/live_diff.py`
+  (added/modified/removed + Markdown-отчёт, fallback на region diff).
+  Общий обход ФС вынесен в `mountfile/fs_walk.py`. Новые команды:
+  `timeline-build`, `timeline-query`, `search`, `yara-scan`,
+  `timestomp-scan`, `slack-extract`, `live-diff`. Набор
+  `tests/test_dfir_tools_87.py` проходит полностью (40 тестов).
+
 - **RW v2 (PR #122)**: `MountFileBridge` получил рабочий RO-путь — раньше он
   импортировал несуществующий `mountfile.main` и вызывал несуществующие
   ключи `mountfile --list/--extract`, поэтому на чистой установке всегда

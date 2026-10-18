@@ -80,6 +80,9 @@ Licensed under the MIT License - see the LICENSE file for details.
   файлу `udev`.
 - **Read-only DFIR CLI:** `grep`, `hash`, `timeline`, `timeline-export`,
   `timestomp`, `yara` и `unallocated-scan` доступны через `python -m mountfile`.
+  Файлово-ориентированные DFIR-команды: `timeline-build`, `timeline-query`,
+  `search`, `yara-scan`, `timestomp-scan`, `slack-extract`, `live-diff`
+  (см. [docs/dfir.md](docs/dfir.md)).
   Timeline-команды принимают CSV внешнего коллектора; YARA использует
   user-supplied rules (optional `yara-python`), а unallocated scan — только
   явно переданные ranges. Команды не обещают автоматический filesystem-aware

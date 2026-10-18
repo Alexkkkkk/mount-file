@@ -30,6 +30,18 @@ from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .dfir_timeline import export_timeline_csv
 from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
+from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
+from .search_content import SearchError, search_files, search_image
+from .slack import SlackError, extract_slack
+from .timeline import (
+    DEFAULT_HASH_LIMIT,
+    EVENT_TYPES,
+    TimelineError,
+    build_timeline,
+    query_timeline,
+)
+from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
+from .yara_scan import TARGETS, YaraScanError, scan_image
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
@@ -59,9 +71,29 @@ COMMANDS = (
     "timestomp",
     "yara",
     "unallocated-scan",
+    "timeline-build",
+    "timeline-query",
+    "search",
+    "yara-scan",
+    "timestomp-scan",
+    "slack-extract",
+    "live-diff",
 )
 
-_READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
+_READ_ERRORS = (
+    Fat32Error,
+    TskError,
+    ExtractError,
+    LiveDiffError,
+    SearchError,
+    SlackError,
+    TimelineError,
+    TimestompError,
+    YaraScanError,
+    OSError,
+    ValueError,
+    Rt809Error,
+)
 
 
 # --------------------------------------------------------------- helpers
@@ -501,6 +533,189 @@ def cmd_unallocated_scan(args):
     return OK if count else ERROR
 
 
+
+# ------------------------------------------------- filesystem-aware DFIR
+def cmd_timeline_build(args):
+    """Collect a filesystem timeline from an image (issue #87, Task 1.1)."""
+    try:
+        count, events = build_timeline(
+            args.image,
+            db_path=getattr(args, "output", None),
+            csv_path=getattr(args, "csv", None),
+            offset=getattr(args, "offset", 0) or 0,
+            hash_limit=getattr(args, "hash_limit", DEFAULT_HASH_LIMIT),
+            max_events=getattr(args, "max_events", None),
+        )
+    except (TimelineError, OSError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    files = {getattr(event, "path", "") for event in events}
+    print("Events: %d (%d files)" % (count, len(files)))
+    if getattr(args, "output", None):
+        print("Wrote SQLite: %s" % args.output)
+    if getattr(args, "csv", None):
+        print("Wrote CSV: %s" % args.csv)
+    for event in list(events)[: getattr(args, "limit", 50)]:
+        print(
+            "%s\t%s\t%s\t%s"
+            % (
+                getattr(event, "timestamp", ""),
+                getattr(event, "event", ""),
+                getattr(event, "source", ""),
+                getattr(event, "path", ""),
+            )
+        )
+    return OK if count else ERROR
+
+
+def cmd_timeline_query(args):
+    """Query a stored timeline (issue #87, Task 1.1)."""
+    try:
+        rows = query_timeline(
+            args.db,
+            start=getattr(args, "start", None),
+            end=getattr(args, "end", None),
+            event=getattr(args, "event", None),
+            path=getattr(args, "path", None),
+            limit=getattr(args, "limit", None),
+        )
+    except (TimelineError, OSError, ValueError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for row in rows:
+        if getattr(args, "json", False):
+            print(json.dumps(row, ensure_ascii=False))
+        else:
+            print(
+                "%s\t%s\t%s\t%s"
+                % (row.get("timestamp"), row.get("event"), row.get("path"), row.get("sha256") or "")
+            )
+    print("Records: %d" % len(rows))
+    return OK if rows else ERROR
+
+
+def cmd_search(args):
+    """Search file contents inside an image (issue #87, Task 1.2)."""
+    try:
+        if getattr(args, "files", False):
+            hits = search_files(
+                args.image,
+                args.pattern,
+                encoding=getattr(args, "encoding", "utf-8"),
+                regex=bool(getattr(args, "regex", False)),
+                context=getattr(args, "context", 32),
+                max_hits=getattr(args, "max_results", 100),
+            )
+        else:
+            hits = search_image(
+                args.image,
+                args.pattern,
+                encoding=getattr(args, "encoding", "utf-8"),
+                regex=bool(getattr(args, "regex", False)),
+                context=getattr(args, "context", 32),
+                max_hits=getattr(args, "max_results", 100),
+            )
+    except (SearchError, OSError, ValueError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for hit in hits:
+        if getattr(args, "json", False):
+            print(json.dumps(hit.as_dict(), ensure_ascii=False))
+        else:
+            print("0x%X (+%d): %s" % (hit.offset, hit.length, hit.context))
+    print("Matches: %d" % len(hits))
+    return OK if hits else ERROR
+
+
+def cmd_yara_scan(args):
+    """YARA scan of image files and/or free space (issue #87, Task 1.3)."""
+    rules = list(getattr(args, "rules", []) or [])
+    if not rules:
+        from .yara_scan import rules_directory
+
+        rules = [str(rules_directory())]
+    target = getattr(args, "target", None) or []
+    files = bool(getattr(args, "files", False)) or "files" in target or not target
+    unallocated = bool(getattr(args, "unallocated", False)) or "unallocated" in target or not target
+    try:
+        hits = scan_image(
+            args.image,
+            rules if len(rules) > 1 else rules[0],
+            files=files,
+            unallocated=unallocated,
+            offset=getattr(args, "offset", 0) or 0,
+        )
+    except (YaraScanError, YaraUnavailableError, OSError, ValueError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for hit in hits:
+        if getattr(args, "json", False):
+            print(json.dumps(hit.as_dict(), ensure_ascii=False))
+        else:
+            print("%s\t%s\t%s" % (hit.rule, hit.target, hit.path))
+    print("Matches: %d" % len(hits))
+    return OK if hits else ERROR
+
+
+def cmd_timestomp_scan(args):
+    """Detect timestamp manipulation in an image (issue #87, Task 1.4)."""
+    try:
+        findings = collect_timestomp(
+            args.image,
+            offset=getattr(args, "offset", 0) or 0,
+            skew=getattr(args, "skew", DEFAULT_SKEW),
+        )
+    except (TimestompError, OSError, ValueError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for finding in findings[: getattr(args, "limit", 200)]:
+        if getattr(args, "json", False):
+            print(json.dumps(finding.as_dict(), ensure_ascii=False))
+        else:
+            print("%s\t%s" % (finding.path, ", ".join(finding.reasons)))
+    print("Findings: %d" % len(findings))
+    return OK if findings else ERROR
+
+
+def cmd_slack_extract(args):
+    """Extract slack space from an image (issue #87, Task 1.6)."""
+    try:
+        regions = extract_slack(
+            args.image,
+            args.output,
+            min_slack=getattr(args, "min_slack", 1),
+            offset=getattr(args, "offset", 0) or 0,
+        )
+    except (SlackError, TimelineError, OSError, ValueError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for region in regions:
+        if getattr(args, "json", False):
+            print(json.dumps(region.as_dict(), ensure_ascii=False))
+        else:
+            print("0x%X (+%d) %s" % (region.offset, region.length, region.path))
+    print("Slack regions: %d -> %s" % (len(regions), args.output))
+    return OK if regions else ERROR
+
+
+def cmd_live_diff(args):
+    """Show what changed between two images (issue #87, Task 2.2)."""
+    try:
+        entries = diff_images(args.before, args.after)
+    except (LiveDiffError, TimelineError, OSError, ValueError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for entry in entries:
+        print("%s\t%s" % (entry.status, entry.path))
+    print("Changes: %d" % len(entries))
+    if getattr(args, "output", None):
+        write_markdown(entries, args.output)
+        print("Wrote Markdown: %s" % args.output)
+    else:
+        print(to_markdown(entries), end="")
+    return OK
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -701,6 +916,79 @@ def build_parser():
     sp.add_argument("--chunk-size", type=int, default=1024 * 1024)
     sp.add_argument("--max-results", type=int, default=1000)
     sp.set_defaults(func=cmd_unallocated_scan)
+
+    sp = sub.add_parser(
+        "timeline-build",
+        help="collect a filesystem timeline from an image (SQLite + CSV)",
+    )
+    sp.add_argument("image")
+    sp.add_argument("-o", "--output", default=None, help="SQLite database to create")
+    sp.add_argument("--csv", default=None, help="CSV export path")
+    sp.add_argument("--offset", type=_parse_offset, default=0, help="filesystem offset")
+    sp.add_argument("--hash-limit", type=int, default=DEFAULT_HASH_LIMIT)
+    sp.add_argument("--max-events", type=int, default=None)
+    sp.add_argument("--limit", type=int, default=50, help="rows printed to stdout")
+    sp.set_defaults(func=cmd_timeline_build)
+
+    sp = sub.add_parser("timeline-query", help="query a stored timeline database")
+    sp.add_argument("--db", required=True, help="SQLite timeline produced by timeline-build")
+    sp.add_argument("--start", default=None, help="ISO-8601 lower bound (inclusive)")
+    sp.add_argument("--end", default=None, help="ISO-8601 upper bound (inclusive)")
+    sp.add_argument("--event", choices=EVENT_TYPES, default=None)
+    sp.add_argument("--path", default=None)
+    sp.add_argument("--limit", type=int, default=None)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_timeline_query)
+
+    sp = sub.add_parser("search", help="search file contents inside an image")
+    sp.add_argument("image")
+    sp.add_argument("pattern")
+    sp.add_argument(
+        "--encoding",
+        default="utf-8",
+        choices=["utf-8", "utf-16le", "utf-16be", "latin-1", "ascii"],
+    )
+    sp.add_argument("--regex", action="store_true")
+    sp.add_argument("--context", type=int, default=32)
+    sp.add_argument("--max-results", type=int, default=100)
+    sp.add_argument("--files", action="store_true", help="search inside files, not raw bytes")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_search)
+
+    sp = sub.add_parser(
+        "yara-scan",
+        help="YARA scan of image files and/or free space (bundled rules by default)",
+    )
+    sp.add_argument("image")
+    sp.add_argument("--rules", action="append", default=[], help="rule file or directory")
+    sp.add_argument("--target", action="append", choices=list(TARGETS), default=[])
+    sp.add_argument("--files", action="store_true", help="scan files inside the image")
+    sp.add_argument("--unallocated", action="store_true", help="scan free space")
+    sp.add_argument("--offset", type=_parse_offset, default=0)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_yara_scan)
+
+    sp = sub.add_parser("timestomp-scan", help="detect timestamp manipulation in an image")
+    sp.add_argument("image")
+    sp.add_argument("--offset", type=_parse_offset, default=0)
+    sp.add_argument("--skew", type=float, default=DEFAULT_SKEW)
+    sp.add_argument("--limit", type=int, default=200)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_timestomp_scan)
+
+    sp = sub.add_parser("slack-extract", help="extract file slack space from an image")
+    sp.add_argument("image")
+    sp.add_argument("-o", "--output", required=True, help="directory for slack dumps")
+    sp.add_argument("--offset", type=_parse_offset, default=0)
+    sp.add_argument("--min-slack", type=int, default=1)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_slack_extract)
+
+    sp = sub.add_parser("live-diff", help="show what changed between two images")
+    sp.add_argument("before")
+    sp.add_argument("after")
+    sp.add_argument("-o", "--output", default=None, help="write the Markdown report here")
+    sp.set_defaults(func=cmd_live_diff)
     return p
 
 

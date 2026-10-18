@@ -298,3 +298,87 @@ print(result.offset, len(result.bytes))
 Для пустого или выровненного по границе кластера файла результат пустой и
 `offset` равен `None`. Проверяйте путь, cluster chain и offset независимо до
 вызова; slack может содержать остатки прежних данных.
+
+---
+
+## Файлово-ориентированные DFIR-модули (эпик #87, этап 1)
+
+Кроме низкоуровневых команд выше в пакет добавлены модули, которые работают с
+файловой структурой образа через `pytsk3`, а не с сырыми байтами. Все они
+read-only и не извлекают данные на диск без явной команды.
+
+| Задача | Модуль | CLI |
+|---|---|---|
+| 1.1 Timeline | `mountfile/timeline.py` | `timeline-build`, `timeline-query` |
+| 1.2 Content search | `mountfile/search_content.py` | `search` |
+| 1.3 YARA | `mountfile/yara_scan.py` + `rules/` | `yara-scan` |
+| 1.4 Timestomp | `mountfile/timestomp.py` | `timestomp-scan` |
+| 1.5 Unallocated | `mountfile/dfir_unallocated_scan.py` | `unallocated-scan` |
+| 1.6 Slack | `mountfile/slack.py` | `slack-extract` |
+| 2.2 Live diff | `mountfile/live_diff.py` | `live-diff` |
+
+### Timeline
+
+```bash
+python -m mountfile timeline-build evidence.img -o timeline.db --csv timeline.csv
+python -m mountfile timeline-query --db timeline.db \
+    --start 2024-03-12T14:00:00+00:00 --end 2024-03-12T15:00:00+00:00
+```
+
+Собираются timestamps `created/mtime/atime/ctime` каждого файла, время
+нормализуется в UTC, для небольших файлов считается SHA-256
+(`--hash-limit`, по умолчанию 16 МиБ). SQLite-схема хранит колонки
+`timestamp, source, path, event, sha256`; CSV использует тот же заголовок.
+
+### Content search
+
+```bash
+python -m mountfile search evidence.img "password=" --encoding utf-16le
+python -m mountfile search evidence.img "id=[0-9]+" --regex --json
+python -m mountfile search evidence.img "BEGIN RSA" --files
+```
+
+Чтение идёт чанками с перекрытием, поэтому строка, разрезанная границей
+чанка, всё равно находится; дубликаты из области перекрытия отбрасываются.
+`--files` ищет по содержимому файлов, а не по сырым байтам.
+
+### YARA
+
+```bash
+python -m mountfile yara-scan evidence.img --rules rules/ --json
+python -m mountfile yara-scan evidence.img --target files --target unallocated
+```
+
+Без `--rules` используется встроенный набор `rules/`: `pii.yar`
+(PEM-ключи, e-mail, платёжные карты, IBAN, паспорт РФ),
+`anti_forensics.yar` (утилиты затирания, timestomp, очистка логов) и
+`eicar.yar` для проверки работоспособности сканера.
+
+### Timestomp
+
+```bash
+python -m mountfile timestomp-scan evidence.img --json
+```
+
+Причины: `future_timestamp`, `equal_mac_times`, `si_mtime_before_fn_mtime`,
+`zero_nanoseconds`.
+
+### Slack
+
+```bash
+python -m mountfile slack-extract evidence.img -o slack/
+```
+
+Slack вычисляется по реальным data runs файла, поэтому одинаково корректно
+работает для невыгружаемых атрибутов NTFS, кластеров FAT и блоков ext.
+Резидентные данные NTFS slack не образуют и в отчёт не попадают.
+
+### Live diff
+
+```bash
+python -m mountfile live-diff before.img after.img -o diff.md
+```
+
+Отчёт в Markdown содержит разделы `Added / Modified / Removed`; если образ не
+читается как файловая система, сравнение автоматически переходит на регионы
+сырых байтов, а не возвращает пустой результат.
