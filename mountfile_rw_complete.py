@@ -52,75 +52,170 @@ except ImportError:
 
 class Fat32Adapter(UniversalRW):
     """
-    Адаптер к существующему нативному движку mountfile/fat32.py.
+    Адаптер к существующему нативному движку ``mountfile/fat32.py``.
 
-    Ожидаемый контракт (минимальный):
-      class Fat32(image_path):
-          def create_file(path, data) -> None
-          def create_dir(path) -> None
-          def delete(path, recursive=False) -> None
-          def rename(src, dst) -> None
-          def write_file(path, data, offset=0) -> None
-          def stat(path) -> dict(size, mtime, is_dir)
-          def verify() -> bool
-    Если сигнатуры отличаются — поправьте методы _xxx ниже.
+    Реальный контракт движка (сверено с исходником ``mountfile/fat32.py``)::
+
+        Fat32(fileobj, offset=0)
+        Fat32.entry(path) -> (parent_cluster, DirEntry)   # бросает Fat32Error
+        Fat32.find_dir(path) -> int
+        Fat32.list_dir(cluster=None) -> list[DirEntry]
+        Fat32.read_file(path) -> bytes
+        Fat32.write_file(dir_path, filename, data)   # создать/перезаписать
+        Fat32.mkdir(dir_path, name)
+        Fat32.delete(path, recursive=False)
+        Fat32.rename(path, new_name)                 # новое ИМЯ, не путь
+        Fat32.free_clusters() / Fat32.sync_fsinfo()
+
+    Особенности, которые обязан учитывать адаптер:
+
+    * движок принимает **файловый объект**, а не путь, поэтому адаптер сам
+      открывает образ (``r+b`` в RW, ``rb`` в RO) и закрывает его в
+      ``_close_backend``;
+    * ``write_file``/``mkdir`` принимают пару ``(каталог, имя)``, а не путь;
+    * ``entry``/``read_file``/``delete`` бросают ``Fat32Error`` на отсутствующий
+      путь — публичный API адаптера вместо этого возвращает ``None``
+      (``_lookup``) или ``FileNotFoundError`` (``_stat``);
+    * ``rename`` меняет только имя внутри того же каталога, поэтому перенос
+      между каталогами честно отклоняется ``RWError``;
+    * timestamps движок не хранит, поэтому ``mtime`` в ``FileStat`` равен 0.0.
     """
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
+        self._fh = None
         self._fs = None
+
+    # --- lifecycle ---------------------------------------------------------
 
     def _open_backend(self) -> None:
         try:
             from mountfile.fat32 import Fat32  # существующий движок
-        except ImportError:
+        except ImportError:  # pragma: no cover - Mount File не установлен
             raise StrategyUnavailable(
                 "mountfile.fat32 не найден. Установите Mount File "
                 "(pip install -e . из корня репозитория)."
             )
-        rw = self.mode == Mode.RW
-        self._fs = Fat32(str(self.image_path), read_only=not rw)
+        writable = self.mode == Mode.RW
+        self._fh = open(self.image_path, "r+b" if writable else "rb")
+        try:
+            self._fs = Fat32(self._fh)
+        except Exception:
+            self._fh.close()
+            self._fh = None
+            raise
 
     def _close_backend(self) -> None:
-        if self._fs and hasattr(self._fs, "close"):
-            self._fs.close()
+        if self._fh is not None:
+            try:
+                self._fh.flush()
+            except (OSError, ValueError):  # образ только для чтения
+                pass
+            self._fh.close()
+            self._fh = None
         self._fs = None
 
+    def _backend(self):
+        if self._fs is None:
+            raise StrategyUnavailable("бэкенд FAT32 не открыт: вызовите open()")
+        return self._fs
+
+    def _lookup(self, path: str):
+        """DirEntry или None — публичная обёртка над бросающим ``entry()``."""
+        try:
+            return self._backend().entry(path)[1]
+        except Exception:
+            return None
+
+    @staticmethod
+    def _split(path: str) -> tuple[str, str]:
+        clean = "/" + str(path).replace("\\", "/").strip("/")
+        parent, _, name = clean.rpartition("/")
+        return (parent or "/"), name
+
+    # --- мутирующие операции ------------------------------------------------
+
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
-        self._fs.create_file(path, data.read(), overwrite=overwrite)
+        fs = self._backend()
+        parent, name = self._split(path)
+        if not name:
+            raise RWError("нельзя записать файл в корень образа")
+        existing = self._lookup(path)
+        if existing is not None:
+            if existing.is_dir:
+                raise IsADirectoryError(path)
+            if not overwrite:
+                raise FileExistsError(path)
+        fs.write_file(parent, name, data.read())
 
     def _create_dir(self, path: str) -> None:
-        self._fs.create_dir(path)
+        fs = self._backend()
+        parent, name = self._split(path)
+        if not name:
+            raise RWError("нельзя создать корневой каталог")
+        if self._lookup(path) is not None:
+            raise FileExistsError(path)
+        fs.mkdir(parent, name)
 
     def _delete(self, path: str, recursive: bool) -> None:
-        self._fs.delete(path, recursive=recursive)
+        self._backend().delete(path, recursive=recursive)
 
     def _rename(self, src: str, dst: str) -> None:
-        self._fs.rename(src, dst)
+        fs = self._backend()
+        src_parent, _ = self._split(src)
+        dst_parent, dst_name = self._split(dst)
+        if src_parent != dst_parent:
+            raise RWError(
+                "нативный движок FAT32 умеет переименование только внутри "
+                f"одного каталога: {src} -> {dst}"
+            )
+        fs.rename(src, dst_name)
 
     def _write_file(self, path: str, data: BinaryIO, offset: int) -> None:
-        self._fs.write_file(path, data.read(), offset=offset)
+        fs = self._backend()
+        parent, name = self._split(path)
+        payload = data.read()
+        if offset:
+            try:
+                current = bytearray(fs.read_file(path))
+            except Exception as exc:  # нет файла / не читается
+                raise RWError(f"не удалось прочитать {path} для записи: {exc}")
+            end = offset + len(payload)
+            if end > len(current):
+                current.extend(b"\x00" * (end - len(current)))
+            current[offset:end] = payload
+            payload = bytes(current)
+        fs.write_file(parent, name, payload)
 
     def _stat(self, path: str) -> FileStat:
-        info = self._fs.stat(path)
+        entry = self._lookup(path)
+        if entry is None:
+            raise FileNotFoundError(path)
         return FileStat(
             path=path,
-            size=info["size"],
-            mtime=info["mtime"],
-            is_dir=info["is_dir"],
+            size=entry.size,
+            mtime=0.0,  # нативный движок не хранит timestamps
+            is_dir=entry.is_dir,
         )
 
 
 def create_rw_full(image_path: Path, fs: Optional[FsType] = None,
-                   mode: Mode = Mode.RO) -> UniversalRW:
-    """Фабрика, которая для FAT32 использует нативный адаптер."""
+                   mode: Mode = Mode.RO, dry_run: bool = False) -> UniversalRW:
+    """Фабрика RW-слоя.
+
+    Для FAT32 используется нативный адаптер (``Fat32Adapter``), для остальных ФС —
+    бэкенды из ``mountfile_universal_rw``.  ``dry_run=True`` возвращает
+    ``DryRunFat32``: тот же адаптер, у которого мутирующие операции не доходят
+    до образа (валидация без записи).
+    """
     fs = fs or detect_fs(image_path)
     if fs == FsType.FAT32:
-        return Fat32Adapter(image_path, mode)
+        engine: UniversalRW = DryRunFat32(image_path, mode) if dry_run else Fat32Adapter(image_path, mode)
+        engine.dry_run = dry_run
+        return engine
     return create_rw(image_path, fs, mode)
 
 
-# ---------------------------------------------------------------------------
 # 2. Верификатор целостности
 # ---------------------------------------------------------------------------
 
@@ -182,11 +277,17 @@ class VerificationEngine:
             boot = f.read(512)
         checks["fat32_signature"] = boot[510:512] == b"\x55\xaa"
         checks["fat32_label"] = boot[82:90].startswith(b"FAT32")
-        # FAT[0] должен начинаться с 0x0FFFFFF8 (media descriptor)
+        # FAT[0] лежит не по смещению 512 (там FSINFO-сектор), а после
+        # зарезервированных секторов: reserved_sectors * bytes_per_sector.
+        bytes_per_sector = int.from_bytes(boot[11:13], "little")
+        reserved = int.from_bytes(boot[14:16], "little")
         with open(image_path, "rb") as f:
-            f.seek(512)
+            f.seek(reserved * bytes_per_sector)
             fat = f.read(4)
-        checks["fat32_media"] = len(fat) == 4 and (fat[3] & 0xF0) == 0x00
+        value = int.from_bytes(fat, "little") if len(fat) == 4 else 0
+        # Валидный FAT32-дескриптор: 0x0FFFFFF8 (биты 3..27 выставлены,
+        # младшие три бита зарезервированы под нули).
+        checks["fat32_media"] = (value & 0x0FFFFFF8) == 0x0FFFFFF8
         return checks
 
     # --- ext4 ---------------------------------------------------------------
@@ -278,24 +379,65 @@ class CrashRecovery:
 
 class DryRunMixin:
     """
-    Миксин для UniversalRW: если dry_run=True, методы только валидируют,
-    но не пишут. Полезно для CI и для предварительной проверки.
+    Гейт «только валидация»: при ``dry_run=True`` мутирующие операции
+    записываются в план и не доходят до образа.
+
+    Порядок базовых классов обязателен: ``class DryRunFat32(DryRunMixin,
+    Fat32Adapter)``.  Если поставить миксин вторым, его переопределения не
+    находятся в MRO и ``dry_run`` молча пишет в образ.
     """
 
     dry_run: bool = False
+
+    def _plan(self, op: str, path: str) -> None:
+        planned = getattr(self, "_planned", None)
+        if planned is None:
+            planned = []
+            self._planned = planned
+        planned.append("%s %s" % (op, path))
+
+    def plan(self) -> list[str]:
+        """Операции, которые были бы выполнены (в порядке вызова)."""
+        return list(getattr(self, "_planned", []))
 
     def _require_rw(self) -> None:
         if self.dry_run:
             return
         super()._require_rw()  # type: ignore[misc]
 
-    def _noop(self) -> None:
+    def create_file(self, path, data, *, overwrite=False):
         if self.dry_run:
-            return
+            self._plan("create_file", path)
+            return None
+        return super().create_file(path, data, overwrite=overwrite)  # type: ignore[misc]
+
+    def create_dir(self, path):
+        if self.dry_run:
+            self._plan("mkdir", path)
+            return None
+        return super().create_dir(path)  # type: ignore[misc]
+
+    def delete(self, path, *, recursive=False):
+        if self.dry_run:
+            self._plan("delete", path)
+            return None
+        return super().delete(path, recursive=recursive)  # type: ignore[misc]
+
+    def rename(self, src, dst):
+        if self.dry_run:
+            self._plan("rename", "%s -> %s" % (src, dst))
+            return None
+        return super().rename(src, dst)  # type: ignore[misc]
+
+    def write_file(self, path, data, *, offset=0):
+        if self.dry_run:
+            self._plan("write_file", path)
+            return None
+        return super().write_file(path, data, offset=offset)  # type: ignore[misc]
 
 
-class DryRunFat32(Fat32Adapter, DryRunMixin):
-    pass
+class DryRunFat32(DryRunMixin, Fat32Adapter):
+    """FAT32-адаптер в режиме «валидация без записи»."""
 
 
 # ---------------------------------------------------------------------------
@@ -328,13 +470,10 @@ class AuditExporter:
 
 def _open(image: Path, mode: Mode, dry_run: bool) -> UniversalRW:
     fs = detect_fs(image)
-    if fs == FsType.FAT32:
-        eng = DryRunFat32(image, mode) if dry_run else Fat32Adapter(image, mode)
-    else:
-        eng = create_rw(image, fs, mode)
+    eng = create_rw_full(image, fs, mode, dry_run=dry_run)
     eng.open()
-    # Автоматическое восстановление после сбоя
-    if mode == Mode.RW:
+    # Автоматическое восстановление после сбоя (в dry-run образ не трогаем).
+    if mode == Mode.RW and not dry_run:
         verifier = VerificationEngine()
         recovered = CrashRecovery(eng.journal, verifier).recover(image, fs)
         if recovered:
@@ -351,7 +490,12 @@ def _read_input(path: str) -> bytes:
 def cmd_put(args) -> int:
     eng = _open(Path(args.image), Mode.RW, args.dry_run)
     try:
-        eng.create_dir(str(Path(args.dst).parent)) if Path(args.dst).parent != Path(".") else None
+        parent = str(Path(args.dst).parent)
+        if parent not in ("/", ".", ""):
+            try:
+                eng.stat(parent)
+            except FileNotFoundError:
+                eng.create_dir(parent)
         eng.create_file(args.dst, io.BytesIO(_read_input(args.src)), overwrite=True)
         print(f"ok: {args.dst}")
         return 0
@@ -359,10 +503,26 @@ def cmd_put(args) -> int:
         eng.close()
 
 
+def _native_read(image: Path, path: str) -> bytes:
+    """RO-чтение через нативный движок FAT32 (stdlib-only слой остаётся RO)."""
+    from mountfile.fat32 import Fat32
+
+    with open(image, "rb") as handle:
+        return Fat32(handle).read_file(path)
+
+
 def cmd_get(args) -> int:
-    # Чтение остаётся pytsk3/нативным движком — здесь через mountfile CLI
-    from mountfile.main import extract_file  # существующий API
-    extract_file(args.image, args.src, args.dst)
+    image = Path(args.image)
+    if detect_fs(image) == FsType.FAT32:
+        Path(args.dst).write_bytes(_native_read(image, args.src))
+    else:
+        # Для остальных ФС чтение остаётся за существующим Mount File CLI.
+        proc = subprocess.run(
+            [sys.executable, "-m", "mountfile", "get", str(image), args.src, args.dst],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise RWError((proc.stderr or proc.stdout).strip() or "mountfile get failed")
     print(f"ok: {args.src} -> {args.dst}")
     return 0
 
@@ -485,15 +645,26 @@ def mcp_handle(tool: str, params: dict) -> dict:
             ]}
 
         if tool in ("list_files", "read_file"):
-            # Использует существующий RO-движок Mount File
-            from mountfile.main import list_files, extract_file
-            if tool == "list_files":
-                return {"files": list_files(params["image"], params["path"])}
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                extract_file(params["image"], params["path"], tmp.name)
-                data = Path(tmp.name).read_bytes()
-            Path(tmp.name).unlink(missing_ok=True)
-            return {"path": params["path"], "size": len(data),
+            # RO-чтение: нативный движок FAT32 (без записи и без pytsk3).
+            image = Path(params["image"])
+            path = params.get("path", "/")
+            if detect_fs(image) != FsType.FAT32:
+                raise StrategyUnavailable(
+                    "RO-мост поддерживает FAT32 (нативный движок); "
+                    f"для {path} используйте mountfile CLI"
+                )
+            from mountfile.fat32 import Fat32
+
+            with open(image, "rb") as handle:
+                fs = Fat32(handle)
+                if tool == "list_files":
+                    entries = fs.list_dir(fs.find_dir(path))
+                    return {"files": [
+                        {"name": e.name, "size": e.size, "is_dir": e.is_dir}
+                        for e in entries
+                    ]}
+                data = fs.read_file(path)
+            return {"path": path, "size": len(data),
                     "sha256": hashlib.sha256(data).hexdigest()}
 
         return {"error": f"unknown tool: {tool}"}

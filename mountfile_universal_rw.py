@@ -453,7 +453,9 @@ def detect_fs(image_path: Path) -> FsType:
         head = f.read(512)
         if head[3:11] == b"NTFS    ":
             return FsType.NTFS
-        if head[54:62] == b"FAT32   ":
+        # FAT32's extended BPB keeps the type string at 82; 54 is the
+        # FAT12/16 slot.  Accept both, like mountfile/firmware.py does.
+        if head[82:90] == b"FAT32   " or head[54:62] == b"FAT32   ":
             return FsType.FAT32
         # ext4: магия 0xEF53 по смещению 0x438
         f.seek(0x438)

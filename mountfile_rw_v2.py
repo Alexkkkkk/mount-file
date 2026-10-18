@@ -250,11 +250,25 @@ class MountFileBridge:
         self._api = self._load_api()
 
     def _load_api(self):
+        """Публичный Python API пакета, если он есть.
+
+        В ``mountfile`` нет модуля ``main`` (есть ``cli`` и ``mainwindow``),
+        поэтому импорт почти всегда возвращает ``None`` — это нормальный
+        случай, дальше работает нативный движок.
+        """
         try:
-            from mountfile import main as mf_main  # type: ignore
-            return mf_main
+            from mountfile import cli as mf_cli  # type: ignore
+            return mf_cli
         except Exception:
             return None
+
+    # --- нативный RO-путь (приоритетный) ------------------------------------
+
+    def _native(self):
+        """Открывает нативный движок FAT32 на чтение (RO)."""
+        from mountfile.fat32 import Fat32
+
+        return Fat32(open(self.image_path, "rb"))
 
     # --- публичные операции -------------------------------------------------
 
@@ -262,11 +276,14 @@ class MountFileBridge:
         if self._api and hasattr(self._api, "list_files"):
             return self._api.list_files(str(self.image_path), path)
         try:
-            out = subprocess.run(
-                ["mountfile", "--list", str(self.image_path), path],
-                capture_output=True, text=True, timeout=30, check=True,
-            )
-            return [{"name": line.strip()} for line in out.stdout.splitlines() if line.strip()]
+            fs = self._native()
+            return [
+                {"name": e.name, "type": "dir" if e.is_dir else "file",
+                 "size": e.size}
+                for e in fs.list_dir(fs.find_dir(path))
+            ]
+        except ImportError:
+            return self._tsk_list(path)
         except Exception:
             return self._tsk_list(path)
 
@@ -275,11 +292,10 @@ class MountFileBridge:
             self._api.extract_file(str(self.image_path), path, str(dst))
             return
         try:
-            subprocess.run(
-                ["mountfile", "--extract", str(self.image_path), path, str(dst)],
-                check=True, timeout=60,
-            )
+            Path(dst).write_bytes(self._native().read_file(path))
             return
+        except ImportError:
+            self._tsk_extract(path, dst)
         except Exception:
             self._tsk_extract(path, dst)
 
@@ -287,10 +303,12 @@ class MountFileBridge:
         if self._api and hasattr(self._api, "stat"):
             return self._api.stat(str(self.image_path), path)
         try:
-            res = self._tsk_stat(path)
-            return res
-        except Exception as e:
-            raise RWError(f"stat failed: {e}")
+            _, entry = self._native().entry(path)
+            return {"size": entry.size, "is_dir": entry.is_dir}
+        except ImportError:
+            return self._tsk_stat(path)
+        except Exception as exc:
+            raise RWError(f"stat failed: {exc}")
 
     # --- pytsk3 fallback ----------------------------------------------------
 
