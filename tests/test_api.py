@@ -75,6 +75,16 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     timeline = client.get("/timeline", params={"image": "disk.img", "limit": 10})
     assert timeline.status_code == 200
     assert timeline.json()[0]["path"] == "/note.txt"
+
+    path_listed = client.get("/fs/disk.img/ls", params={"path": "/"})
+    assert path_listed.status_code == 200
+    assert path_listed.json() == [{"name": "note.txt", "is_dir": False}]
+    path_read = client.get("/fs/disk.img/read", params={"path": "/note.txt"})
+    assert path_read.status_code == 200
+    assert path_read.content == b"evidence"
+    path_timeline = client.get("/fs/disk.img/timeline", params={"limit": 10})
+    assert path_timeline.status_code == 200
+    assert path_timeline.json()[0]["path"] == "/note.txt"
     assert {call[0] for call in registry.calls} == {"images", "ls", "read", "timeline"}
 
 
