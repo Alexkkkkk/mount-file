@@ -29,6 +29,8 @@ pytest.importorskip(
 from mountfile import ai  # noqa: E402
 from mountfile.ai import AiResult  # noqa: E402
 from mountfile.qt_compat import QApplication, QMenu, QToolBar  # noqa: E402
+from mountfile import ai_format_advisor  # noqa: E402
+from mountfile import tc_window  # noqa: E402
 from mountfile.tc_window import AiDialog, MainWindow  # noqa: E402
 
 
@@ -93,6 +95,44 @@ def test_ai_entry_duplicated_in_tools_menu(win):
         m for m in win.menuBar().findChildren(QMenu) if m.title() == "Инструменты"
     )
     assert win.act_ai in tools.actions(), "нет пункта AI в меню Инструменты"
+
+
+def test_format_advisor_uses_metadata_only_and_does_not_call_backend(win, monkeypatch):
+    entry = {"name": "blob.bin", "size": 1024, "is_dir": False}
+    panel = FakePanel(mode="img", entry=entry)
+    reads = []
+    panel.provider.read_file_range = lambda *args: reads.append(args)
+    monkeypatch.setattr(win, "active_panel", lambda: panel)
+
+    class MemoryRemember:
+        def recall(self, fingerprint):
+            return None
+
+        def remember(self, *args):
+            pytest.fail("Remember must require explicit user confirmation")
+
+    class MessageBox:
+        @staticmethod
+        def question(*args):
+            question_text = args[2].lower()
+            assert "файл не открывался" in question_text
+            assert "сеть и модель не вызывались" in question_text
+            assert "не запускаются автоматически" in question_text
+            return tc_window.MB_No
+
+        @staticmethod
+        def information(*args):
+            pytest.fail("unexpected information dialog")
+
+    monkeypatch.setattr(ai_format_advisor, "Remember", MemoryRemember)
+    monkeypatch.setattr(tc_window, "QMessageBox", MessageBox)
+    monkeypatch.setattr(
+        ai, "build_backend", lambda *args, **kwargs: pytest.fail("backend must not be called")
+    )
+
+    win._on_advise()
+
+    assert reads == []
 
 
 def test_dialog_prefills_from_active_panel(app):
