@@ -462,6 +462,10 @@ def print_cheatsheet() -> None:
     python main.py autopick <img>        # авто-подбор рабочего тома (offset + ФС)
     python main.py autopick <img> --json --extract out
     python main.py ls <img> / --auto     # авто-подбор для любой команды
+    python main.py grep <img> "password=" --encoding utf-16le
+    python main.py hash <img>            # SHA-256 identity (read-only)
+    python main.py timeline <img> --csv timeline.csv
+    python main.py timestomp <img> --csv timeline.csv
     python main.py --check-updates       # 10=есть апдейт, 0=нет
 
   Общие флаги у команд с образом:

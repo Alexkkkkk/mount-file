@@ -26,6 +26,7 @@ import sys
 
 from . import __version__
 from .autopick import auto_select, format_candidates, format_choice
+from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
@@ -48,6 +49,10 @@ COMMANDS = (
     "rm",
     "decode",
     "split",
+    "grep",
+    "hash",
+    "timeline",
+    "timestomp",
 )
 
 _READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
@@ -403,6 +408,54 @@ def cmd_autopick(args):
     return OK
 
 
+def cmd_grep(args):
+    """Search raw image bytes without extracting or modifying the image."""
+    count = 0
+    for hit in grep_image(
+        args.image,
+        args.pattern,
+        regex=args.regex,
+        encoding=args.encoding,
+        context=args.context,
+        max_hits=args.max_results,
+    ):
+        count += 1
+        print("0x%X (+%d): %s" % (hit["offset"], hit["length"], hit["context"]))
+    print("Matches: %d" % count)
+    return OK if count else ERROR
+
+
+def cmd_hash(args):
+    print("SHA-256: %s  %s" % (sha256_file(args.image), args.image))
+    return OK
+
+
+def _timeline_records(args):
+    if not args.csv:
+        raise ValueError("--csv is required: filesystem-aware collection is not yet enabled")
+    return list(read_timeline_csv(args.csv))
+
+
+def cmd_timeline(args):
+    records = _timeline_records(args)
+    for record in records[: args.limit]:
+        print(
+            "%s\t%s\t%s\t%s\t%s"
+            % (record.path, record.mtime or "", record.atime or "", record.ctime or "", record.sha256 or "")
+        )
+    print("Records: %d" % len(records))
+    return OK
+
+
+def cmd_timestomp(args):
+    records = _timeline_records(args)
+    findings = list(detect_timestomp(records, skew=args.skew))
+    for record, reasons in findings[: args.limit]:
+        print("%s\t%s" % (record.path, ", ".join(reasons)))
+    print("Findings: %d" % len(findings))
+    return OK if findings else ERROR
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -551,6 +604,32 @@ def build_parser():
         help="extract the whole chosen volume into this host directory",
     )
     sp.set_defaults(func=cmd_autopick)
+
+    sp = sub.add_parser("grep", help="search raw image bytes read-only")
+    sp.add_argument("image")
+    sp.add_argument("pattern")
+    sp.add_argument("--regex", action="store_true")
+    sp.add_argument("--encoding", choices=("utf-8", "utf-16le", "latin-1", "raw"), default="utf-8")
+    sp.add_argument("--context", type=int, default=64)
+    sp.add_argument("--max-results", type=int, default=1000)
+    sp.set_defaults(func=cmd_grep)
+
+    sp = sub.add_parser("hash", help="calculate a read-only SHA-256 identity")
+    sp.add_argument("image")
+    sp.set_defaults(func=cmd_hash)
+
+    sp = sub.add_parser("timeline", help="print records from a timeline CSV")
+    sp.add_argument("image", help="image label retained for a stable CLI shape")
+    sp.add_argument("--csv", required=True, help="CSV with path and timestamp columns")
+    sp.add_argument("--limit", type=int, default=1000)
+    sp.set_defaults(func=cmd_timeline)
+
+    sp = sub.add_parser("timestomp", help="flag conservative timestamp anomalies from CSV")
+    sp.add_argument("image", help="image label retained for a stable CLI shape")
+    sp.add_argument("--csv", required=True, help="CSV with path and timestamp columns")
+    sp.add_argument("--skew", type=float, default=2.0)
+    sp.add_argument("--limit", type=int, default=1000)
+    sp.set_defaults(func=cmd_timestomp)
     return p
 
 
