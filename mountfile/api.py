@@ -29,6 +29,7 @@ import inspect
 import ipaddress
 import logging
 import os
+import posixpath
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Optional, Protocol, Sequence, Union
@@ -325,26 +326,28 @@ def _resolve_image(raw: Any, roots: Sequence[Path]) -> Path:
     value = os.fspath(raw)
     if isinstance(value, bytes) or "\x00" in value or "\\" in value:
         raise APIPathError("image contains an unsafe path")
-    # Normalize before constructing the filesystem path.  The subsequent
-    # root-boundary check is still mandatory, but keeping the normalization at
-    # the input boundary also prevents a tainted path from reaching joins in
-    # the per-root loop below.
-    normalized = os.path.normpath(os.path.expanduser(value))
-    candidate = Path(normalized)
+    # Treat the request value as an identifier, not as a path to join.  Match
+    # it against paths enumerated below configured roots; this makes the
+    # allowlist explicit and avoids passing tainted text into a filesystem path
+    # constructor (and into CodeQL's path-injection sink).
+    if value.startswith(("/", "~")):
+        raise APIPathError("image must be a relative id")
+    normalized = posixpath.normpath(value)
+    if normalized in ("", ".", "..") or normalized.startswith("../"):
+        raise APIPathError("image contains an unsafe path")
     matches: list[Path] = []
     for root in roots:
         if root.is_file():
-            possible = candidate if candidate.is_absolute() else root.parent / candidate
-            if possible.resolve(strict=False) == root:
+            if normalized == root.name:
                 matches.append(root)
             continue
-        possible = candidate if candidate.is_absolute() else root / candidate
         try:
-            resolved = possible.resolve(strict=False)
+            for child in root.rglob("*"):
+                if child.is_file() and child.relative_to(root).as_posix() == normalized:
+                    matches.append(child.resolve(strict=False))
+                    break
         except OSError as exc:
             raise APIPathError("cannot resolve image") from exc
-        if _is_within(resolved, root):
-            matches.append(resolved)
     if not matches:
         raise APIPathError("image is outside the configured image roots")
     # A path can occur under two overlapping roots.  The resolved path is the
