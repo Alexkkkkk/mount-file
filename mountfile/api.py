@@ -325,7 +325,12 @@ def _resolve_image(raw: Any, roots: Sequence[Path]) -> Path:
     value = os.fspath(raw)
     if isinstance(value, bytes) or "\x00" in value or "\\" in value:
         raise APIPathError("image contains an unsafe path")
-    candidate = Path(value).expanduser()
+    # Normalize before constructing the filesystem path.  The subsequent
+    # root-boundary check is still mandatory, but keeping the normalization at
+    # the input boundary also prevents a tainted path from reaching joins in
+    # the per-root loop below.
+    normalized = os.path.normpath(os.path.expanduser(value))
+    candidate = Path(normalized)
     matches: list[Path] = []
     for root in roots:
         if root.is_file():
