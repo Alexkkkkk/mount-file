@@ -27,6 +27,9 @@ import sys
 from . import __version__
 from .autopick import auto_select, format_candidates, format_choice
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
+from .dfir_timeline import export_timeline_csv
+from .dfir_unallocated_scan import scan_unallocated
+from .dfir_yara import YaraUnavailableError, scan_yara
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
@@ -52,7 +55,10 @@ COMMANDS = (
     "grep",
     "hash",
     "timeline",
+    "timeline-export",
     "timestomp",
+    "yara",
+    "unallocated-scan",
 )
 
 _READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
@@ -456,6 +462,45 @@ def cmd_timestomp(args):
     return OK if findings else ERROR
 
 
+def cmd_timeline_export(args):
+    records = _timeline_records(args)
+    count = export_timeline_csv(records, args.output)
+    print("Wrote %d normalized events to %s" % (count, args.output))
+    return OK
+
+
+def cmd_yara(args):
+    try:
+        hits = scan_yara(args.image, args.rules)
+    except YaraUnavailableError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    except (OSError, TypeError, ValueError) as exc:
+        print("error: YARA scan failed: %s" % exc, file=sys.stderr)
+        return ERROR
+    for hit in hits:
+        print(json.dumps(hit, ensure_ascii=False))
+    print("Matches: %d" % len(hits))
+    return OK if hits else ERROR
+
+
+def cmd_unallocated_scan(args):
+    with open(args.ranges, encoding="utf-8") as stream:
+        ranges = json.load(stream)
+    hits = scan_unallocated(
+        args.image,
+        ranges,
+        chunk_size=args.chunk_size,
+        max_hits=args.max_results,
+    )
+    count = 0
+    for hit in hits:
+        print(json.dumps(hit.as_dict(), ensure_ascii=False))
+        count += 1
+    print("Matches: %d" % count)
+    return OK if count else ERROR
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -630,6 +675,32 @@ def build_parser():
     sp.add_argument("--skew", type=float, default=2.0)
     sp.add_argument("--limit", type=int, default=1000)
     sp.set_defaults(func=cmd_timestomp)
+
+    sp = sub.add_parser(
+        "timeline-export", help="normalize caller-supplied timeline CSV timestamps to UTC"
+    )
+    sp.add_argument("--csv", required=True, help="CSV with path and timestamp columns")
+    sp.add_argument("--output", required=True, help="normalized CSV output path")
+    sp.set_defaults(func=cmd_timeline_export)
+
+    sp = sub.add_parser("yara", help="scan a file/image read-only with a YARA rule file")
+    sp.add_argument("image")
+    sp.add_argument("--rules", required=True, help="user-supplied YARA source file")
+    sp.set_defaults(func=cmd_yara)
+
+    sp = sub.add_parser(
+        "unallocated-scan",
+        help="scan explicitly supplied byte ranges for common file signatures",
+    )
+    sp.add_argument("image")
+    sp.add_argument(
+        "--ranges",
+        required=True,
+        help="JSON list of [offset, length] pairs or objects; allocation map is not discovered",
+    )
+    sp.add_argument("--chunk-size", type=int, default=1024 * 1024)
+    sp.add_argument("--max-results", type=int, default=1000)
+    sp.set_defaults(func=cmd_unallocated_scan)
     return p
 
 

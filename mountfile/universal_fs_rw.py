@@ -40,7 +40,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 try:
     import pytsk3
@@ -48,6 +48,15 @@ except ImportError:
     pytsk3 = None
 
 log = logging.getLogger("mountfile.universal_fs_rw")
+
+
+def _image_path_parent_name(path: str) -> tuple[str, str]:
+    """Split a filesystem-in-image path using FAT/POSIX separators on every OS."""
+    image_path = PurePosixPath(str(path).replace("\\", "/"))
+    parent = str(image_path.parent)
+    if parent in ("", "."):
+        parent = "/"
+    return parent, image_path.name
 
 
 # =============================================================================
@@ -234,10 +243,7 @@ class RWBackend(ABC):
             return False
 
     def stat(self, path: str) -> FSEntry | None:
-        parent = str(Path(path).parent)
-        if parent == ".":
-            parent = "/"
-        name = Path(path).name
+        parent, name = _image_path_parent_name(path)
         for e in self.list(parent):
             if e.name == name:
                 return e
@@ -441,7 +447,8 @@ class Fat32RW(RWBackend):
 
     def _parse_dir_raw(self, data: bytes, base: str) -> list[FSEntry]:
         entries: list[FSEntry] = []
-        lfn: list[str] = []
+        lfn: list[int] = []
+        lfn_checksum: int | None = None
         for i in range(0, len(data) - 31, 32):
             raw = data[i : i + 32]
             first = raw[0]
@@ -450,21 +457,22 @@ class Fat32RW(RWBackend):
             attr = raw[11]
             deleted = first == 0xE5
             if attr == 0x0F:
+                if lfn_checksum is None or lfn_checksum != raw[13]:
+                    lfn = []
+                    lfn_checksum = raw[13]
                 chunk = raw[1:11] + raw[14:26] + raw[28:32]
-                chars = []
-                for j in range(0, len(chunk), 2):
-                    c = struct.unpack("<H", chunk[j : j + 2])[0]
-                    if c in (0, 0xFFFF):
-                        break
-                    chars.append(chr(c))
-                lfn = chars + lfn
+                units = [
+                    struct.unpack("<H", chunk[j : j + 2])[0]
+                    for j in range(0, len(chunk), 2)
+                ]
+                lfn = units + lfn
                 continue
             if attr & self.ATTR_VOL:
                 lfn = []
+                lfn_checksum = None
                 continue
-            if lfn:
-                name = "".join(lfn)
-                lfn = []
+            if lfn and lfn_checksum == self._short_checksum(raw[:11]):
+                name = self._decode_lfn_units(lfn)
             else:
                 n = raw[:8].rstrip(b" ")
                 ext = raw[8:11].rstrip(b" ")
@@ -473,6 +481,8 @@ class Fat32RW(RWBackend):
                 name = n.decode("cp437", "replace")
                 if ext:
                     name += "." + ext.decode("cp437", "replace")
+            lfn = []
+            lfn_checksum = None
             if name in (".", "..", ""):
                 continue
             is_dir = bool(attr & self.ATTR_DIR)
@@ -515,8 +525,7 @@ class Fat32RW(RWBackend):
         start = None
         for i in range(0, len(data) - 31, 32):
             first = data[i]
-            attr = data[i + 11]
-            free = (first in (0x00, 0xE5)) or (attr == 0x0F)
+            free = first in (0x00, 0xE5)
             if free:
                 if run == 0:
                     start = i
@@ -529,9 +538,14 @@ class Fat32RW(RWBackend):
         return None
 
     def _build_dir_entry(
-        self, name: str, cluster: int, size: int, is_dir: bool
+        self,
+        name: str,
+        cluster: int,
+        size: int,
+        is_dir: bool,
+        short_name: tuple[bytes, bytes] | None = None,
     ) -> bytes:
-        short = self._short_name(name)
+        short = short_name or self._short_name(name)
         attr = self.ATTR_DIR if is_dir else 0x20
         now = _dt.datetime.now()
         tm = (now.hour << 11) | (now.minute << 5) | (now.second // 2)
@@ -560,23 +574,80 @@ class Fat32RW(RWBackend):
             base = "FILE"
         return base.encode("cp437"), ext.encode("cp437")
 
+    def _short_name_for_dir(self, name: str, data: bytes) -> bytes:
+        used = {
+            data[i : i + 11]
+            for i in range(0, len(data) - 31, 32)
+            if data[i] not in (0x00, 0xE5) and data[i + 11] != self.ATTR_LFN
+        }
+        if "." in name:
+            base, ext = name.rsplit(".", 1)
+        else:
+            base, ext = name, ""
+        base = "".join(
+            c for c in base.upper() if c.isascii() and (c.isalnum() or c in "_~")
+        ) or "FILE"
+        ext = "".join(c for c in ext.upper() if c.isascii() and c.isalnum())[:3]
+        direct = base[:8].ljust(8).encode("ascii") + ext.ljust(3).encode("ascii")
+        if self._is_83_name(name) and direct not in used:
+            return direct
+        for number in range(1, 100000):
+            suffix = f"~{number}"
+            stem = base[: max(1, 8 - len(suffix))]
+            candidate = (
+                (stem + suffix).ljust(8).encode("ascii")
+                + ext[:3].ljust(3).encode("ascii")
+            )
+            if candidate not in used:
+                return candidate
+        raise RuntimeError("cannot generate a unique FAT 8.3 alias")
+
+    @staticmethod
+    def _short_checksum(short_name: bytes) -> int:
+        checksum = 0
+        for value in short_name:
+            checksum = (((checksum & 1) << 7) + (checksum >> 1) + value) & 0xFF
+        return checksum
+
+    @staticmethod
+    def _decode_lfn_units(units: list[int]) -> str:
+        if 0 in units:
+            units = units[: units.index(0)]
+        else:
+            units = list(units)
+            while units and units[-1] == 0xFFFF:
+                units.pop()
+        raw = b"".join(struct.pack("<H", unit) for unit in units)
+        return raw.decode("utf-16le", "replace")
+
     def _lfn_entries(self, name: str, short_check: bytes) -> bytes:
-        chunks = [name[i : i + 13] for i in range(0, len(name), 13)]
+        encoded_name = name.encode("utf-16le")
+        units = [
+            struct.unpack("<H", encoded_name[i : i + 2])[0]
+            for i in range(0, len(encoded_name), 2)
+        ]
+        if len(units) > 255:
+            raise ValueError("FAT long names cannot exceed 255 UTF-16 code units")
+        units.append(0x0000)
+        while len(units) % 13:
+            units.append(0xFFFF)
+        chunks = [units[i : i + 13] for i in range(0, len(units), 13)]
+        short_check = short_check[:11].ljust(11, b" ")
+        checksum = self._short_checksum(short_check)
         out = b""
         for i, chunk in enumerate(reversed(chunks)):
             seq = len(chunks) - i
             entry = bytearray(32)
-            entry[0] = (seq if seq < len(chunks) else seq | 0x40) & 0xFF
+            entry[0] = (seq | 0x40) if i == 0 else seq
             entry[11] = self.ATTR_LFN
-            entry[13] = 0
-            chars = (chunk + "\x00" * 13)[:13]
-            encoded = b""
-            for ch in chars:
-                encoded += struct.pack("<H", ord(ch) if ch != "\x00" else 0x0000)
-            encoded = encoded.ljust(26, b"\xff\xff")
-            entry[1:11] = encoded[0:10]
-            entry[14:26] = encoded[10:22]
-            entry[28:32] = encoded[22:26]
+            entry[13] = checksum
+            cursor = 0
+            for start, count in ((1, 5), (14, 6), (28, 2)):
+                for slot in range(count):
+                    struct.pack_into(
+                        "<H", entry, start + 2 * slot, chunk[cursor]
+                    )
+                    cursor += 1
             out += bytes(entry)
         return out
 
@@ -584,23 +655,20 @@ class Fat32RW(RWBackend):
         self, dir_cluster: int, name: str, cluster: int, size: int, is_dir: bool
     ) -> None:
         data = bytearray(self._read_dir_raw(dir_cluster))
-        need_lfn = (
-            len(name) > 12
-            or any(c in name for c in " .")
-            and not self._is_83_name(name)
-        )
-        lfn_count = (len(name) + 12) // 13 if need_lfn else 0
+        need_lfn = not self._is_83_name(name)
+        short_name = self._short_name_for_dir(name, bytes(data))
+        lfn = self._lfn_entries(name, short_name) if need_lfn else b""
+        lfn_count = len(lfn) // 32
         need = lfn_count + 1
         slot = self._find_entry_slot(bytes(data), need)
         if slot is None:
             raise RuntimeError(f"no free dir slot for {name}")
-        short = self._short_name(name)
         if need_lfn:
-            data[slot : slot + lfn_count * 32] = self._lfn_entries(
-                name, short[0] + short[1]
-            )
-        data[slot + lfn_count * 32 : slot + (lfn_count + 1) * 32] = (
-            self._build_dir_entry(name, cluster, size, is_dir)
+            data[slot : slot + len(lfn)] = lfn
+        short_parts = (short_name[:8], short_name[8:11])
+        entry_offset = slot + len(lfn)
+        data[entry_offset : entry_offset + 32] = self._build_dir_entry(
+            name, cluster, size, is_dir, short_name=short_parts
         )
         self._write_dir_raw(dir_cluster, bytes(data))
 
@@ -613,13 +681,14 @@ class Fat32RW(RWBackend):
         return (
             len(base) <= 8
             and len(ext) <= 3
-            and base.upper() == base
+            and name.upper() == name
+            and bool(base)
             and all(c.isalnum() or c == "_" for c in base + ext)
         )
 
     def _walk_to(self, path: str) -> tuple[int, str]:
         """Return (dir_cluster, basename) for the parent of `path`."""
-        parts = [p for p in path.split("/") if p]
+        parts = [p for p in str(path).replace("\\", "/").split("/") if p]
         if not parts:
             raise ValueError("invalid path")
         name = parts[-1]
@@ -650,6 +719,7 @@ class Fat32RW(RWBackend):
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
+        path = str(path).replace("\\", "/")
         if path in ("/", ""):
             if self.fat_type == 32:
                 data = self._read_chain(self.root_cluster)
@@ -661,9 +731,7 @@ class Fat32RW(RWBackend):
         except FileNotFoundError:
             return []
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         found = next((e for e in entries if e.name == name and e.is_dir), None)
         if not found:
@@ -673,9 +741,7 @@ class Fat32RW(RWBackend):
     def read(self, path: str) -> bytes:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         entry = next((e for e in entries if e.name == name), None)
         if not entry:
@@ -687,64 +753,100 @@ class Fat32RW(RWBackend):
     def write_file(self, path: str, data: bytes) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         existing = next((e for e in entries if e.name == name), None)
         if existing and existing.is_dir:
             raise IsADirectoryError(path)
-        if existing:
-            self._free_chain(existing.inode)
+        old_chain = (
+            self._cluster_chain(existing.inode)
+            if existing and existing.inode >= 2
+            else []
+        )
         clusters_needed = (len(data) + self.cluster_size - 1) // self.cluster_size
         clusters = self._allocate_chain(clusters_needed) if clusters_needed else []
-        if clusters:
-            self._write_chain(clusters, data)
+        try:
+            if clusters:
+                self._write_chain(clusters, data)
+        except Exception:
+            # Keep an overwritten file's original chain intact until the new
+            # data is fully written. A failed write must not destroy evidence.
+            if clusters:
+                self._free_chain(clusters[0])
+            raise
         if existing:
-            # update size + first cluster in existing dir entry
             idx = self._find_entry_index(raw, existing, parent_path)
-            if idx is not None:
-                buf = bytearray(raw)
-                struct.pack_into("<I", buf, idx + 28, len(data))
+            if idx is None:
                 if clusters:
-                    struct.pack_into("<H", buf, idx + 26, clusters[0] & 0xFFFF)
-                    if self.fat_type == 32:
-                        struct.pack_into(
-                            "<H", buf, idx + 20, (clusters[0] >> 16) & 0xFFFF
-                        )
-                self._write_dir_raw(parent_cluster, bytes(buf))
+                    self._free_chain(clusters[0])
+                raise RuntimeError(f"directory entry not found while overwriting {path}")
+            buf = bytearray(raw)
+            first_cluster = clusters[0] if clusters else 0
+            struct.pack_into("<H", buf, idx + 26, first_cluster & 0xFFFF)
+            struct.pack_into(
+                "<H", buf, idx + 20,
+                (first_cluster >> 16) & 0xFFFF if self.fat_type == 32 else 0,
+            )
+            struct.pack_into("<I", buf, idx + 28, len(data))
+            # If this directory write fails partway through, retain the new
+            # chain: a partially updated entry may already point to it.
+            self._write_dir_raw(parent_cluster, bytes(buf))
         else:
             first_cluster = clusters[0] if clusters else 0
-            self._create_in_dir(parent_cluster, name, first_cluster, len(data), False)
+            try:
+                self._create_in_dir(parent_cluster, name, first_cluster, len(data), False)
+            except ValueError:
+                if clusters:
+                    self._free_chain(clusters[0])
+                raise
+            except RuntimeError as exc:
+                if clusters and str(exc).startswith("no free dir slot for "):
+                    self._free_chain(clusters[0])
+                raise
+        # Commit point: the directory now points at the fully written data.
+        # Reclaim the old clusters only after that point.
+        if old_chain:
+            self._free_chain(old_chain[0])
 
     def _find_entry_index(self, raw: bytes, entry: FSEntry, base: str) -> int | None:
-        lfn: list[str] = []
+        lfn: list[int] = []
+        lfn_checksum: int | None = None
         for i in range(0, len(raw) - 31, 32):
             first = raw[i]
             attr = raw[i + 11]
             if first == 0x00:
                 break
+            if first == 0xE5:
+                lfn = []
+                lfn_checksum = None
+                continue
             if attr == 0x0F:
+                if lfn_checksum is None or lfn_checksum != raw[i + 13]:
+                    lfn = []
+                    lfn_checksum = raw[i + 13]
                 chunk = (
                     raw[i + 1 : i + 11] + raw[i + 14 : i + 26] + raw[i + 28 : i + 32]
                 )
-                chars = []
-                for j in range(0, len(chunk), 2):
-                    c = struct.unpack("<H", chunk[j : j + 2])[0]
-                    if c in (0, 0xFFFF):
-                        break
-                    chars.append(chr(c))
-                lfn = chars + lfn
+                units = [
+                    struct.unpack("<H", chunk[j : j + 2])[0]
+                    for j in range(0, len(chunk), 2)
+                ]
+                lfn = units + lfn
                 continue
-            if lfn:
-                name = "".join(lfn)
+            if attr & self.ATTR_VOL:
                 lfn = []
+                lfn_checksum = None
+                continue
+            if lfn and lfn_checksum == self._short_checksum(raw[i : i + 11]):
+                name = self._decode_lfn_units(lfn)
             else:
                 n = raw[i : i + 8].rstrip(b" ")
                 ext = raw[i + 8 : i + 11].rstrip(b" ")
                 name = n.decode("cp437", "replace")
                 if ext:
                     name += "." + ext.decode("cp437", "replace")
+            lfn = []
+            lfn_checksum = None
             if name == entry.name:
                 return i
         return None
@@ -752,26 +854,34 @@ class Fat32RW(RWBackend):
     def mkdir(self, path: str) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         if any(e.name == name for e in entries):
             raise FileExistsError(path)
         new_cluster = self._allocate_chain(1)[0]
         # init . and ..
-        dot = bytearray(self._build_dir_entry(".", new_cluster, 0, True))
-        dotdot = bytearray(self._build_dir_entry("..", parent_cluster, 0, True))
+        dot = bytearray(
+            self._build_dir_entry(".", new_cluster, 0, True, short_name=(b".", b""))
+        )
+        dotdot = bytearray(
+            self._build_dir_entry("..", parent_cluster, 0, True, short_name=(b"..", b""))
+        )
         buf = bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64)
         self._write_cluster(new_cluster, buf)
-        self._create_in_dir(parent_cluster, name, new_cluster, 0, True)
+        try:
+            self._create_in_dir(parent_cluster, name, new_cluster, 0, True)
+        except ValueError:
+            self._free_chain(new_cluster)
+            raise
+        except RuntimeError as exc:
+            if str(exc).startswith("no free dir slot for "):
+                self._free_chain(new_cluster)
+            raise
 
     def delete(self, path: str, recursive: bool = False) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         entry = next((e for e in entries if e.name == name), None)
         if not entry:
@@ -789,33 +899,66 @@ class Fat32RW(RWBackend):
         # mark dir entry deleted
         idx = self._find_entry_index(raw, entry, parent_path)
         if idx is not None:
-            buf = bytearray(raw)
-            buf[idx] = 0xE5
-            self._write_dir_raw(parent_cluster, bytes(buf))
+            self._write_dir_raw(parent_cluster, self._tombstone_entry_slots(raw, idx))
+
+    def _tombstone_entry_slots(self, raw: bytes, short_entry_index: int) -> bytes:
+        start = short_entry_index
+        while start >= 32:
+            previous = start - 32
+            if raw[previous] in (0x00, 0xE5) or raw[previous + 11] != self.ATTR_LFN:
+                break
+            start = previous
+        updated = bytearray(raw)
+        for offset in range(start, short_entry_index + 32, 32):
+            updated[offset] = 0xE5
+        return bytes(updated)
 
     def rename(self, src: str, dst: str) -> None:
-        if str(Path(src).parent) != str(Path(dst).parent):
+        """Rename a same-directory 8.3 entry without changing its cluster chain.
+
+        Long-filename and cross-directory renames are deliberately rejected
+        until they can be implemented with an atomic directory-entry update.
+        """
+        src_parent, src_name = _image_path_parent_name(src)
+        dst_parent, dst_name = _image_path_parent_name(dst)
+        if src_parent != dst_parent:
             raise NotImplementedError("cross-directory rename not supported")
         parent_cluster, _ = self._walk_to(src)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(src).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path = src_parent
         entries = self._parse_dir_raw(raw, parent_path)
-        src_name = Path(src).name
+        if src_name.casefold() == dst_name.casefold():
+            return
         entry = next((e for e in entries if e.name == src_name), None)
         if not entry:
             raise FileNotFoundError(src)
-        dst_name = Path(dst).name
-        if any(e.name == dst_name for e in entries):
+        if any(e.name.casefold() == dst_name.casefold() for e in entries):
             raise FileExistsError(dst)
-        self.delete(src)
-        if entry.is_dir:
-            self._create_in_dir(parent_cluster, dst_name, entry.inode, 0, True)
-        else:
-            self._create_in_dir(
-                parent_cluster, dst_name, entry.inode, entry.size, False
+        if not self._is_83_name(src_name) or not self._is_83_name(dst_name):
+            raise NotImplementedError(
+                "FAT rename currently supports only same-directory 8.3 names"
             )
+        idx = self._find_entry_index(raw, entry, parent_path)
+        if idx is None:
+            raise RuntimeError(f"directory entry not found while renaming {src}")
+
+        short = self._short_name(dst_name)
+        short_raw = short[0].ljust(8, b" ") + short[1].ljust(3, b" ")
+        for other_idx in range(0, len(raw) - 31, 32):
+            if other_idx == idx:
+                continue
+            first = raw[other_idx]
+            if first in (0x00, 0xE5) or raw[other_idx + 11] == self.ATTR_LFN:
+                continue
+            if raw[other_idx : other_idx + 11] == short_raw:
+                raise FileExistsError(dst)
+
+        # Updating the short-name bytes in place preserves the file's FAT
+        # chain and all other directory metadata; the old implementation
+        # called delete(), which freed the chain before recreating the entry.
+        buf = bytearray(raw)
+        buf[idx : idx + 11] = short_raw
+        self._write_dir_raw(parent_cluster, bytes(buf))
 
 
 # =============================================================================

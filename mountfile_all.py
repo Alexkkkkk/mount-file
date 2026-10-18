@@ -466,6 +466,9 @@ def print_cheatsheet() -> None:
     python main.py hash <img>            # SHA-256 identity (read-only)
     python main.py timeline <img> --csv timeline.csv
     python main.py timestomp <img> --csv timeline.csv
+    python main.py timeline-export --csv timeline.csv --output utc.csv
+    python main.py yara <img> --rules user.yar  # optional yara-python
+    python main.py unallocated-scan <img> --ranges ranges.json
     python main.py --check-updates       # 10=есть апдейт, 0=нет
 
   Общие флаги у команд с образом:

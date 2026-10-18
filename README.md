@@ -78,9 +78,12 @@ Licensed under the MIT License - see the LICENSE file for details.
 - **Дампы RT809H:** расшифровка зашифрованных дампов eMMC MStar (MST) и
   MediaTek (MTK) по встроенным XOR-таблицам и разбиение дампа на партиции по
   файлу `udev`.
-- **Read-only DFIR CLI:** `grep`, `hash`, `timeline` и `timestomp` доступны
-  через `python -m mountfile`; timeline/timestomp принимают CSV внешнего
-  коллектора и не обещают filesystem-aware сбор или recovery.
+- **Read-only DFIR CLI:** `grep`, `hash`, `timeline`, `timeline-export`,
+  `timestomp`, `yara` и `unallocated-scan` доступны через `python -m mountfile`.
+  Timeline-команды принимают CSV внешнего коллектора; YARA использует
+  user-supplied rules (optional `yara-python`), а unallocated scan — только
+  явно переданные ranges. Команды не обещают автоматический filesystem-aware
+  сбор, discovery allocation map или recovery.
 - **Экспериментальные library API:** отдельные модули `mountfile/` включают
   SQLite-индексатор заданных unallocated ranges, read-only crypto/Android/
   macOS/NAND/Registry анализаторы, plugin hooks, REST API и MCP/AI helpers.
