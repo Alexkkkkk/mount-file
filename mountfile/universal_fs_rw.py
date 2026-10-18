@@ -236,9 +236,10 @@ class RWBackend(ABC):
 
     # ---- helpers ----------------------------------------------------------
     def exists(self, path: str) -> bool:
+        # ``stat`` returns None for a missing path instead of raising, so the
+        # old truthiness shortcut reported *every* path as present.
         try:
-            self.stat(path)
-            return True
+            return self.stat(path) is not None
         except Exception:
             return False
 
@@ -1470,15 +1471,26 @@ class UniversalFSRW:
             volumes = detect_volumes(self.image)
             candidate = next((v for v in volumes if v.fstype != "raw"), None)
             if candidate is None:
-                raise RuntimeError("no filesystem detected")
-            fs_type, off = candidate.fstype, candidate.offset
+                # detect_volumes only sees signatures inside the scan window;
+                # the header at offset 0 is still worth one direct probe, and
+                # synthetic/small fixtures rely on exactly that fallback.
+                direct = probe_filesystem(self.image, 0)
+                if not direct or direct.lower() == "raw":
+                    raise RuntimeError("no filesystem detected")
+                fs_type, off = direct, 0
+            else:
+                fs_type, off = candidate.fstype, candidate.offset
             self.offset = off
+        # ``probe_filesystem`` returns display names such as ``FAT32`` or
+        # ``NTFS`` while the backend table is lowercase, so the match below
+        # must be case-insensitive.
+        fs_type_lower = str(fs_type).lower()
         for cls, types in [
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
             (NtfsRW, ("ntfs",)),
         ]:
-            if fs_type.startswith(types):
+            if fs_type_lower.startswith(types):
                 try:
                     self.backend = cls(self.image, off)
                     return
