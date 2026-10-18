@@ -15,6 +15,9 @@ file only tracks the releases themselves.
   to GitHub Pages. The Docker workflow keeps build/smoke checks on CI and makes
   GHCR publication an explicit manual action. Added reproducible asciinema
   recordings for timeline, recovery triage and the metadata-only copilot.
+- Added the package MCP stdio entry point `python -m mountfile.ai.cli mcp` and
+  included byte offsets/size metadata in default partition-list results so
+  clients can pass a discovered volume to subsequent MCP tools.
 - Добавлен read-only package DFIR слой `mountfile.dfir`: bounded raw search
   (`grep`), SHA-256 identity (`hash`), импорт timeline CSV и консервативная
   проверка timestomp. Команды доступны через `python -m mountfile`; операции
