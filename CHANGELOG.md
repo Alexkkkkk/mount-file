@@ -6,6 +6,27 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **DFIR-модули эпика #87 закрыты отдельными пакетными модулями** (Tasks 1.1,
+  1.2, 1.3, 1.4, 1.6, 2.2). Раньше функциональность жила только в
+  standalone-скриптах и была недоступна как `python -m mountfile <команда>`:
+
+  | Задача | Модуль | CLI |
+  |---|---|---|
+  | 1.1 Timeline | `mountfile/timeline.py` | `timeline-build`, `timeline-query` |
+  | 1.2 Content search | `mountfile/search_content.py` | `search` |
+  | 1.3 YARA | `mountfile/yara_scan.py` + `rules/` | `yara-scan` |
+  | 1.4 Timestomp | `mountfile/timestomp.py` | `timestomp-scan` |
+  | 1.6 Slack | `mountfile/slack.py` | `slack-extract` |
+  | 2.2 Live diff | `mountfile/live_diff.py` | `live-diff` |
+
+  Ключевое отличие от прежних черновиков: `slack.py` вычисляет **абсолютный
+  offset** slack-области (хвост последнего выделенного run), а не только её
+  длину, поэтому данные действительно можно прочитать; `yara_scan.py` умеет
+  сканировать unallocated space как дополнение к карте занятости; `timeline.py`
+  пишет SQLite + CSV со схемой `timestamp | source | path | event | sha256`.
+  Все команды read-only, добавлены тесты `tests/test_dfir_tools_87.py` (45
+  тестов) и встроенные правила `rules/pii.yar`, `rules/anti_forensics.yar`.
+
 - **RW v2 (PR #122)**: `MountFileBridge` получил рабочий RO-путь — раньше он
   импортировал несуществующий `mountfile.main` и вызывал несуществующие
   ключи `mountfile --list/--extract`, поэтому на чистой установке всегда

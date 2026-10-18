@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import shutil
+import sqlite3
 import sys
 
 from . import __version__
@@ -30,6 +31,18 @@ from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .dfir_timeline import export_timeline_csv
 from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
+from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
+from .search_content import SearchError, search_files, search_image
+from .slack import SlackError, extract_slack
+from .timeline import (
+    DEFAULT_HASH_LIMIT,
+    EVENT_TYPES,
+    TimelineError,
+    build_timeline,
+    query_timeline,
+)
+from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
+from .yara_scan import TARGETS, YaraScanError, scan_image
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
@@ -58,7 +71,14 @@ COMMANDS = (
     "timeline-export",
     "timestomp",
     "yara",
-    "unallocated-scan",
+    "unallocated-scan",    "timeline-build",
+    "timeline-query",
+    "search",
+    "yara-scan",
+    "timestomp-scan",
+    "slack-extract",
+    "live-diff",
+
 )
 
 _READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
@@ -536,6 +556,158 @@ def _add_target(sp):
     )
 
 
+
+# ---------------------------------------------------------- issue #87 commands
+def cmd_timeline_build(args):
+    """Collect a filesystem-aware timeline into SQLite and/or CSV."""
+    if not args.output and not args.csv:
+        print("error: pass -o/--output and/or --csv", file=sys.stderr)
+        return ERROR
+    try:
+        count, events = build_timeline(
+            args.image,
+            db_path=args.output,
+            csv_path=args.csv,
+            hash_limit=args.hash_limit,
+        )
+    except (TimelineError, OSError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    print("Collected %d events from %s" % (count, args.image))
+    if args.output:
+        print("SQLite: %s" % args.output)
+    if args.csv:
+        print("CSV:    %s" % args.csv)
+    return OK if count else ERROR
+
+
+def cmd_timeline_query(args):
+    """Answer "what happened between X and Y" against a timeline database."""
+    try:
+        rows = query_timeline(
+            args.db, start=args.start, end=args.end, event=args.event, limit=args.limit
+        )
+    except sqlite3.Error as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        for row in rows:
+            print(
+                "%s\t%s\t%s\t%s"
+                % (row["timestamp"], row["event"], row["path"], row["sha256"] or "-")
+            )
+    print("Events: %d" % len(rows))
+    return OK if rows else ERROR
+
+
+def cmd_search(args):
+    """Search file content (--files) or raw image bytes, read-only."""
+    try:
+        if args.files:
+            hits = search_files(
+                args.image,
+                args.pattern,
+                regex=args.regex,
+                encoding=args.encoding,
+                context=args.context,
+                max_hits=args.max_results,
+            )
+        else:
+            hits = search_image(
+                args.image,
+                args.pattern,
+                regex=args.regex,
+                encoding=args.encoding,
+                context=args.context,
+                max_hits=args.max_results,
+            )
+    except (SearchError, TimelineError, OSError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    if args.json:
+        print(json.dumps([hit.as_dict() for hit in hits], ensure_ascii=False, indent=2))
+    else:
+        for hit in hits:
+            label = hit.path or "0x%X" % hit.offset
+            print("%s (+%d): %s" % (label, hit.length, hit.context))
+    print("Matches: %d" % len(hits))
+    return OK if hits else ERROR
+
+
+def cmd_yara_scan(args):
+    """Scan image files and/or unallocated space with YARA rules."""
+    try:
+        hits = scan_image(
+            args.image,
+            args.rules,
+            targets=tuple(args.targets),
+            max_file_size=args.max_file_size,
+        )
+    except (YaraScanError, YaraUnavailableError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    except (OSError, TypeError, ValueError) as exc:
+        print("error: YARA scan failed: %s" % exc, file=sys.stderr)
+        return ERROR
+    for hit in hits:
+        if args.json:
+            print(json.dumps(hit.as_dict(), ensure_ascii=False))
+        else:
+            offset = "-" if hit.offset is None else "0x%X" % hit.offset
+            print("%s\t%s\t%s\t%s" % (hit.rule, hit.path or "-", offset, hit.target))
+    print("Matches: %d" % len(hits))
+    return OK if hits else ERROR
+
+
+def cmd_timestomp_scan(args):
+    """Flag timestamp anomalies directly from an image (no CSV round-trip)."""
+    try:
+        findings = collect_timestomp(args.image, skew=args.skew)
+    except (TimestompError, TimelineError, OSError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    if args.json:
+        print(json.dumps([item.as_dict() for item in findings], ensure_ascii=False, indent=2))
+    else:
+        for item in findings:
+            print("%s\t%s" % (item.path, ", ".join(item.reasons)))
+    print("Findings: %d" % len(findings))
+    return OK if findings else ERROR
+
+
+def cmd_slack_extract(args):
+    """Extract the slack tail of every file into a directory."""
+    try:
+        regions = extract_slack(args.image, args.output, min_slack=args.min_slack)
+    except (SlackError, TimelineError, OSError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    for region in regions[:20]:
+        print("%s\toffset=0x%X\tlen=%d" % (region.path, region.offset, region.length))
+    if len(regions) > 20:
+        print("... and %d more" % (len(regions) - 20))
+    print("Slack regions: %d -> %s" % (len(regions), args.output))
+    return OK if regions else ERROR
+
+
+def cmd_live_diff(args):
+    """Diff two images (or one image before/after a write) as Markdown."""
+    try:
+        entries = diff_images(args.before, args.after)
+    except (LiveDiffError, TimelineError, OSError) as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    if args.output:
+        write_markdown(entries, args.output)
+        print("Wrote %d diff entries to %s" % (len(entries), args.output))
+    else:
+        print(to_markdown(entries), end="")
+    print("Diff entries: %d" % len(entries))
+    return OK
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="python -m mountfile",
@@ -701,6 +873,80 @@ def build_parser():
     sp.add_argument("--chunk-size", type=int, default=1024 * 1024)
     sp.add_argument("--max-results", type=int, default=1000)
     sp.set_defaults(func=cmd_unallocated_scan)
+    sp = sub.add_parser(
+        "timeline-build", help="collect a filesystem-aware timeline into SQLite/CSV"
+    )
+    sp.add_argument("image")
+    sp.add_argument("-o", "--output", default=None, help="SQLite database path")
+    sp.add_argument("--csv", default=None, help="CSV output path")
+    sp.add_argument(
+        "--hash-limit",
+        type=int,
+        default=DEFAULT_HASH_LIMIT,
+        help="skip SHA-256 for files above this size; 0 disables hashing",
+    )
+    sp.set_defaults(func=cmd_timeline_build)
+
+    sp = sub.add_parser(
+        "timeline-query", help="query a timeline database by time window and/or event type"
+    )
+    sp.add_argument("--db", required=True, help="SQLite timeline database")
+    sp.add_argument("--start", default=None, help="inclusive lower bound (ISO-8601)")
+    sp.add_argument("--end", default=None, help="inclusive upper bound (ISO-8601)")
+    sp.add_argument("--event", choices=EVENT_TYPES, default=None)
+    sp.add_argument("--limit", type=int, default=1000)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_timeline_query)
+
+    sp = sub.add_parser(
+        "search", help="search file content or raw image bytes read-only"
+    )
+    sp.add_argument("image")
+    sp.add_argument("pattern")
+    sp.add_argument("--regex", action="store_true")
+    sp.add_argument("--encoding", default="utf-8", help="utf-8 (default) or utf-16le")
+    sp.add_argument("--context", type=int, default=32)
+    sp.add_argument("--max-results", type=int, default=1000)
+    sp.add_argument(
+        "--files",
+        action="store_true",
+        help="search file contents through the filesystem instead of raw bytes",
+    )
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_search)
+
+    sp = sub.add_parser(
+        "yara-scan", help="scan files and/or unallocated space with YARA rules"
+    )
+    sp.add_argument("image")
+    sp.add_argument("--rules", required=True, help="rule file or directory of rules")
+    sp.add_argument("--targets", nargs="+", choices=TARGETS, default=list(TARGETS))
+    sp.add_argument("--max-file-size", type=int, default=None)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_yara_scan)
+
+    sp = sub.add_parser(
+        "timestomp-scan", help="flag timestamp anomalies directly from an image"
+    )
+    sp.add_argument("image")
+    sp.add_argument("--skew", type=float, default=DEFAULT_SKEW)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_timestomp_scan)
+
+    sp = sub.add_parser("slack-extract", help="extract file slack space into a directory")
+    sp.add_argument("image")
+    sp.add_argument("-o", "--output", required=True, help="output directory")
+    sp.add_argument("--min-slack", type=int, default=1)
+    sp.set_defaults(func=cmd_slack_extract)
+
+    sp = sub.add_parser(
+        "live-diff", help="diff two images (or one image before/after) into Markdown"
+    )
+    sp.add_argument("before")
+    sp.add_argument("after")
+    sp.add_argument("-o", "--output", default=None, help="Markdown path (stdout when omitted)")
+    sp.set_defaults(func=cmd_live_diff)
+
     return p
 
 
