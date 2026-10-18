@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: MIT
 """Focused tests for the optional mount-file MCP façade."""
 
+import struct
 from pathlib import Path
 
 import pytest
 
 from mountfile.ai.mcp_server import (
+    DefaultBackend,
     MCP_AVAILABLE,
     MountFileMcpServer,
     OperationUnavailable,
@@ -80,6 +82,24 @@ def make_service(tmp_path):
     backend = FakeBackend()
     service = MountFileMcpServer(image, workspace, backend=backend)
     return service, backend, image, workspace
+
+
+def test_default_partition_results_include_byte_offset(tmp_path):
+    image = tmp_path / "mbr.img"
+    mbr = bytearray(20 * 512)
+    entry = 446
+    mbr[entry + 4] = 0x0B
+    struct.pack_into("<II", mbr, entry + 8, 1, 10)
+    mbr[510:512] = b"\x55\xaa"
+    image.write_bytes(mbr)
+
+    partitions = DefaultBackend(tmp_path / "workspace").list_partitions(image)
+
+    assert len(partitions) == 1
+    assert partitions[0]["start_lba"] == 1
+    assert partitions[0]["offset"] == 512
+    assert partitions[0]["size_bytes"] == 10 * 512
+    assert partitions[0]["type_name"] == "FAT32"
 
 
 def test_registers_exactly_requested_tools_without_transport(tmp_path):

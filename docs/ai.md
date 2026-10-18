@@ -71,6 +71,18 @@ JSONL-аудит (`MOUNTFILE_AUDIT`), рабочую папку (`MOUNTFILE_WORK
 раундов (`MOUNTFILE_MAX_ROUNDS`). Каждый инструментальный вызов попадает в
 аудит, а утверждения проходят gates по фактическому результату вызова.
 
+Для пакетного MCP façade используйте явную точку входа `mountfile.ai.cli`:
+
+```bash
+python -m mountfile.ai.cli mcp --image /absolute/path/dump.img \
+  --workspace ~/.mountfile/workspace
+```
+
+Сервер работает через stdio, принимает один image-файл или каталог разрешённых
+образов и по умолчанию пишет артефакты только в `~/.mountfile/workspace`.
+Список разделов возвращает byte `offset`, который затем передаётся в операции
+поиска и чтения тома.
+
 !!! warning "Read-only по умолчанию"
     `MOUNTFILE_READONLY` по умолчанию равен `1`. В таком режиме извлечение,
     восстановление удалённых файлов и XOR-вывод запрещены. Значение `0`
