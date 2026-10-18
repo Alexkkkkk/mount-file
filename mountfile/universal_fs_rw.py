@@ -1315,39 +1315,21 @@ class UniversalFSRW:
         self._open()
 
     def _open(self) -> None:
-        from mountfile.universal_fs import UniversalFS
+        # ``mountfile.universal_fs`` was never part of the package.  Use the
+        # maintained signature/partition detector instead, keeping detection
+        # read-only and avoiding a misleading universal backend claim.
+        from .firmware import detect_volumes, probe_filesystem
 
         if self.offset is not None:
-            candidates = [Fat32RW, Ext234RW, NtfsRW]
-            for cls in candidates:
-                try:
-                    inst = cls(self.image, self.offset)
-                    self.backend = inst
-                    return
-                except Exception:
-                    continue
-            # fallback: loop-mount
-            try:
-                base = UniversalFS(self.image, self.offset)
-                self.backend = LoopMountRW(self.image, self.offset, base.info().fs_type)
-                base.close()
-                return
-            except Exception:
-                pass
-            raise RuntimeError(f"no RW backend for offset {self.offset:#x}")
-
-        # auto-detect
-        best = None
-        try:
-            base = UniversalFS(self.image)
-            best = (base.info().fs_type, base.offset)
-            base.close()
-        except Exception:
-            pass
-        if best is None:
-            raise RuntimeError("no FS detected")
-        fs_type, off = best
-        self.offset = off
+            fs_type = probe_filesystem(self.image, self.offset) or "unknown"
+            off = self.offset
+        else:
+            volumes = detect_volumes(self.image)
+            candidate = next((v for v in volumes if v.fstype != "raw"), None)
+            if candidate is None:
+                raise RuntimeError("no filesystem detected")
+            fs_type, off = candidate.fstype, candidate.offset
+            self.offset = off
         for cls, types in [
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
@@ -1359,11 +1341,11 @@ class UniversalFSRW:
                     return
                 except Exception as e:
                     log.warning("%s failed: %s", cls.__name__, e)
-        # последний шанс: loop-mount
+        # Last resort remains opt-in through an actually detected filesystem.
         try:
             self.backend = LoopMountRW(self.image, off, fs_type)
-        except Exception:
-            raise RuntimeError(f"no RW backend for {fs_type}")
+        except Exception as exc:
+            raise RuntimeError(f"no RW backend for {fs_type} at 0x{off:X}") from exc
 
     def __enter__(self):
         return self
