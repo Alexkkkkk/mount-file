@@ -5,7 +5,32 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
-from mountfile.universal_fs_rw import Fat32RW, UniversalFSRW
+from mountfile.universal_fs_rw import (
+    Fat32RW,
+    UniversalFSRW,
+    _image_path_parent_name,
+)
+
+
+def test_image_paths_use_posix_semantics_independent_of_host_os():
+    assert _image_path_parent_name("/ORIGINAL.BIN") == ("/", "ORIGINAL.BIN")
+    assert _image_path_parent_name("/DIR/CHILD.BIN") == ("/DIR", "CHILD.BIN")
+    assert _image_path_parent_name(r"\DIR\CHILD.BIN") == ("/DIR", "CHILD.BIN")
+
+
+def test_fat_api_accepts_backslash_image_paths(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        payload = b"Windows path separator test"
+        fs.mkdir("/SUBDIR")
+        fs.write_file(r"\SUBDIR\ITEM.BIN", payload)
+        assert fs.stat(r"\SUBDIR\ITEM.BIN") is not None
+        assert fs.read(r"\SUBDIR\ITEM.BIN") == payload
+
+        fs.rename(r"\SUBDIR\ITEM.BIN", r"\SUBDIR\RENAMED.BIN")
+        assert fs.read(r"\SUBDIR\RENAMED.BIN") == payload
+    finally:
+        fs.close()
 
 
 def _open_fat_rw(tmp_path):

@@ -14,11 +14,10 @@ from __future__ import annotations
 import csv
 import math
 import os
-from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from numbers import Real
-from typing import Any, IO, List, Optional, Sequence, Tuple, Union
+from typing import Any, IO, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 
 UTC = timezone.utc

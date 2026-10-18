@@ -12,11 +12,10 @@ filesystem.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from numbers import Real
-from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Any, Iterable, Iterator, List, Mapping, Optional, Tuple, Union
 
 
 TimestampValue = Union[Real, date]

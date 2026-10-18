@@ -40,7 +40,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 try:
     import pytsk3
@@ -48,6 +48,15 @@ except ImportError:
     pytsk3 = None
 
 log = logging.getLogger("mountfile.universal_fs_rw")
+
+
+def _image_path_parent_name(path: str) -> tuple[str, str]:
+    """Split a filesystem-in-image path using FAT/POSIX separators on every OS."""
+    image_path = PurePosixPath(str(path).replace("\\", "/"))
+    parent = str(image_path.parent)
+    if parent in ("", "."):
+        parent = "/"
+    return parent, image_path.name
 
 
 # =============================================================================
@@ -234,10 +243,7 @@ class RWBackend(ABC):
             return False
 
     def stat(self, path: str) -> FSEntry | None:
-        parent = str(Path(path).parent)
-        if parent == ".":
-            parent = "/"
-        name = Path(path).name
+        parent, name = _image_path_parent_name(path)
         for e in self.list(parent):
             if e.name == name:
                 return e
@@ -682,7 +688,7 @@ class Fat32RW(RWBackend):
 
     def _walk_to(self, path: str) -> tuple[int, str]:
         """Return (dir_cluster, basename) for the parent of `path`."""
-        parts = [p for p in path.split("/") if p]
+        parts = [p for p in str(path).replace("\\", "/").split("/") if p]
         if not parts:
             raise ValueError("invalid path")
         name = parts[-1]
@@ -713,6 +719,7 @@ class Fat32RW(RWBackend):
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
+        path = str(path).replace("\\", "/")
         if path in ("/", ""):
             if self.fat_type == 32:
                 data = self._read_chain(self.root_cluster)
@@ -724,9 +731,7 @@ class Fat32RW(RWBackend):
         except FileNotFoundError:
             return []
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         found = next((e for e in entries if e.name == name and e.is_dir), None)
         if not found:
@@ -736,9 +741,7 @@ class Fat32RW(RWBackend):
     def read(self, path: str) -> bytes:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         entry = next((e for e in entries if e.name == name), None)
         if not entry:
@@ -750,9 +753,7 @@ class Fat32RW(RWBackend):
     def write_file(self, path: str, data: bytes) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         existing = next((e for e in entries if e.name == name), None)
         if existing and existing.is_dir:
@@ -853,9 +854,7 @@ class Fat32RW(RWBackend):
     def mkdir(self, path: str) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         if any(e.name == name for e in entries):
             raise FileExistsError(path)
@@ -882,9 +881,7 @@ class Fat32RW(RWBackend):
     def delete(self, path: str, recursive: bool = False) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(path).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
         entry = next((e for e in entries if e.name == name), None)
         if not entry:
@@ -922,16 +919,14 @@ class Fat32RW(RWBackend):
         Long-filename and cross-directory renames are deliberately rejected
         until they can be implemented with an atomic directory-entry update.
         """
-        if str(Path(src).parent) != str(Path(dst).parent):
+        src_parent, src_name = _image_path_parent_name(src)
+        dst_parent, dst_name = _image_path_parent_name(dst)
+        if src_parent != dst_parent:
             raise NotImplementedError("cross-directory rename not supported")
         parent_cluster, _ = self._walk_to(src)
         raw = self._read_dir_raw(parent_cluster)
-        parent_path = str(Path(src).parent)
-        if parent_path == ".":
-            parent_path = "/"
+        parent_path = src_parent
         entries = self._parse_dir_raw(raw, parent_path)
-        src_name = Path(src).name
-        dst_name = Path(dst).name
         if src_name.casefold() == dst_name.casefold():
             return
         entry = next((e for e in entries if e.name == src_name), None)

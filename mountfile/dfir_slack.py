@@ -20,7 +20,7 @@ import os
 from typing import Any, NamedTuple, Optional, Union
 
 
-ImageSource = Union[str, os.PathLike[str], bytes, bytearray, memoryview, Any]
+ImageSource = Union[str, os.PathLike, bytes, bytearray, memoryview, Any]
 
 
 class InvalidSlackBounds(ValueError):
