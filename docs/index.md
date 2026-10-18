@@ -38,6 +38,8 @@ python main.py path\to\image.img
 
 Подробности установки и Windows 7 собраны в [Установке](install.md), команды —
 в [CLI](cli.md), интерфейс — в [GUI](gui.md).
+Экспериментальные библиотечные интерфейсы описаны в [API reference](api.md),
+а сценарии запуска — в [Demos](demos.md).
 
 ## Безопасная модель работы
 
@@ -63,6 +65,7 @@ python main.py path\to\image.img
   проверяемого инструмента. Восстановление удалённых файлов не равно file
   carving и может вернуть неполный или повреждённый файл.
 
-Эта папка и `mkdocs.yml` — исходники документации для локальной сборки
-MkDocs Material. Факт публикации сайта (включая GitHub Pages) этим репозиторием
-не подтверждается и в рамках этого пункта не настраивается.
+Документация опубликована на [GitHub Pages](https://alexkkkkk.github.io/mount-file/).
+Workflow `docs.yml` собирает этот сайт через `mkdocs build --strict`; локальная
+сборка выполняется командами из корня репозитория: `pip install -r
+requirements-docs.txt` и `mkdocs build --strict`.
