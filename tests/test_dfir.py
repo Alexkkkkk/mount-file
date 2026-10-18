@@ -84,3 +84,61 @@ def test_yara_cli_uses_user_rules_and_prints_json(tmp_path, monkeypatch, capsys)
     assert main(["yara", str(image), "--rules", str(rules)]) == 0
     assert calls == [(str(image), str(rules))]
     assert '"rule": "sample"' in capsys.readouterr().out
+
+
+def test_slack_cli_extracts_only_explicit_slack_and_never_overwrites(
+    tmp_path, capsys
+):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"ABCslack")
+    output = tmp_path / "slack.bin"
+    args = [
+        "slack",
+        str(image),
+        "--slack-only",
+        "--last-cluster-offset",
+        "0",
+        "--file-size",
+        "3",
+        "--cluster-size",
+        "8",
+        "--output",
+        str(output),
+    ]
+
+    assert main(args) == 0
+    assert output.read_bytes() == b"slack"
+    assert image.read_bytes() == b"ABCslack"
+    assert json.loads(capsys.readouterr().out) == {
+        "offset": 3,
+        "length": 5,
+        "has_slack": True,
+        "output": str(output),
+    }
+
+    output.write_bytes(b"preserve")
+    assert main(args) == 1
+    assert output.read_bytes() == b"preserve"
+
+
+def test_slack_cli_reports_empty_slack_without_creating_output(tmp_path, capsys):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"12345678")
+    args = [
+        "slack",
+        str(image),
+        "--slack-only",
+        "--last-cluster-offset",
+        "0",
+        "--file-size",
+        "8",
+        "--cluster-size",
+        "8",
+    ]
+
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "offset": None,
+        "length": 0,
+        "has_slack": False,
+    }

@@ -24,6 +24,24 @@ python mountfile_dfir.py serve --db timeline.db --host 127.0.0.1 --port 8000
 сравнения времён (`mtime`, `ctime`, `atime`, `birth`) и выдаёт эвристические
 признаки.
 
+## Final-cluster slack extraction
+
+Команда `slack` читает только slack последнего кластера по явно заданным
+параметрам extent. Она не ищет путь в файловой системе, не вычисляет цепочку
+кластеров и не проверяет, что диапазон действительно принадлежит указанному
+файлу. Независимо подтвердите offset последнего кластера, логический размер
+файла и размер кластера перед запуском:
+
+```bash
+python -m mountfile slack evidence.img --slack-only \
+  --last-cluster-offset 0x1000 --file-size 300 --cluster-size 4096 \
+  --output extracted/slack.bin
+```
+
+Образ открывается только для чтения. Выходной файл создаётся без перезаписи
+существующего файла. Без `--output` команда печатает JSON-сводку с абсолютным
+offset и размером, но не выводит forensic bytes.
+
 ## Explicit plugin discovery
 
 Примеры `examples/plugins/yara.py` и `examples/plugins/timeline.py` экспортируют

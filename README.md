@@ -80,11 +80,15 @@ Licensed under the MIT License - see the LICENSE file for details.
   MediaTek (MTK) по встроенным XOR-таблицам и разбиение дампа на партиции по
   файлу `udev`.
 - **Read-only DFIR CLI:** `grep`, `hash`, `timeline`, `timeline-export`,
-  `timestomp`, `yara` и `unallocated-scan` доступны через `python -m mountfile`.
+  `timestomp`, `yara`, `unallocated-scan` и `slack` доступны через `python -m mountfile`.
   Timeline-команды принимают CSV внешнего коллектора; YARA использует
   user-supplied rules (optional `yara-python`), а unallocated scan — только
-  явно переданные ranges. Команды не обещают автоматический filesystem-aware
-  сбор, discovery allocation map или recovery.
+  явно переданные ranges. `slack --slack-only` принимает смещение последнего
+  кластера, логический размер файла и размер кластера от вызывающей стороны;
+  сам CLI не разрешает путь файла и не строит цепочку кластеров. Выходной файл
+  создаётся только при указанном `--output` и не перезаписывает существующий.
+  Команды не обещают автоматический filesystem-aware сбор, discovery allocation
+  map или recovery.
 - **Экспериментальные library API:** отдельные модули `mountfile/` включают
   SQLite-индексатор заданных unallocated ranges, read-only crypto/Android/
   macOS/NAND/Registry анализаторы, plugin hooks, REST API и MCP/AI helpers.
