@@ -67,6 +67,13 @@ docker compose run --rm mountfile info /evidence/dump.img
 Этот профиль добавляет системные утилиты, но не превращает экспериментальные
 DFIR-модули проекта в полноценную систему carving или malware verdict.
 
+CI собирает образ и выполняет CLI smoke test на PR и push. Публикация в GHCR —
+отдельный ручной запуск **Actions → Docker → Run workflow** с `publish=true`;
+workflow сначала повторяет build/smoke и только затем делает push в
+`ghcr.io/alexkkkkk/mount-file`. Доступ к `docker pull` зависит от visibility
+container package в GitHub Packages; успешный build не означает, что image уже
+публичен.
+
 На Linux для Qt могут понадобиться системные библиотеки `libgl1`, `libegl1`,
 `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0`. Для Codespaces скрипт
 `scripts/setup-gui.sh` дополнительно настраивает Xvfb, x11vnc и noVNC.
@@ -96,5 +103,6 @@ Python 3.10, поэтому в Python 3.8 зависимость пропуск�
 
 Файлы `.exe` из GitHub Releases сопровождаются `.sha256`; проверяйте хэш до
 запуска. Проверка обновлений при старте GUI не блокирует работу без сети. Её
-можно отключить переменной `MOUNTFILE_NO_UPDATE=1`; документация не означает,
-что какая-либо страница публикации уже развёрнута.
+можно отключить переменной `MOUNTFILE_NO_UPDATE=1`. Структурированная
+документация публикуется по адресу
+<https://alexkkkkk.github.io/mount-file/> после успешного Pages workflow.

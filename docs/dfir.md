@@ -96,9 +96,10 @@ print(result.model_dump())
 
 ## Tutorial: анализ Android boot image
 
-У Mount File нет Android-специфичного парсера header/ramdisk, поэтому не следует
-ожидать распаковки, проверки AVB или безопасной перепрошивки. Можно зафиксировать
-образ и проверить только поддерживаемые raw-сигнатуры:
+В `mountfile.android` есть read-only parser API для Android sparse image и
+boot-image headers/chunks. Эти библиотечные функции не распаковывают ramdisk,
+не проверяют AVB и не прошивают устройство; они пока не подключены к основному
+CLI/GUI. Для поиска сигнатур можно также выполнить:
 
 ```bash
 python mountfile_dfir.py hash boot.img > boot.img.sha256
@@ -109,7 +110,8 @@ python -m mountfile info boot.img
 `inspect` смотрит сигнатуры в первых 1 MiB и пытается прочитать таблицу томов
 через `pytsk3`, если она есть. Отсутствие результата не доказывает отсутствие
 Android-разделов: boot image может быть контейнером с заголовком и сжатым
-ramdisk.
+ramdisk. Пример parser API для структурированных заголовков приведён в
+[API reference](api.md).
 
 Для отдельного извлечения используйте внешний инструмент, установленный и
 проверенный по его документации, например `unpackbootimg` или `magiskboot`:

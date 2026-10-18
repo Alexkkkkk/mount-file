@@ -1,0 +1,4 @@
+{"version": 2, "width": 100, "height": 34, "timestamp": 1792314361, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}, "title": "Mount File: deleted-entry recovery (synthetic image)"}
+[0.741942, "o", "Read-only scan found deleted directory entry /_ELETED.TXT (offset=0, inode=4, size=39 bytes).\r\n"]
+[1.282102, "o", "Recovered 39 bytes; complete=True; SHA-256=4e0fe072fa166795c93dd239c397c848976ae9a721ad8c01c16dff609b06665a\r\n"]
+[1.393906, "o", "Verified: recovered bytes match the synthetic source; only the temporary image was used.\r\n"]

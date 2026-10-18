@@ -11,10 +11,11 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 # Mount File
 
-**Актуальный релиз: [v1.26.0](https://github.com/Alexkkkkk/mount-file/releases/tag/v1.26.0).**
+**Актуальный релиз: [последняя версия](https://github.com/Alexkkkkk/mount-file/releases/latest).**
+**Документация:** [Mount File Docs](https://alexkkkkk.github.io/mount-file/).
 
 > **Статус:** issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
-> открытый roadmap-эпик, а не заявление о полностью готовой forensic-платформе.
+> roadmap, а не заявление о полностью готовой forensic-платформе.
 > Рабочая запись штатно поддерживается FAT32; DFIR, AI, YARA, carving и
 > универсальная запись имеют экспериментальные или частичные реализации.
 
@@ -52,6 +53,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 - [OLMA](#olma)
 - [GUI в GitHub Codespaces](#gui-в-github-codespaces)
 - [Сборка](#сборка)
+- [Документация, Docker и demos](#документация-docker-и-demos)
 - [Тесты и разработка](#тесты-и-разработка)
 - [Структура проекта](#структура-проекта)
 - [Ограничения](#ограничения)
@@ -79,6 +81,15 @@ Licensed under the MIT License - see the LICENSE file for details.
 - **Read-only DFIR CLI:** `grep`, `hash`, `timeline` и `timestomp` доступны
   через `python -m mountfile`; timeline/timestomp принимают CSV внешнего
   коллектора и не обещают filesystem-aware сбор или recovery.
+- **Экспериментальные library API:** отдельные модули `mountfile/` включают
+  SQLite-индексатор заданных unallocated ranges, read-only crypto/Android/
+  macOS/NAND/Registry анализаторы, plugin hooks, REST API и MCP/AI helpers.
+  Это библиотечные интерфейсы, а не новые команды главного CLI или GUI;
+  индексатор не определяет allocation map и сам по себе не выполняет carving,
+  а распознавание контейнера не расшифровывает его.
+- **Метаданные copilot:** `mountfile.ai.copilot` строит ограниченную summary
+  по уже извлечённым fingerprint/timeline/anomaly данным; он не открывает образ,
+  не читает байты файла и не обращается к сети/LLM.
 - **HEX-просмотр** первых 1 МБ выбранного файла.
 - **Двухпанельный интерфейс** в стиле Total Commander: вкладки каталогов,
   отметка файлов, массовые операции, светлая и тёмная темы, журнал окна.
@@ -419,6 +430,35 @@ py -3.8 build_exe.bat          REM Windows 7: принудительно Python 
 встроенным движком FAT32. Релизные сборки собирает workflow `release.yml`
 (Windows x64, Windows 7, Linux x86-64, macOS arm64), а версию в
 `mountfile/__init__.py` проставляет `scripts/stamp_version.py` из git-тега.
+
+## Документация, Docker и demos
+
+Структурированные docs доступны на [GitHub Pages](https://alexkkkkk.github.io/mount-file/);
+CI собирает их через `mkdocs build --strict`. Для локального просмотра:
+
+```bash
+python -m pip install -r requirements-docs.txt
+mkdocs serve
+```
+
+Короткие записи терминала можно воспроизвести локально через asciinema:
+
+```bash
+asciinema play examples/demos/timeline.cast
+asciinema play examples/demos/recovery.cast
+asciinema play examples/demos/ai-copilot.cast
+```
+
+В исходниках есть runners для timeline, synthetic deleted-entry recovery и
+metadata-only copilot; prerequisites и границы сценариев описаны в
+[`docs/demos.md`](docs/demos.md). Recovery demo не делает file carving и
+использует только временный синтетический образ.
+
+Docker build/smoke выполняется в CI. Чтобы опубликовать image в
+`ghcr.io/alexkkkkk/mount-file`, владелец запускает **Actions → Docker → Run
+workflow** с `publish=true`; push не происходит автоматически на каждом commit.
+Публичный pull возможен только после изменения visibility package в GitHub
+Packages. До этого можно собрать локально: `docker build -t mountfile:local .`.
 
 ## Тесты и разработка
 

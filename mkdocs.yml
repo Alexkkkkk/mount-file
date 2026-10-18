@@ -2,9 +2,7 @@ site_name: Mount File
 site_description: Работа с raw-образами дисков и дампами NAND/eMMC
 repo_name: Alexkkkkk/mount-file
 repo_url: https://github.com/Alexkkkkk/mount-file
-
-# This is the source configuration for local/docs-as-code builds. Deployment is
-# intentionally not configured here.
+site_url: https://alexkkkkk.github.io/mount-file/
 docs_dir: docs
 
 theme:
@@ -26,6 +24,18 @@ theme:
         icon: material/weather-night
         name: Тёмная тема
 
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: false
+
 markdown_extensions:
   - admonition
   - tables
@@ -42,3 +52,7 @@ nav:
   - GUI: gui.md
   - AI: ai.md
   - DFIR: dfir.md
+  - API: api.md
+  - Demos: demos.md
+  - Разработчикам:
+      - UniversalFSRW snippet: tc_window_universal_fs_rw_snippet.md
