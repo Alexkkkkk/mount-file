@@ -15,6 +15,9 @@ file only tracks the releases themselves.
   to GitHub Pages. The Docker workflow keeps build/smoke checks on CI and makes
   GHCR publication an explicit manual action. Added reproducible asciinema
   recordings for timeline, recovery triage and the metadata-only copilot.
+- The GUI Format Advisor now uses the deterministic metadata-only engine: it
+  never reads or sends file bytes, does not call a model/network, and stores a
+  selected recipe locally only after explicit user confirmation.
 - Добавлен read-only package DFIR слой `mountfile.dfir`: bounded raw search
   (`grep`), SHA-256 identity (`hash`), импорт timeline CSV и консервативная
   проверка timestomp. Команды доступны через `python -m mountfile`; операции

@@ -10,6 +10,7 @@ from mountfile.ai_format_advisor import (
     FileFingerprint,
     HypothesisEngine,
     Remember,
+    advise_from_metadata,
 )
 
 
@@ -27,6 +28,23 @@ def test_fingerprint_uses_metadata_without_opening_file(monkeypatch):
     assert set(fingerprint.to_dict()) == {"filename", "size", "extension", "magic_summary"}
 
 
+def test_runtime_entrypoint_uses_metadata_only_and_returns_tools(monkeypatch):
+    def fail_open(*args, **kwargs):
+        raise AssertionError("metadata advisor must never open the target file")
+
+    monkeypatch.setattr("builtins.open", fail_open)
+    fingerprint, recipes = advise_from_metadata("mystery.zzz", size=17)
+
+    assert fingerprint.to_dict() == {
+        "filename": "mystery.zzz",
+        "size": 17,
+        "extension": ".zzz",
+        "magic_summary": "",
+    }
+    assert 3 <= len(recipes) <= 5
+    assert all(recipe["tools"] and recipe["steps"] for recipe in recipes)
+
+
 def test_known_format_returns_ranked_actionable_shortlist():
     fingerprint = FileFingerprint("archive.zip", 4096, magic_summary="50 4b 03 04")
     recipes = HypothesisEngine().suggest(fingerprint)
@@ -35,7 +53,7 @@ def test_known_format_returns_ranked_actionable_shortlist():
     assert recipes[0]["id"] == "zip"
     assert recipes[0]["confidence"] > recipes[1]["confidence"]
     assert [recipe["rank"] for recipe in recipes] == [1, 2, 3, 4, 5]
-    assert all(recipe["action"] and recipe["steps"] for recipe in recipes)
+    assert all(recipe["action"] and recipe["steps"] and recipe["tools"] for recipe in recipes)
     assert len(KNOWLEDGE_BASE) >= 12
 
 
@@ -46,6 +64,7 @@ def test_unknown_format_still_has_safe_next_actions():
     assert 3 <= len(recipes) <= 5
     assert recipes[0]["id"] == "metadata check"
     assert all(recipe["evidence"] for recipe in recipes)
+    assert all(recipe["tools"] for recipe in recipes)
     safety_text = " ".join(" ".join(recipe["steps"]).lower() for recipe in recipes)
     assert any(term in safety_text for term in ("read-only", "copy", "isolated", "disposable"))
 

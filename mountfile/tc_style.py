@@ -100,8 +100,9 @@ SETTINGS = {
     # Отдельный адрес OpenAI-совместимого бэкенда: локальный адрес Ollama
     # не должен протекать в облачный эндпоинт (пусто = https://api.openai.com).
     "ai_base_url_openai": "",
-    # AI-советник v2 (ai_format_advisor_v2): авто-разбор формата при открытии
-    # файла и отчёт в GitHub Issues. Токен никогда не пишется в журнал.
+    # Format Advisor: локальные рекомендации только по метаданным. Старые
+    # GitHub reporter/consensus settings сохранены для совместимости, но GUI
+    # больше их не использует и не отправляет советник в сеть.
     "ai_format_autohook": False,
     "ai_github_repo": "",
     "ai_github_token": "",
