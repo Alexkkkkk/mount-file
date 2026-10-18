@@ -124,6 +124,12 @@ class Fat32:
             raise Fat32Error("FAT12/16 not supported by this module")
         self.spf = spf32
         self.root_cluster = struct.unpack_from("<I", bpb, 44)[0]
+        # FSINFO is only a cache of the allocator state; the FAT stays the
+        # source of truth.  The pointer is remembered here so the writer paths
+        # can refresh that cache - a stale free-cluster count is the exact
+        # condition `fsck.fat` reports as "Free cluster summary wrong".
+        self.fsinfo_sector = struct.unpack_from("<H", bpb, 48)[0]
+        self.backup_boot_sector = struct.unpack_from("<H", bpb, 50)[0]
         self.fat_start = self.offset + self.reserved * self.bps
         self.fat_size = self.spf * self.bps
         self.data_start = (
@@ -277,6 +283,60 @@ class Fat32:
             if len(chunk) < self.cluster_size:
                 chunk = chunk + b"\x00" * (self.cluster_size - len(chunk))
             self._write(self.cluster_offset(c), chunk)
+
+    # ------------------------------------------------------------ FSINFO
+    def _fsinfo_location(self):
+        """Byte offset of a *valid* FSINFO structure, or ``None``.
+
+        A volume that does not declare an FSINFO sector, points one at a
+        nonsensical sector, or carries the wrong signatures is left untouched:
+        writing the counters into an unrelated sector would corrupt the volume
+        while "fixing" a cache.
+        """
+        if not self.fsinfo_sector:
+            return None
+        off = self.offset + self.fsinfo_sector * self.bps
+        try:
+            raw = self._read(off, self.bps)
+        except Fat32Error:
+            return None
+        if struct.unpack_from("<I", raw, 0)[0] != 0x41615252:  # lead signature
+            return None
+        if struct.unpack_from("<I", raw, 484)[0] != 0x61417272:  # structure
+            return None
+        if struct.unpack_from("<I", raw, 508)[0] != 0xAA550000:  # trail
+            return None
+        return off
+
+    def free_clusters(self):
+        """Exact number of free clusters, counted from the FAT itself."""
+        total = min(self.cluster_count + 2, self.fat_size // 4)
+        fat = self._read(self.fat_start, self.fat_size)
+        free = 0
+        first = 0xFFFFFFFF
+        for n in range(2, total):
+            if struct.unpack_from("<I", fat, n * 4)[0] == 0:
+                free += 1
+                if first == 0xFFFFFFFF:
+                    first = n
+        return free, first
+
+    def sync_fsinfo(self):
+        """Refresh the cached free-cluster count/next-free hint.
+
+        Counted from the FAT (the source of truth), never incremented, so the
+        cache cannot drift after a rollback or a partially applied operation.
+        Returns ``True`` when an FSINFO structure was found and updated.
+        """
+        off = self._fsinfo_location()
+        if off is None:
+            return False
+        free, first = self.free_clusters()
+        raw = bytearray(self._read(off, self.bps))
+        struct.pack_into("<I", raw, 488, free)
+        struct.pack_into("<I", raw, 492, first)
+        self._write(off, bytes(raw))
+        return True
 
     # ----------------------------------------------------- 8.3 / LFN
     @staticmethod
@@ -511,6 +571,7 @@ class Fat32:
         if entry.cluster >= 2:
             self._free_chain(entry.cluster)
         self._delete_entry(parent, entry.entry_offset)
+        self.sync_fsinfo()
         self.f.flush()
         return entry
 
@@ -542,6 +603,7 @@ class Fat32:
         raw = self._build_entries(new_name, short, entry.cluster, entry.size, attr=attr)
         self._delete_entry(parent, entry.entry_offset)
         self._insert_entries(parent, raw)
+        self.sync_fsinfo()
         self.f.flush()
         return entry
 
@@ -640,6 +702,7 @@ class Fat32:
             raise
         if target is not None and target.cluster >= 2:
             self._free_chain(target.cluster)
+        self.sync_fsinfo()
         self.f.flush()
 
     def mkdir(self, dir_path, name):
@@ -662,14 +725,21 @@ class Fat32:
         dotdot = bytearray(32)
         dotdot[0:11] = b"..".ljust(8) + b"   "
         dotdot[11] = 0x10
-        struct.pack_into("<H", dotdot, 20, (dir_cluster >> 16) & 0xFFFF)
-        struct.pack_into("<H", dotdot, 26, dir_cluster & 0xFFFF)
+        # Microsoft's FAT specification: a directory created in the *root*
+        # directory stores 0 in the ".." cluster field - the root directory has
+        # no cluster number of its own.  Writing the root cluster number (2)
+        # there produced an image fsck.fat rejects with "Invalid '..' entry in
+        # the second slot", i.e. a volume our own writer declared verified.
+        parent_cluster = 0 if dir_cluster == self.root_cluster else dir_cluster
+        struct.pack_into("<H", dotdot, 20, (parent_cluster >> 16) & 0xFFFF)
+        struct.pack_into("<H", dotdot, 26, parent_cluster & 0xFFFF)
         self._write(
             self.cluster_offset(c),
             bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64),
         )
         raw = self._build_entries(name, short, c, 0, attr=0x10)
         self._insert_entries(dir_cluster, raw)
+        self.sync_fsinfo()
         self.f.flush()
 
 
