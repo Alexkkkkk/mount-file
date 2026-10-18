@@ -213,7 +213,27 @@ Boundary/range alerts по умолчанию отключены и требую
 ### YARA и сигнатуры в переданных unallocated ranges
 
 YARA доступен через optional `yara-python`; он не нужен для импорта остальных
-DFIR модулей. Правила поставляет пользователь:
+DFIR модулей. Правила поставляет пользователь. В package CLI доступны
+`yara` и `unallocated-scan`; последний читает JSON-файл с явными
+`[offset, length]` ranges:
+
+```bash
+python -m pip install yara-python  # optional, только для YARA
+python -m mountfile yara evidence.img --rules user-rules.yar
+printf '[[1048576, 2097152]]\n' > ranges.json
+python -m mountfile unallocated-scan evidence.img --ranges ranges.json
+```
+
+Чтобы выгрузить нормализованный UTC timeline CSV из метаданных существующего
+collector CSV:
+
+```bash
+python -m mountfile timeline-export \
+  --csv collector.csv --output normalized-timeline.csv
+```
+
+Правила и ranges не скачиваются автоматически; сканеры не определяют
+allocation map. Примеры Python API:
 
 ```python
 from mountfile.dfir_yara import scan_yara
