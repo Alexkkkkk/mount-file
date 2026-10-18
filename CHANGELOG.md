@@ -21,6 +21,9 @@ file only tracks the releases themselves.
 - The GUI Format Advisor now uses the deterministic metadata-only engine: it
   never reads or sends file bytes, does not call a model/network, and stores a
   selected recipe locally only after explicit user confirmation.
+- The first-party YARA and timeline plugin examples now export `PLUGINS` and
+  are covered by an explicit-discovery test; loading remains opt-in because
+  discovering Python plugins imports executable code.
 - Добавлен read-only package DFIR слой `mountfile.dfir`: bounded raw search
   (`grep`), SHA-256 identity (`hash`), импорт timeline CSV и консервативная
   проверка timestomp. Команды доступны через `python -m mountfile`; операции

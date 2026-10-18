@@ -24,6 +24,29 @@ python mountfile_dfir.py serve --db timeline.db --host 127.0.0.1 --port 8000
 сравнения времён (`mtime`, `ctime`, `atime`, `birth`) и выдаёт эвристические
 признаки.
 
+## Explicit plugin discovery
+
+Примеры `examples/plugins/yara.py` и `examples/plugins/timeline.py` экспортируют
+`PLUGINS`. Импорт не регистрирует и не запускает плагины автоматически;
+владелец процесса явно перечисляет доверенные файлы и открывает lifecycle:
+
+```python
+from mountfile.plugins import PluginRegistry
+
+registry = PluginRegistry()
+registry.discover(paths=[
+    "examples/plugins/yara.py",
+    "examples/plugins/timeline.py",
+])
+with registry.session("evidence.img", {"size": 4096}):
+    registry.file({"path": "/note.txt", "data": b"example", "size": 7})
+```
+
+`discover(paths=...)` импортирует исполняемый Python-код, поэтому загружайте
+только проверенные плагины. YARA-адаптер требует явно настроенных правил и
+опциональной зависимости `yara-python`; плагины не получают изменяемый handle
+на образ и не меняют поведение записи.
+
 ## Tutorial: PDF на FAT32
 
 ### Живой файл

@@ -2,6 +2,7 @@
 """Focused tests for the opt-in plugin registry and example adapters."""
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
@@ -96,6 +97,17 @@ def test_path_discovery_is_sorted_and_import_is_explicit(tmp_path):
     assert registry.plugin_names == ()
     assert registry.discover(paths=[first, second]) == ("a", "z")
     assert registry.plugin_names == ("a", "z")
+
+
+def test_first_party_examples_export_plugins_for_explicit_discovery():
+    examples = Path(__file__).resolve().parents[1] / "examples" / "plugins"
+    registry = PluginRegistry()
+
+    assert registry.plugin_names == ()
+    loaded = registry.discover(paths=[examples / "yara.py", examples / "timeline.py"])
+
+    assert loaded == ("timeline", "yara")
+    assert registry.plugin_names == ("timeline", "yara")
 
 
 def test_optional_adapters_import_without_optional_dependencies():
