@@ -694,28 +694,51 @@ class Fat32RW(RWBackend):
         existing = next((e for e in entries if e.name == name), None)
         if existing and existing.is_dir:
             raise IsADirectoryError(path)
-        if existing:
-            self._free_chain(existing.inode)
+        old_chain = (
+            self._cluster_chain(existing.inode)
+            if existing and existing.inode >= 2
+            else []
+        )
         clusters_needed = (len(data) + self.cluster_size - 1) // self.cluster_size
         clusters = self._allocate_chain(clusters_needed) if clusters_needed else []
-        if clusters:
-            self._write_chain(clusters, data)
+        try:
+            if clusters:
+                self._write_chain(clusters, data)
+        except Exception:
+            # Keep an overwritten file's original chain intact until the new
+            # data is fully written. A failed write must not destroy evidence.
+            if clusters:
+                self._free_chain(clusters[0])
+            raise
         if existing:
-            # update size + first cluster in existing dir entry
             idx = self._find_entry_index(raw, existing, parent_path)
-            if idx is not None:
-                buf = bytearray(raw)
-                struct.pack_into("<I", buf, idx + 28, len(data))
+            if idx is None:
                 if clusters:
-                    struct.pack_into("<H", buf, idx + 26, clusters[0] & 0xFFFF)
-                    if self.fat_type == 32:
-                        struct.pack_into(
-                            "<H", buf, idx + 20, (clusters[0] >> 16) & 0xFFFF
-                        )
-                self._write_dir_raw(parent_cluster, bytes(buf))
+                    self._free_chain(clusters[0])
+                raise RuntimeError(f"directory entry not found while overwriting {path}")
+            buf = bytearray(raw)
+            first_cluster = clusters[0] if clusters else 0
+            struct.pack_into("<H", buf, idx + 26, first_cluster & 0xFFFF)
+            struct.pack_into(
+                "<H", buf, idx + 20,
+                (first_cluster >> 16) & 0xFFFF if self.fat_type == 32 else 0,
+            )
+            struct.pack_into("<I", buf, idx + 28, len(data))
+            # If this directory write fails partway through, retain the new
+            # chain: a partially updated entry may already point to it.
+            self._write_dir_raw(parent_cluster, bytes(buf))
         else:
             first_cluster = clusters[0] if clusters else 0
-            self._create_in_dir(parent_cluster, name, first_cluster, len(data), False)
+            try:
+                self._create_in_dir(parent_cluster, name, first_cluster, len(data), False)
+            except RuntimeError as exc:
+                if clusters and str(exc).startswith("no free dir slot for "):
+                    self._free_chain(clusters[0])
+                raise
+        # Commit point: the directory now points at the fully written data.
+        # Reclaim the old clusters only after that point.
+        if old_chain:
+            self._free_chain(old_chain[0])
 
     def _find_entry_index(self, raw: bytes, entry: FSEntry, base: str) -> int | None:
         lfn: list[str] = []
@@ -794,6 +817,11 @@ class Fat32RW(RWBackend):
             self._write_dir_raw(parent_cluster, bytes(buf))
 
     def rename(self, src: str, dst: str) -> None:
+        """Rename a same-directory 8.3 entry without changing its cluster chain.
+
+        Long-filename and cross-directory renames are deliberately rejected
+        until they can be implemented with an atomic directory-entry update.
+        """
         if str(Path(src).parent) != str(Path(dst).parent):
             raise NotImplementedError("cross-directory rename not supported")
         parent_cluster, _ = self._walk_to(src)
@@ -803,19 +831,39 @@ class Fat32RW(RWBackend):
             parent_path = "/"
         entries = self._parse_dir_raw(raw, parent_path)
         src_name = Path(src).name
+        dst_name = Path(dst).name
+        if src_name.casefold() == dst_name.casefold():
+            return
         entry = next((e for e in entries if e.name == src_name), None)
         if not entry:
             raise FileNotFoundError(src)
-        dst_name = Path(dst).name
-        if any(e.name == dst_name for e in entries):
+        if any(e.name.casefold() == dst_name.casefold() for e in entries):
             raise FileExistsError(dst)
-        self.delete(src)
-        if entry.is_dir:
-            self._create_in_dir(parent_cluster, dst_name, entry.inode, 0, True)
-        else:
-            self._create_in_dir(
-                parent_cluster, dst_name, entry.inode, entry.size, False
+        if not self._is_83_name(src_name) or not self._is_83_name(dst_name):
+            raise NotImplementedError(
+                "FAT rename currently supports only same-directory 8.3 names"
             )
+        idx = self._find_entry_index(raw, entry, parent_path)
+        if idx is None:
+            raise RuntimeError(f"directory entry not found while renaming {src}")
+
+        short = self._short_name(dst_name)
+        short_raw = short[0].ljust(8, b" ") + short[1].ljust(3, b" ")
+        for other_idx in range(0, len(raw) - 31, 32):
+            if other_idx == idx:
+                continue
+            first = raw[other_idx]
+            if first in (0x00, 0xE5) or raw[other_idx + 11] == self.ATTR_LFN:
+                continue
+            if raw[other_idx : other_idx + 11] == short_raw:
+                raise FileExistsError(dst)
+
+        # Updating the short-name bytes in place preserves the file's FAT
+        # chain and all other directory metadata; the old implementation
+        # called delete(), which freed the chain before recreating the entry.
+        buf = bytearray(raw)
+        buf[idx : idx + 11] = short_raw
+        self._write_dir_raw(parent_cluster, bytes(buf))
 
 
 # =============================================================================
