@@ -6,6 +6,24 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **RW v2 (PR #122)**: `MountFileBridge` получил рабочий RO-путь — раньше он
+  импортировал несуществующий `mountfile.main` и вызывал несуществующие
+  ключи `mountfile --list/--extract`, поэтому на чистой установке всегда
+  падал в `StrategyUnavailable`. Теперь чтение идёт через нативный движок
+  FAT32 (`find_dir`/`list_dir`/`entry`/`read_file`), затем pytsk3. В
+  `pyproject.toml` добавлен `py-modules` — без него консольные скрипты
+  `mountfile-rw` / `mountfile-rw-v2` вообще не устанавливались. Ветка
+  синхронизирована с исправлениями #121. Добавлены тесты
+  `tests/test_rw_v2.py` (журнал v2, rollback, RO-мост).
+
+- **RW-слой (PR #121) доведён до рабочего состояния**: `Fat32Adapter`
+  переведён на реальный контракт `mountfile/fat32.py` (файловый объект,
+  пары «каталог + имя», `entry()` возвращает `(parent, DirEntry)`);
+  `DryRunMixin` действительно блокирует запись (исправлен порядок базовых
+  классов — раньше `--dry-run` молча писал в образ); `create_rw_full`
+  учитывает `dry_run`; `put` не пытается пересоздать существующий каталог;
+  `get`/MCP-чтение больше не импортируют несуществующий `mountfile.main`.
+  Добавлены сквозные тесты `tests/test_rw_layer.py`.
 - **Исправлены два дефекта записи FAT32**, из-за которых образ, который
   `WriteEngine.verify()` объявлял проверенным, `fsck.fat` отвергал как
   повреждённый (из-за этого падал `test_transaction_commit_writes_and_verifies`

@@ -451,14 +451,16 @@ def detect_fs(image_path: Path) -> FsType:
     """
     with open(image_path, "rb") as f:
         head = f.read(512)
-    if head[3:11] == b"NTFS    ":
-        return FsType.NTFS
-    if head[54:62] == b"FAT32   ":
-        return FsType.FAT32
-    # ext4: магия 0xEF53 по смещению 0x438
-    f.seek(0x438)
-    if f.read(2) == b"\x53\xef":
-        return FsType.EXT4
+        if head[3:11] == b"NTFS    ":
+            return FsType.NTFS
+        # FAT32's extended BPB keeps the type string at 82; 54 is the
+        # FAT12/16 slot.  Accept both, like mountfile/firmware.py does.
+        if head[82:90] == b"FAT32   " or head[54:62] == b"FAT32   ":
+            return FsType.FAT32
+        # ext4: магия 0xEF53 по смещению 0x438
+        f.seek(0x438)
+        if f.read(2) == b"\x53\xef":
+            return FsType.EXT4
     raise RWError("Не удалось определить ФС. Укажите явно.")
 
 
