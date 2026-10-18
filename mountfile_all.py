@@ -468,6 +468,15 @@ def print_cheatsheet() -> None:
     python main.py timestomp <img> --csv timeline.csv
     python main.py timeline-export --csv timeline.csv --output utc.csv
     python main.py yara <img> --rules user.yar  # optional yara-python
+
+  DFIR-команды из эпика #87 (read-only):
+    python -m mountfile timeline-build <img> -o timeline.db --csv timeline.csv
+    python -m mountfile timeline-query --db timeline.db --start 2024-03-12T14:00 --end 2024-03-12T15:00
+    python -m mountfile search <img> "password=" [--regex] [--encoding utf-16le] [--files]
+    python -m mountfile yara-scan <img> --rules rules/ [--targets files unallocated] [--json]
+    python -m mountfile timestomp-scan <img> [--skew 2.0] [--json]
+    python -m mountfile slack-extract <img> -o slack/
+    python -m mountfile live-diff before.img after.img -o diff.md
     python main.py unallocated-scan <img> --ranges ranges.json
     python main.py --check-updates       # 10=есть апдейт, 0=нет
 
