@@ -50,6 +50,23 @@ python -m mountfile --help
 также описывает PyQt6 и `pytsk3`; фактический режим без `pytsk3` поддерживается
 кодом и использует только FAT32.
 
+## Docker
+
+Контейнер запускает только CLI от non-root пользователя. Для read-only проверки
+образов используйте отдельные каталоги `evidence` и `output`:
+
+```bash
+mkdir -p evidence output
+docker compose run --rm mountfile --version
+docker compose run --rm mountfile info /evidence/dump.img
+```
+
+`evidence` монтируется read-only, а запись в исходный образ не должна
+выполняться. Для дополнительного forensic-инструментария собирайте профиль
+`docker build --build-arg INSTALL_FORENSIC_TOOLS=1 -t mountfile:forensics .`.
+Этот профиль добавляет системные утилиты, но не превращает экспериментальные
+DFIR-модули проекта в полноценную систему carving или malware verdict.
+
 На Linux для Qt могут понадобиться системные библиотеки `libgl1`, `libegl1`,
 `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0`. Для Codespaces скрипт
 `scripts/setup-gui.sh` дополнительно настраивает Xvfb, x11vnc и noVNC.

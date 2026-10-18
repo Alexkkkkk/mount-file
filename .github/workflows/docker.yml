@@ -1,0 +1,44 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-smoke:
+    name: Docker build and CLI smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag mountfile:test .
+
+      - name: Check CLI entrypoint
+        run: docker run --rm --read-only --cap-drop=ALL --security-opt no-new-privileges mountfile:test --version
+
+      - name: Check read-only evidence workflow
+        shell: bash
+        run: |
+          mkdir -p evidence output
+          printf 'not an image' > evidence/sample.bin
+          docker run --rm --read-only --cap-drop=ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,src=$PWD/evidence,dst=/evidence,ro" \
+            --mount "type=bind,src=$PWD/output,dst=/output" \
+            mountfile:test info /evidence/sample.bin || test $? -eq 1
+
+      - name: Validate compose configuration
+        run: docker compose config
