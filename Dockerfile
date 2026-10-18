@@ -15,11 +15,12 @@ ENV HOME=/home/mountfile \
 # The default image needs no apt packages: the pytsk3 wheel bundles the Python
 # binding used by the CLI.  Opt in only when command-line forensic utilities
 # are useful in the same container:
-#   INSTALL_FORENSIC_TOOLS=1 adds:
-#   - sleuthkit: The Sleuth Kit command-line tools
-#   - testdisk: partition/file-recovery utilities
-#   - dosfstools and mtools: FAT image inspection and test-image tooling
-#   - file and binutils: file identification and strings/binutils helpers
+#   INSTALL_FORENSIC_TOOLS=1 adds the optional read-only triage toolchain:
+#   - sleuthkit, testdisk and binutils: filesystem/recovery inspection helpers
+#   - dosfstools, mtools and e2fsprogs: FAT/ext image inspection and fsck tools
+#   - ntfs-3g, squashfs-tools and mtd-utils: filesystem/flash image utilities
+#   - cryptsetup and qemu-utils: bounded container and image inspection helpers
+#   - file, binwalk and yara: identification, signature and rule scanning tools
 # Example: docker build --build-arg INSTALL_FORENSIC_TOOLS=1 -t mountfile:forensics .
 RUN set -eux; \
     case "${INSTALL_FORENSIC_TOOLS}" in \
@@ -27,7 +28,9 @@ RUN set -eux; \
         1) \
             apt-get update; \
             apt-get install --yes --no-install-recommends \
-                binutils dosfstools file mtools sleuthkit testdisk; \
+                binutils binwalk cryptsetup dosfstools e2fsprogs file \
+                mtd-utils mtools ntfs-3g qemu-utils sleuthkit squashfs-tools \
+                testdisk yara; \
             rm -rf /var/lib/apt/lists/*; \
             ;; \
         *) \
