@@ -331,8 +331,8 @@ class DocumentationRetriever:
 
     Args:
         root: Repository/documentation root.  Only the root-level
-            ``README.md`` and ``CHANGELOG.md`` plus ``*.py`` docstrings below
-            it are read.
+            ``README.md``, ``CHANGELOG.md`` and Markdown files below ``docs/``
+            plus ``*.py`` docstrings below it are read.
         embedding_backend: Optional callable ``text -> vector`` or object with
             ``embed(text)``.  Its vectors are ranked with cosine similarity;
             BM25 remains the fallback if it is absent or fails.
@@ -378,7 +378,13 @@ class DocumentationRetriever:
             raise ValueError("documentation root must be a directory")
 
         chunks: List[DocumentationChunk] = []
-        approved_markdown = (selected_root / "README.md", selected_root / "CHANGELOG.md")
+        approved_markdown = [selected_root / "README.md", selected_root / "CHANGELOG.md"]
+        docs_root = selected_root / "docs"
+        if docs_root.is_dir():
+            try:
+                approved_markdown.extend(sorted(docs_root.rglob("*.md")))
+            except (OSError, ValueError):
+                pass
         for path in approved_markdown:
             if not _safe_child(selected_root, path, ".md"):
                 continue

@@ -63,6 +63,20 @@ def test_answer_cites_snippets_and_is_explicit_when_no_evidence(tmp_path):
     assert retriever.answer("unicorns and completely unrelated text") == NO_EVIDENCE_MESSAGE
 
 
+def test_indexes_repository_docs_markdown(tmp_path):
+    (tmp_path / "README.md").write_text("# Project\n\nOverview.\n", encoding="utf-8")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "api.md").write_text(
+        "# API\n\nUse the authenticated filesystem endpoint.\n", encoding="utf-8"
+    )
+    retriever = DocumentationRetriever(tmp_path)
+
+    results = retriever.retrieve("authenticated filesystem endpoint", top_k=5)
+
+    assert any(item.source == "docs/api.md" for item in results)
+
+
 def test_injectable_embedding_backend_can_retrieve_without_token_overlap(tmp_path):
     (tmp_path / "README.md").write_text(
         "# Setup\n\nConfigure the network adapter here.\n\n"
