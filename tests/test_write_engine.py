@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_fat32 import BPS, RESERVED, SPF, make_fat32_image
 
+from mountfile.fat32 import Fat32
+
 from mountfile.write_engine import (
     DamagedImageError,
     ReadOnlyError,
@@ -448,3 +450,59 @@ def test_ext_backend_verifies_and_rolls_back(tmp_path):
         assert engine.exists("/VOLATILE.TXT") is False
     finally:
         engine.close()
+
+
+# ------------------------------------------------- writer/fat32 consistency
+def _uint(data, offset, size=4):
+    return int.from_bytes(data[offset : offset + size], "little")
+
+
+def _fsinfo_counters(image):
+    """(free clusters, next free cluster) as cached in the FSINFO sector."""
+    data = Path(image).read_bytes()
+    bps = _uint(data, 11, 2)
+    sector = _uint(data, 48, 2)
+    raw = data[sector * bps : (sector + 1) * bps]
+    return _uint(raw, 488), _uint(raw, 492)
+
+
+def test_written_image_leaves_fat_metadata_consistent(tmp_path):
+    """The writer must not leave a volume that fsck rejects as dirty.
+
+    Regression for two defects found while closing epic #87:
+
+    * the FSINFO sector was never refreshed, so the externally visible free
+      cluster count stayed at its pre-write value (``fsck.fat``: "Free cluster
+      summary wrong") — i.e. ``WriteEngine.verify()`` could report a clean image
+      that a real checker refused;
+    * ``mkdir`` wrote the root cluster number (2) into the ``..`` slot of a
+      directory created in the root, which the FAT specification defines as 0
+      (``fsck.fat``: "Invalid '..' entry in the second slot").
+    """
+    image, engine = _engine(tmp_path)
+    try:
+        with engine.transaction("add evidence"):
+            engine.mkdir("/EVIDENCE")
+            engine.write_file("/EVIDENCE/README.TXT", b"collected 2026-10-18")
+            engine.rename("/EVIDENCE/README.TXT", "/EVIDENCE/RENAMED.TXT")
+    finally:
+        engine.close()
+
+    # 1. the cached counters must equal a recomputation from the FAT
+    cached_free, cached_first = _fsinfo_counters(image)
+    with open(image, "r+b") as handle:
+        fs = Fat32(handle)
+        real_free, real_first = fs.free_clusters()
+        dir_cluster = fs.find_dir("/EVIDENCE")
+        fs.f.seek(fs.cluster_offset(dir_cluster) + 32)
+        dotdot = fs.f.read(32)
+    assert (cached_free, cached_first) == (real_free, real_first)
+    assert dotdot[0:11] == b".." + b" " * 9
+    assert _uint(dotdot, 26, 2) == 0, "a directory in the root stores 0 in '..'"
+
+    # 2. and an independent checker must agree, when one is installed
+    if shutil.which("fsck.fat"):
+        proc = subprocess.run(
+            [shutil.which("fsck.fat"), "-n", str(image)], capture_output=True, text=True
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr

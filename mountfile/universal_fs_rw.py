@@ -327,8 +327,58 @@ class Fat32RW(RWBackend):
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
             if self.root_cluster < 2:
                 self.root_cluster = 2
+            # FSINFO only caches the allocator state; the FAT stays the source
+            # of truth.  The pointer is kept so the writer paths below can
+            # refresh that cache - a stale free-cluster count is exactly what
+            # `fsck.fat` reports as "Free cluster summary wrong".
+            self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
         else:
             self.root_cluster = 0
+            self.fsinfo_sector = 0
+
+    # ---- FSINFO ------------------------------------------------------------
+    def free_clusters(self) -> tuple:
+        """Count free clusters (and the first one) from the FAT itself."""
+        free = 0
+        first = 0xFFFFFFFF
+        for n in range(2, self.cluster_count + 2):
+            if self._fat_get(n) == 0:
+                free += 1
+                if first == 0xFFFFFFFF:
+                    first = n
+        return free, first
+
+    def sync_fsinfo(self) -> bool:
+        """Refresh the cached free-cluster count/next-free hint.
+
+        Recounted from the FAT rather than incremented/decremented, so the cache
+        cannot drift after a failed allocation or a partially applied delete.
+        Volumes that declare no FSINFO sector, or one whose signatures do not
+        match, are left untouched: writing counters into an unrelated sector
+        would corrupt the image while "fixing" a cache.  Returns ``True`` when a
+        valid FSINFO structure was found and updated.
+        """
+        if self.fat_type != 32 or not self.fsinfo_sector:
+            return False
+        off = self.fsinfo_sector * self.bytes_per_sector
+        try:
+            raw = self._read_at(off, self.bytes_per_sector)
+        except (OSError, ValueError):
+            return False
+        if len(raw) < self.bytes_per_sector:
+            return False
+        if struct.unpack("<I", raw[0:4])[0] != 0x41615252:  # lead signature
+            return False
+        if struct.unpack("<I", raw[484:488])[0] != 0x61417272:  # structure
+            return False
+        if struct.unpack("<I", raw[508:512])[0] != 0xAA550000:  # trail
+            return False
+        free, first = self.free_clusters()
+        buf = bytearray(raw)
+        struct.pack_into("<I", buf, 488, free)
+        struct.pack_into("<I", buf, 492, first)
+        self._write_at(off, bytes(buf))
+        return True
 
     # ---- FAT ---------------------------------------------------------------
     def _fat_get(self, cluster: int) -> int:
@@ -808,6 +858,7 @@ class Fat32RW(RWBackend):
         # Reclaim the old clusters only after that point.
         if old_chain:
             self._free_chain(old_chain[0])
+        self.sync_fsinfo()
 
     def _find_entry_index(self, raw: bytes, entry: FSEntry, base: str) -> int | None:
         lfn: list[int] = []
@@ -864,8 +915,21 @@ class Fat32RW(RWBackend):
         dot = bytearray(
             self._build_dir_entry(".", new_cluster, 0, True, short_name=(b".", b""))
         )
+        # Microsoft's FAT specification: a directory created in the *root*
+        # directory stores 0 in the ".." cluster field, because the root
+        # directory has no cluster number of its own.  Storing the root cluster
+        # number (2) instead produced images that `fsck.fat` rejects with
+        # "Invalid '..' entry in the second slot" - a volume our own writer
+        # (and MF-WE's verify()) reported as clean.
+        dotdot_cluster = (
+            0
+            if self.fat_type == 32 and parent_cluster == self.root_cluster
+            else parent_cluster
+        )
         dotdot = bytearray(
-            self._build_dir_entry("..", parent_cluster, 0, True, short_name=(b"..", b""))
+            self._build_dir_entry(
+                "..", dotdot_cluster, 0, True, short_name=(b"..", b"")
+            )
         )
         buf = bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64)
         self._write_cluster(new_cluster, buf)
@@ -878,6 +942,7 @@ class Fat32RW(RWBackend):
             if str(exc).startswith("no free dir slot for "):
                 self._free_chain(new_cluster)
             raise
+        self.sync_fsinfo()
 
     def delete(self, path: str, recursive: bool = False) -> None:
         parent_cluster, name = self._walk_to(path)
@@ -901,6 +966,7 @@ class Fat32RW(RWBackend):
         idx = self._find_entry_index(raw, entry, parent_path)
         if idx is not None:
             self._write_dir_raw(parent_cluster, self._tombstone_entry_slots(raw, idx))
+        self.sync_fsinfo()
 
     def _tombstone_entry_slots(self, raw: bytes, short_entry_index: int) -> bytes:
         start = short_entry_index
