@@ -344,7 +344,10 @@ def _resolve_image(raw: Any, roots: Sequence[Path]) -> Path:
         try:
             for child in root.rglob("*"):
                 if child.is_file() and child.relative_to(root).as_posix() == normalized:
-                    matches.append(child.resolve(strict=False))
+                    resolved_child = child.resolve(strict=False)
+                    if not _is_within(resolved_child, root):
+                        continue
+                    matches.append(resolved_child)
                     break
         except OSError as exc:
             raise APIPathError("cannot resolve image") from exc

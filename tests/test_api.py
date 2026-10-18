@@ -135,6 +135,28 @@ def test_image_and_virtual_paths_cannot_escape_configured_root(tmp_path):
     assert all(call[0] not in {"ls", "read"} for call in registry.calls)
 
 
+def test_symlink_image_cannot_escape_configured_root(tmp_path):
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    outside = tmp_path / "outside.img"
+    outside.write_bytes(b"outside evidence")
+    link = image_root / "linked.img"
+    try:
+        link.symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip("symlink creation is unavailable: %s" % exc)
+
+    registry = FakeRegistry()
+    app = create_app(registry, image_roots=image_root)
+    client = _client_or_skip(app)
+    response = client.get(
+        "/filesystem/ls", params={"image": "linked.img", "path": "/"}
+    )
+
+    assert response.status_code == 400
+    assert all(call[0] != "ls" for call in registry.calls)
+
+
 def test_api_module_remains_importable_without_fastapi():
     # This is intentionally an environment-sensitive assertion: when FastAPI
     # is installed the module still exposes the feature flag and factory.
