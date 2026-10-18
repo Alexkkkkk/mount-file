@@ -99,3 +99,6 @@ def register(registry: Any, **kwargs: Any) -> TimelinePlugin:
 
 TimelineAdapter = TimelinePlugin
 create_timeline_plugin = create_plugin
+PLUGINS = (TimelinePlugin,)
+
+__all__ = ["PLUGINS", "TimelineAdapter", "TimelinePlugin", "create_plugin", "create_timeline_plugin", "register"]

@@ -116,3 +116,6 @@ def register(registry: Any, **kwargs: Any) -> YaraPlugin:
 
 YaraAdapter = YaraPlugin
 create_yara_plugin = create_plugin
+PLUGINS = (YaraPlugin,)
+
+__all__ = ["PLUGINS", "YaraAdapter", "YaraPlugin", "create_plugin", "create_yara_plugin", "register"]
