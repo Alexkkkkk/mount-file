@@ -199,6 +199,11 @@ class MainWindow(QMainWindow):
         tb.addWidget(QLabel("  Volume: "))
         self.cmb_parts = QComboBox()
         self.cmb_parts.setMinimumWidth(320)
+        # Qt default is 10 visible rows: dumps with dozens of partitions end
+        # up hidden behind an inner scrollbar.  Show them all so every volume
+        # is reachable without scrolling through chunks.
+        self.cmb_parts.setMaxVisibleItems(64)
+        self.cmb_parts.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.cmb_parts.currentIndexChanged.connect(self.volume_changed)
         tb.addWidget(self.cmb_parts)
 

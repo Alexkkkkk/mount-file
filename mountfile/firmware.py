@@ -31,7 +31,7 @@ __all__ = ["FoundVolume", "detect_volumes", "probe_filesystem"]
 PROBE_SIZE = 0x8006
 
 #: How far into a partitionless image the signature scan walks by default.
-DEFAULT_SCAN_LIMIT = 512 * 1024 * 1024
+DEFAULT_SCAN_LIMIT = 0  # 0 = "до конца файла"
 
 _CHUNK = 1 << 20
 
