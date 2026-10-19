@@ -146,18 +146,10 @@ jobs:
       - name: Build with PyInstaller
         shell: bash
         run: |
-          # Иконка приложения берётся из mountfile/data через mountfile.appicon:
-          # .ico для Windows, .icns для macOS, .png для Linux.
-          ICON="$(python -m mountfile.appicon || true)"
-          ICON_FLAG=()
-          if [ -n "$ICON" ] && [ -f "$ICON" ]; then ICON_FLAG=(--icon "$ICON"); fi
           if [ -f "mount-file.spec" ]; then
             pyinstaller mount-file.spec --noconfirm
           else
-            pyinstaller --onefile --name ${{ matrix.artifact }} \
-              "${ICON_FLAG[@]}" \
-              --add-data "mountfile/data/icon.png:mountfile/data" \
-              main.py
+            pyinstaller --onefile --name ${{ matrix.artifact }} main.py
           fi
 
       - name: Upload artifact

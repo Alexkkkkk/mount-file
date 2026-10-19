@@ -37,8 +37,6 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --windowed `
-            --icon mountfile/data/icon.ico `
-            --add-data "mountfile/data/icon.png;mountfile/data" `
             --name MountFile-nightly main.py
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
           Get-ChildItem dist | Select-Object Name, Length

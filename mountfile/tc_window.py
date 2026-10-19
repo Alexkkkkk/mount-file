@@ -1256,7 +1256,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
         self.setMinimumSize(640, 400)
-        self._apply_app_icon()
 
         self.image_path = None
         self.volumes = []
@@ -1274,18 +1273,6 @@ class MainWindow(QMainWindow):
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._start_updater()
-
-    # ----------------------------------------------------------------- icon
-    def _apply_app_icon(self):
-        """Window icon from the packaged artwork (cosmetic, never raises)."""
-        try:
-            from . import appicon
-
-            icon = appicon.app_icon()
-            if icon is not None and not icon.isNull():
-                self.setWindowIcon(icon)
-        except Exception:  # pragma: no cover - icons are cosmetic
-            pass
 
     # -------------------------------------------------------- screen fit
     def screen_geometry(self):

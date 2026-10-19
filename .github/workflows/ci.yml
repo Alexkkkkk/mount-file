@@ -125,8 +125,6 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --onefile --windowed \
             --collect-submodules pytsk3 \
-            --icon "$(python -m mountfile.appicon)" \
-            --add-data "mountfile/data/icon.png:mountfile/data" \
             --name MountFile main.py
           test -f "dist/${{ matrix.artifact }}"
 

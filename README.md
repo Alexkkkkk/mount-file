@@ -526,14 +526,13 @@ mount-file/
 │   ├── tc_window.py            основное двухпанельное окно
 │   ├── tc_style.py             темы и настройки
 │   ├── mainwindow.py           упрощённое окно (используется тестами)
-│   ├── appicon.py              иконка приложения (поиск в data/ и в _MEIPASS)
 │   ├── qt_compat.py            слой совместимости Qt6/Qt5
 │   ├── updater.py              проверка и установка обновлений
 │   ├── olma_watch.py           слежение за падениями
 │   ├── turbo.py                вспомогательные утилиты (кэш, CDC, журнал)
 │   ├── ai/                     бэкенды AI-анализа
 │   ├── olma/                   самоанализ, автофикс, отчёты, публикация
-│   └── data/                   XOR-таблицы MST/MTK и иконки icon.png/.ico/.icns
+│   └── data/                   встроенные XOR-таблицы MST/MTK
 ├── scripts/                    сборка образов, GUI в Codespaces, стимп версии
 ├── tests/                      автотесты (pytest)
 ├── tools/tidy_repo.py          утилита уборки репозитория

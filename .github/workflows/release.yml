@@ -164,13 +164,6 @@ jobs:
           $flags = @('--noconfirm', '--clean', '--onefile', '--windowed', '--name', $name)
           python -c "import pytsk3" 2>$null
           if ($LASTEXITCODE -eq 0) { $flags += @('--collect-submodules', 'pytsk3') }
-          # App icon + runtime artwork (mountfile/data). Path is picked per OS by
-          # mountfile/appicon.py: icon.ico on Windows, icon.icns on macOS, icon.png
-          # on Linux.
-          $icon = (python -m mountfile.appicon).Trim()
-          if ($icon) { $flags += @('--icon', $icon); Write-Host "icon: $icon" }
-          else { Write-Host '::warning title=icon missing::building with the default PyInstaller icon' }
-          $flags += @('--add-data', "mountfile/data/icon.png$(python -c 'import os;print(os.pathsep)')mountfile/data")
           python -m PyInstaller @flags main.py
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
 
