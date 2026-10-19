@@ -11,7 +11,8 @@ from .extract import extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import detect_volumes
 from .hexview import HexView
-from .qt_compat import (BottomDock, DisplayRole, Horizontal, MB_No, MB_Yes,
+from .qt_compat import (BottomDock, ComboAdjustToMinimumContentsLengthWithIcon,
+                        DisplayRole, Horizontal, MB_No, MB_Yes,
                         QAbstractItemModel, QAction, QComboBox, QDockWidget,
                         QFileDialog, QInputDialog, QLabel, QMainWindow,
                         QMessageBox, QModelIndex, QPlainTextEdit, QPushButton,
@@ -203,7 +204,7 @@ class MainWindow(QMainWindow):
         # up hidden behind an inner scrollbar.  Show them all so every volume
         # is reachable without scrolling through chunks.
         self.cmb_parts.setMaxVisibleItems(64)
-        self.cmb_parts.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_parts.setSizeAdjustPolicy(ComboAdjustToMinimumContentsLengthWithIcon)
         self.cmb_parts.currentIndexChanged.connect(self.volume_changed)
         tb.addWidget(self.cmb_parts)
 

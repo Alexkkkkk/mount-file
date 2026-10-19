@@ -274,7 +274,10 @@ def _scan_range(f, start, end):
     except OSError:
         return []
     start = max(0, int(start))
-    end = min(int(end), total)
+    # ``end`` == 0 (DEFAULT_SCAN_LIMIT) means "до конца файла": прежний
+    # min(0, total) давал пустой диапазон и сканер не находил ни одной ФС.
+    end = int(end or 0)
+    end = min(end, total) if end > 0 else total
     if end <= start:
         return []
 
