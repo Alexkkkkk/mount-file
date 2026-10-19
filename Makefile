@@ -44,7 +44,7 @@ exe:
 # Standalone single-file build: GUI + CLI in one binary, no package needed.
 mountfile-exe:
 	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \
-		--onefile --icon mountfile/data/icon.png --name mountfile mountfile.py
+		--icon mountfile/data/icon.png --name mountfile mountfile.py
 	@test -f dist/mountfile && echo "Done: dist/mountfile"
 
 clean:

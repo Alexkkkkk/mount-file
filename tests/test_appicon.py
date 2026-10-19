@@ -4,6 +4,10 @@
 """The bundled app icon must exist in every format a build can ask for."""
 
 import os
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import pytest
 
@@ -49,3 +53,24 @@ def test_app_icon_is_optional():
     """No Qt / no artwork must return None instead of raising."""
     icon = appicon.app_icon()
     assert icon is None or not icon.isNull()
+
+
+def test_app_icon_is_none_without_a_running_application():
+    """A fresh interpreter has no QApplication, so no QIcon may be built.
+
+    Qt aborts the whole process (``Fatal Python error: Aborted``, exit code
+    134) instead of raising when a QIcon is constructed without a live
+    application - that is what killed the full pytest run in CI as soon as
+    an earlier test's QApplication had been collected. Runs in its own
+    interpreter, because a QApplication created by another test in the same
+    session would hide the bug.
+    """
+    code = (
+        "from mountfile import appicon; "
+        "assert appicon._qt_app_running() is False, 'unexpected QApplication'; "
+        "assert appicon.app_icon() is None"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr

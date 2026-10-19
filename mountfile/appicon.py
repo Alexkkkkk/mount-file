@@ -11,7 +11,7 @@ platforms need:
 * ``icon.png``  - Linux window icon and the runtime ``QIcon``
 
 ``icon.png`` is shipped inside the frozen executable with
-``--add-data "mountfile/data/icon.png:mounfile/data"``. ``icon_path``
+``--add-data "mountfile/data/icon.png:mountfile/data"``. ``icon_path``
 looks in the source tree first and then in ``sys._MEIPASS``, so the same
 call works from a checkout, from an installed wheel and from a one-file
 PyInstaller build. Everything here is cosmetic: a missing icon returns
@@ -60,14 +60,37 @@ def icon_file():
     return icon_path()
 
 
+def _qt_app_running():
+    """True when a live QGuiApplication exists in this process.
+
+    ``QIcon(path)`` must not be constructed without one: Qt aborts the
+    whole interpreter (``Fatal Python error: Aborted``, exit code 134)
+    instead of raising, which used to kill pytest and the GUI smoke job
+    as soon as a QApplication created by an earlier test had been
+    garbage collected. Everything here is cosmetic, so the cheap check
+    comes before the QIcon call.
+    """
+    try:
+        from mountfile.qt_compat import QtCore
+    except Exception:  # pragma: no cover - Qt missing
+        return False
+    try:
+        return QtCore.QCoreApplication.instance() is not None
+    except Exception:  # pragma: no cover - broken Qt build
+        return False
+
+
 def app_icon():
     """QIcon for QApplication / MainWindow / tray icon.
 
-    Returns ``None`` when Qt or the artwork is unavailable, so callers can
-    simply skip setting an icon instead of crashing a headless build.
+    Returns ``None`` when Qt, the artwork or a live QApplication is
+    unavailable, so callers can simply skip setting an icon instead of
+    crashing a headless build.
     """
     path = icon_path()
     if not path:
+        return None
+    if not _qt_app_running():
         return None
     try:
         from mountfile.qt_compat import QIcon
