@@ -11,8 +11,11 @@ status line - then the command line and the function key bar.
 
 Function keys (real shortcuts, also clickable buttons at the bottom):
 
-    F3  view the selected file in the hex viewer
-    F4  edit (not supported - images are modified by an F5 import)
+    F3  view the selected file - a text file (``.txt`` and the other plain
+        text kinds) opens in the system editor (Блокнот on Windows), anything
+        else in the hex viewer
+    F4  edit the selected text file in the same system editor (files inside an
+        image are modified by an F5 import, not by F4)
     F5  copy between panels (image -> local = extract,
         local -> image = FAT32 import via the write engine)
     F6  move (source removed when the engine can remove it)
@@ -34,10 +37,11 @@ from __future__ import annotations
 import fnmatch
 import os
 import shutil
+import tempfile
 import threading
 import webbrowser
 
-from . import ai, autopick, tc_style
+from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .hexview import HexView
 from .partition import list_partitions
@@ -508,8 +512,15 @@ class TcPanel(QWidget):
         is_file = bool(is_real_entry and not entry.get("is_dir"))
         can_write_image = self.mode != "img" or self.writer is not None
 
-        add("Открыть" if entry and entry.get("is_dir") else "Просмотр (F3)",
-            lambda: self.open_row(self.table.currentRow()), bool(entry))
+        is_text = bool(is_file and text_editor.is_text_file(entry["name"]))
+        if entry and entry.get("is_dir"):
+            open_label = "Открыть"
+        elif is_text:
+            open_label = "Открыть в Блокноте"
+        else:
+            open_label = "Просмотр (F3)"
+        add(open_label, lambda: self.open_row(self.table.currentRow()), bool(entry))
+        add("HEX-просмотр", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
         add("Копировать в другую панель (F5)", self.win.f5_copy, is_real_entry)
@@ -973,8 +984,10 @@ class TcPanel(QWidget):
             return
         if e["is_dir"]:
             self.cd(self.join(e["name"]))
+        elif text_editor.is_text_file(e["name"]):
+            self.win.open_text_file(self)
         else:
-            self.win.f3_view()
+            self.win.f3_hex_view()
 
 
 class AiDialog(QDialog):
@@ -1263,6 +1276,9 @@ class MainWindow(QMainWindow):
 
         self.active_side = "L"
         self.updater = None
+        #: Каталог временных копий текстовых файлов из образов (см.
+        #: :meth:`open_text_file`); создаётся при первом обращении.
+        self._text_tmp = None
 
         self._build_ui()
         self._fit_to_screen()
@@ -2401,7 +2417,66 @@ class MainWindow(QMainWindow):
             self.log_msg("Команда «%s» не найдена. Доступно: cd <путь>" % text)
         self.cmdline.clear()
 
+    # -------------------------------------------------- текстовый редактор
+    def _text_temp_dir(self):
+        """Один временный каталог на сессию для копий текстовых файлов."""
+        if self._text_tmp is None or not os.path.isdir(self._text_tmp):
+            self._text_tmp = tempfile.mkdtemp(prefix="mountfile-text-")
+        return self._text_tmp
+
+    def open_text_file(self, panel=None):
+        """Открыть выбранный текстовый файл в системном редакторе.
+
+        Windows - Блокнот (``notepad.exe``), macOS - ``open -t``, Linux -
+        ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе первый
+        найденный редактор, иначе ``xdg-open``. Файл внутри образа сначала
+        извлекается во временный каталог, поэтому сам образ не меняется.
+        """
+        p = panel or self.active_panel()
+        entry = p.selected_entry()
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            QMessageBox.information(
+                self, "Блокнот", "Сначала выберите файл в активной панели."
+            )
+            return
+        self._open_text_entry(p, entry)
+
+    def _open_text_entry(self, panel, entry):
+        """Открыть `entry` в редакторе и записать результат в журнал окна."""
+        name = entry["name"]
+        try:
+            if panel.mode == "img":
+                if panel.provider is None:
+                    raise RuntimeError("том не открыт")
+                target, encoding = text_editor.prepare_image_text(
+                    panel.provider, panel.join(name), self._text_temp_dir()
+                )
+                note = "временная копия из образа: %s" % target
+            else:
+                target = panel.join(name)
+                encoding = "utf-8"
+                note = str(target)
+            argv = text_editor.open_in_editor(target)
+        except Exception as e:
+            QMessageBox.critical(self, "Блокнот", str(e))
+            self.log_msg("Блокнот: не удалось открыть %s: %s" % (name, e))
+            return
+        self.log_msg(
+            "Блокнот: %s -> %s (%s; кодировка %s)"
+            % (name, " ".join(argv), note, encoding)
+        )
+
     def f3_view(self):
+        """F3 / Enter: текстовый файл идёт в редактор, остальное в HEX."""
+        p = self.active_panel()
+        entry = p.selected_entry()
+        if entry and not entry.get("is_dir") and text_editor.is_text_file(entry["name"]):
+            self.open_text_file(p)
+            return
+        self.f3_hex_view()
+
+    def f3_hex_view(self):
+        """HEX-просмотр выбранного файла (первые ``PREVIEW_LIMIT`` байт)."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir"):
@@ -2424,8 +2499,16 @@ class MainWindow(QMainWindow):
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):
+        """F4: правка текстового файла в системном редакторе (Блокнот).
+
+        Локальный файл открывается как есть. Файл внутри образа открывается
+        временной копией, а сам образ меняется только импортом через F5.
+        """
         p = self.active_panel()
         entry = p.selected_entry()
+        if entry and not entry.get("is_dir") and text_editor.is_text_file(entry["name"]):
+            self.open_text_file(p)
+            return
         if p.mode == "img" and entry and not entry.get("is_dir"):
             self.log_msg(
                 "Правка (F4): файлы внутри образа изменяются только импортом "
@@ -2433,8 +2516,8 @@ class MainWindow(QMainWindow):
             )
             return
         self.log_msg(
-            "Правка (F4) не поддерживается — образ изменяется только "
-            "импортом через F5"
+            "Правка (F4): выберите текстовый файл (%s) — он откроется "
+            "в системном редакторе" % ", ".join(text_editor.TEXT_EXTENSIONS[:5])
         )
 
     # -------------------------------------------------------------- copying

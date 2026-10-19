@@ -6,6 +6,16 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Текстовые файлы открываются в Блокноте**: `Enter` / двойной щелчок и `F3`
+  / `F4` больше не показывают `.txt` в HEX-просмотре — файл уходит в системный
+  редактор (Windows: `notepad.exe`; macOS: `open -t`; Linux: `$MOUNTFILE_EDITOR`
+  / `$VISUAL` / `$EDITOR`, иначе gedit/kate/xed/pluma/mousepad/leafpad/featherpad,
+  иначе `xdg-open`). Новый модуль `mountfile/text_editor.py`; для файла внутри
+  образа сначала пишется временная копия, поэтому образ не изменяется, а
+  не-UTF-8 байты (CP1251 / CP866) перекодируются в UTF-8 с BOM, чтобы кириллица
+  не превращалась в кракозябры. В контекстном меню появился пункт «Открыть в
+  Блокноте» и отдельный «HEX-просмотр».
+
 - **Package linking for EPIC #87**: `JournalV2` is now implemented in
   `mountfile.universal_fs_rw` with in-place legacy SQLite migration and
   byte-exact rollback; `mountfile_rw_v2.JournalV2` remains a compatibility
