@@ -27,7 +27,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 
-pytest.importorskip("mountfile.qt_compat", reason="нет установленных Qt-биндингов")
+pytest.importorskip(
+    "mountfile.qt_compat",
+    exc_type=ImportError,
+    reason="нет установленных Qt-биндингов",
+)
 
 from mountfile import tc_window  # noqa: E402
 from mountfile.qt_compat import QApplication  # noqa: E402
