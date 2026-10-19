@@ -184,6 +184,38 @@ class VerifiedFat32Adapter(Fat32Adapter):
         self._fs.write_file(path, data.read(), offset=offset)
         self._verify_after("write_file", path)
 
+    def _backup_structural_region(self) -> None:
+        """Snapshot the whole image before FAT32 metadata rewrites.
+
+        Directory creation, deletion and rename can update FAT chains and
+        directory entries in several non-contiguous sectors.  The native
+        adapter does not expose all touched sectors, so a single exact image
+        snapshot is safer than pretending that one local region is enough.
+        JournalV2 still records the offset/length and restores byte-for-byte.
+        """
+        self.journal.backup_region(0, self.image_path.stat().st_size)
+
+    def _create_dir(self, path: str) -> None:
+        if self.dry_run:
+            return
+        self._backup_structural_region()
+        super()._create_dir(path)
+        self._verify_after("mkdir", path)
+
+    def _delete(self, path: str, recursive: bool) -> None:
+        if self.dry_run:
+            return
+        self._backup_structural_region()
+        super()._delete(path, recursive)
+        self._verify_after("delete", path)
+
+    def _rename(self, src: str, dst: str) -> None:
+        if self.dry_run:
+            return
+        self._backup_structural_region()
+        super()._rename(src, dst)
+        self._verify_after("rename", "%s -> %s" % (src, dst))
+
     def _verify_after(self, op: str, path: str) -> None:
         report = self.verifier.verify(self.image_path, FsType.FAT32)
         if not report.ok:

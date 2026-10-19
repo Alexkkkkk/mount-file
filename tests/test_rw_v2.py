@@ -12,6 +12,7 @@ rollback against the native FAT32 engine, and the read-only ``MountFileBridge``.
 import hashlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -83,6 +84,20 @@ def test_journal_v2_reports_uncommitted_transactions(tmp_path):
         assert journal.uncommitted() == []
     finally:
         journal.close()
+
+
+def test_structural_snapshot_covers_the_complete_image(tmp_path):
+    image = _image(tmp_path)
+    calls = []
+    adapter = object.__new__(rw_v2.VerifiedFat32Adapter)
+    adapter.image_path = image
+    adapter.journal = SimpleNamespace(
+        backup_region=lambda offset, length: calls.append((offset, length))
+    )
+
+    adapter._backup_structural_region()
+
+    assert calls == [(0, image.stat().st_size)]
 
 
 def test_bridge_lists_and_reads_without_writing(tmp_path):
