@@ -413,6 +413,10 @@ class TcPanel(QWidget):
         self.cmb_drive = QComboBox()
         self.cmb_drive.setMinimumWidth(230)
         self.cmb_drive.setSizeAdjustPolicy(ComboAdjustToContents)
+        # Qt по умолчанию показывает 10 строк в дропдауне: дампы с десятками
+        # разделов прячут остальные тома за встроенным scroll. 64 — потолок,
+        # при котором любой практический дамп помещается целиком.
+        self.cmb_drive.setMaxVisibleItems(64)
         self.cmb_drive.currentIndexChanged.connect(self.drive_changed)
         bar.addWidget(self.cmb_drive)
         self.lbl_space = QLabel("")
