@@ -31,7 +31,7 @@ __all__ = ["FoundVolume", "detect_volumes", "probe_filesystem"]
 PROBE_SIZE = 0x8006
 
 #: How far into a partitionless image the signature scan walks by default.
-DEFAULT_SCAN_LIMIT = 512 * 1024 * 1024
+DEFAULT_SCAN_LIMIT = 0  # 0 = "до конца файла"
 
 _CHUNK = 1 << 20
 
@@ -169,10 +169,16 @@ def _verify(f, offset, expected):
 
 
 def _scan_signatures(f, limit):
-    """Yield `(offset, fstype)` for filesystem headers inside the image."""
+    """Yield `(offset, fstype)` for filesystem headers inside the image.
+
+    ``limit`` of 0 (or None) means "scan the whole image": the signature
+    walk must never stop at offset 0, otherwise every header deeper in the
+    dump is silently lost.
+    """
     f.seek(0, 2)
     total = f.tell()
-    end = min(total, int(limit))
+    limit = int(limit or 0)
+    end = min(total, limit) if limit > 0 else total
     if end <= 0:
         return []
 
