@@ -6,6 +6,14 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Package linking for EPIC #87**: `JournalV2` is now implemented in
+  `mountfile.universal_fs_rw` with in-place legacy SQLite migration and
+  byte-exact rollback; `mountfile_rw_v2.JournalV2` remains a compatibility
+  alias. `UnallocatedExtractor` is exported from `mountfile.dfir` through a
+  lazy legacy adapter, while bounded range scanning remains the canonical
+  read-only package primitive. Added regression coverage for both public
+  import paths and evidence immutability.
+
 - **DFIR-модули эпика #87 закрыты отдельными пакетными модулями** (Tasks 1.1,
   1.2, 1.3, 1.4, 1.6, 2.2). Раньше функциональность жила только в
   standalone-скриптах и была недоступна как `python -m mountfile <команда>`:

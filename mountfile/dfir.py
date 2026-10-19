@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
+from .dfir_unallocated_scan import UnallocatedExtractor
+
 
 @dataclass(frozen=True)
 class TimelineRecord:
@@ -134,6 +136,7 @@ def detect_timestomp(
 
 __all__ = [
     "TimelineRecord",
+    "UnallocatedExtractor",
     "detect_timestomp",
     "grep_image",
     "read_timeline_csv",

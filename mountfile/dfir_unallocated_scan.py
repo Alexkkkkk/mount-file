@@ -557,6 +557,39 @@ class UnallocatedScanner:
         )
 
 
+class UnallocatedExtractor:
+    """Compatibility facade for the original image-space extractor.
+
+    The bounded :func:`scan_unallocated` API above is the canonical package
+    primitive when allocation ranges are already known. The former
+    ``mountfile_dfir_tools.UnallocatedExtractor`` also discovers ranges from
+    FAT/NTFS heuristics and writes extracted regions to a separate directory.
+    Keep that behaviour available from the package without importing the
+    optional legacy module at package-import time.
+    """
+
+    def __init__(self, image_path: Any) -> None:
+        self.image_path = image_path
+        self._legacy = None
+
+    def _implementation(self) -> Any:
+        if self._legacy is None:
+            try:
+                from mountfile_dfir_tools import UnallocatedExtractor as legacy
+            except ImportError as exc:
+                raise RuntimeError(
+                    "legacy allocation discovery is unavailable; use "
+                    "scan_unallocated() with explicit ranges"
+                ) from exc
+            self._legacy = legacy(self.image_path)
+        return self._legacy
+
+    def extract(self, out_dir: Any, *, min_region: int = 4096) -> Any:
+        """Extract discovered unallocated regions into *out_dir*."""
+
+        return self._implementation().extract(out_dir, min_region=min_region)
+
+
 # Aliases keep the API easy to discover without creating a second scanner.
 scan_unallocated_ranges = scan_unallocated
 scan_signatures = scan_unallocated
@@ -573,6 +606,7 @@ __all__ = [
     "SIGNATURES",
     "SignatureHit",
     "SignatureMatch",
+    "UnallocatedExtractor",
     "UnallocatedScanner",
     "UnallocatedSignature",
     "iter_unallocated_signatures",
