@@ -41,6 +41,7 @@ ai = [
     "mcp[cli]>=1.0.0",
     "pydantic>=2.0",
     "openai>=1.0",
+    "yara-python>=4.3",
 ]
 win7 = [
     "PyQt5>=5.15.11,<5.16",

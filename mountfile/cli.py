@@ -32,6 +32,7 @@ from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .vfs import TskError, TskImage
+from .yara_scan import YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
@@ -53,9 +54,18 @@ COMMANDS = (
     "hash",
     "timeline",
     "timestomp",
+    "yara",
 )
 
-_READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
+_READ_ERRORS = (
+    Fat32Error,
+    TskError,
+    ExtractError,
+    OSError,
+    ValueError,
+    Rt809Error,
+    YaraScanError,
+)
 
 
 # --------------------------------------------------------------- helpers
@@ -456,6 +466,32 @@ def cmd_timestomp(args):
     return OK if findings else ERROR
 
 
+def cmd_yara(args):
+    """Scan a bounded prefix of a local image with a YARA rule file."""
+
+    findings = scan_image(args.image, args.rules, max_bytes=args.max_bytes)
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "rule": item.rule,
+                        "tags": list(item.tags),
+                        "meta": item.meta,
+                        "strings": list(item.strings),
+                    }
+                    for item in findings
+                ],
+                ensure_ascii=False,
+            )
+        )
+    else:
+        for item in findings:
+            print("%s\ttags=%s\tstrings=%s" % (item.rule, ",".join(item.tags), ",".join(item.strings)))
+        print("Matches: %d" % len(findings))
+    return OK
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -630,6 +666,18 @@ def build_parser():
     sp.add_argument("--skew", type=float, default=2.0)
     sp.add_argument("--limit", type=int, default=1000)
     sp.set_defaults(func=cmd_timestomp)
+
+    sp = sub.add_parser("yara", help="bounded read-only YARA scan of a local image")
+    sp.add_argument("image", help="local raw image to scan")
+    sp.add_argument("rules", help="YARA rule file")
+    sp.add_argument(
+        "--max-bytes",
+        type=_parse_offset,
+        default=64 * 1024 * 1024,
+        help="maximum image bytes read (default: 64 MiB)",
+    )
+    sp.add_argument("--json", action="store_true", help="print structured JSON findings")
+    sp.set_defaults(func=cmd_yara)
     return p
 
 

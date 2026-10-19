@@ -17,13 +17,15 @@ python -m mountfile grep dump.img "password=" --encoding utf-8
 python -m mountfile hash dump.img
 python -m mountfile timeline dump.img --csv timeline.csv
 python -m mountfile timestomp dump.img --csv timeline.csv
+python -m mountfile yara dump.img rules.yar --max-bytes 67108864 --json
 ```
 
 `grep` возвращает ограниченные byte offsets и контекст, `hash` вычисляет
-SHA-256, а `timeline` и `timestomp` работают с CSV, полученным внешним
-коллектором. Эти команды не изменяют исходный образ. Полноценный
-filesystem-aware collector, YARA pipeline, carving и slack discovery пока не
-являются частью package CLI.
+SHA-256, `timeline` и `timestomp` работают с CSV, полученным внешним
+коллектором, а `yara` читает только ограниченный префикс локального образа и
+требует optional dependency `mountfile[ai]`. Эти команды не изменяют исходный
+образ. Полноценные filesystem-aware collector, carving и slack discovery пока
+не являются частью package CLI.
 
 Отдельные `mountfile_dfir.py` и `mountfile_grep.py` сохраняются как
 экспериментальные standalone-инструменты с расширенными сценариями. Их наличие
@@ -40,6 +42,7 @@ filesystem-aware collector, YARA pipeline, carving и slack discovery пока �
 | `mv` | переименовать запись в том же каталоге | **да, FAT32** |
 | `rm` | удалить файл/каталог | **да, FAT32** |
 | `autopick` | выбрать рабочий том по проверяемым кандидатам | нет |
+| `yara` | bounded read-only YARA scan локального образа | нет |
 | `decode` | расшифровать RT809H MST/MTK-дамп встроенной таблицей | создаёт новый файл |
 | `split` | разбить дамп по секции `[PARTITIONS]` файла `udev` | создаёт файлы в каталоге вывода |
 
