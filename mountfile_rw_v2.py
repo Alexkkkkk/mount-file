@@ -49,6 +49,10 @@ except ImportError as e:
     print(f"Положите предыдущие файлы рядом: {e}")
     raise
 
+# The byte-exact implementation now lives in the installable package. Keep
+# this standalone module as a compatibility entry point for existing scripts.
+from mountfile.universal_fs_rw import JournalV2 as PackageJournalV2
+
 
 # ===========================================================================
 # 1. Journal v2: реальный rollback по offset/length
@@ -148,6 +152,9 @@ class JournalV2(Journal):
 # ===========================================================================
 # 2. Патч бэкендов: реальный rollback + verify после транзакции
 # ===========================================================================
+
+# Use the package implementation rather than the historical duplicate above.
+JournalV2 = PackageJournalV2
 
 class VerifiedFat32Adapter(Fat32Adapter):
     """
