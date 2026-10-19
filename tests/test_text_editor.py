@@ -22,6 +22,19 @@ import pytest  # noqa: E402
 
 from mountfile import text_editor  # noqa: E402
 
+# pytest.importorskip здесь не работает: mountfile.qt_compat бросает
+# ImportError сам, но pytest 8.2+ считает «нет Qt» ошибкой (reason=... только
+# для отсутствующего модуля), поэтому GUI-тест падал вместо skip на джобах
+# без PyQt. Проверяем доступность Qt вручную.
+try:  # pragma: no cover - зависит от окружения
+    import mountfile.qt_compat as _qt_compat  # noqa: F401
+
+    HAVE_QT = True
+except ImportError:  # pragma: no cover
+    HAVE_QT = False
+
+needs_qt = pytest.mark.skipif(not HAVE_QT, reason="нет установленных Qt-биндингов")
+
 
 class FakeProvider:
     """Минимальный провайдер образа: только ``read_file``."""
@@ -132,10 +145,10 @@ def test_safe_name_never_escapes_the_directory():
 
 
 # --------------------------------------------------------------------- GUI
+@needs_qt
 def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
-    pytest.importorskip("mountfile.qt_compat", reason="нет установленных Qt-биндингов")
 
     from mountfile.qt_compat import QApplication
     from mountfile.tc_window import MainWindow

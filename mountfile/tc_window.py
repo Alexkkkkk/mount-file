@@ -34,6 +34,7 @@ All colours, fonts and column formatting live in :mod:`mountfile.tc_style`.
 
 from __future__ import annotations
 
+import atexit
 import fnmatch
 import os
 import shutil
@@ -130,11 +131,29 @@ def local_drives():
     return out
 
 
-#: Фоновые потоки обновления, которые не должны уничтожаться вместе с
-#: окном. Закрытие окна больше не ждёт их в потоке GUI, поэтому ссылку
-#: держим здесь до конца процесса (иначе Qt выдаёт «QThread: Destroyed
-#: while thread is still running»).
+#: Фоновые потоки, отсоединённые от закрытого окна.
+#:
+#: Работающий QThread нельзя уничтожать: Qt печатает «QThread: Destroyed
+#: while thread is still running» и завершает процесс с ``Fatal Python
+#: error: Aborted``. Именно это убивало и CI, и само приложение при выходе
+#: во время проверки обновлений. Ссылка на такой поток переезжает сюда.
 _ORPHAN_THREADS = []
+
+
+def drain_orphan_threads(timeout_ms=250):
+    """Дать отсоединённым потокам завершиться, не блокируя GUI надолго."""
+    for thread in list(_ORPHAN_THREADS):
+        try:
+            if thread.isRunning():
+                thread.wait(timeout_ms)
+            if not thread.isRunning():
+                _ORPHAN_THREADS.remove(thread)
+        except Exception:  # pragma: no cover - поток уже уничтожен
+            if thread in _ORPHAN_THREADS:
+                _ORPHAN_THREADS.remove(thread)
+
+
+atexit.register(drain_orphan_threads)
 
 
 class ViewerDialog(QDialog):
@@ -1365,7 +1384,9 @@ class MainWindow(QMainWindow):
         if self.updater is not None and self.updater.isRunning():
             return
         self.log_msg("Проверка обновлений (установлено v%s)…" % app_version())
-        self.updater = StartupUpdater(self)
+        # parent=None: дочерний QThread удаляется вместе с окном, а удаление
+        # работающего QThread — это аварийное завершение всего процесса.
+        self.updater = StartupUpdater(None)
         self.updater.status.connect(self.log_msg)
         self.updater.available.connect(self._on_update_available)
         self.updater.installing.connect(
@@ -2895,18 +2916,25 @@ class MainWindow(QMainWindow):
             self.act_menu_toggle.setChecked(visible)
 
     def _detach_updater(self):
-        """Не ждать фоновые потоки в потоке GUI при закрытии окна.
+        """Отпустить поток обновления, не ожидая его в потоке GUI.
 
         Раньше здесь стояло ``self.updater.wait(1500)``: окно замирало на
         полторы секунды, а во время скачивания обновления — на всё время
-        загрузки. Ссылка переносится в модульный список, чтобы QThread не
-        уничтожался вместе с окном; процесс завершается сразу.
+        загрузки. Если проверка не укладывалась в таймаут (медленная сеть,
+        прокси), QThread оставался работающим, терял последнюю ссылку и
+        уничтожался — процесс падал с ``Fatal Python error: Aborted``.
+        Теперь поток отвязывается и доживает в :data:`_ORPHAN_THREADS`.
         """
         updater = getattr(self, "updater", None)
         self.updater = None
-        if updater is not None and getattr(updater, "isRunning", None):
+        if updater is None:
+            return
+        try:
             if updater.isRunning():
-                _ORPHAN_THREADS.append(updater)
+                updater.requestInterruption()
+        except Exception:  # pragma: no cover - заглушка без Qt
+            pass
+        _ORPHAN_THREADS.append(updater)
 
     def closeEvent(self, e):
         self._close_writer()
