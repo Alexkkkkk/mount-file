@@ -20,8 +20,13 @@ set EXTRA=
 python -c "import pytsk3" >nul 2>&1 && set EXTRA=--collect-submodules pytsk3
 if not defined EXTRA echo Note: pytsk3 not installed - building with the built-in FAT32 engine only.
 
+REM App icon from the bundled artwork: icon.ico (16..256) for Windows.
+set ICON=mountfile\data\icon.ico
+if exist "%ICON%" (set ICONARG=--icon %ICON%) else (echo Note: %ICON% not found - default icon used.)
+
 python -m pip install --quiet --upgrade pyinstaller
-python -m PyInstaller --onefile --windowed --name MountFile %EXTRA% main.py
+python -m PyInstaller --onefile --windowed --name MountFile %EXTRA% %ICONARG% ^
+    --add-data "mountfile\data\icon.png;mountfile\data" main.py
 
 echo.
 if exist dist\MountFile.exe (

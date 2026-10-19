@@ -38,12 +38,13 @@ fmt:
 	$(PY) -m isort --quiet mountfile tests main.py
 
 exe:
-	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed --name MountFile main.py
+	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \
+		--icon mountfile/data/icon.ico --name MountFile main.py
 
 # Standalone single-file build: GUI + CLI in one binary, no package needed.
 mountfile-exe:
 	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \
-		--name mountfile mountfile.py
+		--onefile --icon mountfile/data/icon.png --name mountfile mountfile.py
 	@test -f dist/mountfile && echo "Done: dist/mountfile"
 
 clean:
