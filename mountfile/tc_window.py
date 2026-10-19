@@ -130,6 +130,13 @@ def local_drives():
     return out
 
 
+#: Фоновые потоки обновления, которые не должны уничтожаться вместе с
+#: окном. Закрытие окна больше не ждёт их в потоке GUI, поэтому ссылку
+#: держим здесь до конца процесса (иначе Qt выдаёт «QThread: Destroyed
+#: while thread is still running»).
+_ORPHAN_THREADS = []
+
+
 class ViewerDialog(QDialog):
     """F3 viewer: hex dump of the first 1 MiB of the selected file."""
 
@@ -1265,6 +1272,10 @@ class SettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    #: Сколько ждать завершения этапа обновления, прежде чем сбросить
+    #: индикатор в строке состояния (мс). 0 — сторож выключен.
+    UPDATE_WATCHDOG_MS = 15 * 60 * 1000
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
@@ -1394,6 +1405,8 @@ class MainWindow(QMainWindow):
         self._update_stage_label.show()
         self._update_bar.setRange(0, 0)
         self._update_bar.show()
+        if self.UPDATE_WATCHDOG_MS:
+            self._update_watchdog.start(self.UPDATE_WATCHDOG_MS)
 
     def _update_progress(self, value):
         """Ход скачивания: 0–100 %; ``-1`` — размер неизвестен («занят»)."""
@@ -1407,13 +1420,38 @@ class MainWindow(QMainWindow):
 
     def _update_hide(self):
         """Скрыть индикатор (нечего показывать / установка провалилась)."""
+        watchdog = getattr(self, "_update_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
         self._update_stage_label.hide()
         self._update_bar.hide()
 
+    def _update_timeout(self):
+        """Сторож сработал: сбросить «висящий» индикатор и сказать в журнал.
+
+        Без него полоса «занят» оставалась на экране навсегда, если поток
+        установки умирал молча, — именно так выглядела заморозка при
+        обновлении.
+        """
+        self._update_hide()
+        self.log_msg(
+            "Обновление не завершилось за %d мин — индикатор сброшен. "
+            "Журнал установки: %s"
+            % (
+                self.UPDATE_WATCHDOG_MS // 60000,
+                os.path.join(tempfile.gettempdir(), "mountfile-update.log"),
+            )
+        )
+
     def _on_update_installed(self):
+        """Обновление поставлено: сразу закрываемся, ничего не ожидая.
+
+        Скрипт подмены уже запущен и сам ждёт наш PID, поэтому окно должно
+        закрыться немедленно: пока процесс жив, файл занят и ``move`` не
+        проходит. Раньше здесь стояло ``wait_installer(3000)`` — поток GUI
+        замирал на три секунды в самый ненужный момент.
+        """
         self._close_writer()
-        if self.updater is not None:
-            self.updater.wait_installer(3000)
         QApplication.quit()
 
     # ------------------------------------------------------------------ UI
@@ -1440,6 +1478,11 @@ class MainWindow(QMainWindow):
         self._update_bar.setFixedWidth(140)
         sb.addPermanentWidget(self._update_stage_label)
         sb.addPermanentWidget(self._update_bar)
+        # Сторож против «висящего» индикатора: если этап обновления не
+        # закончился за UPDATE_WATCHDOG_MS, индикатор сбрасывается сам.
+        self._update_watchdog = QTimer(self)
+        self._update_watchdog.setSingleShot(True)
+        self._update_watchdog.timeout.connect(self._update_timeout)
         self._update_hide()
 
     def _icon(self, name):
@@ -2834,11 +2877,24 @@ class MainWindow(QMainWindow):
         if hasattr(self, "act_menu_toggle"):
             self.act_menu_toggle.setChecked(visible)
 
+    def _detach_updater(self):
+        """Не ждать фоновые потоки в потоке GUI при закрытии окна.
+
+        Раньше здесь стояло ``self.updater.wait(1500)``: окно замирало на
+        полторы секунды, а во время скачивания обновления — на всё время
+        загрузки. Ссылка переносится в модульный список, чтобы QThread не
+        уничтожался вместе с окном; процесс завершается сразу.
+        """
+        updater = getattr(self, "updater", None)
+        self.updater = None
+        if updater is not None and getattr(updater, "isRunning", None):
+            if updater.isRunning():
+                _ORPHAN_THREADS.append(updater)
+
     def closeEvent(self, e):
         self._close_writer()
         tc_style.save_settings()
-        if self.updater is not None and self.updater.isRunning():
-            self.updater.wait(1500)
+        self._detach_updater()
         super().closeEvent(e)
 
 
