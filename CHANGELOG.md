@@ -118,7 +118,6 @@ file only tracks the releases themselves.
   `get`/MCP-чтение больше не импортируют несуществующий `mountfile.main`.
   Добавлены сквозные тесты `tests/test_rw_layer.py`
 
-
 - **Исправлены два дефекта записи FAT32**, из-за которых образ, который
   `WriteEngine.verify()` объявлял проверенным, `fsck.fat` отвергал как
   повреждённый (из-за этого падал `test_transaction_commit_writes_and_verifies`
@@ -139,7 +138,6 @@ file only tracks the releases themselves.
   * Регрессионный тест `test_written_image_leaves_fat_metadata_consistent`
     сверяет кэш FSINFO с пересчётом по FAT, проверяет `..` и (когда
     установлен `dosfstools`) требует `fsck.fat -n` с кодом 0.
-
 - **MF-WE — транзакционный движок записи** (`mountfile/write_engine.py`,
   ТЗ MF-WE-TZ-001). Тонкий фасад над существующими RW-бэкендами
   (`mountfile/universal_fs_rw.py`), который добавляет обязательный по ТЗ §8

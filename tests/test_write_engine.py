@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import BPS, RESERVED, SPF, make_fat32_image
 
 from mountfile.fat32 import Fat32
-
 from mountfile.write_engine import (
     DamagedImageError,
     ReadOnlyError,
@@ -33,12 +32,10 @@ from mountfile.write_engine import (
     damage_report,
 )
 
-
 def _image(tmp_path, name="fat32.img"):
     image = tmp_path / name
     make_fat32_image(image)
     return image
-
 
 def _engine(tmp_path, *, read_only=False, **kwargs):
     image = _image(tmp_path)
@@ -51,12 +48,10 @@ def _engine(tmp_path, *, read_only=False, **kwargs):
     )
     return image, engine
 
-
 def _sha(path):
     import hashlib
 
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
 
 # --------------------------------------------------------------- read-only
 def test_engine_is_read_only_by_default(tmp_path):
@@ -70,7 +65,6 @@ def test_engine_is_read_only_by_default(tmp_path):
     finally:
         engine.close()
     assert _sha(image) == before
-
 
 @pytest.mark.parametrize("method", ["mkdir", "delete", "rename", "copy", "chmod"])
 def test_every_mutation_is_gated_by_read_only_mode(tmp_path, method):
@@ -90,7 +84,6 @@ def test_every_mutation_is_gated_by_read_only_mode(tmp_path, method):
         engine.close()
     assert _sha(image) == before, "read-only mode must not change the image"
 
-
 def test_read_only_engine_still_reads(tmp_path):
     image, engine = _engine(tmp_path, read_only=True)
     try:
@@ -99,7 +92,6 @@ def test_read_only_engine_still_reads(tmp_path):
         assert engine.info().fs_type.startswith("fat")
     finally:
         engine.close()
-
 
 # ------------------------------------------------------- write + verify
 def test_transaction_commit_writes_and_verifies(tmp_path):
@@ -119,7 +111,6 @@ def test_transaction_commit_writes_and_verifies(tmp_path):
     finally:
         engine.close()
 
-
 def test_verify_reports_observed_values_not_bare_booleans(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -135,7 +126,6 @@ def test_verify_reports_observed_values_not_bare_booleans(tmp_path):
     finally:
         engine.close()
 
-
 def test_delete_removes_the_file(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -146,7 +136,6 @@ def test_delete_removes_the_file(tmp_path):
     finally:
         engine.close()
 
-
 def test_copy_duplicates_content(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -155,7 +144,6 @@ def test_copy_duplicates_content(tmp_path):
         assert engine.read("/DST.BIN") == b"payload"
     finally:
         engine.close()
-
 
 # --------------------------------------------------------------- rollback
 def test_rollback_restores_the_image_byte_for_byte(tmp_path):
@@ -172,7 +160,6 @@ def test_rollback_restores_the_image_byte_for_byte(tmp_path):
         assert engine.exists("/TEMP.BIN") is False
     finally:
         engine.close()
-
 
 def test_rollback_from_a_crash_between_transactions(tmp_path):
     """A crashed process leaves a snapshot and a journal entry behind."""
@@ -212,7 +199,6 @@ def test_rollback_from_a_crash_between_transactions(tmp_path):
     finally:
         recovered.close()
 
-
 # ----------------------------------------------------------------- dry run
 def test_dry_run_never_touches_the_image(tmp_path):
     image, engine = _engine(tmp_path, dry_run=True)
@@ -228,7 +214,6 @@ def test_dry_run_never_touches_the_image(tmp_path):
     finally:
         engine.close()
 
-
 def test_dry_run_reports_missing_parent_as_a_planning_error(tmp_path):
     image, engine = _engine(tmp_path, dry_run=True)
     try:
@@ -238,7 +223,6 @@ def test_dry_run_reports_missing_parent_as_a_planning_error(tmp_path):
         assert _sha(image) == before
     finally:
         engine.close()
-
 
 # ------------------------------------------------------------ damaged image
 def _corrupt_fat(image):
@@ -255,7 +239,6 @@ def _corrupt_fat(image):
         handle.seek(offset)
         handle.write(b"\x00")
 
-
 def test_damaged_image_is_refused_for_rw(tmp_path):
     image = _image(tmp_path)
     _corrupt_fat(image)
@@ -265,7 +248,6 @@ def test_damaged_image_is_refused_for_rw(tmp_path):
     with pytest.raises(DamagedImageError) as excinfo:
         WriteEngine(image, read_only=False, snapshot_dir=tmp_path / "s", journal_path=tmp_path / "j.jsonl")
     assert "allow_damaged" in str(excinfo.value)
-
 
 def test_allow_damaged_override_is_explicit(tmp_path):
     image = _image(tmp_path)
@@ -282,7 +264,6 @@ def test_allow_damaged_override_is_explicit(tmp_path):
         assert engine.write_file("/STILL.WORKS", b"ok").status == "applied"
     finally:
         engine.close()
-
 
 # -------------------------------------------------------------- journal
 def test_journal_is_a_verified_hash_chain(tmp_path):
@@ -301,7 +282,6 @@ def test_journal_is_a_verified_hash_chain(tmp_path):
     finally:
         engine.close()
 
-
 def test_journal_verification_detects_tampering(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -318,7 +298,6 @@ def test_journal_verification_detects_tampering(tmp_path):
     finally:
         engine.close()
 
-
 # ------------------------------------------------------------- validation
 @pytest.mark.parametrize("bad", ["relative.txt", "", "/../escape.txt", "..\\escape.txt"])
 def test_unsafe_paths_are_rejected(tmp_path, bad):
@@ -329,7 +308,6 @@ def test_unsafe_paths_are_rejected(tmp_path, bad):
     finally:
         engine.close()
 
-
 def test_operating_on_the_root_is_rejected(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -337,7 +315,6 @@ def test_operating_on_the_root_is_rejected(tmp_path):
             engine.delete("/")
     finally:
         engine.close()
-
 
 def test_rename_onto_an_existing_path_is_rejected_in_dry_run(tmp_path):
     image, engine = _engine(tmp_path)
@@ -362,7 +339,6 @@ def test_rename_onto_an_existing_path_is_rejected_in_dry_run(tmp_path):
     finally:
         planner.close()
 
-
 def test_transactions_do_not_nest(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -373,7 +349,6 @@ def test_transactions_do_not_nest(tmp_path):
     finally:
         engine.close()
 
-
 def test_unknown_transaction_id_is_reported(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -381,7 +356,6 @@ def test_unknown_transaction_id_is_reported(tmp_path):
             engine.commit("no-such-transaction")
     finally:
         engine.close()
-
 
 def test_close_rolls_back_an_open_transaction(tmp_path):
     image, engine = _engine(tmp_path)
@@ -392,7 +366,6 @@ def test_close_rolls_back_an_open_transaction(tmp_path):
     engine.close()
     assert _sha(image) == before, "closing with an open transaction must not persist it"
     assert engine.verify_journal()["ok"] is True
-
 
 # ------------------------------------------------------- unsupported ops
 def test_chmod_on_fat_reports_unsupported_operation(tmp_path):
@@ -405,7 +378,6 @@ def test_chmod_on_fat_reports_unsupported_operation(tmp_path):
     finally:
         engine.close()
 
-
 def test_to_dict_describes_the_engine_state(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -417,10 +389,8 @@ def test_to_dict_describes_the_engine_state(tmp_path):
     finally:
         engine.close()
 
-
 # ----------------------------------------------------------- ext backend
 HAVE_MKFS_EXT4 = shutil.which("mkfs.ext4") is not None and shutil.which("debugfs") is not None
-
 
 @pytest.mark.skipif(not HAVE_MKFS_EXT4, reason="mkfs.ext4/debugfs not available")
 def test_ext_backend_verifies_and_rolls_back(tmp_path):
@@ -451,11 +421,9 @@ def test_ext_backend_verifies_and_rolls_back(tmp_path):
     finally:
         engine.close()
 
-
 # ------------------------------------------------- writer/fat32 consistency
 def _uint(data, offset, size=4):
     return int.from_bytes(data[offset : offset + size], "little")
-
 
 def _fsinfo_counters(image):
     """(free clusters, next free cluster) as cached in the FSINFO sector."""
@@ -464,7 +432,6 @@ def _fsinfo_counters(image):
     sector = _uint(data, 48, 2)
     raw = data[sector * bps : (sector + 1) * bps]
     return _uint(raw, 488), _uint(raw, 492)
-
 
 def test_written_image_leaves_fat_metadata_consistent(tmp_path):
     """The writer must not leave a volume that fsck rejects as dirty.
