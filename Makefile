@@ -4,7 +4,8 @@
 
 PY ?= python3
 
-.PHONY: help install test test-standalone lint fmt exe mountfile-exe clean all-in-one sample
+.PHONY: help install test test-standalone lint fmt exe mountfile-exe clean all-in-one sample \
+        sync sync-status sync-check sync-pr sync-watch
 
 help:
 	@echo "make install    - install runtime dependencies"
@@ -17,6 +18,11 @@ help:
 	@echo "make clean      - remove build artifacts"
 	@echo "make all-in-one - run every feature: CLI + API + tests (no GUI)"
 	@echo "make sample     - build a FAT32 dump.img and an RT809H-style sample"
+	@echo "make sync       - pull --rebase + commit + push (tools/mfsync.py)"
+	@echo "make sync-status - branch, ahead/behind, dirty files, version parity"
+	@echo "make sync-check - fail on version mismatch between pyproject/__init__"
+	@echo "make sync-pr    - sync through a pull request (protected main)"
+	@echo "make sync-watch - auto-commit + push on every save"
 
 install:
 	$(PY) -m pip install -r requirements.txt
@@ -62,3 +68,22 @@ all-in-one:
 # `make all-in-one`.
 sample:
 	bash scripts/make_sample_image.sh
+
+# --------------------------------------------------------------- sync targets
+# Requires only git + Python 3.8 (stdlib). Token is read from GH_TOKEN at call
+# time and never stored. See docs/sync.md.
+
+sync:
+	$(PY) tools/mfsync.py sync
+
+sync-status:
+	$(PY) tools/mfsync.py status
+
+sync-check:
+	$(PY) tools/mfsync.py check --strict
+
+sync-pr:
+	$(PY) tools/mfsync.py sync --pr
+
+sync-watch:
+	$(PY) tools/mfsync.py watch --push

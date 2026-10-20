@@ -54,6 +54,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 - [GUI в GitHub Codespaces](#gui-в-github-codespaces)
 - [Сборка](#сборка)
 - [Документация, Docker и demos](#документация-docker-и-demos)
+- [Синхронизация кода](#синхронизация-кода)
 - [Тесты и разработка](#тесты-и-разработка)
 - [Структура проекта](#структура-проекта)
 - [Ограничения](#ограничения)
@@ -468,6 +469,43 @@ Docker build/smoke выполняется в CI. Чтобы опубликова
 workflow** с `publish=true`; push не происходит автоматически на каждом commit.
 Публичный pull возможен только после изменения visibility package в GitHub
 Packages. До этого можно собрать локально: `docker build -t mountfile:local .`.
+
+## Синхронизация кода
+
+`tools/mfsync.py` — синхронизация рабочей копии с GitHub одной командой: без
+сторонних зависимостей (только stdlib + `git`), с autostash-rebase, сканером
+секретов, генерацией Conventional Commits и автоматическим переходом на pull
+request, если `main` защищён правилами.
+
+```bash
+python tools/mfsync.py status        # ветка, ahead/behind, изменения, версии
+python tools/mfsync.py sync          # fetch + rebase + commit + push
+python tools/mfsync.py sync --pr     # то же через pull request
+python tools/mfsync.py watch --push  # авто-синхронизация при сохранении
+```
+
+| Что закрывает | Как |
+|---|---|
+| Забытый `pull` перед работой | `fetch --prune` + `rebase @{u}` в начале `sync` |
+| Незакоммиченные правки | `stash --include-untracked`, восстановление после rebase |
+| Конфликт в rebase | `rebase --abort`, stash возвращается, список файлов печатается |
+| Мусорные сообщения коммитов | тип/скоуп выводятся из diff в формате Conventional Commits |
+| Случайный токен или `.env` в коммите | сканер блокирует commit (exit 4) |
+| `GH013` от ruleset на `main` | публикация в ветку `sync/*` + авто-PR через REST API |
+| Расхождение версий | `status` / `check --strict` сверяют `pyproject.toml`, `__init__.py` и тег |
+| Параллельные прогоны | lock-файл `.git/mfsync.lock` |
+
+Токен берётся из `GH_TOKEN` / `GITHUB_TOKEN` / `MFSYNC_TOKEN` в момент вызова и
+не попадает ни в `.git/config`, ни в вывод (всё проходит через редакцию
+`x-access-token:...@github.com` и `github_pat_*`). Полное описание и рецепты —
+[docs/sync.md](docs/sync.md); в CI это проверяет workflow
+[Sync Guard](.github/workflows/sync-guard.yml).
+
+```bash
+make sync          # pull + commit + push
+make sync-status   # статус
+make sync-check    # проверка версий для CI
+```
 
 ## Тесты и разработка
 
