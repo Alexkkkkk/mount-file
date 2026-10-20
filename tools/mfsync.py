@@ -145,20 +145,30 @@ def redact_secret(text):
     return text
 
 
+# Every line that can reach a terminal or a log goes through _emit() - the
+# single redaction choke point. No other code path in this module prints.
+def _emit(text, stream=None):
+    line = redact_secret(text)
+    if stream is None:
+        print(line)
+    else:
+        print(line, file=stream)
+
+
 def say(text=""):
-    print(redact_secret(text))
+    _emit(text)
 
 
 def ok(text):
-    print("  \u2714 " + redact_secret(text))
+    _emit("  \u2714 %s" % text)
 
 
 def warn(text):
-    print("  ! " + redact_secret(text))  # codeql[py/clear-text-logging-sensitive-data]:suppress value already sanitized by redact_secret()
+    _emit("  ! %s" % text)
 
 
 def fail(text):
-    print("  \u2716 " + redact_secret(text), file=sys.stderr)  # codeql[py/clear-text-logging-sensitive-data]:suppress value already sanitized by redact_secret()
+    _emit("  \u2716 %s" % text, stream=sys.stderr)
 
 
 # --------------------------------------------------------------------------- git
@@ -206,7 +216,7 @@ def ahead_behind(cwd):
     proc = git(["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd, check=False)
     if proc.returncode != 0:
         return 0, 0
-    parts = proc.stdout.split()
+    parts = proc.stdout.splitlines()
     try:
         return int(parts[0]), int(parts[1])
     except (IndexError, ValueError):
@@ -316,30 +326,42 @@ def _looks_placeholder(value):
     return any(hint in lowered for hint in PLACEHOLDER_HINTS)
 
 
+def _match_line(line):
+    """Return a finding dict for ``line`` (a plain str), or None.
+
+    The single copy of the scanner rule loop: allowlist pragmas, placeholder
+    values and the 120-character snippet cap live here so scan_text() and
+    scan_files() cannot drift apart.
+    """
+    if "pragma: allowlist secret" in line or "noqa: secret" in line:
+        return None
+    for kind, pattern in SECRET_PATTERNS:
+        match = pattern.search(line)
+        if not match:
+            continue
+        candidate = match.group(1) if match.groups() else match.group(0)
+        if _looks_placeholder(candidate):
+            return None
+        snippet = line.strip()
+        if len(snippet) > 120:
+            snippet = snippet[:117] + "..."
+        return {
+            "kind": kind,
+            "severity": severity_of(kind),
+            "snippet": redact_secret(snippet),
+        }
+    return None
+
+
 def scan_text(text, path="<text>"):
     """Return findings for a blob of text: [{'path','line','kind','snippet'}]."""
     findings = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        if "pragma: allowlist secret" in line or "noqa: secret" in line:
-            continue
-        for kind, pattern in SECRET_PATTERNS:
-            match = pattern.search(line)
-            if not match:
-                continue
-            candidate = match.group(1) if match.groups() else match.group(0)
-            if _looks_placeholder(candidate):
-                continue
-            snippet = line.strip()
-            if len(snippet) > 120:
-                snippet = snippet[:117] + "..."
-            findings.append({
-                "path": path,
-                "line": lineno,
-                "kind": kind,
-                "severity": severity_of(kind),
-                "snippet": redact_secret(snippet),
-            })
-            break
+        finding = _match_line(line)
+        if finding:
+            finding["path"] = path
+            finding["line"] = lineno
+            findings.append(finding)
     return findings
 
 
@@ -354,23 +376,11 @@ def scan_files(cwd, paths=None):
         if not os.path.isfile(absolute):
             continue
         for lineno, line in _iter_candidate_lines(absolute):
-            if "pragma: allowlist secret" in line or "noqa: secret" in line:
-                continue
-            for kind, pattern in SECRET_PATTERNS:
-                match = pattern.search(line)
-                if not match:
-                    continue
-                candidate = match.group(1) if match.groups() else match.group(0)
-                if _looks_placeholder(candidate):
-                    continue
-                snippet = line.strip()
-                if len(snippet) > 120:
-                    snippet = snippet[:117] + "..."
-                findings.append({
-                    "path": relative, "line": lineno, "kind": kind,
-                    "severity": severity_of(kind), "snippet": redact_secret(snippet),
-                })
-                break
+            finding = _match_line(line)
+            if finding:
+                finding["path"] = relative
+                finding["line"] = lineno
+                findings.append(finding)
     return findings
 
 
@@ -502,7 +512,7 @@ def pull(cwd, remote="origin", rebase=True):
     step = ["rebase", upstream] if rebase else ["merge", "--no-edit", upstream]
     run = git(step, cwd, check=False)
     if run.returncode != 0:
-        conflicts = git(["diff", "--name-only", "--diff-filter=U"], cwd, check=False).stdout.split()
+        conflicts = git(["diff", "--name-only", "--diff-filter=U"], cwd, check=False).stdout.splitlines()
         git(["rebase", "--abort"] if rebase else ["merge", "--abort"], cwd, check=False)
         if stashed:
             git(["stash", "pop"], cwd, check=False)
@@ -518,7 +528,7 @@ def pull(cwd, remote="origin", rebase=True):
         if pop.returncode != 0:
             raise SyncError(
                 "local changes could not be re-applied on top of %s" % upstream, 2,
-                git(["diff", "--name-only", "--diff-filter=U"], cwd, check=False).stdout.split(),
+                git(["diff", "--name-only", "--diff-filter=U"], cwd, check=False).stdout.splitlines(),
             )
     return result
 
@@ -530,7 +540,7 @@ def stage_all(cwd):
 def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=False):
     """Stage everything and commit. Returns the new sha, or '' if nothing to do."""
     stage_all(cwd)
-    staged = git(["diff", "--cached", "--name-only"], cwd, check=False).stdout.split()
+    staged = git(["diff", "--cached", "--name-only"], cwd, check=False).stdout.splitlines()
     if not staged:
         return ""
 
@@ -718,7 +728,7 @@ def sync(cwd, message=None, kind=None, scope=None, do_push=True, pr=False, base=
         return report
 
     branch = current_branch(cwd)
-    if pr or not upstream_ref(cwd) or branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd):
+    if pr or not upstream_ref(cwd) or (branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd)):
         # Explicit PR mode, or a branch protection ruleset is active on the base.
         report["pr"] = open_pr(cwd, base=base or branch if branch in PROTECTED_BRANCHES else base)
         return report
@@ -758,8 +768,10 @@ def watch(cwd, interval=1.0, debounce=2.0, do_push=False, pr=False, max_cycles=N
             if newer == pending:
                 break
             pending = newer
+        changed = sorted(set(pending) ^ set(snapshot))
         snapshot = pending
-        changed = sorted(set(pending) ^ set(snapshot)) or ["(content)"]
+        if not changed:
+            changed = ["(content)"]
         say("\n[%s] %d path(s) changed" % (time.strftime("%H:%M:%S"), len(changed)))
         try:
             result = sync(cwd, message=message, do_push=do_push, pr=pr)
@@ -900,7 +912,7 @@ def main(argv=None):
         if command == "scan":
             paths = None
             if args.all:
-                paths = git(["ls-files"], cwd, check=False).stdout.split()
+                paths = git(["ls-files"], cwd, check=False).stdout.splitlines()
             findings = scan_files(cwd, paths)
             blocking = [f for f in findings if f["severity"] == "high"]
             advisory = [f for f in findings if f["severity"] != "high"]
