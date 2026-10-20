@@ -806,15 +806,22 @@ def build_parser():
     )
     parser.add_argument("--cwd", default=".", help="repository path (default: .)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    # --json is accepted after the subcommand too (`status --json`), which is how
+    # the CI workflows call it. SUPPRESS keeps the top-level value when the flag
+    # is only given before the subcommand.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="machine-readable output")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("status", help="branch, ahead/behind, dirty files, version parity")
+    sub.add_parser("status", parents=[common],
+                   help="branch, ahead/behind, dirty files, version parity")
 
-    check = sub.add_parser("check", help="release/sync gates (version parity)")
+    check = sub.add_parser("check", parents=[common], help="release/sync gates (version parity)")
     check.add_argument("--strict", action="store_true", help="non-zero exit on version mismatch")
 
     for name, help_text in (("sync", "pull --rebase + commit + push"),):
-        node = sub.add_parser(name, help=help_text)
+        node = sub.add_parser(name, parents=[common], help=help_text)
         node.add_argument("-m", "--message", help="explicit commit message")
         node.add_argument("--type", dest="kind", help="conventional type override (feat/fix/docs/...)")
         node.add_argument("--scope", help="conventional scope override")
@@ -824,26 +831,26 @@ def build_parser():
         node.add_argument("--no-scan", action="store_true", help="skip the secret scanner (not recommended)")
         node.add_argument("--remote", default="origin")
 
-    commit_node = sub.add_parser("commit", help="stage everything and commit (no network)")
+    commit_node = sub.add_parser("commit", parents=[common], help="stage everything and commit (no network)")
     commit_node.add_argument("-m", "--message")
     commit_node.add_argument("--type", dest="kind")
     commit_node.add_argument("--scope")
     commit_node.add_argument("--no-scan", action="store_true")
 
-    pull_node = sub.add_parser("pull", help="fetch + rebase with autostash")
+    pull_node = sub.add_parser("pull", parents=[common], help="fetch + rebase with autostash")
     pull_node.add_argument("--merge", action="store_true", help="merge instead of rebase")
 
-    push_node = sub.add_parser("push", help="push the current branch")
+    push_node = sub.add_parser("push", parents=[common], help="push the current branch")
     push_node.add_argument("--branch")
     push_node.add_argument("--remote", default="origin")
     push_node.add_argument("--force-with-lease", action="store_true")
 
-    pr_node = sub.add_parser("pr", help="push to sync/* and open a pull request")
+    pr_node = sub.add_parser("pr", parents=[common], help="push to sync/* and open a pull request")
     pr_node.add_argument("--base")
     pr_node.add_argument("--title")
     pr_node.add_argument("--body")
 
-    watch_node = sub.add_parser("watch", help="debounce watcher")
+    watch_node = sub.add_parser("watch", parents=[common], help="debounce watcher")
     watch_node.add_argument("--interval", type=float, default=1.0)
     watch_node.add_argument("--debounce", type=float, default=2.0)
     watch_node.add_argument("--push", action="store_true", help="push after each cycle")
@@ -851,7 +858,7 @@ def build_parser():
     watch_node.add_argument("--max-cycles", type=int, default=None)
     watch_node.add_argument("-m", "--message")
 
-    scan_node = sub.add_parser("scan", help="scan changed files for secrets")
+    scan_node = sub.add_parser("scan", parents=[common], help="scan changed files for secrets")
     scan_node.add_argument("--all", action="store_true", help="scan every tracked file")
     scan_node.add_argument("--strict-heuristics", action="store_true",
                            help="also fail on PEM headers / credential assignments")

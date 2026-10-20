@@ -1,54 +1,64 @@
 name: mfsync
 
-# Runs tools/mfsync.py inside CI. Two jobs:
+# Runs tools/mfsync.py inside GitHub Actions.
 #
-#   status   - read-only verification on every push / pull request:
-#              sync report, secret scan, version parity, helper self-tests.
-#              No credentials beyond contents:read, never writes anything.
-#   autosync - actually commits and pushes (or opens a pull request) using
-#              the built-in GITHUB_TOKEN. Only reachable by hand
-#              (workflow_dispatch) or on the nightly schedule - never by a push
-#              - so a CI-generated commit cannot re-trigger the job.
+#   verify   (push / PR / schedule / manual) - read-only gates: sync report,
+#            secret scan, version parity, helper self-tests, JSON artifact.
+#   autosync (manual or nightly only)        - commits and pushes, or opens a
+#            pull request when main is protected. Uses the repository's own
+#            GITHUB_TOKEN; no personal token is referenced anywhere here.
 #
-# Loop protection is layered: the push trigger never reaches the write job, its
-# commits carry [skip ci], a bot actor is skipped, and the concurrency group
-# serialises writers so two runs cannot race on the same branch.
-#
-# The PAT that a developer uses locally is never referenced here: CI uses
-# secrets.GITHUB_TOKEN only.
+# Loop protection:
+#   * a push event can never reach the write job (it needs workflow_dispatch or
+#     schedule), so a commit made by CI cannot re-trigger the writer;
+#   * generated commits carry [skip ci];
+#   * bot actors are skipped as a second line of defence;
+#   * concurrency group `mfsync-write` serialises writers.
 
 on:
   push:
-    branches: [main, 'feat/**', 'sync/**']
+    branches:
+      - main
+      - 'feat/**'
+      - 'sync/**'
   pull_request:
-    branches: [main]
+    branches:
+      - main
   schedule:
-    # nightly, 03:17 UTC - off the top of the hour to avoid the runner stampede
     - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'verify = checks only | commit = commit + push | pr = commit + pull request'
-        type: choice
-        options: [verify, commit, pr]
+        description: 'verify = checks only, commit = commit + push, pr = commit + pull request'
+        required: true
         default: verify
+        type: choice
+        options:
+          - verify
+          - commit
+          - pr
       message:
         description: 'Commit message (empty = generated from the diff)'
         required: false
         default: ''
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: mfsync-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
 jobs:
-  status:
+  verify:
     name: Verify (status, secrets, versions, tests)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # `git describe --tags` in mfsync check needs the tags
+          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
@@ -59,7 +69,7 @@ jobs:
       - name: Sync report
         run: python tools/mfsync.py status
 
-      - name: Secret scan (blocks github_pat_*/ghp_*/AKIA*/xox*/sk-*)
+      - name: Secret scan (github_pat_*/ghp_*/AKIA*/xox*/sk-*)
         run: python tools/mfsync.py scan --all
 
       - name: Version parity (pyproject.toml vs mountfile/__init__.py)
@@ -87,24 +97,18 @@ jobs:
         run: python tools/mfsync.py status | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
   autosync:
-    name: Autosync (${{ inputs.mode || 'commit' }})
-    needs: status
-    # Only the manual and scheduled paths may write; a push can never reach it,
-    # and a bot actor is skipped as a second line of defence.
-    if: |
-      always() &&
-      (github.event_name == 'workflow_dispatch' && inputs.mode != 'verify') ||
-      (github.event_name == 'schedule' && github.actor != 'github-actions[bot]')
+    name: Autosync
+    needs: verify
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # commit + push to a sync/* branch or the current one
-      pull-requests: write # mfsync falls back to a PR when main is protected
+      contents: write
+      pull-requests: write
     concurrency:
       group: mfsync-write
       cancel-in-progress: false
     env:
-      # Read by mfsync at call time; never printed, always redacted.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
@@ -124,14 +128,14 @@ jobs:
       - name: Sync
         run: |
           set -eu
-          MODE="${{ inputs.mode }}"
-          MESSAGE="${{ inputs.message }}"
+          MODE="${{ github.event.inputs.mode }}"
+          MESSAGE="${{ github.event.inputs.message }}"
           if [ -z "$MESSAGE" ]; then
             MESSAGE="chore(sync): automated mfsync run [skip ci]"
           else
             MESSAGE="$MESSAGE [skip ci]"
           fi
-          echo "mode=${MODE:-commit} message=${MESSAGE}"
+          echo "mode=${MODE:-commit}"
           if [ "$MODE" = "pr" ]; then
             python tools/mfsync.py sync --pr -m "$MESSAGE"
           else
