@@ -295,6 +295,73 @@ class ForensicTriageDialog(QDialog):
         self.output.setPlainText("\n".join("%s\t%s" % (r.path, ", ".join(reasons)) for r, reasons in findings[:1000]) + "\n\nFindings: %d" % len(findings))
 
 
+class ImageFileSearchDialog(QDialog):
+    """Search filesystem entries by name across every detected image volume."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.owner = parent
+        self.setWindowTitle("Поиск файла в образе")
+        self.resize(900, 520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Образ: %s" % (parent.image_path or "не открыт")))
+
+        row = QHBoxLayout()
+        self.pattern = QLineEdit("*")
+        self.pattern.setPlaceholderText("Имя или маска, например *.db или config")
+        self.pattern.returnPressed.connect(self.run_search)
+        button = QPushButton("Искать во всём образе")
+        button.clicked.connect(self.run_search)
+        row.addWidget(self.pattern, 1)
+        row.addWidget(button)
+        layout.addLayout(row)
+
+        self.status = QLabel("Введите имя или маску файла.")
+        layout.addWidget(self.status)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(("Том", "ФС", "Путь", "Размер", "Offset"))
+        self.table.setSelectionBehavior(SelectRows)
+        self.table.setEditTriggers(NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self.open_result)
+        layout.addWidget(self.table, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close, 0, AlignRight)
+        self.results = []
+
+    def run_search(self):
+        pattern = self.pattern.text().strip()
+        if not pattern:
+            self.status.setText("Введите имя или маску файла.")
+            return
+        self.status.setText("Поиск…")
+        QApplication.processEvents()
+        try:
+            self.results = self.owner.search_files_in_image(pattern)
+        except Exception as exc:
+            self.results = []
+            self.status.setText("Ошибка поиска: %s" % exc)
+            return
+        self.table.setRowCount(len(self.results))
+        for row, result in enumerate(self.results):
+            values = (
+                result["volume"],
+                result["fstype"],
+                result["path"],
+                tc_style.fmt_size(result["size"]),
+                "0x%X" % result["offset"],
+            )
+            for column, value in enumerate(values):
+                self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        self.table.resizeColumnsToContents()
+        self.status.setText("Найдено файлов: %d" % len(self.results))
+
+    def open_result(self, row, _column):
+        if 0 <= row < len(self.results):
+            self.accept()
+            self.owner.open_image_search_result(self.results[row])
+
+
 class PanelTable(QTableWidget):
     """File list with Total Commander key bindings."""
 
@@ -1751,6 +1818,9 @@ class MainWindow(QMainWindow):
             self._action("Обзор всего образа…", self.show_whole_image)
         )
         m_tool.addAction(
+            self._action("Поиск файла в образе…", self.search_image_files, "Ctrl+Shift+F")
+        )
+        m_tool.addAction(
             self._action("DFIR triage (только чтение)…", self.open_forensic_triage)
         )
         m_tool.addSeparator()
@@ -2095,6 +2165,82 @@ class MainWindow(QMainWindow):
         dialog.accept()
         self.mount_volume(self.active_panel(), int(volume.offset))
         self.log_msg("Открыт том из обзора образа: %s" % volume.desc)
+
+    def search_image_files(self):
+        """Open the filesystem-aware filename search for the whole image."""
+        if not self.image_path:
+            QMessageBox.information(
+                self, "Поиск файла", "Сначала откройте образ (Ctrl+O)."
+            )
+            return
+        exec_dialog(ImageFileSearchDialog(self))
+
+    def search_files_in_image(self, pattern, *, max_results=2000, max_nodes=30000):
+        """Return bounded filename matches from all detected image volumes."""
+        from .fat32 import Fat32Error, Fat32Provider
+        from .vfs import TskError, TskImage
+
+        volumes = self.volumes or [_PartitionVolume(type("Whole", (), {
+            "offset": 0, "name": "whole image", "type_name": "raw",
+            "size_mb": os.path.getsize(self.image_path) / 1048576.0,
+            "start_lba": 0,
+        })())]
+        wanted = pattern.lower()
+        results = []
+        for volume in volumes:
+            offset = int(getattr(volume, "offset", 0))
+            provider = None
+            owned = False
+            try:
+                current = self.active_panel()
+                if current.mode == "img" and current.volume_offset == offset and current.provider:
+                    provider = current.provider
+                else:
+                    try:
+                        provider = TskImage(self.image_path, offset=offset)
+                    except TskError:
+                        provider = Fat32Provider(self.image_path, offset=offset)
+                    owned = True
+                stack = ["/"]
+                visited = 0
+                while stack and visited < max_nodes and len(results) < max_results:
+                    directory = stack.pop()
+                    visited += 1
+                    for entry in provider.list_dir(directory):
+                        name = str(entry.get("name", ""))
+                        child = (
+                            directory.rstrip("/") + "/" + name
+                            if directory != "/" else "/" + name
+                        )
+                        if fnmatch.fnmatch(name.lower(), wanted) or wanted in name.lower():
+                            results.append({
+                                "volume": str(getattr(volume, "desc", "offset 0")),
+                                "fstype": str(getattr(volume, "fstype", "unknown")),
+                                "path": child,
+                                "size": int(entry.get("size") or 0),
+                                "offset": offset,
+                            })
+                            if len(results) >= max_results:
+                                break
+                        if entry.get("is_dir") and name not in (".", ".."):
+                            stack.append(child)
+            except (OSError, TskError, Fat32Error, RuntimeError) as exc:
+                self.log_msg("Поиск: том @ 0x%X пропущен: %s" % (offset, exc))
+            finally:
+                if owned and provider is not None and hasattr(provider, "close"):
+                    provider.close()
+            if len(results) >= max_results:
+                break
+        return results
+
+    def open_image_search_result(self, result):
+        """Mount and navigate to a filename selected from search results."""
+        panel = self.active_panel()
+        if not self.mount_volume(panel, int(result["offset"])):
+            return
+        parent = str(PurePosixPath(result["path"]).parent)
+        panel.cd(parent if parent != "." else "/")
+        self.log_msg("Найден файл: %s" % result["path"])
 
     def open_forensic_triage(self):
         """Open bounded read-only hash/search/timeline helpers."""
