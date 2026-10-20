@@ -6,6 +6,12 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- Total Commander mode: F4 now edits bounded text files and saves changes into
+  writable FAT32 or ext2/3/4 volumes. ext writes use a temporary filesystem
+  extent, read-back/SHA-256 verification, a rollback snapshot, and a persistent
+  image backup; ext browse/write fallback requires `debugfs` when pytsk3 is
+  absent. Existing image backups are not overwritten, and declining a backup
+  cancels the write.
 - Epic #87 roadmap batch: experimental library modules for unallocated-range
   indexing, crypto/Android/macOS/NAND/Registry inspection, AI orchestration and
   metadata-only copilot summaries, MCP/RAG, plugins and the REST API. These

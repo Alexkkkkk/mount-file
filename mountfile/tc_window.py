@@ -12,9 +12,9 @@ status line - then the command line and the function key bar.
 Function keys (real shortcuts, also clickable buttons at the bottom):
 
     F3  view the selected file in the hex viewer
-    F4  edit (not supported - images are modified by an F5 import)
+    F4  edit text files (FAT32, ext2/3/4 with debugfs; image backup required)
     F5  copy between panels (image -> local = extract,
-        local -> image = FAT32 import via the write engine)
+        local -> image = import on writable FAT32/ext volumes)
     F6  move (source removed when the engine can remove it)
     F7  make a directory in the active panel
     F8  delete (local filesystem only; the FAT32 engine has no delete)
@@ -34,6 +34,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import shutil
+import tempfile
 import threading
 import webbrowser
 
@@ -161,6 +162,98 @@ class ViewerDialog(QDialog):
             self.resize(
                 max(400, geo.width() * 9 // 10), max(300, geo.height() * 9 // 10)
             )
+
+
+class TextEditorDialog(QDialog):
+    """Small text-only F4 editor; binary formats remain view-only."""
+
+    def __init__(self, parent, name, text):
+        super().__init__(parent)
+        self.setWindowTitle("Правка — %s" % name)
+        self.resize(760, 560)
+        self._ends_with_newline = text.endswith("\n")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Изменения попадут в файл только после нажатия «Сохранить»."))
+        self.editor = QPlainTextEdit()
+        self.editor.setPlainText(text)
+        layout.addWidget(self.editor, 1)
+        buttons = QHBoxLayout()
+        save = QPushButton("Сохранить")
+        cancel = QPushButton("Отмена")
+        save.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+    def text(self):
+        text = self.editor.toPlainText()
+        if self._ends_with_newline and not text.endswith("\n"):
+            text += "\n"
+        return text
+
+
+class _ExtPanelWriter:
+    """Adapt the ext writer to the FAT32-style two-argument GUI contract."""
+
+    def __init__(self, backend):
+        self.backend = backend
+
+    @staticmethod
+    def _join(directory, name):
+        directory = (directory or "/").replace("\\", "/").rstrip("/")
+        return (directory + "/" + name) if directory else ("/" + name)
+
+    def write_file(self, directory, name, data):
+        self.backend.write_file(self._join(directory, name), data)
+
+    def mkdir(self, directory, name):
+        self.backend.mkdir(self._join(directory, name))
+
+    def rename(self, source, new_name):
+        parent = source.replace("\\", "/").rsplit("/", 1)[0] or "/"
+        self.backend.rename(source, self._join(parent, new_name))
+
+
+def _decode_editable_text(data):
+    """Return normalized text and its encoding/newline metadata, or None."""
+    if len(data) > 2 * 1024 * 1024 or b"\x00" in data:
+        return None
+    bom = data.startswith(b"\xef\xbb\xbf")
+    content = data[3:] if bom else data
+    encoding = "utf-8"
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        encoding = "cp1251"
+        try:
+            text = content.decode(encoding)
+        except UnicodeDecodeError:
+            return None
+    newline = "\r\n" if b"\r\n" in data else "\n"
+    return text.replace("\r\n", "\n").replace("\r", "\n"), encoding, bom, newline
+
+
+def _encode_editable_text(text, encoding, bom, newline):
+    content = text.replace("\r\n", "\n").replace("\r", "\n")
+    data = content.replace("\n", newline).encode(encoding)
+    return (b"\xef\xbb\xbf" + data) if bom else data
+
+
+def _atomic_write_local(path, data):
+    """Replace a local text file atomically without leaving partial contents."""
+    parent = os.path.dirname(os.path.abspath(path))
+    fd, temp_path = tempfile.mkstemp(prefix=".mountfile-edit-", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 class ForensicTriageDialog(QDialog):
@@ -379,6 +472,7 @@ class TcPanel(QWidget):
         self.provider = None
         self.writer = None
         self.writer_fh = None
+        self.write_reason = ""
         self.volume_offset = 0
         self.volume_label = ""
         self.entries = []
@@ -2109,6 +2203,10 @@ class MainWindow(QMainWindow):
         if panel.mode != "img" or not self.image_path:
             return True
         backup = self.image_path + ".bak"
+        suffix = 1
+        while os.path.exists(backup):
+            backup = self.image_path + ".bak.%d" % suffix
+            suffix += 1
         answer = QMessageBox.question(
             self,
             "Резервная копия образа",
@@ -2117,7 +2215,8 @@ class MainWindow(QMainWindow):
             MB_Yes,
         )
         if answer != MB_Yes:
-            return True
+            self.log_msg("Запись отменена: резервная копия не создана")
+            return False
         try:
             shutil.copy2(self.image_path, backup)
         except OSError as exc:
@@ -2266,6 +2365,24 @@ class MainWindow(QMainWindow):
         if not self.image_path:
             return False
         self.release_volume(panel)
+        panel.write_reason = ""
+        volume_size = next(
+            (
+                getattr(volume, "size", None)
+                for volume in (self.volumes or [])
+                if getattr(volume, "offset", None) == offset
+            ),
+            None,
+        )
+        if volume_size is None:
+            image_size = os.path.getsize(self.image_path)
+            next_offsets = [
+                int(getattr(volume, "offset"))
+                for volume in (self.volumes or [])
+                if getattr(volume, "offset", -1) > offset
+            ]
+            next_boundary = min(next_offsets) if next_offsets else image_size
+            volume_size = max(0, next_boundary - offset)
         from .vfs import TskError, TskImage
 
         try:
@@ -2276,32 +2393,45 @@ class MainWindow(QMainWindow):
             try:
                 panel.provider = Fat32Provider(self.image_path, offset=offset)
             except (Fat32Error, OSError, ValueError) as fat_error:
-                panel.provider = None
-                self.log_msg(
-                    "Том @ offset %d не открылся — The Sleuth Kit: %s; FAT32: %s"
-                    % (offset, tsk_error, fat_error)
-                )
-                panel.refresh()
-                # A partition table (or a udev offset) that does not point at a
-                # filesystem is the normal case in NAND/eMMC dumps: pick the
-                # working volume automatically instead of stopping on an error.
-                if getattr(self, "_autopick_busy", False):
+                try:
+                    from .ext_debugfs_writer import Ext234Provider
+
+                    panel.provider = Ext234Provider(
+                        self.image_path, offset=offset, volume_size=volume_size
+                    )
+                    self.log_msg(
+                        "Том @ offset %d открыт через debugfs (fallback без pytsk3)"
+                        % offset
+                    )
+                except Exception as ext_error:
+                    panel.provider = None
+                    self.log_msg(
+                        "Том @ offset %d не открылся — The Sleuth Kit: %s; "
+                        "FAT32: %s; debugfs: %s"
+                        % (offset, tsk_error, fat_error, ext_error)
+                    )
+                    panel.refresh()
+                    # A partition table (or a udev offset) that does not point at a
+                    # filesystem is the normal case in NAND/eMMC dumps: pick the
+                    # working volume automatically instead of stopping on an error.
+                    if getattr(self, "_autopick_busy", False):
+                        QMessageBox.warning(
+                            self,
+                            "Не удалось смонтировать том",
+                            "The Sleuth Kit: %s\nFAT32: %s\ndebugfs: %s"
+                            % (tsk_error, fat_error, ext_error),
+                        )
+                        return False
+                    if self._auto_pick(panel, quiet=True):
+                        return True
                     QMessageBox.warning(
                         self,
                         "Не удалось смонтировать том",
-                        "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
+                        "The Sleuth Kit: %s\nFAT32: %s\ndebugfs: %s\n\n"
+                        "Авто-подбор не нашёл рабочий том — подробности в журнале."
+                        % (tsk_error, fat_error, ext_error),
                     )
                     return False
-                if self._auto_pick(panel, quiet=True):
-                    return True
-                QMessageBox.warning(
-                    self,
-                    "Не удалось смонтировать том",
-                    "The Sleuth Kit: %s\nFAT32: %s\n\n"
-                    "Авто-подбор не нашёл рабочий том — подробности в журнале."
-                    % (tsk_error, fat_error),
-                )
-                return False
 
         panel.mode = "img"
         panel.volume_offset = offset
@@ -2312,6 +2442,7 @@ class MainWindow(QMainWindow):
         try:
             fh = open(self.image_path, "r+b")
         except OSError as e:
+            panel.write_reason = str(e)
             self.log_msg("Том @ offset %d — только чтение (%s)" % (offset, e))
         else:
             try:
@@ -2323,7 +2454,25 @@ class MainWindow(QMainWindow):
                 )
             except Fat32Error as e:
                 fh.close()
-                self.log_msg("Том @ offset %d — только чтение: %s" % (offset, e))
+                try:
+                    from .ext_debugfs_writer import Ext234ImageWriter
+
+                    ext_writer = Ext234ImageWriter(
+                        self.image_path, offset=offset, volume_size=volume_size
+                    )
+                    panel.writer = _ExtPanelWriter(ext_writer)
+                    panel.volume_label = "%s ofs %d" % (ext_writer.fs_type, offset)
+                    self.log_msg(
+                        "Том @ offset %d смонтирован — запись %s через debugfs включена"
+                        % (offset, ext_writer.fs_type)
+                    )
+                except Exception as ext_error:
+                    panel.writer = None
+                    panel.write_reason = str(ext_error)
+                    self.log_msg(
+                        "Том @ offset %d — только чтение (FAT32: %s; ext: %s)"
+                        % (offset, e, ext_error)
+                    )
 
         panel.path = "/"
         panel.tabs = ["/"]
@@ -2418,16 +2567,83 @@ class MainWindow(QMainWindow):
     def f4_edit(self):
         p = self.active_panel()
         entry = p.selected_entry()
-        if p.mode == "img" and entry and not entry.get("is_dir"):
-            self.log_msg(
-                "Правка (F4): файлы внутри образа изменяются только импортом "
-                "через F5 (%s)" % entry["name"]
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            QMessageBox.information(self, "Правка", "Выберите текстовый файл.")
+            return
+        name = entry["name"]
+        if os.path.splitext(name)[1].lower() not in (
+            ".ini", ".cfg", ".conf", ".txt", ".log", ".json", ".xml",
+            ".csv", ".yaml", ".yml", ".md",
+        ):
+            QMessageBox.information(
+                self, "Правка", "F4 редактирует только текстовые файлы известных форматов."
             )
             return
-        self.log_msg(
-            "Правка (F4) не поддерживается — образ изменяется только "
-            "импортом через F5"
-        )
+        if int(entry.get("size") or 0) > 2 * 1024 * 1024:
+            QMessageBox.information(
+                self, "Правка", "Файл больше лимита редактирования 2 MiB."
+            )
+            return
+        full = p.join(name)
+        try:
+            if p.mode == "img":
+                if p.writer is None:
+                    reason = getattr(p, "write_reason", "") or "нет доступного writer"
+                    raise RuntimeError("том открыт только для чтения: %s" % reason)
+                data = p.provider.read_file(full)
+            else:
+                with open(full, "rb") as stream:
+                    data = stream.read(2 * 1024 * 1024 + 1)
+        except Exception as exc:
+            QMessageBox.warning(self, "Правка", "Не удалось прочитать файл:\n%s" % exc)
+            return
+        decoded = _decode_editable_text(data)
+        if decoded is None:
+            QMessageBox.information(
+                self, "Правка", "Файл бинарный или больше 2 MiB; редактирование отменено."
+            )
+            return
+        text, encoding, bom, newline = decoded
+        dialog = TextEditorDialog(self, name, text)
+        if exec_dialog(dialog) != DialogAccepted:
+            return
+        try:
+            updated = _encode_editable_text(dialog.text(), encoding, bom, newline)
+        except UnicodeEncodeError as exc:
+            QMessageBox.warning(
+                self,
+                "Правка",
+                "Текст нельзя сохранить в исходной кодировке:\n%s" % exc,
+            )
+            return
+        if updated == data:
+            self.log_msg("Изменений нет: %s" % name)
+            return
+        if p.mode == "img":
+            answer = QMessageBox.warning(
+                self,
+                "Подтвердите запись",
+                "Записать изменения в образ?\n\n%s\n\n"
+                "Перед записью будет создана резервная копия образа." % full,
+                MB_Yes | MB_No,
+            )
+            if answer != MB_Yes or not self._backup_before_write(p):
+                return
+            try:
+                p.writer.write_file(p.path, name, updated)
+                p.refresh()
+            except Exception as exc:
+                QMessageBox.critical(self, "Сохранение не удалось", str(exc))
+                return
+            self.log_msg("Изменения записаны в образ: %s (%d байт)" % (full, len(updated)))
+            return
+        try:
+            _atomic_write_local(full, updated)
+        except Exception as exc:
+            QMessageBox.critical(self, "Сохранение не удалось", str(exc))
+            return
+        p.refresh()
+        self.log_msg("Файл сохранён: %s (%d байт)" % (full, len(updated)))
 
     # -------------------------------------------------------------- copying
     def _gather(self, panel):
@@ -2561,8 +2777,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Копирование в образ",
-                "Том в левой панели открыт только для чтения: запись "
-                "поддерживается только в FAT32.",
+                "Целевой том открыт только для чтения: запись "
+                "требует FAT32 либо ext2/3/4 с установленным debugfs.\n\n%s"
+                % (getattr(other, "write_reason", "") or "Причина не указана."),
             )
             return
         target_dir = other.path
