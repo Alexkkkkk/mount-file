@@ -55,11 +55,26 @@ def repo(tmp_path):
     run_git(work, "config", "user.name", "Test User")
     run_git(work, "config", "commit.gpgsign", "false")
     run_git(work, "remote", "add", "origin", str(bare))
+    # A CI checkout is a detached HEAD; the fixture reproduces that by creating
+    # the branch explicitly instead of relying on init.defaultBranch.
+    run_git(work, "checkout", "-B", "main")
     (work / "README.md").write_text("# demo\n", encoding="utf-8")
     run_git(work, "add", "-A")
     run_git(work, "commit", "-m", "chore: initial")
     run_git(work, "push", "-u", "origin", "main")
     return work
+
+
+@pytest.fixture()
+def remote_with_extra_branch(repo, tmp_path):
+    """A bare origin that also has a `test-remote` branch.
+
+    auto-release.yml pushes such a branch with GITHUB_TOKEN, and the resulting
+    event does not trigger CI - the ``remote_without_extra_branch`` fixture
+    below mirrors the normal repository state for the happy path.
+    """
+    run_git(repo, "push", "origin", "main:test-remote")
+    return repo
 
 
 # --------------------------------------------------------------- secret gate
