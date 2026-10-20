@@ -99,7 +99,11 @@ jobs:
   autosync:
     name: Autosync
     needs: verify
-    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    if: |
+      always() && (
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'verify') ||
+        github.event_name == 'schedule'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

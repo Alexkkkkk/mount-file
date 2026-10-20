@@ -130,6 +130,36 @@ PR создаётся через REST API (`POST /repos/{owner}/{repo}/pulls`) �
 Секреты в workflow не нужны: используются только `GITHUB_TOKEN` от Actions
 для чтения репозитория.
 
+## Автозапуск в GitHub Actions
+
+`.github/workflows/mfsync.yml` запускает `mfsync` в CI на встроенном
+`secrets.GITHUB_TOKEN` — личный PAT в workflow не используется ни на одной
+строке.
+
+| Событие | Что выполняется |
+|---|---|
+| `push` в `main`, `feat/**`, `sync/**` | job **Verify**: `status`, `scan --all`, `check --strict`, self-tests, JSON-артефакт, summary. Только чтение |
+| `pull_request` в `main` | то же самое — это required check для PR |
+| `schedule` (03:17 UTC) | **Verify** + **Autosync** с `commit` |
+| `workflow_dispatch` с `mode=verify` | только **Verify** |
+| `workflow_dispatch` с `mode=commit` / `mode=pr` | **Verify** + **Autosync** (push или PR) |
+
+Локальные режимы (`watch`, интерактивный `sync`) в CI не запускаются: у job'а
+нет терминала, а watcher завершился бы по таймауту. Поэтому workflow вызывает
+только конечные команды `status`, `scan`, `check`, `sync`.
+
+Защита от циклов — четыре независимых слоя:
+
+1. write-job недостижим по `push`: его `if` требует `workflow_dispatch` или
+   `schedule`, а `mode=verify` его пропускает;
+2. коммиты бота содержат `[skip ci]`;
+3. `concurrency: mfsync-write` сериализует писателей, `cancel-in-progress:
+   false`;
+4. job наследует права только `contents: write` + `pull-requests: write`.
+
+Если `main` защищён ruleset'ом, `mfsync` сам уходит в ветку `sync/*` и открывает
+PR — для этого в job'е и запрошено `pull-requests: write`.
+
 ## Make-цели
 
 ```bash
