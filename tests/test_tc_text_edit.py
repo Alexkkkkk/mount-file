@@ -24,8 +24,10 @@ from mountfile.qt_compat import (
 
 @pytest.fixture(scope="module")
 def qapp():
+    # Only QT_QPA_PLATFORM is set here: MOUNTFILE_NO_UPDATE is process-global, and
+    # setting it at import/fixture time disables updater.disabled() for every
+    # later test module, which made tests/test_updater.py fail in CI.
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    os.environ["MOUNTFILE_NO_UPDATE"] = "1"
     return QApplication.instance() or QApplication([])
 
 
