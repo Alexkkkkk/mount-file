@@ -10,7 +10,6 @@ when ``mkfs.ext4`` is unavailable.
 
 import json
 import shutil
-import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -19,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_fat32 import BPS, RESERVED, SPF, make_fat32_image
+from test_fat32 import BPS, RESERVED, make_fat32_image
 
 from mountfile.fat32 import Fat32
 from mountfile.write_engine import (

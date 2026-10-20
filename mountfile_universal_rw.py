@@ -20,7 +20,6 @@ mountfile_universal_rw.py — Universal RW-слой для Mount File (Task 2.1,
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -30,7 +29,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Literal, Optional
+from typing import BinaryIO, Optional
 
 
 # ---------------------------------------------------------------------------

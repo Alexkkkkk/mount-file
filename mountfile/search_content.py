@@ -24,7 +24,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional, Sequence
+from typing import Any, Iterator, Optional, Sequence
 
 from .timeline import iter_file_entries
 

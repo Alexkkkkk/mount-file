@@ -4,7 +4,7 @@ import json
 
 import mountfile.cli as cli
 from mountfile.cli import main
-from mountfile.dfir import TimelineRecord, detect_timestomp, grep_image, sha256_file
+from mountfile.dfir import detect_timestomp, grep_image, sha256_file
 
 
 def test_hash_and_literal_search(tmp_path, capsys):

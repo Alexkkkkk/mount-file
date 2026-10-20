@@ -22,7 +22,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def main():
     from mountfile.qt_compat import QApplication
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory():
         # заведомо нерабочий: локальный порт, где никто не слушает
         os.environ["MOUNTFILE_UPDATE_URL"] = "http://127.0.0.1:9/latest.json"
         from mountfile import updater

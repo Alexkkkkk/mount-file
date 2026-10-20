@@ -21,18 +21,15 @@ import argparse
 import hashlib
 import io
 import json
-import os
 import shutil
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
-from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Callable, Optional
+from typing import BinaryIO, Optional
 
 # Импорт базового слоя. Если файла нет — подсказка.
 try:
