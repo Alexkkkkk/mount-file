@@ -20,7 +20,9 @@
   для платформы asset (.exe / бинарник linux), сверяем sha256, если релиз
   его публикует, и подменяем файл:
     - Windows — запускается .cmd, который ждёт выхода процесса (занятый
-      exe перезаписать нельзя), затем ``move`` + ``start``;
+      exe перезаписать нельзя), затем ``move`` + ``start``. Ожидание
+      ОГРАНИЧЕНО: ``WINDOWS_WAIT_TRIES`` проверок, потом файл всё равно
+      подменяется, а сам .cmd работает без консольного окна;
     - Linux/macOS — подмена файла на месте и ``os.execv``;
 * запуск из исходников — файлы не трогаем: показываем ссылку на релиз
   (и, если это git-чекаут и ``MOUNTFILE_GIT_PULL=1``, делаем ``git pull``).
@@ -312,25 +314,44 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
 # «%DATE%»/«%TIME%» в шаблоне - переменные cmd.exe, поэтому никакого
 # %-форматирования на этих строках быть не должно (иначе Python падает
 # с "not enough arguments for format string"). Подстановка - replace().
+#: Сколько раз (примерно секунд: между проверками стоит ``ping``) .cmd
+#: ждёт выхода процесса перед подменой файла. Ожидание было бесконечным
+#: ``goto wait`` без счётчика: если процесс не завершался или ``tasklist``
+#: его не находил, окно ``findstr`` висело вечно, и обновление не
+#: заканчивалось никогда ("при обновлении программы висит").
+WINDOWS_WAIT_TRIES = 60
+#: Сколько раз .cmd пытается заменить файл, пока он ещё занят процессом.
+WINDOWS_MOVE_TRIES = 10
+
 _WINDOWS_SWAP_TEMPLATE = """@echo off
 setlocal
 set "LOG=__LOG__"
+set /a TRIES=0
 :wait
-tasklist /FI "PID eq __PID__" | findstr /I "__PID__" >nul
-if not errorlevel 1 (
-  ping -n 2 127.0.0.1 >nul
-  goto wait
-)
-echo %DATE% %TIME% installing > "%LOG%"
+tasklist /FI "PID eq __PID__" 2>nul | findstr /I "__PID__" >nul
+if errorlevel 1 goto replace
+set /a TRIES+=1
+if %TRIES% GEQ __WAIT_TRIES__ goto forced
+ping -n 2 127.0.0.1 >nul
+goto wait
+:forced
+echo %DATE% %TIME% PID __PID__ still alive after __WAIT_TRIES__ checks - replacing anyway >> "%LOG%"
+:replace
+echo %DATE% %TIME% installing >> "%LOG%"
+set /a MOVES=0
+:trymove
 move /Y "__NEW__" "__TARGET__" >> "%LOG%" 2>&1
-if errorlevel 1 goto failed
+if not errorlevel 1 goto started
+set /a MOVES+=1
+if %MOVES% GEQ __MOVE_TRIES__ goto failed
+ping -n 2 127.0.0.1 >nul
+goto trymove
+:started
 echo %DATE% %TIME% restart >> "%LOG%"
 start "" "__TARGET__"
 goto done
 :failed
 echo %DATE% %TIME% update FAILED, new file left at __NEW__ >> "%LOG%"
-echo Update failed - see "%LOG%"
-pause
 :done
 del "%~f0"
 """
@@ -342,6 +363,8 @@ def _windows_swap_script(new_file, target, pid, log_file):
     script = (
         _WINDOWS_SWAP_TEMPLATE.replace("__LOG__", log_file)
         .replace("__PID__", str(pid))
+        .replace("__WAIT_TRIES__", str(WINDOWS_WAIT_TRIES))
+        .replace("__MOVE_TRIES__", str(WINDOWS_MOVE_TRIES))
         .replace("__NEW__", new_file)
         .replace("__TARGET__", target)
     )
@@ -365,12 +388,19 @@ def install_and_restart(new_file):
     if os.name == "nt":
         log_file = os.path.join(tempfile.gettempdir(), "mountfile-update.log")
         script = _windows_swap_script(new_file, target, os.getpid(), log_file)
-        detached = 0x00000008  # DETACHED_PROCESS
+        # CREATE_NO_WINDOW (0x08000000) — документированный «без окна консоли»
+        # флаг для консольного дочернего процесса. Раньше здесь стоял
+        # DETACHED_PROCESS, и на живой машине был виден висящий консольный
+        # скрипт подмены (окно с заголовком вида ``findstr /i "<pid>"`` —
+        # это и есть ожидание PID из шаблона). DETACHED_PROCESS и
+        # CREATE_NO_WINDOW несовместимы (второй игнорируется вместе с
+        # первым), поэтому выбран CREATE_NO_WINDOW.
+        no_window = 0x08000000  # CREATE_NO_WINDOW
         new_group = 0x00000200  # CREATE_NEW_PROCESS_GROUP
         subprocess.Popen(
             ["cmd", "/c", script],
             close_fds=True,
-            creationflags=detached | new_group,
+            creationflags=no_window | new_group,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

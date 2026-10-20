@@ -273,6 +273,54 @@ def test_download_progress_indeterminate_without_size(tmp_path, monkeypatch):
     assert -1 in seen and seen[-1] == 100
 
 
+# ------------------------------------- скрипт подмены не висит бесконечно
+def test_windows_swap_script_is_bounded(tmp_path, monkeypatch):
+    """Ожидание PID ограничено счётчиком — «висения» быть не должно.
+
+    Раньше шаблон содержал безусловный ``goto wait``: если процесс не
+    завершался, окно ``findstr`` висело вечно и обновление не заканчивалось.
+    """
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path))
+    script = updater._windows_swap_script(
+        "C:\\new.exe", "C:\\app\\MountFile.exe", 4242, str(tmp_path / "l.log")
+    )
+    text = open(script, encoding="utf-8").read()
+
+    # счётчик проверок PID и предел из модуля подставлены в текст
+    assert "set /a TRIES=0" in text
+    assert "__WAIT_TRIES__" not in text and "__MOVE_TRIES__" not in text
+    assert "GEQ %d" % updater.WINDOWS_WAIT_TRIES in text
+    assert "GEQ %d" % updater.WINDOWS_MOVE_TRIES in text
+    # никакого ожидания нажатия клавиши: процесс запущен отсоединённым
+    assert "pause" not in text.lower()
+    # проверка PID не пишет в stderr и не зацикливается без инкремента
+    assert 'tasklist /FI "PID eq 4242" 2>nul' in text
+    assert "set /a TRIES+=1" in text
+
+
+def test_windows_install_hides_the_console(tmp_path, monkeypatch):
+    """Запуск скрипта подмены идёт без окна консоли (CREATE_NO_WINDOW)."""
+    monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater.os, "name", "nt", raising=False)
+
+    seen = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            seen["argv"] = argv
+            seen["kwargs"] = kwargs
+
+    monkeypatch.setattr(updater.subprocess, "Popen", _FakePopen)
+
+    assert updater.install_and_restart(sys.executable) == "restart"
+    flags = seen["kwargs"]["creationflags"]
+    assert flags & 0x08000000, "нужен CREATE_NO_WINDOW: 0x%08X" % flags
+    assert not flags & 0x00000008, "DETACHED_PROCESS показывает окно консоли"
+    assert seen["kwargs"]["stdin"] is updater.subprocess.DEVNULL
+    assert seen["argv"][:2] == ["cmd", "/c"]
+
+
 if __name__ == "__main__":
     import pytest
 
