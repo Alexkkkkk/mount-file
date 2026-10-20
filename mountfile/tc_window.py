@@ -17,10 +17,10 @@ Function keys (real shortcuts, also clickable buttons at the bottom):
     F4  edit the selected text file in the same system editor (files inside an
         image are modified by an F5 import, not by F4)
     F5  copy between panels (image -> local = extract,
-        local -> image = FAT32 import via the write engine)
+        local -> image = import via the selected filesystem writer)
     F6  move (source removed when the engine can remove it)
     F7  make a directory in the active panel
-    F8  delete (local filesystem only; the FAT32 engine has no delete)
+    F8  delete (local filesystem or a writable image backend)
     F9  toggle the menu bar
 
 Keys inside a panel: Enter / double click opens, Backspace goes up, Tab
@@ -41,6 +41,7 @@ import shutil
 import tempfile
 import threading
 import webbrowser
+from pathlib import PurePosixPath
 
 from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
@@ -75,6 +76,56 @@ COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")
 
 #: What Total Commander prints in the size column for a directory.
 DIR_SIZE_TEXT = "<Папка>"
+
+
+class _UniversalImageWriter:
+    """Adapt :class:`UniversalFSRW` to the GUI's legacy writer contract.
+
+    The panel UI historically called the native FAT32 writer with
+    ``(directory, name, data)`` arguments.  The package RW facade uses one
+    POSIX path instead.  Keeping this adapter in the GUI avoids changing the
+    tested FAT32 engine while enabling the same commands for ext2/3/4, NTFS,
+    and the loop-mount fallback.
+    """
+
+    def __init__(self, filesystem):
+        self.filesystem = filesystem
+        info = filesystem.info()
+        self.total_bytes = int(info.total_size or 0)
+        self.fs_type = info.fs_type
+        self.write_strategy = info.write_strategy
+
+    @staticmethod
+    def _join(directory, name):
+        directory = str(directory or "/").replace("\\", "/")
+        name = str(name).replace("\\", "/")
+        if name.startswith("/"):
+            return str(PurePosixPath(name))
+        return str(PurePosixPath(directory) / name)
+
+    def mkdir(self, directory, name):
+        self.filesystem.mkdir(self._join(directory, name))
+
+    def write_file(self, directory, name, data):
+        self.filesystem.write_file(self._join(directory, name), data)
+
+    def rename(self, source, destination):
+        source = str(source).replace("\\", "/")
+        destination = str(destination).replace("\\", "/")
+        if not destination.startswith("/"):
+            destination = self._join(str(PurePosixPath(source).parent), destination)
+        self.filesystem.rename(source, destination)
+
+    def delete(self, path, recursive=False):
+        self.filesystem.delete(path, recursive=recursive)
+
+    def close(self):
+        self.filesystem.close()
+
+    def free_space(self):
+        # The package facade deliberately does not guess free space for every
+        # filesystem.  Returning None keeps the GUI status truthful.
+        return None
 
 #: What the Имя / Тип / Размер / Дата / Атрибуты header row reads.
 #: The flexible Имя column is `COLUMN_NAME`; the other four keep a width
@@ -272,6 +323,73 @@ class ForensicTriageDialog(QDialog):
             return
         findings = list(detect_timestomp(read_timeline_csv(path)))
         self.output.setPlainText("\n".join("%s\t%s" % (r.path, ", ".join(reasons)) for r, reasons in findings[:1000]) + "\n\nFindings: %d" % len(findings))
+
+
+class ImageFileSearchDialog(QDialog):
+    """Search filesystem entries by name across every detected image volume."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.owner = parent
+        self.setWindowTitle("Поиск файла в образе")
+        self.resize(900, 520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Образ: %s" % (parent.image_path or "не открыт")))
+
+        row = QHBoxLayout()
+        self.pattern = QLineEdit("*")
+        self.pattern.setPlaceholderText("Имя или маска, например *.db или config")
+        self.pattern.returnPressed.connect(self.run_search)
+        button = QPushButton("Искать во всём образе")
+        button.clicked.connect(self.run_search)
+        row.addWidget(self.pattern, 1)
+        row.addWidget(button)
+        layout.addLayout(row)
+
+        self.status = QLabel("Введите имя или маску файла.")
+        layout.addWidget(self.status)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(("Том", "ФС", "Путь", "Размер", "Offset"))
+        self.table.setSelectionBehavior(SelectRows)
+        self.table.setEditTriggers(NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self.open_result)
+        layout.addWidget(self.table, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close, 0, AlignRight)
+        self.results = []
+
+    def run_search(self):
+        pattern = self.pattern.text().strip()
+        if not pattern:
+            self.status.setText("Введите имя или маску файла.")
+            return
+        self.status.setText("Поиск…")
+        QApplication.processEvents()
+        try:
+            self.results = self.owner.search_files_in_image(pattern)
+        except Exception as exc:
+            self.results = []
+            self.status.setText("Ошибка поиска: %s" % exc)
+            return
+        self.table.setRowCount(len(self.results))
+        for row, result in enumerate(self.results):
+            values = (
+                result["volume"],
+                result["fstype"],
+                result["path"],
+                tc_style.fmt_size(result["size"]),
+                "0x%X" % result["offset"],
+            )
+            for column, value in enumerate(values):
+                self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        self.table.resizeColumnsToContents()
+        self.status.setText("Найдено файлов: %d" % len(self.results))
+
+    def open_result(self, row, _column):
+        if 0 <= row < len(self.results):
+            self.accept()
+            self.owner.open_image_search_result(self.results[row])
 
 
 class PanelTable(QTableWidget):
@@ -1777,6 +1895,12 @@ class MainWindow(QMainWindow):
             self._action("Сводка образа и тома…", self.show_image_info)
         )
         m_tool.addAction(
+            self._action("Обзор всего образа…", self.show_whole_image)
+        )
+        m_tool.addAction(
+            self._action("Поиск файла в образе…", self.search_image_files, "Ctrl+Shift+F")
+        )
+        m_tool.addAction(
             self._action("DFIR triage (только чтение)…", self.open_forensic_triage)
         )
         m_tool.addSeparator()
@@ -2050,6 +2174,153 @@ class MainWindow(QMainWindow):
                     )
                 )
         QMessageBox.information(self, "Сводка образа и тома", "\n".join(lines))
+
+    def show_whole_image(self):
+        """Show every detected volume together instead of one at a time.
+
+        Filesystems remain separate because their offsets and metadata are
+        independent. Double-clicking a row mounts that complete volume in the
+        active panel; the table itself is the whole-image view.
+        """
+        if not self.image_path:
+            QMessageBox.information(
+                self, "Обзор всего образа", "Сначала откройте образ (Ctrl+O)."
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            "Обзор всего образа — %s" % os.path.basename(self.image_path)
+        )
+        dialog.resize(900, 460)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel(
+                "Образ: %s\nРазмер: %s. Найдено томов: %d. "
+                "Двойной клик открывает том целиком в активной панели."
+                % (
+                    self.image_path,
+                    tc_style.fmt_kb(os.path.getsize(self.image_path)),
+                    len(self.volumes),
+                )
+            )
+        )
+        table = QTableWidget(dialog)
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(
+            ("№", "Имя/описание", "ФС", "Offset", "Размер", "Источник")
+        )
+        table.setRowCount(len(self.volumes))
+        table.setSelectionBehavior(SelectRows)
+        table.setEditTriggers(NoEditTriggers)
+        for row, volume in enumerate(self.volumes):
+            offset = int(getattr(volume, "offset", 0))
+            size = getattr(volume, "size", None)
+            values = (
+                str(row + 1),
+                str(getattr(volume, "desc", "том")),
+                str(getattr(volume, "fstype", "unknown")),
+                "0x%X / LBA %d" % (offset, offset // 512),
+                tc_style.fmt_kb(size) if size else "н/д",
+                str(getattr(volume, "source", "detector")),
+            )
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        table.cellDoubleClicked.connect(
+            lambda row, _column: self._open_overview_volume(dialog, row)
+        )
+        layout.addWidget(table, 1)
+        buttons = QDialogButtonBox()
+        close_button = buttons.addButton(DlgClose)
+        close_button.clicked.connect(dialog.reject)
+        layout.addWidget(buttons)
+        exec_dialog(dialog)
+
+    def _open_overview_volume(self, dialog, row):
+        """Mount one complete volume selected from the whole-image table."""
+        if row < 0 or row >= len(self.volumes):
+            return
+        volume = self.volumes[row]
+        dialog.accept()
+        self.mount_volume(self.active_panel(), int(volume.offset))
+        self.log_msg("Открыт том из обзора образа: %s" % volume.desc)
+
+    def search_image_files(self):
+        """Open the filesystem-aware filename search for the whole image."""
+        if not self.image_path:
+            QMessageBox.information(
+                self, "Поиск файла", "Сначала откройте образ (Ctrl+O)."
+            )
+            return
+        exec_dialog(ImageFileSearchDialog(self))
+
+    def search_files_in_image(self, pattern, *, max_results=2000, max_nodes=30000):
+        """Return bounded filename matches from all detected image volumes."""
+        from .fat32 import Fat32Error, Fat32Provider
+        from .vfs import TskError, TskImage
+
+        volumes = self.volumes or [_PartitionVolume(type("Whole", (), {
+            "offset": 0, "name": "whole image", "type_name": "raw",
+            "size_mb": os.path.getsize(self.image_path) / 1048576.0,
+            "start_lba": 0,
+        })())]
+        wanted = pattern.lower()
+        results = []
+        for volume in volumes:
+            offset = int(getattr(volume, "offset", 0))
+            provider = None
+            owned = False
+            try:
+                current = self.active_panel()
+                if current.mode == "img" and current.volume_offset == offset and current.provider:
+                    provider = current.provider
+                else:
+                    try:
+                        provider = TskImage(self.image_path, offset=offset)
+                    except TskError:
+                        provider = Fat32Provider(self.image_path, offset=offset)
+                    owned = True
+                stack = ["/"]
+                visited = 0
+                while stack and visited < max_nodes and len(results) < max_results:
+                    directory = stack.pop()
+                    visited += 1
+                    for entry in provider.list_dir(directory):
+                        name = str(entry.get("name", ""))
+                        child = (
+                            directory.rstrip("/") + "/" + name
+                            if directory != "/" else "/" + name
+                        )
+                        if fnmatch.fnmatch(name.lower(), wanted) or wanted in name.lower():
+                            results.append({
+                                "volume": str(getattr(volume, "desc", "offset 0")),
+                                "fstype": str(getattr(volume, "fstype", "unknown")),
+                                "path": child,
+                                "size": int(entry.get("size") or 0),
+                                "offset": offset,
+                            })
+                            if len(results) >= max_results:
+                                break
+                        if entry.get("is_dir") and name not in (".", ".."):
+                            stack.append(child)
+            except (OSError, TskError, Fat32Error, RuntimeError) as exc:
+                self.log_msg("Поиск: том @ 0x%X пропущен: %s" % (offset, exc))
+            finally:
+                if owned and provider is not None and hasattr(provider, "close"):
+                    provider.close()
+            if len(results) >= max_results:
+                break
+        return results
+
+    def open_image_search_result(self, result):
+        """Mount and navigate to a filename selected from search results."""
+        panel = self.active_panel()
+        if not self.mount_volume(panel, int(result["offset"])):
+            return
+        parent = str(PurePosixPath(result["path"]).parent)
+        panel.cd(parent if parent != "." else "/")
+        self.log_msg("Найден файл: %s" % result["path"])
 
     def open_forensic_triage(self):
         """Open bounded read-only hash/search/timeline helpers."""
@@ -2359,9 +2630,25 @@ class MainWindow(QMainWindow):
             try:
                 from .firmware import detect_volumes
 
-                return list(detect_volumes(path))
+                volumes = list(detect_volumes(path))
             except ImportError:
-                return [_PartitionVolume(p) for p in list_partitions(path)]
+                volumes = [_PartitionVolume(p) for p in list_partitions(path)]
+            # Signature scanning can see the same filesystem through more than
+            # one compatible probe. Present one row per physical volume so the
+            # whole-image view and drive selector do not show duplicates.
+            unique = []
+            seen = set()
+            for volume in volumes:
+                key = (
+                    int(getattr(volume, "offset", 0)),
+                    str(getattr(volume, "fstype", "")),
+                    getattr(volume, "size", None),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(volume)
+            return unique
         except Exception as e:
             self.log_msg("Сканирование томов не удалось: %s" % e)
             return []
@@ -2414,10 +2701,12 @@ class MainWindow(QMainWindow):
 
         from .fat32 import Fat32, Fat32Error
 
+        fat_writer_ready = False
         try:
             fh = open(self.image_path, "r+b")
         except OSError as e:
-            self.log_msg("Том @ offset %d — только чтение (%s)" % (offset, e))
+            fh = None
+            fat_error = e
         else:
             try:
                 panel.writer = Fat32(fh, offset=offset)
@@ -2426,9 +2715,36 @@ class MainWindow(QMainWindow):
                 self.log_msg(
                     "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
                 )
+                fat_writer_ready = True
             except Fat32Error as e:
                 fh.close()
-                self.log_msg("Том @ offset %d — только чтение: %s" % (offset, e))
+                fat_error = e
+
+        # FAT32 keeps its native writer. For every other detected filesystem,
+        # use the package facade: ext2/3/4 via debugfs, NTFS via ntfs-3g, and
+        # other supported filesystems through the loop-mount backend. A failed
+        # optional backend remains a truthful read-only volume.
+        if not fat_writer_ready:
+            try:
+                from .universal_fs_rw import UniversalFSRW
+
+                filesystem = UniversalFSRW(
+                    self.image_path, offset=offset, auto_backup=False
+                )
+                adapter = _UniversalImageWriter(filesystem)
+            except Exception as e:
+                self.log_msg(
+                    "Том @ offset %d — только чтение (FAT32: %s; RW backend: %s)"
+                    % (offset, fat_error, e)
+                )
+            else:
+                panel.writer = adapter
+                panel.writer_fh = adapter
+                panel.volume_label = "%s ofs %d" % (adapter.fs_type.upper(), offset)
+                self.log_msg(
+                    "Том @ offset %d смонтирован — запись включена (%s)"
+                    % (offset, adapter.write_strategy)
+                )
 
         panel.path = "/"
         panel.tabs = ["/"]
@@ -2733,8 +3049,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Копирование в образ",
-                "Том в левой панели открыт только для чтения: запись "
-                "поддерживается только в FAT32.",
+                "Том в левой панели открыт только для чтения: для записи "
+                "нужен доступный backend выбранной файловой системы.",
             )
             return
         target_dir = other.path
@@ -2830,9 +3146,9 @@ class MainWindow(QMainWindow):
     def rename_selected(self):
         """Rename the cursor entry from the context menu.
 
-        FAT32 uses its native writer; local panels use ``os.rename``. The
-        operation intentionally targets one cursor entry, while batch actions
-        continue to use the Space-marked set.
+        Image panels use the active filesystem writer; local panels use
+        ``os.rename``. The operation intentionally targets one cursor entry,
+        while batch actions continue to use the Space-marked set.
         """
         p = self.active_panel()
         entry = p.selected_entry()
@@ -2842,8 +3158,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Переименование",
-                "Том открыт только для чтения: переименование доступно "
-                "только в FAT32.",
+                "Том открыт только для чтения: backend записи недоступен.",
             )
             return
         new_name, ok = QInputDialog.getText(
@@ -2878,12 +3193,35 @@ class MainWindow(QMainWindow):
         if not entries:
             return
         if p.mode == "img":
-            QMessageBox.information(
+            if p.writer is None:
+                QMessageBox.information(
+                    self,
+                    "Удалить",
+                    "Том открыт только для чтения: backend записи недоступен.",
+                )
+                return
+            names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
+            if len(entries) > 8:
+                names += "\n  … ещё %d" % (len(entries) - 8)
+            ret = QMessageBox.warning(
                 self,
-                "Удалить",
-                "Удаление из образа не поддерживается движком FAT32 "
-                "(создание, перезапись и mkdir).",
+                "Удалить из образа",
+                "Эта операция изменит образ и удалит %d объект(ов):\n\n%s\n\n"
+                "Продолжить?" % (len(entries), names),
+                MB_Yes | MB_No,
             )
+            if ret != MB_Yes or not self._backup_before_write(p):
+                return
+            for entry in entries:
+                try:
+                    p.writer.delete(
+                        p.join(entry["name"]), recursive=bool(entry["is_dir"])
+                    )
+                except Exception as exc:
+                    self.log_msg("Удаление не удалось (%s): %s" % (entry["name"], exc))
+            p.marked.clear()
+            p.refresh()
+            self.log_msg("Удалено объектов из образа: %d" % len(entries))
             return
         names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
         if len(entries) > 8:

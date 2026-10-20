@@ -6,6 +6,25 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Поиск файлов в образе**: меню «Инструменты → Поиск файла в образе…» и
+  `Ctrl+Shift+F` рекурсивно ищут имена/маски файлов во всех найденных томах,
+  показывают путь, ФС, размер и offset, а двойной клик открывает каталог файла.
+  Поиск ограничен 30 000 каталогами и 2 000 результатами, чтобы большие
+  forensic-образы не зависали в интерфейсе.
+
+- **Обзор образа целиком**: в меню «Инструменты» добавлена таблица всех
+  найденных томов сразу с файловой системой, размером, offset/LBA и источником
+  обнаружения. Двойной клик открывает выбранный том целиком в активной панели;
+  одинаковые сигнатуры одного физического тома больше не дублируются в списке.
+
+- **Non-FAT image writes in the GUI**: the Total Commander window now keeps
+  native FAT32 writes and falls back to `UniversalFSRW` for ext2/3/4 via
+  `debugfs`, NTFS via `ntfs-3g`, and supported loop-mounted filesystems.
+  Import, mkdir, overwrite, rename, and delete use the same explicit backup
+  confirmation. EXT4 `debugfs` listing and file rename are covered by new
+  regression tests; unsupported system helpers remain read-only with a clear
+  log message.
+
 - **macOS: `$MOUNTFILE_EDITOR` / `$VISUAL` / `$EDITOR` снова учитываются**:
   в `text_editor.editor_command` ветка `open -t` проверялась раньше
   переменных окружения, поэтому на macOS явно заданный редактор
@@ -90,7 +109,9 @@ file only tracks the releases themselves.
   классов — раньше `--dry-run` молча писал в образ); `create_rw_full`
   учитывает `dry_run`; `put` не пытается пересоздать существующий каталог;
   `get`/MCP-чтение больше не импортируют несуществующий `mountfile.main`.
-  Добавлены сквозные тесты `tests/test_rw_layer.py`.
+  Добавлены сквозные тесты `tests/test_rw_layer.py`
+
+
 - **Исправлены два дефекта записи FAT32**, из-за которых образ, который
   `WriteEngine.verify()` объявлял проверенным, `fsck.fat` отвергал как
   повреждённый (из-за этого падал `test_transaction_commit_writes_and_verifies`
