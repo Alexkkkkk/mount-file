@@ -11,8 +11,11 @@ status line - then the command line and the function key bar.
 
 Function keys (real shortcuts, also clickable buttons at the bottom):
 
-    F3  view the selected file in the hex viewer
-    F4  edit (not supported - images are modified by an F5 import)
+    F3  view the selected file - a text file (``.txt`` and the other plain
+        text kinds) opens in the system editor (Блокнот on Windows), anything
+        else in the hex viewer
+    F4  edit the selected text file in the same system editor (files inside an
+        image are modified by an F5 import, not by F4)
     F5  copy between panels (image -> local = extract,
         local -> image = import via the selected filesystem writer)
     F6  move (source removed when the engine can remove it)
@@ -31,14 +34,16 @@ All colours, fonts and column formatting live in :mod:`mountfile.tc_style`.
 
 from __future__ import annotations
 
+import atexit
 import fnmatch
 import os
 import shutil
+import tempfile
 import threading
 import webbrowser
 from pathlib import PurePosixPath
 
-from . import ai, autopick, tc_style
+from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .hexview import HexView
 from .partition import list_partitions
@@ -175,6 +180,31 @@ def local_drives():
         out.append(("/", "/"))
         out.append(("~", os.path.expanduser("~")))
     return out
+
+
+#: Фоновые потоки, отсоединённые от закрытого окна.
+#:
+#: Работающий QThread нельзя уничтожать: Qt печатает «QThread: Destroyed
+#: while thread is still running» и завершает процесс с ``Fatal Python
+#: error: Aborted``. Именно это убивало и CI, и само приложение при выходе
+#: во время проверки обновлений. Ссылка на такой поток переезжает сюда.
+_ORPHAN_THREADS = []
+
+
+def drain_orphan_threads(timeout_ms=250):
+    """Дать отсоединённым потокам завершиться, не блокируя GUI надолго."""
+    for thread in list(_ORPHAN_THREADS):
+        try:
+            if thread.isRunning():
+                thread.wait(timeout_ms)
+            if not thread.isRunning():
+                _ORPHAN_THREADS.remove(thread)
+        except Exception:  # pragma: no cover - поток уже уничтожен
+            if thread in _ORPHAN_THREADS:
+                _ORPHAN_THREADS.remove(thread)
+
+
+atexit.register(drain_orphan_threads)
 
 
 class ViewerDialog(QDialog):
@@ -630,8 +660,15 @@ class TcPanel(QWidget):
         is_file = bool(is_real_entry and not entry.get("is_dir"))
         can_write_image = self.mode != "img" or self.writer is not None
 
-        add("Открыть" if entry and entry.get("is_dir") else "Просмотр (F3)",
-            lambda: self.open_row(self.table.currentRow()), bool(entry))
+        is_text = bool(is_file and text_editor.is_text_file(entry["name"]))
+        if entry and entry.get("is_dir"):
+            open_label = "Открыть"
+        elif is_text:
+            open_label = "Открыть в Блокноте"
+        else:
+            open_label = "Просмотр (F3)"
+        add(open_label, lambda: self.open_row(self.table.currentRow()), bool(entry))
+        add("HEX-просмотр", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
         add("Копировать в другую панель (F5)", self.win.f5_copy, is_real_entry)
@@ -1095,8 +1132,10 @@ class TcPanel(QWidget):
             return
         if e["is_dir"]:
             self.cd(self.join(e["name"]))
+        elif text_editor.is_text_file(e["name"]):
+            self.win.open_text_file(self)
         else:
-            self.win.f3_view()
+            self.win.f3_hex_view()
 
 
 class AiDialog(QDialog):
@@ -1374,6 +1413,10 @@ class SettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    #: Сколько ждать завершения этапа обновления, прежде чем сбросить
+    #: индикатор в строке состояния (мс). 0 — сторож выключен.
+    UPDATE_WATCHDOG_MS = 15 * 60 * 1000
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
@@ -1386,6 +1429,9 @@ class MainWindow(QMainWindow):
 
         self.active_side = "L"
         self.updater = None
+        #: Каталог временных копий текстовых файлов из образов (см.
+        #: :meth:`open_text_file`); создаётся при первом обращении.
+        self._text_tmp = None
 
         self._build_ui()
         self._fit_to_screen()
@@ -1456,7 +1502,9 @@ class MainWindow(QMainWindow):
         if self.updater is not None and self.updater.isRunning():
             return
         self.log_msg("Проверка обновлений (установлено v%s)…" % app_version())
-        self.updater = StartupUpdater(self)
+        # parent=None: дочерний QThread удаляется вместе с окном, а удаление
+        # работающего QThread — это аварийное завершение всего процесса.
+        self.updater = StartupUpdater(None)
         self.updater.status.connect(self.log_msg)
         self.updater.available.connect(self._on_update_available)
         self.updater.installing.connect(
@@ -1513,6 +1561,8 @@ class MainWindow(QMainWindow):
         self._update_stage_label.show()
         self._update_bar.setRange(0, 0)
         self._update_bar.show()
+        if self.UPDATE_WATCHDOG_MS:
+            self._update_watchdog.start(self.UPDATE_WATCHDOG_MS)
 
     def _update_progress(self, value):
         """Ход скачивания: 0–100 %; ``-1`` — размер неизвестен («занят»)."""
@@ -1526,13 +1576,38 @@ class MainWindow(QMainWindow):
 
     def _update_hide(self):
         """Скрыть индикатор (нечего показывать / установка провалилась)."""
+        watchdog = getattr(self, "_update_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
         self._update_stage_label.hide()
         self._update_bar.hide()
 
+    def _update_timeout(self):
+        """Сторож сработал: сбросить «висящий» индикатор и сказать в журнал.
+
+        Без него полоса «занят» оставалась на экране навсегда, если поток
+        установки умирал молча, — именно так выглядела заморозка при
+        обновлении.
+        """
+        self._update_hide()
+        self.log_msg(
+            "Обновление не завершилось за %d мин — индикатор сброшен. "
+            "Журнал установки: %s"
+            % (
+                self.UPDATE_WATCHDOG_MS // 60000,
+                os.path.join(tempfile.gettempdir(), "mountfile-update.log"),
+            )
+        )
+
     def _on_update_installed(self):
+        """Обновление поставлено: сразу закрываемся, ничего не ожидая.
+
+        Скрипт подмены уже запущен и сам ждёт наш PID, поэтому окно должно
+        закрыться немедленно: пока процесс жив, файл занят и ``move`` не
+        проходит. Раньше здесь стояло ``wait_installer(3000)`` — поток GUI
+        замирал на три секунды в самый ненужный момент.
+        """
         self._close_writer()
-        if self.updater is not None:
-            self.updater.wait_installer(3000)
         QApplication.quit()
 
     # ------------------------------------------------------------------ UI
@@ -1559,6 +1634,11 @@ class MainWindow(QMainWindow):
         self._update_bar.setFixedWidth(140)
         sb.addPermanentWidget(self._update_stage_label)
         sb.addPermanentWidget(self._update_bar)
+        # Сторож против «висящего» индикатора: если этап обновления не
+        # закончился за UPDATE_WATCHDOG_MS, индикатор сбрасывается сам.
+        self._update_watchdog = QTimer(self)
+        self._update_watchdog.setSingleShot(True)
+        self._update_watchdog.timeout.connect(self._update_timeout)
         self._update_hide()
 
     def _icon(self, name):
@@ -2734,7 +2814,66 @@ class MainWindow(QMainWindow):
             self.log_msg("Команда «%s» не найдена. Доступно: cd <путь>" % text)
         self.cmdline.clear()
 
+    # -------------------------------------------------- текстовый редактор
+    def _text_temp_dir(self):
+        """Один временный каталог на сессию для копий текстовых файлов."""
+        if self._text_tmp is None or not os.path.isdir(self._text_tmp):
+            self._text_tmp = tempfile.mkdtemp(prefix="mountfile-text-")
+        return self._text_tmp
+
+    def open_text_file(self, panel=None):
+        """Открыть выбранный текстовый файл в системном редакторе.
+
+        Windows - Блокнот (``notepad.exe``), macOS - ``open -t``, Linux -
+        ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе первый
+        найденный редактор, иначе ``xdg-open``. Файл внутри образа сначала
+        извлекается во временный каталог, поэтому сам образ не меняется.
+        """
+        p = panel or self.active_panel()
+        entry = p.selected_entry()
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            QMessageBox.information(
+                self, "Блокнот", "Сначала выберите файл в активной панели."
+            )
+            return
+        self._open_text_entry(p, entry)
+
+    def _open_text_entry(self, panel, entry):
+        """Открыть `entry` в редакторе и записать результат в журнал окна."""
+        name = entry["name"]
+        try:
+            if panel.mode == "img":
+                if panel.provider is None:
+                    raise RuntimeError("том не открыт")
+                target, encoding = text_editor.prepare_image_text(
+                    panel.provider, panel.join(name), self._text_temp_dir()
+                )
+                note = "временная копия из образа: %s" % target
+            else:
+                target = panel.join(name)
+                encoding = "utf-8"
+                note = str(target)
+            argv = text_editor.open_in_editor(target)
+        except Exception as e:
+            QMessageBox.critical(self, "Блокнот", str(e))
+            self.log_msg("Блокнот: не удалось открыть %s: %s" % (name, e))
+            return
+        self.log_msg(
+            "Блокнот: %s -> %s (%s; кодировка %s)"
+            % (name, " ".join(argv), note, encoding)
+        )
+
     def f3_view(self):
+        """F3 / Enter: текстовый файл идёт в редактор, остальное в HEX."""
+        p = self.active_panel()
+        entry = p.selected_entry()
+        if entry and not entry.get("is_dir") and text_editor.is_text_file(entry["name"]):
+            self.open_text_file(p)
+            return
+        self.f3_hex_view()
+
+    def f3_hex_view(self):
+        """HEX-просмотр выбранного файла (первые ``PREVIEW_LIMIT`` байт)."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir"):
@@ -2757,8 +2896,16 @@ class MainWindow(QMainWindow):
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):
+        """F4: правка текстового файла в системном редакторе (Блокнот).
+
+        Локальный файл открывается как есть. Файл внутри образа открывается
+        временной копией, а сам образ меняется только импортом через F5.
+        """
         p = self.active_panel()
         entry = p.selected_entry()
+        if entry and not entry.get("is_dir") and text_editor.is_text_file(entry["name"]):
+            self.open_text_file(p)
+            return
         if p.mode == "img" and entry and not entry.get("is_dir"):
             self.log_msg(
                 "Правка (F4): файлы внутри образа изменяются только импортом "
@@ -2766,8 +2913,8 @@ class MainWindow(QMainWindow):
             )
             return
         self.log_msg(
-            "Правка (F4) не поддерживается — образ изменяется только "
-            "импортом через F5"
+            "Правка (F4): выберите текстовый файл (%s) — он откроется "
+            "в системном редакторе" % ", ".join(text_editor.TEXT_EXTENSIONS[:5])
         )
 
     # -------------------------------------------------------------- copying
@@ -3106,11 +3253,31 @@ class MainWindow(QMainWindow):
         if hasattr(self, "act_menu_toggle"):
             self.act_menu_toggle.setChecked(visible)
 
+    def _detach_updater(self):
+        """Отпустить поток обновления, не ожидая его в потоке GUI.
+
+        Раньше здесь стояло ``self.updater.wait(1500)``: окно замирало на
+        полторы секунды, а во время скачивания обновления — на всё время
+        загрузки. Если проверка не укладывалась в таймаут (медленная сеть,
+        прокси), QThread оставался работающим, терял последнюю ссылку и
+        уничтожался — процесс падал с ``Fatal Python error: Aborted``.
+        Теперь поток отвязывается и доживает в :data:`_ORPHAN_THREADS`.
+        """
+        updater = getattr(self, "updater", None)
+        self.updater = None
+        if updater is None:
+            return
+        try:
+            if updater.isRunning():
+                updater.requestInterruption()
+        except Exception:  # pragma: no cover - заглушка без Qt
+            pass
+        _ORPHAN_THREADS.append(updater)
+
     def closeEvent(self, e):
         self._close_writer()
         tc_style.save_settings()
-        if self.updater is not None and self.updater.isRunning():
-            self.updater.wait(1500)
+        self._detach_updater()
         super().closeEvent(e)
 
 
