@@ -32,6 +32,7 @@ env:
 
 jobs:
   gate:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
@@ -63,6 +64,7 @@ jobs:
   test:
     needs: gate
     if: needs.gate.outputs.proceed == 'true'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -81,6 +83,7 @@ jobs:
     name: exe (${{ matrix.label }})
     needs: [gate, test]
     if: needs.gate.outputs.proceed == 'true'
+    timeout-minutes: 30
     runs-on: windows-latest
     continue-on-error: ${{ matrix.legacy }}
     strategy:
@@ -210,6 +213,7 @@ jobs:
     name: unix binary (${{ matrix.label }})
     needs: [gate, test]
     if: needs.gate.outputs.proceed == 'true'
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -282,6 +286,7 @@ jobs:
       always() &&
       needs.gate.outputs.proceed == 'true' &&
       (needs.build.result == 'success' || needs.unix.result == 'success')
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       # gh release create/upload shell out to git, so the job must be inside

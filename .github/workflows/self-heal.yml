@@ -35,17 +35,18 @@ jobs:
     if: >-
       ${{ vars.ENABLE_AI_AUTOMATION == 'true' &&
           github.event.workflow_run.conclusion == 'failure' }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout failing ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 

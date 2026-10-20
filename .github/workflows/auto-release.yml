@@ -28,6 +28,7 @@ jobs:
   # JOB 1: Semantic Release — авто-версия и создание тега
   # ============================================================
   release:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     outputs:
       new_release_published: ${{ steps.semantic.outputs.new_release_published }}
@@ -35,13 +36,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # нужно для анализа всей истории коммитов
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -76,6 +77,7 @@ jobs:
   build:
     needs: release
     if: needs.release.outputs.new_release_published == 'true'
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -114,13 +116,13 @@ jobs:
       # Тег релиза — это vX.Y.Z, а output semantic-release отдаёт X.Y.Z
       # без префикса, поэтому здесь обязательна буква v.
       - name: Checkout (по тегу релиза)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: v${{ needs.release.outputs.new_release_version }}
           fetch-depth: 0
 
       - name: Setup Python ${{ matrix.python }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: 'pip'
@@ -161,7 +163,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.asset }}

@@ -32,6 +32,7 @@ jobs:
       github.event_name == 'issues' && github.event.action == 'opened' ||
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'
       )
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,13 +40,13 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -74,19 +75,20 @@ jobs:
       vars.ENABLE_AI_AUTOMATION == 'true' &&
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'failure'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
       - name: Checkout failing ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -117,13 +119,14 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.action == 'labeled' &&
       github.event.label.name == 'automerge'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -151,6 +154,7 @@ jobs:
   # ============================================================
   supply-chain-security:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -159,7 +163,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -175,7 +179,7 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom.spdx.json
@@ -186,6 +190,7 @@ jobs:
   # ============================================================
   observability:
     if: always()
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -211,6 +216,7 @@ jobs:
       github.event.action == 'closed' &&
       github.event.pull_request.merged == true ||
       github.event_name == 'schedule'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       contents: write
