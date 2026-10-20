@@ -40,6 +40,7 @@ python -m mountfile --help
 |---|---|---|
 | PyQt6 (в `requirements.txt` `>=6.11`) | основной для Win 10/11, Linux, macOS | GUI `main.py` |
 | `pytsk3` | необязателен для встроенного FAT32; нужен для NTFS/EXT и прочих ФС | сборка/колёса зависят от Python и платформы |
+| `debugfs` из e2fsprogs | необязателен; нужен для записи в ext2/3/4 через F4/F5 | исполняемый файл должен быть в `PATH`; не поставляется вместе с приложением |
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |
 | `dosfstools`, `mtools` | только разработка | создание синтетических образов через `make sample` |
 | `fastapi`, `uvicorn` | только DFIR REST-команда | нужны лишь для `mountfile_dfir.py serve` |
@@ -91,7 +92,12 @@ python main.py path\to\image.img
 
 На Windows 7 применяется PyQt5. Колёса `pytsk3` для Windows начинаются с
 Python 3.10, поэтому в Python 3.8 зависимость пропускается: встроенный FAT32
-работает, а чтение NTFS/EXT через `pytsk3` недоступно.
+работает, а чтение NTFS через `pytsk3` недоступно. Для EXT предусмотрен
+debugfs fallback, но он работает только при наличии совместимого `debugfs` в
+`PATH`.
+
+Если `debugfs` недоступен, EXT на Windows 7 остаётся только для чтения.
+Приложение не устанавливает системные инструменты автоматически.
 
 ## Проверка образа перед работой
 
