@@ -45,7 +45,6 @@ import datetime as _dt
 import hashlib
 import json
 import logging
-import os
 import shutil
 import struct
 import uuid

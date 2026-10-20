@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib
 from types import MappingProxyType
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from mountfile.plugins import FileEvent, OpenEvent, PluginStatus
 

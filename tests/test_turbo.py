@@ -14,7 +14,6 @@ Run:  python -m pytest tests/test_turbo.py -v
 
 import os
 import sqlite3
-import struct
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

@@ -21,28 +21,19 @@ mountfile_rw_v2.py — финальные патчи к Mount File Universal RW 
 from __future__ import annotations
 
 import hashlib
-import io
-import json
-import os
-import random
-import sqlite3
-import subprocess
 import sys
 import tempfile
-import time
-import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterator, Optional
 
 # Импорт предыдущих слоёв — кладём файлы рядом.
 try:
     from mountfile_universal_rw import (
-        FsType, Mode, RWError, StrategyUnavailable, FileStat, Journal,
-        detect_fs, create_rw, Fat32RW, Ext4RW, NtfsRW,
+        FsType, Mode, RWError, StrategyUnavailable, FileStat,  # noqa: F401
+        Journal, detect_fs, create_rw, Fat32RW, Ext4RW, NtfsRW,  # noqa: F401
     )
-    from mountfile_rw_complete import (
+    from mountfile_rw_complete import (  # noqa: F401
         Fat32Adapter, VerificationEngine, CrashRecovery, create_rw_full,
     )
 except ImportError as e:
@@ -507,7 +498,6 @@ def _fuzz_one(data: bytes) -> None:
     Проверяем, что движок не падает и не портит образ.
     """
     with _fake_fat32_journal() as (img, j):
-        original = img.read_bytes()
         for line in data.split(b"\n")[:10]:
             path = "/" + line.decode("utf-8", "replace")[:64]
             tx = j.begin("fuzz", path)
@@ -534,7 +524,7 @@ def run_fuzz(seconds: int = 30) -> int:
         print("atheris не установлен — пропуск fuzz.")
         return 0
     import sys as _sys
-    fuzzer = atheris.Setup([_sys.argv[0]], _fuzz_one)
+    atheris.Setup([_sys.argv[0]], _fuzz_one)
     atheris.Fuzz()
     return 0
 

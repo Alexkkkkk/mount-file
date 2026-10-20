@@ -25,7 +25,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Literal, Optional
+from typing import BinaryIO, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +473,6 @@ def create_engine(image_path: Path, fs_type: FsType, mode: Mode = Mode.RO) -> Wr
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
 
     image = Path("disk.img")
     image.write_bytes(b"\0" * 1024 * 1024)  # 1 MiB «образ» для демо

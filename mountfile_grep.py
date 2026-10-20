@@ -10,7 +10,6 @@ CLI: python mountfile_grep.py <image> <pattern> [--unicode] [--regex]
 from __future__ import annotations
 
 import argparse
-import mmap
 import re
 import sys
 from pathlib import Path

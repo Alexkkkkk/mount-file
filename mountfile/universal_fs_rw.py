@@ -1250,7 +1250,7 @@ class Ext234RW(RWBackend):
         out = self._debugfs(f"ls -l {path}")
         entries: list[FSEntry] = []
         for line in out.splitlines():
-            m = line.strip().split("/", 6)
+            line.strip().split("/", 6)
             # debugfs: `ls -l /` формат: inode mode uid gid size date name/
             parts = line.split()
             if len(parts) < 8 or parts[0] == "debugfs:":
