@@ -1656,6 +1656,8 @@ class MainWindow(QMainWindow):
             return
         if auto_install():
             return
+        if self._show_update_dialog(info):
+            return
         ret = QMessageBox.question(
             self,
             "Обновление Mount File",
@@ -1667,6 +1669,22 @@ class MainWindow(QMainWindow):
         )
         if ret == MB_Yes:
             self.updater.install(info, self)
+
+    def _show_update_dialog(self, info):
+        """Показать «Центр обновлений» вместо простого вопроса QMessageBox.
+
+        Возвращает False, если модуль окна недоступен (нет Qt / файл не
+        доставлен) — тогда вызывающий код показывает прежний вопрос.
+        """
+        try:
+            from .update_dialog import UpdateDialog
+        except Exception as exc:  # pragma: no cover - только без Qt/файла
+            self.log_msg("Окно обновления недоступно (%s) — простое подтверждение." % exc)
+            return False
+        dialog = UpdateDialog.from_release(info, app_version(), self)
+        self._update_hide()
+        dialog.exec()
+        return True
 
     def _on_update_restarting(self):
         self.statusBar().showMessage("Установка обновления — перезапуск…")
