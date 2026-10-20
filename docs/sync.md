@@ -82,7 +82,7 @@ python tools/mfsync.py check --strict     # exit 1 при расхождении
 
 Токен читается из `GH_TOKEN`, `GITHUB_TOKEN` или `MFSYNC_TOKEN` в момент
 вызова. Он не пишется ни в `.git/config`, ни в отчёты, ни в вывод: любая
-строка перед печатью проходит через `_redact()`, а URL вида
+строка перед печатью проходит через `redact_secret()`, а URL вида
 `https://x-access-token:...@github.com/...` маскируется.
 
 ```bash

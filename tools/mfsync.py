@@ -131,7 +131,7 @@ class SyncError(RuntimeError):
         self.details = details or []
 
 
-def _redact(text):
+def redact_secret(text):
     """Strip tokens from anything we are about to print or log."""
     text = str(text)
     for _kind, pattern in SECRET_PATTERNS:
@@ -146,19 +146,19 @@ def _redact(text):
 
 
 def say(text=""):
-    print(_redact(text))
+    print(redact_secret(text))
 
 
 def ok(text):
-    print("  \u2714 " + _redact(text))
+    print("  \u2714 " + redact_secret(text))
 
 
 def warn(text):
-    print("  ! " + _redact(text))
+    print("  ! " + redact_secret(text))
 
 
 def fail(text):
-    print("  \u2716 " + _redact(text), file=sys.stderr)
+    print("  \u2716 " + redact_secret(text), file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- git
@@ -337,7 +337,7 @@ def scan_text(text, path="<text>"):
                 "line": lineno,
                 "kind": kind,
                 "severity": severity_of(kind),
-                "snippet": _redact(snippet),
+                "snippet": redact_secret(snippet),
             })
             break
     return findings
@@ -368,7 +368,7 @@ def scan_files(cwd, paths=None):
                     snippet = snippet[:117] + "..."
                 findings.append({
                     "path": relative, "line": lineno, "kind": kind,
-                    "severity": severity_of(kind), "snippet": _redact(snippet),
+                    "severity": severity_of(kind), "snippet": redact_secret(snippet),
                 })
                 break
     return findings
@@ -509,7 +509,7 @@ def pull(cwd, remote="origin", rebase=True):
         raise SyncError(
             "pull stopped: %s conflicts with %s" % (current_branch(cwd), upstream),
             2,
-            conflicts or [_redact((run.stderr or run.stdout).strip())],
+            conflicts or [redact_secret((run.stderr or run.stdout).strip())],
         )
     result["rebased"] = True
 
@@ -580,8 +580,8 @@ def push(cwd, branch=None, remote="origin", force_with_lease=False):
     if proc.returncode != 0:
         output = (proc.stderr or "") + (proc.stdout or "")
         if needs_pr_fallback(output):
-            raise SyncError("push rejected by branch protection", 5, [_redact(output.strip())])
-        raise SyncError("push failed: %s" % _redact(output.strip()))
+            raise SyncError("push rejected by branch protection", 5, [redact_secret(output.strip())])
+        raise SyncError("push failed: %s" % redact_secret(output.strip()))
     return branch
 
 
@@ -601,7 +601,7 @@ def api(method, path, payload=None, token=None):
             return json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
-        raise SyncError("GitHub API %s %s -> %s: %s" % (method, path, exc.code, _redact(body)[:400]), exc.code)
+        raise SyncError("GitHub API %s %s -> %s: %s" % (method, path, exc.code, redact_secret(body)[:400]), exc.code)
     except urllib.error.URLError as exc:
         raise SyncError("GitHub API unreachable: %s" % exc.reason, 6)
 

@@ -142,9 +142,9 @@ def test_sensitive_filenames():
     assert hits == ["a/.env", "certs/server.pem", "id_rsa"]
 
 
-def test_redact_removes_env_token(monkeypatch):
+def testredact_secret_removes_env_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp_" + "z" * 36)
-    text = M._redact("push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36))
+    text = M.redact_secret("push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36))
     assert "ghp_" not in text
     assert "***" in text
 
