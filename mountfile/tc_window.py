@@ -14,10 +14,10 @@ Function keys (real shortcuts, also clickable buttons at the bottom):
     F3  view the selected file in the hex viewer
     F4  edit (not supported - images are modified by an F5 import)
     F5  copy between panels (image -> local = extract,
-        local -> image = FAT32 import via the write engine)
+        local -> image = import via the selected filesystem writer)
     F6  move (source removed when the engine can remove it)
     F7  make a directory in the active panel
-    F8  delete (local filesystem only; the FAT32 engine has no delete)
+    F8  delete (local filesystem or a writable image backend)
     F9  toggle the menu bar
 
 Keys inside a panel: Enter / double click opens, Backspace goes up, Tab
@@ -36,6 +36,7 @@ import os
 import shutil
 import threading
 import webbrowser
+from pathlib import PurePosixPath
 
 from . import ai, autopick, tc_style
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
@@ -70,6 +71,56 @@ COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")
 
 #: What Total Commander prints in the size column for a directory.
 DIR_SIZE_TEXT = "<Папка>"
+
+
+class _UniversalImageWriter:
+    """Adapt :class:`UniversalFSRW` to the GUI's legacy writer contract.
+
+    The panel UI historically called the native FAT32 writer with
+    ``(directory, name, data)`` arguments.  The package RW facade uses one
+    POSIX path instead.  Keeping this adapter in the GUI avoids changing the
+    tested FAT32 engine while enabling the same commands for ext2/3/4, NTFS,
+    and the loop-mount fallback.
+    """
+
+    def __init__(self, filesystem):
+        self.filesystem = filesystem
+        info = filesystem.info()
+        self.total_bytes = int(info.total_size or 0)
+        self.fs_type = info.fs_type
+        self.write_strategy = info.write_strategy
+
+    @staticmethod
+    def _join(directory, name):
+        directory = str(directory or "/").replace("\\", "/")
+        name = str(name).replace("\\", "/")
+        if name.startswith("/"):
+            return str(PurePosixPath(name))
+        return str(PurePosixPath(directory) / name)
+
+    def mkdir(self, directory, name):
+        self.filesystem.mkdir(self._join(directory, name))
+
+    def write_file(self, directory, name, data):
+        self.filesystem.write_file(self._join(directory, name), data)
+
+    def rename(self, source, destination):
+        source = str(source).replace("\\", "/")
+        destination = str(destination).replace("\\", "/")
+        if not destination.startswith("/"):
+            destination = self._join(str(PurePosixPath(source).parent), destination)
+        self.filesystem.rename(source, destination)
+
+    def delete(self, path, recursive=False):
+        self.filesystem.delete(path, recursive=recursive)
+
+    def close(self):
+        self.filesystem.close()
+
+    def free_space(self):
+        # The package facade deliberately does not guess free space for every
+        # filesystem.  Returning None keeps the GUI status truthful.
+        return None
 
 #: What the Имя / Тип / Размер / Дата / Атрибуты header row reads.
 #: The flexible Имя column is `COLUMN_NAME`; the other four keep a width
@@ -2317,10 +2368,12 @@ class MainWindow(QMainWindow):
 
         from .fat32 import Fat32, Fat32Error
 
+        fat_writer_ready = False
         try:
             fh = open(self.image_path, "r+b")
         except OSError as e:
-            self.log_msg("Том @ offset %d — только чтение (%s)" % (offset, e))
+            fh = None
+            fat_error = e
         else:
             try:
                 panel.writer = Fat32(fh, offset=offset)
@@ -2329,9 +2382,36 @@ class MainWindow(QMainWindow):
                 self.log_msg(
                     "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
                 )
+                fat_writer_ready = True
             except Fat32Error as e:
                 fh.close()
-                self.log_msg("Том @ offset %d — только чтение: %s" % (offset, e))
+                fat_error = e
+
+        # FAT32 keeps its native writer. For every other detected filesystem,
+        # use the package facade: ext2/3/4 via debugfs, NTFS via ntfs-3g, and
+        # other supported filesystems through the loop-mount backend. A failed
+        # optional backend remains a truthful read-only volume.
+        if not fat_writer_ready:
+            try:
+                from .universal_fs_rw import UniversalFSRW
+
+                filesystem = UniversalFSRW(
+                    self.image_path, offset=offset, auto_backup=False
+                )
+                adapter = _UniversalImageWriter(filesystem)
+            except Exception as e:
+                self.log_msg(
+                    "Том @ offset %d — только чтение (FAT32: %s; RW backend: %s)"
+                    % (offset, fat_error, e)
+                )
+            else:
+                panel.writer = adapter
+                panel.writer_fh = adapter
+                panel.volume_label = "%s ofs %d" % (adapter.fs_type.upper(), offset)
+                self.log_msg(
+                    "Том @ offset %d смонтирован — запись включена (%s)"
+                    % (offset, adapter.write_strategy)
+                )
 
         panel.path = "/"
         panel.tabs = ["/"]
@@ -2569,8 +2649,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Копирование в образ",
-                "Том в левой панели открыт только для чтения: запись "
-                "поддерживается только в FAT32.",
+                "Том в левой панели открыт только для чтения: для записи "
+                "нужен доступный backend выбранной файловой системы.",
             )
             return
         target_dir = other.path
@@ -2666,9 +2746,9 @@ class MainWindow(QMainWindow):
     def rename_selected(self):
         """Rename the cursor entry from the context menu.
 
-        FAT32 uses its native writer; local panels use ``os.rename``. The
-        operation intentionally targets one cursor entry, while batch actions
-        continue to use the Space-marked set.
+        Image panels use the active filesystem writer; local panels use
+        ``os.rename``. The operation intentionally targets one cursor entry,
+        while batch actions continue to use the Space-marked set.
         """
         p = self.active_panel()
         entry = p.selected_entry()
@@ -2678,8 +2758,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Переименование",
-                "Том открыт только для чтения: переименование доступно "
-                "только в FAT32.",
+                "Том открыт только для чтения: backend записи недоступен.",
             )
             return
         new_name, ok = QInputDialog.getText(
@@ -2714,12 +2793,35 @@ class MainWindow(QMainWindow):
         if not entries:
             return
         if p.mode == "img":
-            QMessageBox.information(
+            if p.writer is None:
+                QMessageBox.information(
+                    self,
+                    "Удалить",
+                    "Том открыт только для чтения: backend записи недоступен.",
+                )
+                return
+            names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
+            if len(entries) > 8:
+                names += "\n  … ещё %d" % (len(entries) - 8)
+            ret = QMessageBox.warning(
                 self,
-                "Удалить",
-                "Удаление из образа не поддерживается движком FAT32 "
-                "(создание, перезапись и mkdir).",
+                "Удалить из образа",
+                "Эта операция изменит образ и удалит %d объект(ов):\n\n%s\n\n"
+                "Продолжить?" % (len(entries), names),
+                MB_Yes | MB_No,
             )
+            if ret != MB_Yes or not self._backup_before_write(p):
+                return
+            for entry in entries:
+                try:
+                    p.writer.delete(
+                        p.join(entry["name"]), recursive=bool(entry["is_dir"])
+                    )
+                except Exception as exc:
+                    self.log_msg("Удаление не удалось (%s): %s" % (entry["name"], exc))
+            p.marked.clear()
+            p.refresh()
+            self.log_msg("Удалено объектов из образа: %d" % len(entries))
             return
         names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
         if len(entries) > 8:

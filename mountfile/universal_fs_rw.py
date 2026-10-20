@@ -1260,8 +1260,13 @@ class Ext234RW(RWBackend):
                 mode = int(parts[1], 8)
             except ValueError:
                 continue
-            name = parts[7] if len(parts) > 7 else parts[-1]
-            is_dir = name.endswith("/")
+            # ``ls -l`` emits date and time before the name; names may contain
+            # spaces, so retain all tokens after the timestamp instead of
+            # treating the time as the entry name.
+            if len(parts) < 9:
+                continue
+            name = " ".join(parts[8:])
+            is_dir = (mode & 0o170000) == 0o040000
             name = name.rstrip("/")
             if name in (".", ".."):
                 continue
@@ -1296,7 +1301,7 @@ class Ext234RW(RWBackend):
             tmp = Path(tf.name)
         try:
             # удалить если существует
-            self._debugfs(f"rm {path}")
+            self._debugfs(f"rm {path}", write=True)
             self._debugfs(f"write {tmp} {path}", write=True)
             self._flush_tmp()
         finally:
@@ -1314,8 +1319,27 @@ class Ext234RW(RWBackend):
             self._flush_tmp()
 
     def rename(self, src: str, dst: str) -> None:
-        self._debugfs(f"rename {src} {dst}", write=True)
-        self._flush_tmp()
+        # debugfs has no ``rename`` command.  Use a bounded dump/write/unlink
+        # sequence for regular files, preserving the source until the new
+        # directory entry has been created successfully.  Directory rename is
+        # intentionally rejected rather than pretending that a file-only
+        # emulation preserves an entire subtree.
+        entries = self.list(str(PurePosixPath(src).parent))
+        source = next((item for item in entries if item.path == src), None)
+        if source is None:
+            raise FileNotFoundError(src)
+        if source.is_dir:
+            raise NotImplementedError("ext directory rename is not supported by debugfs")
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            tmp = Path(tf.name)
+        try:
+            self._debugfs(f"dump {src} {tmp}")
+            self._debugfs(f"rm {dst}", write=True)
+            self._debugfs(f"write {tmp} {dst}", write=True)
+            self._debugfs(f"rm {src}", write=True)
+            self._flush_tmp()
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 # =============================================================================

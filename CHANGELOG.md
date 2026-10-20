@@ -6,6 +6,14 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Non-FAT image writes in the GUI**: the Total Commander window now keeps
+  native FAT32 writes and falls back to `UniversalFSRW` for ext2/3/4 via
+  `debugfs`, NTFS via `ntfs-3g`, and supported loop-mounted filesystems.
+  Import, mkdir, overwrite, rename, and delete use the same explicit backup
+  confirmation. EXT4 `debugfs` listing and file rename are covered by new
+  regression tests; unsupported system helpers remain read-only with a clear
+  log message.
+
 - **Package linking for EPIC #87**: `JournalV2` is now implemented in
   `mountfile.universal_fs_rw` with in-place legacy SQLite migration and
   byte-exact rollback; `mountfile_rw_v2.JournalV2` remains a compatibility
