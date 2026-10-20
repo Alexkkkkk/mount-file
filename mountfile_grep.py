@@ -7,6 +7,8 @@ mountfile_grep.py — Content search (grep) внутри raw-образов.
 CLI: python mountfile_grep.py <image> <pattern> [--unicode] [--regex]
 """
 
+from __future__ import annotations
+
 import argparse
 import mmap
 import re

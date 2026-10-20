@@ -1,0 +1,151 @@
+name: mfsync
+
+# Runs tools/mfsync.py inside GitHub Actions.
+#
+#   verify   (push / PR / schedule / manual) - read-only gates: sync report,
+#            secret scan, version parity, helper self-tests, JSON artifact.
+#   autosync (manual or nightly only)        - commits and pushes, or opens a
+#            pull request when main is protected. Uses the repository's own
+#            GITHUB_TOKEN; no personal token is referenced anywhere here.
+#
+# Loop protection:
+#   * a push event can never reach the write job (it needs workflow_dispatch or
+#     schedule), so a commit made by CI cannot re-trigger the writer;
+#   * generated commits carry [skip ci];
+#   * bot actors are skipped as a second line of defence;
+#   * concurrency group `mfsync-write` serialises writers.
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+      - 'sync/**'
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'verify = checks only, commit = commit + push, pr = commit + pull request'
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - commit
+          - pr
+      message:
+        description: 'Commit message (empty = generated from the diff)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mfsync-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify (status, secrets, versions, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Sync report
+        run: python tools/mfsync.py status
+
+      - name: Secret scan (github_pat_*/ghp_*/AKIA*/xox*/sk-*)
+        run: python tools/mfsync.py scan --all
+
+      - name: Version parity (pyproject.toml vs mountfile/__init__.py)
+        run: python tools/mfsync.py check --strict
+
+      - name: Helper self-tests
+        run: |
+          python -m pip install --quiet --upgrade pytest
+          python -m pytest tests/test_mfsync.py -q
+
+      - name: Machine-readable report
+        if: always()
+        run: python tools/mfsync.py status --json > mfsync-status.json
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mfsync-status
+          path: mfsync-status.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Job summary
+        if: always()
+        run: python tools/mfsync.py status | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+
+  autosync:
+    name: Autosync
+    needs: verify
+    if: |
+      always() && (
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'verify') ||
+        github.event_name == 'schedule'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: mfsync-write
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync
+        run: |
+          set -eu
+          MODE="${{ github.event.inputs.mode }}"
+          MESSAGE="${{ github.event.inputs.message }}"
+          if [ -z "$MESSAGE" ]; then
+            MESSAGE="chore(sync): automated mfsync run [skip ci]"
+          else
+            MESSAGE="$MESSAGE [skip ci]"
+          fi
+          echo "mode=${MODE:-commit}"
+          if [ "$MODE" = "pr" ]; then
+            python tools/mfsync.py sync --pr -m "$MESSAGE"
+          else
+            python tools/mfsync.py sync -m "$MESSAGE"
+          fi
+
+      - name: Post-sync report
+        if: always()
+        run: python tools/mfsync.py status | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"

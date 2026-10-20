@@ -43,7 +43,7 @@ import threading
 import time
 import traceback
 import zlib
-from collections.abc import Callable
+from typing import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
