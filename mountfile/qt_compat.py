@@ -125,6 +125,9 @@ if QT6:  # pragma: no branch
     SizePolicyFixed = QSizePolicy.Policy.Fixed
     SizePolicyIgnored = QSizePolicy.Policy.Ignored
     ComboAdjustToContents = QComboBox.SizeAdjustPolicy.AdjustToContents
+    ComboAdjustToMinimumContentsLengthWithIcon = (
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
     DlgOk = QDialogButtonBox.StandardButton.Ok
     DlgCancel = QDialogButtonBox.StandardButton.Cancel
     DlgClose = QDialogButtonBox.StandardButton.Close
@@ -197,6 +200,9 @@ else:  # pragma: no cover - PyQt5 / Windows 7
     SizePolicyFixed = QSizePolicy.Fixed
     SizePolicyIgnored = QSizePolicy.Ignored
     ComboAdjustToContents = QComboBox.AdjustToContents
+    ComboAdjustToMinimumContentsLengthWithIcon = (
+        QComboBox.AdjustToMinimumContentsLengthWithIcon
+    )
     DlgOk = QDialogButtonBox.Ok
     DlgCancel = QDialogButtonBox.Cancel
     DlgClose = QDialogButtonBox.Close
@@ -402,6 +408,7 @@ __all__ = [
     "SizePolicyFixed",
     "SizePolicyIgnored",
     "ComboAdjustToContents",
+    "ComboAdjustToMinimumContentsLengthWithIcon",
     "DlgOk",
     "DlgCancel",
     "DlgClose",

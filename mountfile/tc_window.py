@@ -11,13 +11,18 @@ status line - then the command line and the function key bar.
 
 Function keys (real shortcuts, also clickable buttons at the bottom):
 
-    F3  view the selected file in the hex viewer
-    F4  edit text files (FAT32, ext2/3/4 with debugfs; image backup required)
+    F3  view the selected file - a text file (``.txt`` and the other plain
+        text kinds) opens in the system editor (Блокнот on Windows), anything
+        else in the hex viewer
+    F4  edit a text file in the built-in bounded editor: a local file is saved
+        atomically, a file inside the image is written through the volume
+        writer (FAT32 or ext2/3/4 via ``debugfs``) after an explicit
+        confirmation and a fresh, non-overwriting image backup
     F5  copy between panels (image -> local = extract,
-        local -> image = import on writable FAT32/ext volumes)
+        local -> image = import via the selected filesystem writer)
     F6  move (source removed when the engine can remove it)
     F7  make a directory in the active panel
-    F8  delete (local filesystem only; the FAT32 engine has no delete)
+    F8  delete (local filesystem or a writable image backend)
     F9  toggle the menu bar
 
 Keys inside a panel: Enter / double click opens, Backspace goes up, Tab
@@ -31,14 +36,16 @@ All colours, fonts and column formatting live in :mod:`mountfile.tc_style`.
 
 from __future__ import annotations
 
+import atexit
 import fnmatch
 import os
 import shutil
 import tempfile
 import threading
 import webbrowser
+from pathlib import PurePosixPath
 
-from . import ai, autopick, tc_style
+from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .hexview import HexView
 from .partition import list_partitions
@@ -72,6 +79,56 @@ COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")
 #: What Total Commander prints in the size column for a directory.
 DIR_SIZE_TEXT = "<Папка>"
 
+
+class _UniversalImageWriter:
+    """Adapt :class:`UniversalFSRW` to the GUI's legacy writer contract.
+
+    The panel UI historically called the native FAT32 writer with
+    ``(directory, name, data)`` arguments.  The package RW facade uses one
+    POSIX path instead.  Keeping this adapter in the GUI avoids changing the
+    tested FAT32 engine while enabling the same commands for ext2/3/4, NTFS,
+    and the loop-mount fallback.
+    """
+
+    def __init__(self, filesystem):
+        self.filesystem = filesystem
+        info = filesystem.info()
+        self.total_bytes = int(info.total_size or 0)
+        self.fs_type = info.fs_type
+        self.write_strategy = info.write_strategy
+
+    @staticmethod
+    def _join(directory, name):
+        directory = str(directory or "/").replace("\\", "/")
+        name = str(name).replace("\\", "/")
+        if name.startswith("/"):
+            return str(PurePosixPath(name))
+        return str(PurePosixPath(directory) / name)
+
+    def mkdir(self, directory, name):
+        self.filesystem.mkdir(self._join(directory, name))
+
+    def write_file(self, directory, name, data):
+        self.filesystem.write_file(self._join(directory, name), data)
+
+    def rename(self, source, destination):
+        source = str(source).replace("\\", "/")
+        destination = str(destination).replace("\\", "/")
+        if not destination.startswith("/"):
+            destination = self._join(str(PurePosixPath(source).parent), destination)
+        self.filesystem.rename(source, destination)
+
+    def delete(self, path, recursive=False):
+        self.filesystem.delete(path, recursive=recursive)
+
+    def close(self):
+        self.filesystem.close()
+
+    def free_space(self):
+        # The package facade deliberately does not guess free space for every
+        # filesystem.  Returning None keeps the GUI status truthful.
+        return None
+
 #: What the Имя / Тип / Размер / Дата / Атрибуты header row reads.
 #: The flexible Имя column is `COLUMN_NAME`; the other four keep a width
 #: derived from their own header and reference content (see
@@ -85,6 +142,15 @@ NAME_MIN_WIDTH = 150
 
 #: How many bytes the F3 viewer shows, and the chunk one AI read pulls.
 PREVIEW_LIMIT = 1 << 20
+
+#: Extensions the built-in F4 editor accepts (bounded text files only).
+EDITABLE_TEXT_EXTENSIONS = (
+    ".ini", ".cfg", ".conf", ".txt", ".log", ".json", ".xml",
+    ".csv", ".yaml", ".yml", ".md",
+)
+
+#: Hard size limit of one F4 edit; the reader also refuses larger files.
+MAX_EDIT_BYTES = 2 * 1024 * 1024
 
 #: One-line reminder of the panel keys, shown under an empty panel.
 PANEL_LEGEND = (
@@ -125,6 +191,31 @@ def local_drives():
         out.append(("/", "/"))
         out.append(("~", os.path.expanduser("~")))
     return out
+
+
+#: Фоновые потоки, отсоединённые от закрытого окна.
+#:
+#: Работающий QThread нельзя уничтожать: Qt печатает «QThread: Destroyed
+#: while thread is still running» и завершает процесс с ``Fatal Python
+#: error: Aborted``. Именно это убивало и CI, и само приложение при выходе
+#: во время проверки обновлений. Ссылка на такой поток переезжает сюда.
+_ORPHAN_THREADS = []
+
+
+def drain_orphan_threads(timeout_ms=250):
+    """Дать отсоединённым потокам завершиться, не блокируя GUI надолго."""
+    for thread in list(_ORPHAN_THREADS):
+        try:
+            if thread.isRunning():
+                thread.wait(timeout_ms)
+            if not thread.isRunning():
+                _ORPHAN_THREADS.remove(thread)
+        except Exception:  # pragma: no cover - поток уже уничтожен
+            if thread in _ORPHAN_THREADS:
+                _ORPHAN_THREADS.remove(thread)
+
+
+atexit.register(drain_orphan_threads)
 
 
 class ViewerDialog(QDialog):
@@ -214,6 +305,19 @@ class _ExtPanelWriter:
     def rename(self, source, new_name):
         parent = source.replace("\\", "/").rsplit("/", 1)[0] or "/"
         self.backend.rename(source, self._join(parent, new_name))
+
+    def delete(self, path, recursive=False):
+        self.backend.delete(path, recursive=recursive)
+
+    def close(self):
+        self.backend.close()
+
+    def free_space(self):
+        return self.backend.free_space()
+
+    @property
+    def total_bytes(self):
+        return self.backend.filesystem_size
 
 
 def _decode_editable_text(data):
@@ -335,6 +439,73 @@ class ForensicTriageDialog(QDialog):
             return
         findings = list(detect_timestomp(read_timeline_csv(path)))
         self.output.setPlainText("\n".join("%s\t%s" % (r.path, ", ".join(reasons)) for r, reasons in findings[:1000]) + "\n\nFindings: %d" % len(findings))
+
+
+class ImageFileSearchDialog(QDialog):
+    """Search filesystem entries by name across every detected image volume."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.owner = parent
+        self.setWindowTitle("Поиск файла в образе")
+        self.resize(900, 520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Образ: %s" % (parent.image_path or "не открыт")))
+
+        row = QHBoxLayout()
+        self.pattern = QLineEdit("*")
+        self.pattern.setPlaceholderText("Имя или маска, например *.db или config")
+        self.pattern.returnPressed.connect(self.run_search)
+        button = QPushButton("Искать во всём образе")
+        button.clicked.connect(self.run_search)
+        row.addWidget(self.pattern, 1)
+        row.addWidget(button)
+        layout.addLayout(row)
+
+        self.status = QLabel("Введите имя или маску файла.")
+        layout.addWidget(self.status)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(("Том", "ФС", "Путь", "Размер", "Offset"))
+        self.table.setSelectionBehavior(SelectRows)
+        self.table.setEditTriggers(NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self.open_result)
+        layout.addWidget(self.table, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close, 0, AlignRight)
+        self.results = []
+
+    def run_search(self):
+        pattern = self.pattern.text().strip()
+        if not pattern:
+            self.status.setText("Введите имя или маску файла.")
+            return
+        self.status.setText("Поиск…")
+        QApplication.processEvents()
+        try:
+            self.results = self.owner.search_files_in_image(pattern)
+        except Exception as exc:
+            self.results = []
+            self.status.setText("Ошибка поиска: %s" % exc)
+            return
+        self.table.setRowCount(len(self.results))
+        for row, result in enumerate(self.results):
+            values = (
+                result["volume"],
+                result["fstype"],
+                result["path"],
+                tc_style.fmt_size(result["size"]),
+                "0x%X" % result["offset"],
+            )
+            for column, value in enumerate(values):
+                self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        self.table.resizeColumnsToContents()
+        self.status.setText("Найдено файлов: %d" % len(self.results))
+
+    def open_result(self, row, _column):
+        if 0 <= row < len(self.results):
+            self.accept()
+            self.owner.open_image_search_result(self.results[row])
 
 
 class PanelTable(QTableWidget):
@@ -496,6 +667,10 @@ class TcPanel(QWidget):
         self.cmb_drive = QComboBox()
         self.cmb_drive.setMinimumWidth(230)
         self.cmb_drive.setSizeAdjustPolicy(ComboAdjustToContents)
+        # Qt по умолчанию показывает 10 строк в дропдауне: дампы с десятками
+        # разделов прячут остальные тома за встроенным scroll. 64 — потолок,
+        # при котором любой практический дамп помещается целиком.
+        self.cmb_drive.setMaxVisibleItems(64)
         self.cmb_drive.currentIndexChanged.connect(self.drive_changed)
         bar.addWidget(self.cmb_drive)
         self.lbl_space = QLabel("")
@@ -602,8 +777,15 @@ class TcPanel(QWidget):
         is_file = bool(is_real_entry and not entry.get("is_dir"))
         can_write_image = self.mode != "img" or self.writer is not None
 
-        add("Открыть" if entry and entry.get("is_dir") else "Просмотр (F3)",
-            lambda: self.open_row(self.table.currentRow()), bool(entry))
+        is_text = bool(is_file and text_editor.is_text_file(entry["name"]))
+        if entry and entry.get("is_dir"):
+            open_label = "Открыть"
+        elif is_text:
+            open_label = "Открыть в Блокноте"
+        else:
+            open_label = "Просмотр (F3)"
+        add(open_label, lambda: self.open_row(self.table.currentRow()), bool(entry))
+        add("HEX-просмотр", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
         add("Копировать в другую панель (F5)", self.win.f5_copy, is_real_entry)
@@ -1067,8 +1249,10 @@ class TcPanel(QWidget):
             return
         if e["is_dir"]:
             self.cd(self.join(e["name"]))
+        elif text_editor.is_text_file(e["name"]):
+            self.win.open_text_file(self)
         else:
-            self.win.f3_view()
+            self.win.f3_hex_view()
 
 
 class AiDialog(QDialog):
@@ -1311,9 +1495,9 @@ class SettingsDialog(QDialog):
             int(tc_style.SETTINGS.get("ai_max_bytes") or 262144) // 1024
         )
         lay.addRow("Читать до:", self.spn_ai_bytes)
-        # --- AI-советник v2: авто-разбор формата + отчёт на GitHub (opt-in)
+        # --- Privacy-safe Format Advisor: локальные рекомендации по метаданным
         self.chk_advise = QCheckBox(
-            "AI-советник: предлагать разбор формата при открытии файла"
+            "Format Advisor: показывать локальные советы по метаданным при открытии"
         )
         self.chk_advise.setChecked(bool(tc_style.SETTINGS.get("ai_format_autohook")))
         lay.addRow("", self.chk_advise)
@@ -1346,10 +1530,15 @@ class SettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    #: Сколько ждать завершения этапа обновления, прежде чем сбросить
+    #: индикатор в строке состояния (мс). 0 — сторож выключен.
+    UPDATE_WATCHDOG_MS = 15 * 60 * 1000
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
         self.setMinimumSize(640, 400)
+        self._apply_app_icon()
 
         self.image_path = None
         self.volumes = []
@@ -1357,6 +1546,9 @@ class MainWindow(QMainWindow):
 
         self.active_side = "L"
         self.updater = None
+        #: Каталог временных копий текстовых файлов из образов (см.
+        #: :meth:`open_text_file`); создаётся при первом обращении.
+        self._text_tmp = None
 
         self._build_ui()
         self._fit_to_screen()
@@ -1367,6 +1559,18 @@ class MainWindow(QMainWindow):
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._start_updater()
+
+    # ----------------------------------------------------------------- icon
+    def _apply_app_icon(self):
+        """Window icon from the packaged artwork (cosmetic, never raises)."""
+        try:
+            from . import appicon
+
+            icon = appicon.app_icon()
+            if icon is not None and not icon.isNull():
+                self.setWindowIcon(icon)
+        except Exception:  # pragma: no cover - icons are cosmetic
+            pass
 
     # -------------------------------------------------------- screen fit
     def screen_geometry(self):
@@ -1415,7 +1619,9 @@ class MainWindow(QMainWindow):
         if self.updater is not None and self.updater.isRunning():
             return
         self.log_msg("Проверка обновлений (установлено v%s)…" % app_version())
-        self.updater = StartupUpdater(self)
+        # parent=None: дочерний QThread удаляется вместе с окном, а удаление
+        # работающего QThread — это аварийное завершение всего процесса.
+        self.updater = StartupUpdater(None)
         self.updater.status.connect(self.log_msg)
         self.updater.available.connect(self._on_update_available)
         self.updater.installing.connect(
@@ -1472,6 +1678,8 @@ class MainWindow(QMainWindow):
         self._update_stage_label.show()
         self._update_bar.setRange(0, 0)
         self._update_bar.show()
+        if self.UPDATE_WATCHDOG_MS:
+            self._update_watchdog.start(self.UPDATE_WATCHDOG_MS)
 
     def _update_progress(self, value):
         """Ход скачивания: 0–100 %; ``-1`` — размер неизвестен («занят»)."""
@@ -1485,13 +1693,38 @@ class MainWindow(QMainWindow):
 
     def _update_hide(self):
         """Скрыть индикатор (нечего показывать / установка провалилась)."""
+        watchdog = getattr(self, "_update_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
         self._update_stage_label.hide()
         self._update_bar.hide()
 
+    def _update_timeout(self):
+        """Сторож сработал: сбросить «висящий» индикатор и сказать в журнал.
+
+        Без него полоса «занят» оставалась на экране навсегда, если поток
+        установки умирал молча, — именно так выглядела заморозка при
+        обновлении.
+        """
+        self._update_hide()
+        self.log_msg(
+            "Обновление не завершилось за %d мин — индикатор сброшен. "
+            "Журнал установки: %s"
+            % (
+                self.UPDATE_WATCHDOG_MS // 60000,
+                os.path.join(tempfile.gettempdir(), "mountfile-update.log"),
+            )
+        )
+
     def _on_update_installed(self):
+        """Обновление поставлено: сразу закрываемся, ничего не ожидая.
+
+        Скрипт подмены уже запущен и сам ждёт наш PID, поэтому окно должно
+        закрыться немедленно: пока процесс жив, файл занят и ``move`` не
+        проходит. Раньше здесь стояло ``wait_installer(3000)`` — поток GUI
+        замирал на три секунды в самый ненужный момент.
+        """
         self._close_writer()
-        if self.updater is not None:
-            self.updater.wait_installer(3000)
         QApplication.quit()
 
     # ------------------------------------------------------------------ UI
@@ -1518,6 +1751,11 @@ class MainWindow(QMainWindow):
         self._update_bar.setFixedWidth(140)
         sb.addPermanentWidget(self._update_stage_label)
         sb.addPermanentWidget(self._update_bar)
+        # Сторож против «висящего» индикатора: если этап обновления не
+        # закончился за UPDATE_WATCHDOG_MS, индикатор сбрасывается сам.
+        self._update_watchdog = QTimer(self)
+        self._update_watchdog.setSingleShot(True)
+        self._update_watchdog.timeout.connect(self._update_timeout)
         self._update_hide()
 
     def _icon(self, name):
@@ -1774,6 +2012,12 @@ class MainWindow(QMainWindow):
             self._action("Сводка образа и тома…", self.show_image_info)
         )
         m_tool.addAction(
+            self._action("Обзор всего образа…", self.show_whole_image)
+        )
+        m_tool.addAction(
+            self._action("Поиск файла в образе…", self.search_image_files, "Ctrl+Shift+F")
+        )
+        m_tool.addAction(
             self._action("DFIR triage (только чтение)…", self.open_forensic_triage)
         )
         m_tool.addSeparator()
@@ -1781,15 +2025,15 @@ class MainWindow(QMainWindow):
         m_tool.addAction(self._action("Разбить дамп по udev…", self.tool_split))
         m_tool.addSeparator()
         m_tool.addAction(self.act_ai)
-        # «AI-советник v2» живёт только в меню: тулбар-тесты закрепляют
+        # Format Advisor живёт только в меню: тулбар-тесты закрепляют
         # кнопку AI последней иконкой панели, лишняя кнопка на тулбаре
         # сломала бы позиционные проверки (tests/test_ai_ui.py).
         self.act_advise = self._action(
-            "AI-советник v2 (multi-hypothesis)",
+            "Format Advisor (offline, metadata-only)",
             self._on_advise,
             "Ctrl+Shift+I",
             "SP_ComputerIcon",
-            "Мульти-гипотезный разбор формата файла (Ctrl+Shift+I)",
+            "Локальные рекомендации по имени, расширению и размеру; файл не читается (Ctrl+Shift+I)",
         )
         m_tool.addAction(self.act_advise)
 
@@ -1934,16 +2178,7 @@ class MainWindow(QMainWindow):
         exec_dialog(dlg)
 
     def _on_advise(self):
-        """«AI-советник v2»: мульти-гипотезный разбор формата файла.
-
-        Советник ставит гипотезы по сигнатурам, затем опрашивает модель;
-        при включённом консенсусе и доступном втором бэкенде голосуют двое.
-        Отчёт на GitHub уходит только при заполненных настройках репозитория
-        и токена (токен никогда не попадает в журнал и в отчёт).
-        """
-        from mountfile.ai_format_advisor_v2 import (GitHubReporter,
-                                                    advise_and_show)
-
+        """Show offline, metadata-only format recommendations."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir") or entry.get("up"):
@@ -1951,35 +2186,49 @@ class MainWindow(QMainWindow):
                 self, "AI-советник", "Сначала выберите файл в активной панели."
             )
             return
-        backends = [ai.build_backend(tc_style.SETTINGS)]
-        if tc_style.SETTINGS.get("ai_consensus"):
-            for key in ("ollama", "openai"):
-                extra = ai.build_backend({**tc_style.SETTINGS, "ai_backend": key})
-                if extra.name != backends[0].name and extra.available():
-                    backends.append(extra)
-        github = None
-        repo = tc_style.SETTINGS.get("ai_github_repo") or ""
-        token = tc_style.SETTINGS.get("ai_github_token") or ""
-        if repo and token:
-            try:
-                github = GitHubReporter(repo, token)
-            except ValueError:
-                github = None
-        advise_and_show(
-            p.join(entry["name"]),
-            backends,
-            github=github,
-            parent=self,
-            # Файл внутри образа нельзя открыть по пути — байты уже здесь.
-            head=(
-                p.provider.read_file_range(p.join(entry["name"]), 0, 4096)
-                if p.mode == "img"
-                else None
-            ),
-        )
+        from mountfile.ai_format_advisor import Remember, advise_from_metadata
 
-    def _maybe_advise(self, path, head=None):
-        """Autohook: при открытии файла с неуверенным форматом — советник.
+        filename = entry["name"]
+        remember = Remember()
+        fingerprint, recipes = advise_from_metadata(
+            filename, size=entry.get("size"), remember=remember
+        )
+        text = self._format_metadata_advice(fingerprint, recipes)
+        answer = QMessageBox.question(
+            self,
+            "Format Advisor (offline, metadata-only)",
+            text + "\n\nСохранить верхнюю рекомендацию локально в ~/.mountfile/ai_kb.json?",
+            MB_Yes | MB_No,
+            MB_No,
+        )
+        if answer == MB_Yes:
+            try:
+                remember.remember(fingerprint, recipes[0])
+                self.log_msg("Format Advisor: сохранена локальная рекомендация для %s" % fingerprint.filename)
+            except OSError as exc:
+                QMessageBox.information(self, "Format Advisor", "Не удалось сохранить рекомендацию: %s" % exc)
+
+    @staticmethod
+    def _format_metadata_advice(fingerprint, recipes):
+        lines = [
+            "Использованы только имя, расширение и размер. Файл не открывался; сеть и модель не вызывались.",
+            "Файл: %s | расширение: %s | размер: %s" % (
+                fingerprint.filename,
+                fingerprint.extension or "неизвестно",
+                fingerprint.size if fingerprint.size is not None else "неизвестен",
+            ),
+            "",
+        ]
+        for recipe in recipes:
+            lines.append("%d. %s (уверенность %.0f%%) — %s" % (
+                recipe["rank"], recipe["format"], 100.0 * recipe["confidence"], recipe["evidence"]
+            ))
+            lines.append("   Инструменты (не запускаются автоматически): %s" % ", ".join(recipe.get("tools", [])))
+            lines.extend("   • %s" % step for step in recipe["steps"])
+        return "\n".join(lines)
+
+    def _maybe_advise(self, path, size=None):
+        """Log an offline metadata-only hint for an uncertain opened file.
 
         Включается галочкой «ai_format_autohook» в Настройках; никак не
         может сломать открытие файла — все ошибки глушатся в журнал.
@@ -1987,13 +2236,16 @@ class MainWindow(QMainWindow):
         if not tc_style.SETTINGS.get("ai_format_autohook"):
             return
         try:
-            from mountfile.ai_format_advisor_v2 import maybe_advise
+            from mountfile.ai_format_advisor import advise_from_metadata
 
-            maybe_advise(
-                tc_style.SETTINGS, path, parent=self, log=self.log_msg, head=head
-            )
+            fingerprint, recipes = advise_from_metadata(path, size=size)
+            if recipes[0]["confidence"] < 0.7:
+                self.log_msg(
+                    "Format Advisor (offline): %s — %s; файл и сеть не использовались"
+                    % (fingerprint.filename, recipes[0]["action"])
+                )
         except Exception as e:  # the hook must never break opening a file
-            self.log_msg("AI-советник: %s" % e)
+            self.log_msg("Format Advisor: %s" % e)
 
     def open_releases(self):
         webbrowser.open("https://github.com/Alexkkkkk/mount-file/releases/latest")
@@ -2039,6 +2291,153 @@ class MainWindow(QMainWindow):
                     )
                 )
         QMessageBox.information(self, "Сводка образа и тома", "\n".join(lines))
+
+    def show_whole_image(self):
+        """Show every detected volume together instead of one at a time.
+
+        Filesystems remain separate because their offsets and metadata are
+        independent. Double-clicking a row mounts that complete volume in the
+        active panel; the table itself is the whole-image view.
+        """
+        if not self.image_path:
+            QMessageBox.information(
+                self, "Обзор всего образа", "Сначала откройте образ (Ctrl+O)."
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            "Обзор всего образа — %s" % os.path.basename(self.image_path)
+        )
+        dialog.resize(900, 460)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel(
+                "Образ: %s\nРазмер: %s. Найдено томов: %d. "
+                "Двойной клик открывает том целиком в активной панели."
+                % (
+                    self.image_path,
+                    tc_style.fmt_kb(os.path.getsize(self.image_path)),
+                    len(self.volumes),
+                )
+            )
+        )
+        table = QTableWidget(dialog)
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(
+            ("№", "Имя/описание", "ФС", "Offset", "Размер", "Источник")
+        )
+        table.setRowCount(len(self.volumes))
+        table.setSelectionBehavior(SelectRows)
+        table.setEditTriggers(NoEditTriggers)
+        for row, volume in enumerate(self.volumes):
+            offset = int(getattr(volume, "offset", 0))
+            size = getattr(volume, "size", None)
+            values = (
+                str(row + 1),
+                str(getattr(volume, "desc", "том")),
+                str(getattr(volume, "fstype", "unknown")),
+                "0x%X / LBA %d" % (offset, offset // 512),
+                tc_style.fmt_kb(size) if size else "н/д",
+                str(getattr(volume, "source", "detector")),
+            )
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        table.cellDoubleClicked.connect(
+            lambda row, _column: self._open_overview_volume(dialog, row)
+        )
+        layout.addWidget(table, 1)
+        buttons = QDialogButtonBox()
+        close_button = buttons.addButton(DlgClose)
+        close_button.clicked.connect(dialog.reject)
+        layout.addWidget(buttons)
+        exec_dialog(dialog)
+
+    def _open_overview_volume(self, dialog, row):
+        """Mount one complete volume selected from the whole-image table."""
+        if row < 0 or row >= len(self.volumes):
+            return
+        volume = self.volumes[row]
+        dialog.accept()
+        self.mount_volume(self.active_panel(), int(volume.offset))
+        self.log_msg("Открыт том из обзора образа: %s" % volume.desc)
+
+    def search_image_files(self):
+        """Open the filesystem-aware filename search for the whole image."""
+        if not self.image_path:
+            QMessageBox.information(
+                self, "Поиск файла", "Сначала откройте образ (Ctrl+O)."
+            )
+            return
+        exec_dialog(ImageFileSearchDialog(self))
+
+    def search_files_in_image(self, pattern, *, max_results=2000, max_nodes=30000):
+        """Return bounded filename matches from all detected image volumes."""
+        from .fat32 import Fat32Error, Fat32Provider
+        from .vfs import TskError, TskImage
+
+        volumes = self.volumes or [_PartitionVolume(type("Whole", (), {
+            "offset": 0, "name": "whole image", "type_name": "raw",
+            "size_mb": os.path.getsize(self.image_path) / 1048576.0,
+            "start_lba": 0,
+        })())]
+        wanted = pattern.lower()
+        results = []
+        for volume in volumes:
+            offset = int(getattr(volume, "offset", 0))
+            provider = None
+            owned = False
+            try:
+                current = self.active_panel()
+                if current.mode == "img" and current.volume_offset == offset and current.provider:
+                    provider = current.provider
+                else:
+                    try:
+                        provider = TskImage(self.image_path, offset=offset)
+                    except TskError:
+                        provider = Fat32Provider(self.image_path, offset=offset)
+                    owned = True
+                stack = ["/"]
+                visited = 0
+                while stack and visited < max_nodes and len(results) < max_results:
+                    directory = stack.pop()
+                    visited += 1
+                    for entry in provider.list_dir(directory):
+                        name = str(entry.get("name", ""))
+                        child = (
+                            directory.rstrip("/") + "/" + name
+                            if directory != "/" else "/" + name
+                        )
+                        if fnmatch.fnmatch(name.lower(), wanted) or wanted in name.lower():
+                            results.append({
+                                "volume": str(getattr(volume, "desc", "offset 0")),
+                                "fstype": str(getattr(volume, "fstype", "unknown")),
+                                "path": child,
+                                "size": int(entry.get("size") or 0),
+                                "offset": offset,
+                            })
+                            if len(results) >= max_results:
+                                break
+                        if entry.get("is_dir") and name not in (".", ".."):
+                            stack.append(child)
+            except (OSError, TskError, Fat32Error, RuntimeError) as exc:
+                self.log_msg("Поиск: том @ 0x%X пропущен: %s" % (offset, exc))
+            finally:
+                if owned and provider is not None and hasattr(provider, "close"):
+                    provider.close()
+            if len(results) >= max_results:
+                break
+        return results
+
+    def open_image_search_result(self, result):
+        """Mount and navigate to a filename selected from search results."""
+        panel = self.active_panel()
+        if not self.mount_volume(panel, int(result["offset"])):
+            return
+        parent = str(PurePosixPath(result["path"]).parent)
+        panel.cd(parent if parent != "." else "/")
+        self.log_msg("Найден файл: %s" % result["path"])
 
     def open_forensic_triage(self):
         """Open bounded read-only hash/search/timeline helpers."""
@@ -2353,9 +2752,25 @@ class MainWindow(QMainWindow):
             try:
                 from .firmware import detect_volumes
 
-                return list(detect_volumes(path))
+                volumes = list(detect_volumes(path))
             except ImportError:
-                return [_PartitionVolume(p) for p in list_partitions(path)]
+                volumes = [_PartitionVolume(p) for p in list_partitions(path)]
+            # Signature scanning can see the same filesystem through more than
+            # one compatible probe. Present one row per physical volume so the
+            # whole-image view and drive selector do not show duplicates.
+            unique = []
+            seen = set()
+            for volume in volumes:
+                key = (
+                    int(getattr(volume, "offset", 0)),
+                    str(getattr(volume, "fstype", "")),
+                    getattr(volume, "size", None),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(volume)
+            return unique
         except Exception as e:
             self.log_msg("Сканирование томов не удалось: %s" % e)
             return []
@@ -2439,11 +2854,12 @@ class MainWindow(QMainWindow):
 
         from .fat32 import Fat32, Fat32Error
 
+        fat_writer_ready = False
         try:
             fh = open(self.image_path, "r+b")
         except OSError as e:
-            panel.write_reason = str(e)
-            self.log_msg("Том @ offset %d — только чтение (%s)" % (offset, e))
+            fh = None
+            fat_error = e
         else:
             try:
                 panel.writer = Fat32(fh, offset=offset)
@@ -2452,26 +2868,57 @@ class MainWindow(QMainWindow):
                 self.log_msg(
                     "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
                 )
+                fat_writer_ready = True
             except Fat32Error as e:
                 fh.close()
-                try:
-                    from .ext_debugfs_writer import Ext234ImageWriter
+                fat_error = e
 
-                    ext_writer = Ext234ImageWriter(
-                        self.image_path, offset=offset, volume_size=volume_size
+        # FAT32 keeps its native writer. Any other filesystem needs a backend:
+        # ext2/3/4 prefers the transactional debugfs writer (temporary extent,
+        # read-back/SHA-256 verification, rollback snapshot), and the package
+        # facade covers NTFS via ntfs-3g plus the loop-mount fallback. A failed
+        # backend leaves the volume truthfully read-only.
+        if not fat_writer_ready:
+            ext_writer = None
+            try:
+                from .ext_debugfs_writer import Ext234ImageWriter
+
+                ext_writer = Ext234ImageWriter(
+                    self.image_path, offset=offset, volume_size=volume_size
+                )
+            except Exception as ext_error:
+                fat_error = "%s; ext: %s" % (fat_error, ext_error)
+            if ext_writer is not None:
+                adapter = _ExtPanelWriter(ext_writer)
+                panel.writer = adapter
+                panel.writer_fh = adapter
+                panel.volume_label = "%s ofs %d" % (ext_writer.fs_type, offset)
+                self.log_msg(
+                    "Том @ offset %d смонтирован — запись %s через debugfs включена"
+                    % (offset, ext_writer.fs_type)
+                )
+            else:
+                try:
+                    from .universal_fs_rw import UniversalFSRW
+
+                    filesystem = UniversalFSRW(
+                        self.image_path, offset=offset, auto_backup=False
                     )
-                    panel.writer = _ExtPanelWriter(ext_writer)
-                    panel.volume_label = "%s ofs %d" % (ext_writer.fs_type, offset)
-                    self.log_msg(
-                        "Том @ offset %d смонтирован — запись %s через debugfs включена"
-                        % (offset, ext_writer.fs_type)
-                    )
-                except Exception as ext_error:
+                    adapter = _UniversalImageWriter(filesystem)
+                except Exception as e:
                     panel.writer = None
-                    panel.write_reason = str(ext_error)
+                    panel.write_reason = str(e)
                     self.log_msg(
-                        "Том @ offset %d — только чтение (FAT32: %s; ext: %s)"
-                        % (offset, e, ext_error)
+                        "Том @ offset %d — только чтение (FAT32: %s; RW: %s)"
+                        % (offset, fat_error, e)
+                    )
+                else:
+                    panel.writer = adapter
+                    panel.writer_fh = adapter
+                    panel.volume_label = "%s ofs %d" % (adapter.fs_type.upper(), offset)
+                    self.log_msg(
+                        "Том @ offset %d смонтирован — запись включена (%s)"
+                        % (offset, adapter.write_strategy)
                     )
 
         panel.path = "/"
@@ -2542,7 +2989,66 @@ class MainWindow(QMainWindow):
             self.log_msg("Команда «%s» не найдена. Доступно: cd <путь>" % text)
         self.cmdline.clear()
 
+    # -------------------------------------------------- текстовый редактор
+    def _text_temp_dir(self):
+        """Один временный каталог на сессию для копий текстовых файлов."""
+        if self._text_tmp is None or not os.path.isdir(self._text_tmp):
+            self._text_tmp = tempfile.mkdtemp(prefix="mountfile-text-")
+        return self._text_tmp
+
+    def open_text_file(self, panel=None):
+        """Открыть выбранный текстовый файл в системном редакторе.
+
+        Windows - Блокнот (``notepad.exe``), macOS - ``open -t``, Linux -
+        ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе первый
+        найденный редактор, иначе ``xdg-open``. Файл внутри образа сначала
+        извлекается во временный каталог, поэтому сам образ не меняется.
+        """
+        p = panel or self.active_panel()
+        entry = p.selected_entry()
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            QMessageBox.information(
+                self, "Блокнот", "Сначала выберите файл в активной панели."
+            )
+            return
+        self._open_text_entry(p, entry)
+
+    def _open_text_entry(self, panel, entry):
+        """Открыть `entry` в редакторе и записать результат в журнал окна."""
+        name = entry["name"]
+        try:
+            if panel.mode == "img":
+                if panel.provider is None:
+                    raise RuntimeError("том не открыт")
+                target, encoding = text_editor.prepare_image_text(
+                    panel.provider, panel.join(name), self._text_temp_dir()
+                )
+                note = "временная копия из образа: %s" % target
+            else:
+                target = panel.join(name)
+                encoding = "utf-8"
+                note = str(target)
+            argv = text_editor.open_in_editor(target)
+        except Exception as e:
+            QMessageBox.critical(self, "Блокнот", str(e))
+            self.log_msg("Блокнот: не удалось открыть %s: %s" % (name, e))
+            return
+        self.log_msg(
+            "Блокнот: %s -> %s (%s; кодировка %s)"
+            % (name, " ".join(argv), note, encoding)
+        )
+
     def f3_view(self):
+        """F3 / Enter: текстовый файл идёт в редактор, остальное в HEX."""
+        p = self.active_panel()
+        entry = p.selected_entry()
+        if entry and not entry.get("is_dir") and text_editor.is_text_file(entry["name"]):
+            self.open_text_file(p)
+            return
+        self.f3_hex_view()
+
+    def f3_hex_view(self):
+        """HEX-просмотр выбранного файла (первые ``PREVIEW_LIMIT`` байт)."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir"):
@@ -2561,25 +3067,33 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Просмотр", str(e))
             return
         exec_dialog(ViewerDialog(self, entry["name"], entry.get("size") or 0, data))
-        self._maybe_advise(full, head=data[:4096] if p.mode == "img" else None)
+        self._maybe_advise(full, size=entry.get("size"))
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):
+        """F4: правка текстового файла в системном редакторе (Блокнот).
+
+        Локальный файл открывается как есть. Файл внутри образа открывается
+        временной копией, а сам образ меняется только импортом через F5.
+        """
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir") or entry.get("up"):
             QMessageBox.information(self, "Правка", "Выберите текстовый файл.")
             return
         name = entry["name"]
-        if os.path.splitext(name)[1].lower() not in (
-            ".ini", ".cfg", ".conf", ".txt", ".log", ".json", ".xml",
-            ".csv", ".yaml", ".yml", ".md",
-        ):
+        if p.mode != "img" and text_editor.is_text_file(name):
+            # Локальный файл: F4 по-прежнему отдаёт его системному редактору.
+            self.open_text_file(p)
+            return
+        if os.path.splitext(name)[1].lower() not in EDITABLE_TEXT_EXTENSIONS:
             QMessageBox.information(
-                self, "Правка", "F4 редактирует только текстовые файлы известных форматов."
+                self,
+                "Правка",
+                "F4 редактирует только текстовые файлы известных форматов.",
             )
             return
-        if int(entry.get("size") or 0) > 2 * 1024 * 1024:
+        if int(entry.get("size") or 0) > MAX_EDIT_BYTES:
             QMessageBox.information(
                 self, "Правка", "Файл больше лимита редактирования 2 MiB."
             )
@@ -2777,8 +3291,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Копирование в образ",
-                "Целевой том открыт только для чтения: запись "
-                "требует FAT32 либо ext2/3/4 с установленным debugfs.\n\n%s"
+                "Целевой том открыт только для чтения: нужен доступный "
+                "backend записи его файловой системы (FAT32 встроен, ext2/3/4 "
+                "требует debugfs, NTFS — ntfs-3g).\n\n%s"
                 % (getattr(other, "write_reason", "") or "Причина не указана."),
             )
             return
@@ -2875,9 +3390,9 @@ class MainWindow(QMainWindow):
     def rename_selected(self):
         """Rename the cursor entry from the context menu.
 
-        FAT32 uses its native writer; local panels use ``os.rename``. The
-        operation intentionally targets one cursor entry, while batch actions
-        continue to use the Space-marked set.
+        Image panels use the active filesystem writer; local panels use
+        ``os.rename``. The operation intentionally targets one cursor entry,
+        while batch actions continue to use the Space-marked set.
         """
         p = self.active_panel()
         entry = p.selected_entry()
@@ -2887,8 +3402,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Переименование",
-                "Том открыт только для чтения: переименование доступно "
-                "только в FAT32.",
+                "Том открыт только для чтения: backend записи недоступен.",
             )
             return
         new_name, ok = QInputDialog.getText(
@@ -2923,12 +3437,35 @@ class MainWindow(QMainWindow):
         if not entries:
             return
         if p.mode == "img":
-            QMessageBox.information(
+            if p.writer is None:
+                QMessageBox.information(
+                    self,
+                    "Удалить",
+                    "Том открыт только для чтения: backend записи недоступен.",
+                )
+                return
+            names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
+            if len(entries) > 8:
+                names += "\n  … ещё %d" % (len(entries) - 8)
+            ret = QMessageBox.warning(
                 self,
-                "Удалить",
-                "Удаление из образа не поддерживается движком FAT32 "
-                "(создание, перезапись и mkdir).",
+                "Удалить из образа",
+                "Эта операция изменит образ и удалит %d объект(ов):\n\n%s\n\n"
+                "Продолжить?" % (len(entries), names),
+                MB_Yes | MB_No,
             )
+            if ret != MB_Yes or not self._backup_before_write(p):
+                return
+            for entry in entries:
+                try:
+                    p.writer.delete(
+                        p.join(entry["name"]), recursive=bool(entry["is_dir"])
+                    )
+                except Exception as exc:
+                    self.log_msg("Удаление не удалось (%s): %s" % (entry["name"], exc))
+            p.marked.clear()
+            p.refresh()
+            self.log_msg("Удалено объектов из образа: %d" % len(entries))
             return
         names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
         if len(entries) > 8:
@@ -2960,11 +3497,31 @@ class MainWindow(QMainWindow):
         if hasattr(self, "act_menu_toggle"):
             self.act_menu_toggle.setChecked(visible)
 
+    def _detach_updater(self):
+        """Отпустить поток обновления, не ожидая его в потоке GUI.
+
+        Раньше здесь стояло ``self.updater.wait(1500)``: окно замирало на
+        полторы секунды, а во время скачивания обновления — на всё время
+        загрузки. Если проверка не укладывалась в таймаут (медленная сеть,
+        прокси), QThread оставался работающим, терял последнюю ссылку и
+        уничтожался — процесс падал с ``Fatal Python error: Aborted``.
+        Теперь поток отвязывается и доживает в :data:`_ORPHAN_THREADS`.
+        """
+        updater = getattr(self, "updater", None)
+        self.updater = None
+        if updater is None:
+            return
+        try:
+            if updater.isRunning():
+                updater.requestInterruption()
+        except Exception:  # pragma: no cover - заглушка без Qt
+            pass
+        _ORPHAN_THREADS.append(updater)
+
     def closeEvent(self, e):
         self._close_writer()
         tc_style.save_settings()
-        if self.updater is not None and self.updater.isRunning():
-            self.updater.wait(1500)
+        self._detach_updater()
         super().closeEvent(e)
 
 

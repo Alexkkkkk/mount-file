@@ -54,7 +54,7 @@ SECTOR_SIZE = 512
 
 # Extended partition types (MBR); their contents are chained through EBRs.
 _EXTENDED_TYPES = (0x05, 0x0F, 0x85)
-_MAX_LOGICAL = 128
+_MAX_LOGICAL = 1 << 16
 
 _TYPE_NAMES = {
     0x01: "FAT12",
@@ -202,7 +202,7 @@ def _parse_gpt(f):
     entry_lba = struct.unpack_from("<Q", hdr, 72)[0]
     # Clamp what the header claims: a corrupt entry count must not become a
     # huge read loop, and an out-of-range entry size is not a valid GPT.
-    num_entries = min(struct.unpack_from("<I", hdr, 80)[0], 128)
+    num_entries = min(struct.unpack_from("<I", hdr, 80)[0], 4096)
     entry_size = struct.unpack_from("<I", hdr, 84)[0]
     if not entry_lba or not 128 <= entry_size <= 4096:
         return []

@@ -27,6 +27,7 @@ dependencies = [
 dev = [
     "pytest>=7",
     "pytest-cov>=4",
+    "hypothesis>=6",
     "ruff>=0.4",
     "black>=24.4",
     "isort>=5.13",
@@ -45,15 +46,41 @@ ai = [
 win7 = [
     "PyQt5>=5.15.11,<5.16",
 ]
+rw = [
+    "pytsk3>=20231007",   # RO-чтение через MountFileBridge
+]
+rw-ext = [
+    "mountfile[rw]",
+    # debugfs — системный пакет e2fsprogs, ставится отдельно
+]
+rw-ntfs = [
+    "mountfile[rw]",
+    # ntfs-3g — системный пакет, ставится отдельно
+]
+fuzz = [
+    "atheris>=2.3; sys_platform == 'linux'",
+]
 
 [project.scripts]
 mountfile = "mountfile.__main__:main"
+mountfile-rw = "mountfile_rw_complete:main"
+mountfile-rw-v2 = "mountfile_rw_v2:main"
+
+[tool.setuptools]
+# Top-level RW modules are referenced by [project.scripts] below; without
+# py-modules setuptools ships only the ``mountfile`` package and the
+# ``mountfile-rw`` / ``mountfile-rw-v2`` entry points never get installed.
+py-modules = [
+    "mountfile_universal_rw",
+    "mountfile_rw_complete",
+    "mountfile_rw_v2",
+]
 
 [tool.setuptools.packages.find]
 include = ["mountfile*"]
 
 [tool.setuptools.package-data]
-mountfile = ["data/*.bin"]
+mountfile = ["data/*.bin", "data/*.png", "data/*.ico", "data/*.icns"]
 
 [tool.ruff]
 line-length = 100

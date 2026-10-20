@@ -24,12 +24,18 @@ _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.+@=-]+$")
 _CHUNK = 1024 * 1024
 
 
-def normalize_image_path(path):
-    """Normalize a restricted POSIX image path and reject command syntax."""
+def normalize_image_path(path, allow_root=False):
+    """Normalize a restricted POSIX image path and reject command syntax.
+
+    ``allow_root`` lets the read-only helpers address the filesystem root; a
+    write to ``/`` is always rejected.
+    """
     if not isinstance(path, str):
         raise ExtWriteError("image path must be text")
     raw = path.replace("\\", "/")
     parts = [part for part in raw.split("/") if part not in ("", ".")]
+    if not parts and allow_root:
+        return "/"
     if not parts or any(part == ".." or not _SAFE_COMPONENT.match(part) for part in parts):
         raise ExtWriteError(
             "ext write accepts only simple ASCII path names without spaces or shell characters"
@@ -78,9 +84,13 @@ class Ext234ImageWriter:
         blocks = int.from_bytes(sb[4:8], "little")
         incompat = int.from_bytes(sb[96:100], "little")
         compat = int.from_bytes(sb[92:96], "little")
+        self.free_blocks = int.from_bytes(sb[12:16], "little")
         if incompat & 0x80:  # EXT4_FEATURE_INCOMPAT_64BIT
             blocks |= int.from_bytes(sb[0x150:0x154], "little") << 32
+            self.free_blocks |= int.from_bytes(sb[0x158:0x15C], "little") << 32
         self.filesystem_size = blocks * self.block_size
+        if self.free_blocks > blocks:
+            self.free_blocks = 0
         if incompat & 0xC0:
             self.fs_type = "ext4"
         elif compat & 0x4:
@@ -190,7 +200,7 @@ class Ext234ImageWriter:
             return result
 
     def read_file(self, path):
-        image_path = normalize_image_path(path)
+        image_path = normalize_image_path(path, allow_root=True)
         with tempfile.TemporaryDirectory(prefix="mountfile-ext-read-") as work:
             filesystem = os.path.join(work, "filesystem.ext")
             self._copy_extent(self.image_path, filesystem)
@@ -203,7 +213,7 @@ class Ext234ImageWriter:
                 return stream.read()
 
     def list_dir(self, path="/"):
-        image_path = normalize_image_path(path)
+        image_path = normalize_image_path(path, allow_root=True)
         with tempfile.TemporaryDirectory(prefix="mountfile-ext-list-") as work:
             filesystem = os.path.join(work, "filesystem.ext")
             self._copy_extent(self.image_path, filesystem)
@@ -286,6 +296,56 @@ class Ext234ImageWriter:
                 write=True,
             )
         self._with_working_extent(apply)
+
+    def delete(self, path, recursive=False):
+        image_path = normalize_image_path(path, allow_root=True)
+        if image_path == "/":
+            raise ExtWriteError("refusing to delete the filesystem root")
+        entries = {entry["name"]: entry for entry in self.list_dir(image_path)} \
+            if self._is_dir(image_path) else {}
+        if entries and not recursive:
+            raise ExtWriteError("directory is not empty; recursive delete not confirmed")
+
+        def remove_dir(working, target):
+            for name, entry in sorted(entries.items()):
+                child = target.rstrip("/") + "/" + name
+                if entry["is_dir"]:
+                    nested = {item["name"]: item for item in self.list_dir(child)}
+                    if nested:
+                        raise ExtWriteError(
+                            "nested directory delete is not supported by this writer"
+                        )
+                    self._run(working, f"rmdir {_debugfs_quote(child)}", write=True)
+                else:
+                    self._run(working, f"rm {_debugfs_quote(child)}", write=True)
+            self._run(working, f"rmdir {_debugfs_quote(target)}", write=True)
+
+        def apply(working, _work):
+            if self._is_dir(image_path):
+                remove_dir(working, image_path)
+            else:
+                self._run(working, f"rm {_debugfs_quote(image_path)}", write=True)
+
+        self._with_working_extent(apply)
+
+    def _is_dir(self, path):
+        """True when `path` is an existing directory in the image."""
+        parent = path.rsplit("/", 1)[0] or "/"
+        name = path.rsplit("/", 1)[-1]
+        return any(
+            entry["name"] == name and entry["is_dir"]
+            for entry in self.list_dir(parent)
+        )
+
+    def free_space(self):
+        """Free bytes reported by the superblock, or None when unknown."""
+        if not self.free_blocks:
+            return None
+        return self.free_blocks * self.block_size
+
+    def close(self):
+        """The debugfs writer keeps no handle open between operations."""
+        return None
 
 
 class Ext234Provider:

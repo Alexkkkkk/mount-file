@@ -15,6 +15,15 @@ if FASTAPI_AVAILABLE:
 else:  # pragma: no cover - exercised when the optional API is absent.
     TestClient = None
 
+#: FastAPI — опциональная зависимость: CI-джобы, которые ставят только
+#: pytest (Quality), и ночная сборка на requirements-win7.txt её не имеют.
+#: Без этого маркера пять тестов ниже падали с APIUnavailableError вместо
+#: честного skip, и красными были и nightly, и quality-gate.
+needs_fastapi = pytest.mark.skipif(
+    not FASTAPI_AVAILABLE,
+    reason="fastapi не установлен (опциональная зависимость; см. extras 'api')",
+)
+
 
 class FakeRegistry:
     def __init__(self):
@@ -46,12 +55,14 @@ def _client_or_skip(app):
         pytest.skip("FastAPI TestClient is unavailable: %s" % exc)
 
 
+@needs_fastapi
 def test_non_loopback_app_fails_closed_without_auth(tmp_path):
     registry = FakeRegistry()
     with pytest.raises(APIConfigurationError, match="bearer auth token"):
         create_app(registry, image_roots=tmp_path, host="0.0.0.0")
 
 
+@needs_fastapi
 def test_loopback_endpoints_and_registry_injection(tmp_path):
     image = tmp_path / "disk.img"
     image.write_bytes(b"image")
@@ -88,6 +99,7 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     assert {call[0] for call in registry.calls} == {"images", "ls", "read", "timeline"}
 
 
+@needs_fastapi
 def test_bearer_auth_protects_non_loopback_endpoints(tmp_path):
     image = tmp_path / "disk.img"
     image.write_bytes(b"image")
@@ -108,6 +120,7 @@ def test_bearer_auth_protects_non_loopback_endpoints(tmp_path):
     ).status_code == 200
 
 
+@needs_fastapi
 def test_image_and_virtual_paths_cannot_escape_configured_root(tmp_path):
     image_root = tmp_path / "images"
     image_root.mkdir()
@@ -133,6 +146,29 @@ def test_image_and_virtual_paths_cannot_escape_configured_root(tmp_path):
     assert encoded_traversal.status_code == 400
 
     assert all(call[0] not in {"ls", "read"} for call in registry.calls)
+
+
+@needs_fastapi
+def test_symlink_image_cannot_escape_configured_root(tmp_path):
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    outside = tmp_path / "outside.img"
+    outside.write_bytes(b"outside evidence")
+    link = image_root / "linked.img"
+    try:
+        link.symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip("symlink creation is unavailable: %s" % exc)
+
+    registry = FakeRegistry()
+    app = create_app(registry, image_roots=image_root)
+    client = _client_or_skip(app)
+    response = client.get(
+        "/filesystem/ls", params={"image": "linked.img", "path": "/"}
+    )
+
+    assert response.status_code == 400
+    assert all(call[0] != "ls" for call in registry.calls)
 
 
 def test_api_module_remains_importable_without_fastapi():

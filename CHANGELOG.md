@@ -12,6 +12,155 @@ file only tracks the releases themselves.
   image backup; ext browse/write fallback requires `debugfs` when pytsk3 is
   absent. Existing image backups are not overwritten, and declining a backup
   cancels the write.
+
+- **Поиск файлов в образе**: меню «Инструменты → Поиск файла в образе…» и
+  `Ctrl+Shift+F` рекурсивно ищут имена/маски файлов во всех найденных томах,
+  показывают путь, ФС, размер и offset, а двойной клик открывает каталог файла.
+  Поиск ограничен 30 000 каталогами и 2 000 результатами, чтобы большие
+  forensic-образы не зависали в интерфейсе.
+
+- **Обзор образа целиком**: в меню «Инструменты» добавлена таблица всех
+  найденных томов сразу с файловой системой, размером, offset/LBA и источником
+  обнаружения. Двойной клик открывает выбранный том целиком в активной панели;
+  одинаковые сигнатуры одного физического тома больше не дублируются в списке.
+
+- **Non-FAT image writes in the GUI**: the Total Commander window now keeps
+  native FAT32 writes and falls back to `UniversalFSRW` for ext2/3/4 via
+  `debugfs`, NTFS via `ntfs-3g`, and supported loop-mounted filesystems.
+  Import, mkdir, overwrite, rename, and delete use the same explicit backup
+  confirmation. EXT4 `debugfs` listing and file rename are covered by new
+  regression tests; unsupported system helpers remain read-only with a clear
+  log message.
+
+- **macOS: `$MOUNTFILE_EDITOR` / `$VISUAL` / `$EDITOR` снова учитываются**:
+  в `text_editor.editor_command` ветка `open -t` проверялась раньше
+  переменных окружения, поэтому на macOS явно заданный редактор
+  игнорировался. Теперь переменные окружения проверяются первыми на всех
+  POSIX-хостах, а `open -t` остаётся запасным вариантом. Это же
+  исправляет три падавших джоба `Unit tests (…, macos-latest)`.
+
+- **Обновление больше не «висит»**: скрипт подмены файла на Windows ждал
+  завершения процесса бесконечным ``goto wait`` без счётчика — если процесс
+  не завершался или ``tasklist`` его не находил, ожидание не заканчивалось
+  никогда, а висящий консольный скрипт с проверкой PID было видно на экране
+  (окно вида ``findstr /i "<pid>"``). Теперь ожидание ограничено
+  ``WINDOWS_WAIT_TRIES`` проверок, затем файл всё равно подменяется, а
+  ``move`` повторяется до ``WINDOWS_MOVE_TRIES`` раз; скрипт запускается с
+  ``CREATE_NO_WINDOW`` вместо ``DETACHED_PROCESS`` (тот показывал окно
+  консоли) и больше не содержит ``pause`` — при ошибке ничего не ждёт
+  нажатия клавиши, результат пишется в ``%TEMP%\mountfile-update.log``.
+
+- **Закрытие окна и индикатор обновления не блокируют GUI**: из
+  ``closeEvent`` убран ``updater.wait(1500)`` (при скачивании обновления окно
+  замирало на всё время загрузки) — поток больше не ожидается в потоке
+  интерфейса, а ссылка на него переносится в модульный список, чтобы Qt не
+  уничтожил работающий ``QThread``; из ``_on_update_installed`` убран
+  ``wait_installer(3000)`` — окно закрывается сразу, чтобы освободить exe для
+  ``move``. Добавлен сторож ``UPDATE_WATCHDOG_MS``: если этап обновления не
+  завершился за 15 минут, индикатор «занят» сбрасывается сам и в журнал
+  пишется путь к журналу установки.
+
+- **Текстовые файлы открываются в Блокноте**: `Enter` / двойной щелчок и `F3`
+  / `F4` больше не показывают `.txt` в HEX-просмотре — файл уходит в системный
+  редактор (Windows: `notepad.exe`; macOS: `open -t`; Linux: `$MOUNTFILE_EDITOR`
+  / `$VISUAL` / `$EDITOR`, иначе gedit/kate/xed/pluma/mousepad/leafpad/featherpad,
+  иначе `xdg-open`). Новый модуль `mountfile/text_editor.py`; для файла внутри
+  образа сначала пишется временная копия, поэтому образ не изменяется, а
+  не-UTF-8 байты (CP1251 / CP866) перекодируются в UTF-8 с BOM, чтобы кириллица
+  не превращалась в кракозябры. В контекстном меню появился пункт «Открыть в
+  Блокноте» и отдельный «HEX-просмотр».
+
+- **Package linking for EPIC #87**: `JournalV2` is now implemented in
+  `mountfile.universal_fs_rw` with in-place legacy SQLite migration and
+  byte-exact rollback; `mountfile_rw_v2.JournalV2` remains a compatibility
+  alias. `UnallocatedExtractor` is exported from `mountfile.dfir` through a
+  lazy legacy adapter, while bounded range scanning remains the canonical
+  read-only package primitive. Added regression coverage for both public
+  import paths and evidence immutability.
+
+- **DFIR-модули эпика #87 закрыты отдельными пакетными модулями** (Tasks 1.1,
+  1.2, 1.3, 1.4, 1.6, 2.2). Раньше функциональность жила только в
+  standalone-скриптах и была недоступна как `python -m mountfile <команда>`:
+
+  | Задача | Модуль | CLI |
+  |---|---|---|
+  | 1.1 Timeline | `mountfile/timeline.py` | `timeline-build`, `timeline-query` |
+  | 1.2 Content search | `mountfile/search_content.py` | `search` |
+  | 1.3 YARA | `mountfile/yara_scan.py` + `rules/` | `yara-scan` |
+  | 1.4 Timestomp | `mountfile/timestomp.py` | `timestomp-scan` |
+  | 1.6 Slack | `mountfile/slack.py` | `slack-extract` |
+  | 2.2 Live diff | `mountfile/live_diff.py` | `live-diff` |
+
+  Ключевое отличие от прежних черновиков: `slack.py` вычисляет **абсолютный
+  offset** slack-области (хвост последнего выделенного run), а не только её
+  длину, поэтому данные действительно можно прочитать; `yara_scan.py` умеет
+  сканировать unallocated space как дополнение к карте занятости; `timeline.py`
+  пишет SQLite + CSV со схемой `timestamp | source | path | event | sha256`.
+  Все команды read-only, добавлены тесты `tests/test_dfir_tools_87.py` (45
+  тестов) и встроенные правила `rules/pii.yar`, `rules/anti_forensics.yar`.
+
+- **RW v2 (PR #122)**: `MountFileBridge` получил рабочий RO-путь — раньше он
+  импортировал несуществующий `mountfile.main` и вызывал несуществующие
+  ключи `mountfile --list/--extract`, поэтому на чистой установке всегда
+  падал в `StrategyUnavailable`. Теперь чтение идёт через нативный движок
+  FAT32 (`find_dir`/`list_dir`/`entry`/`read_file`), затем pytsk3. В
+  `pyproject.toml` добавлен `py-modules` — без него консольные скрипты
+  `mountfile-rw` / `mountfile-rw-v2` вообще не устанавливались. Ветка
+  синхронизирована с исправлениями #121. Добавлены тесты
+  `tests/test_rw_v2.py` (журнал v2, rollback, RO-мост).
+
+- **RW-слой (PR #121) доведён до рабочего состояния**: `Fat32Adapter`
+  переведён на реальный контракт `mountfile/fat32.py` (файловый объект,
+  пары «каталог + имя», `entry()` возвращает `(parent, DirEntry)`);
+  `DryRunMixin` действительно блокирует запись (исправлен порядок базовых
+  классов — раньше `--dry-run` молча писал в образ); `create_rw_full`
+  учитывает `dry_run`; `put` не пытается пересоздать существующий каталог;
+  `get`/MCP-чтение больше не импортируют несуществующий `mountfile.main`.
+  Добавлены сквозные тесты `tests/test_rw_layer.py`
+
+
+- **Исправлены два дефекта записи FAT32**, из-за которых образ, который
+  `WriteEngine.verify()` объявлял проверенным, `fsck.fat` отвергал как
+  повреждённый (из-за этого падал `test_transaction_commit_writes_and_verifies`
+  и весь CI-матрикс был красным):
+  * `mountfile/universal_fs_rw.py` (`Fat32RW`) не обновлял сектор FSINFO —
+    кэш числа свободных кластеров оставался на значении до записи
+    («Free cluster summary wrong»). Добавлены `free_clusters()` и
+    `sync_fsinfo()`, которые **пересчитывают** счётчики по FAT (а не
+    инкрементируют) и вызываются из `write_file`/`mkdir`/`delete`; сектор
+    с неверными сигнатурами не трогается вообще.
+  * `mkdir` записывал в слот `..` каталога, созданного в корне, номер
+    корневого кластера (2) вместо 0, как того требует спецификация Microsoft
+    FAT («Invalid '..' entry in the second slot»).
+  * Те же исправления внесены в `mountfile/fat32.py` (независимый движок
+    FAT32), а синтетический фикстур `tests/test_fat32.py` дополнен до
+    структурно полного тома: media-байт 0xF8, FSINFO, backup boot sector,
+    extended boot signature и метка тома в BPB + корневом каталоге.
+  * Регрессионный тест `test_written_image_leaves_fat_metadata_consistent`
+    сверяет кэш FSINFO с пересчётом по FAT, проверяет `..` и (когда
+    установлен `dosfstools`) требует `fsck.fat -n` с кодом 0.
+
+- **MF-WE — транзакционный движок записи** (`mountfile/write_engine.py`,
+  ТЗ MF-WE-TZ-001). Тонкий фасад над существующими RW-бэкендами
+  (`mountfile/universal_fs_rw.py`), который добавляет обязательный по ТЗ §8
+  слой: RO по умолчанию, авто-бэкап сессии и снапшот перед транзакцией,
+  hash-chain журнал операций (`verify_journal()`), байт-в-байт откат транзакции
+  (в том числе после имитированного краха), `verify()` после коммита с
+  построчным отчётом «что реально проверено», `dry_run` без единой записи и
+  отказ от RW-доступа к образу с признаками повреждения без явного
+  `allow_damaged=True`. Собственный нативный движок NTFS/ext не пишется
+  (ТЗ §15) — операции делегируются уже существующим бэкендам.
+- Исправлены два дефекта в `mountfile/universal_fs_rw.py`, найденные при
+  интеграции: `RWBackend.exists()` всегда возвращал `True`, потому что `stat()`
+  отдаёт `None`, а не бросает исключение; `UniversalFSRW` не распознавал
+  заголовок ФС по смещению 0, когда `detect_volumes()` не находил сигнатуру в
+  окне сканирования (синтетические и маленькие образы), и сравнивал имена ФС
+  от детектора (`FAT32`, `ext2/3/4`) с lowercase-таблицей без нормализации.
+- `mountfile/write_engine.py` покрыт тестами `tests/test_write_engine.py`
+  (31 тест: RO-гейт по каждой мутирующей операции, коммит/откат, dry-run,
+  повреждённый образ, подделка журнала, запрет `..`/относительных путей,
+  реальный ext4-образ через `mkfs.ext4` + `debugfs`).
+
 - Epic #87 roadmap batch: experimental library modules for unallocated-range
   indexing, crypto/Android/macOS/NAND/Registry inspection, AI orchestration and
   metadata-only copilot summaries, MCP/RAG, plugins and the REST API. These
@@ -21,6 +170,15 @@ file only tracks the releases themselves.
   to GitHub Pages. The Docker workflow keeps build/smoke checks on CI and makes
   GHCR publication an explicit manual action. Added reproducible asciinema
   recordings for timeline, recovery triage and the metadata-only copilot.
+- Added the package MCP stdio entry point `python -m mountfile.ai.cli mcp` and
+  included byte offsets/size metadata in default partition-list results so
+  clients can pass a discovered volume to subsequent MCP tools.
+- The GUI Format Advisor now uses the deterministic metadata-only engine: it
+  never reads or sends file bytes, does not call a model/network, and stores a
+  selected recipe locally only after explicit user confirmation.
+- The first-party YARA and timeline plugin examples now export `PLUGINS` and
+  are covered by an explicit-discovery test; loading remains opt-in because
+  discovering Python plugins imports executable code.
 - Добавлен read-only package DFIR слой `mountfile.dfir`: bounded raw search
   (`grep`), SHA-256 identity (`hash`), импорт timeline CSV и консервативная
   проверка timestomp. Команды доступны через `python -m mountfile`; операции

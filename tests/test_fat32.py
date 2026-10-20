@@ -21,6 +21,13 @@ from mountfile.fat32 import Fat32, Fat32Error
 from mountfile.partition import list_partitions
 
 BPS, SPC, RESERVED, NFATS, ROOTC = 512, 1, 32, 1, 2
+# A FAT32 volume has to declare an FSINFO sector and a backup boot sector;
+# fsck.fat (dosfstools) reports their absence as a defect, so the fixture
+# keeps them and stays clean for the external checker used by MF-WE.
+FSINFO_SECTOR, BACKUP_BOOT_SECTOR = 1, 6
+# The volume label lives in *two* places and fsck.fat compares them: the BPB
+# field at offset 71 and an ATTR_VOLUME_ID entry in the root directory.
+VOLUME_LABEL = b"MOUNTFILE  "
 TOTAL_SECTORS = 70000
 
 
@@ -37,6 +44,17 @@ SPF = _spf()
 
 
 def make_fat32_image(path):
+    """Build a small but structurally *complete* FAT32 volume.
+
+    The image is synthetic, yet nothing a real FAT32 has is missing: the media
+    descriptor (0xF8), the extended boot signature with a volume label and the
+    ``FAT32`` type string, an FSINFO sector and a byte-identical backup boot
+    sector at sector 6.  ``fsck.fat -n`` therefore exits 0, which matters
+    because ``WriteEngine.verify()`` reports a real external checker result
+    instead of silently treating the volume as clean.
+    """
+    data_clusters = TOTAL_SECTORS - (RESERVED + NFATS * SPF)
+    free_clusters = data_clusters - 1  # cluster 2 is the (used) root directory
     with open(path, "wb") as f:
         f.truncate(TOTAL_SECTORS * BPS)
         bpb = bytearray(BPS)
@@ -46,19 +64,45 @@ def make_fat32_image(path):
         bpb[13] = SPC
         struct.pack_into("<H", bpb, 14, RESERVED)
         bpb[16] = NFATS
+        bpb[21] = 0xF8  # media descriptor: fixed disk
         struct.pack_into("<I", bpb, 32, TOTAL_SECTORS)
         struct.pack_into("<I", bpb, 36, SPF)
         struct.pack_into("<I", bpb, 44, ROOTC)
-        bpb[64] = 0x80
+        struct.pack_into("<H", bpb, 48, FSINFO_SECTOR)
+        struct.pack_into("<H", bpb, 50, BACKUP_BOOT_SECTOR)
+        bpb[64] = 0x80  # drive number
+        bpb[66] = 0x29  # extended boot signature
+        struct.pack_into("<I", bpb, 67, 0x20261018)  # volume id
+        bpb[71:82] = VOLUME_LABEL  # volume label
+        bpb[82:90] = b"FAT32   "  # filesystem type
         bpb[510:512] = b"\x55\xaa"
         f.seek(0)
         f.write(bpb)
+        fsinfo = bytearray(BPS)
+        struct.pack_into("<I", fsinfo, 0, 0x41615252)  # lead signature
+        struct.pack_into("<I", fsinfo, 484, 0x61417272)  # structure signature
+        struct.pack_into("<I", fsinfo, 488, free_clusters)
+        struct.pack_into("<I", fsinfo, 492, 3)  # next free cluster
+        struct.pack_into("<I", fsinfo, 508, 0xAA550000)  # trail signature
+        f.seek(FSINFO_SECTOR * BPS)
+        f.write(fsinfo)
+        f.seek(BACKUP_BOOT_SECTOR * BPS)
+        f.write(bpb)  # backup boot sector must be byte-identical
         fat = bytearray(SPF * BPS)
         struct.pack_into("<I", fat, 0, 0x0FFFFFF8)
         struct.pack_into("<I", fat, 4, 0xFFFFFFFF)
         struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
         f.seek(RESERVED * BPS)
         f.write(fat)
+        # The matching root-directory volume-label entry (attr 0x08).  A real
+        # FAT32 always has one next to its BPB label, and without it fsck.fat
+        # exits non-zero, which would make WriteEngine.verify() report the
+        # synthetic fixture as damaged.
+        label_entry = bytearray(32)
+        label_entry[0:11] = VOLUME_LABEL
+        label_entry[11] = 0x08  # ATTR_VOLUME_ID
+        f.seek((RESERVED + NFATS * SPF) * BPS)
+        f.write(label_entry)
 
 
 class TestFat32:

@@ -52,6 +52,7 @@ nav:
   - GUI: gui.md
   - AI: ai.md
   - DFIR: dfir.md
+  - Движок записи (MF-WE): write_engine.md
   - API: api.md
   - Demos: demos.md
   - Разработчикам:

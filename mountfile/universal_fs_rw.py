@@ -33,10 +33,13 @@ import hashlib
 import logging
 import os
 import shutil
+import sqlite3
 import struct
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
@@ -144,6 +147,143 @@ class RWJournal:
         self._prev = digest
 
 
+class JournalV2:
+    """SQLite transaction journal with byte-exact rollback support.
+
+    This is the package home of the v2 journal that was previously implemented
+    only by ``mountfile_rw_v2.py``.  The schema is deliberately compatible with
+    the legacy journal: opening an existing journal adds ``offset``, ``length``
+    and ``committed`` columns in place.  Backups are made before a mutation and
+    rollback restores exactly the recorded byte range.
+    """
+
+    SCHEMA_VERSION = 2
+
+    def __init__(self, image: Path):
+        self.image_path = Path(image)
+        self.db_path = self.image_path.with_suffix(
+            self.image_path.suffix + ".rw-journal.sqlite"
+        )
+        self.backup_dir = self.image_path.with_suffix(
+            self.image_path.suffix + ".rw-backups"
+        )
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self.db_path))
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS journal (
+                   tx_id TEXT PRIMARY KEY,
+                   op TEXT NOT NULL,
+                   path TEXT NOT NULL,
+                   backup_path TEXT,
+                   sha256 TEXT,
+                   prev_hash TEXT NOT NULL,
+                   created_at REAL NOT NULL
+               )"""
+        )
+        self._migrate()
+        self._current = None
+        self._last_hash = self._get_last_hash()
+
+    def _migrate(self):
+        columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(journal)")
+        }
+        if "offset" not in columns:
+            self._conn.execute("ALTER TABLE journal ADD COLUMN offset INTEGER")
+        if "length" not in columns:
+            self._conn.execute("ALTER TABLE journal ADD COLUMN length INTEGER")
+        if "committed" not in columns:
+            self._conn.execute(
+                "ALTER TABLE journal ADD COLUMN committed INTEGER DEFAULT 0"
+            )
+        self._conn.commit()
+
+    def _get_last_hash(self):
+        row = self._conn.execute(
+            "SELECT sha256 FROM journal WHERE sha256 IS NOT NULL "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else "0" * 64
+
+    def begin(self, op: str, path: str) -> str:
+        tx_id = str(uuid.uuid4())
+        self._current = tx_id
+        self._conn.execute(
+            "INSERT INTO journal(tx_id, op, path, prev_hash, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (tx_id, op, path, self._last_hash, time.time()),
+        )
+        self._conn.commit()
+        return tx_id
+
+    def backup_region(self, offset: int, length: int) -> Path:
+        if self._current is None:
+            raise RuntimeError("begin() must be called before backup_region()")
+        if offset < 0 or length < 0:
+            raise ValueError("offset and length must be non-negative")
+        backup = self.backup_dir / (self._current + ".bin")
+        with self.image_path.open("rb") as source, backup.open("wb") as target:
+            source.seek(offset)
+            target.write(source.read(length))
+        digest = hashlib.sha256(backup.read_bytes()).hexdigest()
+        self._conn.execute(
+            "UPDATE journal SET backup_path=?, sha256=?, offset=?, length=? "
+            "WHERE tx_id=?",
+            (str(backup), digest, offset, length, self._current),
+        )
+        self._conn.commit()
+        self._last_hash = digest
+        return backup
+
+    def commit(self):
+        if self._current is not None:
+            self._conn.execute(
+                "UPDATE journal SET committed=1 WHERE tx_id=?", (self._current,)
+            )
+            self._conn.commit()
+        self._current = None
+
+    def rollback(self, tx_id=None):
+        tx_id = tx_id or self._current
+        if not tx_id:
+            return False
+        row = self._conn.execute(
+            "SELECT backup_path, offset, length FROM journal WHERE tx_id=?",
+            (tx_id,),
+        ).fetchone()
+        restored = False
+        if row and row[0] and row[1] is not None and row[2] is not None:
+            backup = Path(row[0])
+            if backup.exists():
+                with backup.open("rb") as source, self.image_path.open("r+b") as image:
+                    image.seek(int(row[1]))
+                    image.write(source.read(int(row[2])))
+                restored = True
+        self._conn.execute("DELETE FROM journal WHERE tx_id=?", (tx_id,))
+        self._conn.commit()
+        if tx_id == self._current:
+            self._current = None
+        return restored
+
+    def uncommitted(self):
+        rows = self._conn.execute(
+            "SELECT tx_id, op, path, offset, length, backup_path, created_at "
+            "FROM journal WHERE committed=0 AND backup_path IS NOT NULL "
+            "ORDER BY created_at"
+        ).fetchall()
+        return [
+            {
+                "tx_id": row[0], "op": row[1], "path": row[2],
+                "offset": row[3], "length": row[4], "backup": row[5],
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+
+    def close(self):
+        self._conn.close()
+
+
 class ImageBackup:
     """Полная резервная копия образа перед записью."""
 
@@ -236,9 +376,10 @@ class RWBackend(ABC):
 
     # ---- helpers ----------------------------------------------------------
     def exists(self, path: str) -> bool:
+        # ``stat`` returns None for a missing path instead of raising, so the
+        # old truthiness shortcut reported *every* path as present.
         try:
-            self.stat(path)
-            return True
+            return self.stat(path) is not None
         except Exception:
             return False
 
@@ -326,8 +467,58 @@ class Fat32RW(RWBackend):
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
             if self.root_cluster < 2:
                 self.root_cluster = 2
+            # FSINFO only caches the allocator state; the FAT stays the source
+            # of truth.  The pointer is kept so the writer paths below can
+            # refresh that cache - a stale free-cluster count is exactly what
+            # `fsck.fat` reports as "Free cluster summary wrong".
+            self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
         else:
             self.root_cluster = 0
+            self.fsinfo_sector = 0
+
+    # ---- FSINFO ------------------------------------------------------------
+    def free_clusters(self) -> tuple:
+        """Count free clusters (and the first one) from the FAT itself."""
+        free = 0
+        first = 0xFFFFFFFF
+        for n in range(2, self.cluster_count + 2):
+            if self._fat_get(n) == 0:
+                free += 1
+                if first == 0xFFFFFFFF:
+                    first = n
+        return free, first
+
+    def sync_fsinfo(self) -> bool:
+        """Refresh the cached free-cluster count/next-free hint.
+
+        Recounted from the FAT rather than incremented/decremented, so the cache
+        cannot drift after a failed allocation or a partially applied delete.
+        Volumes that declare no FSINFO sector, or one whose signatures do not
+        match, are left untouched: writing counters into an unrelated sector
+        would corrupt the image while "fixing" a cache.  Returns ``True`` when a
+        valid FSINFO structure was found and updated.
+        """
+        if self.fat_type != 32 or not self.fsinfo_sector:
+            return False
+        off = self.fsinfo_sector * self.bytes_per_sector
+        try:
+            raw = self._read_at(off, self.bytes_per_sector)
+        except (OSError, ValueError):
+            return False
+        if len(raw) < self.bytes_per_sector:
+            return False
+        if struct.unpack("<I", raw[0:4])[0] != 0x41615252:  # lead signature
+            return False
+        if struct.unpack("<I", raw[484:488])[0] != 0x61417272:  # structure
+            return False
+        if struct.unpack("<I", raw[508:512])[0] != 0xAA550000:  # trail
+            return False
+        free, first = self.free_clusters()
+        buf = bytearray(raw)
+        struct.pack_into("<I", buf, 488, free)
+        struct.pack_into("<I", buf, 492, first)
+        self._write_at(off, bytes(buf))
+        return True
 
     # ---- FAT ---------------------------------------------------------------
     def _fat_get(self, cluster: int) -> int:
@@ -807,6 +998,7 @@ class Fat32RW(RWBackend):
         # Reclaim the old clusters only after that point.
         if old_chain:
             self._free_chain(old_chain[0])
+        self.sync_fsinfo()
 
     def _find_entry_index(self, raw: bytes, entry: FSEntry, base: str) -> int | None:
         lfn: list[int] = []
@@ -863,8 +1055,21 @@ class Fat32RW(RWBackend):
         dot = bytearray(
             self._build_dir_entry(".", new_cluster, 0, True, short_name=(b".", b""))
         )
+        # Microsoft's FAT specification: a directory created in the *root*
+        # directory stores 0 in the ".." cluster field, because the root
+        # directory has no cluster number of its own.  Storing the root cluster
+        # number (2) instead produced images that `fsck.fat` rejects with
+        # "Invalid '..' entry in the second slot" - a volume our own writer
+        # (and MF-WE's verify()) reported as clean.
+        dotdot_cluster = (
+            0
+            if self.fat_type == 32 and parent_cluster == self.root_cluster
+            else parent_cluster
+        )
         dotdot = bytearray(
-            self._build_dir_entry("..", parent_cluster, 0, True, short_name=(b"..", b""))
+            self._build_dir_entry(
+                "..", dotdot_cluster, 0, True, short_name=(b"..", b"")
+            )
         )
         buf = bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64)
         self._write_cluster(new_cluster, buf)
@@ -877,6 +1082,7 @@ class Fat32RW(RWBackend):
             if str(exc).startswith("no free dir slot for "):
                 self._free_chain(new_cluster)
             raise
+        self.sync_fsinfo()
 
     def delete(self, path: str, recursive: bool = False) -> None:
         parent_cluster, name = self._walk_to(path)
@@ -900,6 +1106,7 @@ class Fat32RW(RWBackend):
         idx = self._find_entry_index(raw, entry, parent_path)
         if idx is not None:
             self._write_dir_raw(parent_cluster, self._tombstone_entry_slots(raw, idx))
+        self.sync_fsinfo()
 
     def _tombstone_entry_slots(self, raw: bytes, short_entry_index: int) -> bytes:
         start = short_entry_index
@@ -1053,8 +1260,13 @@ class Ext234RW(RWBackend):
                 mode = int(parts[1], 8)
             except ValueError:
                 continue
-            name = parts[7] if len(parts) > 7 else parts[-1]
-            is_dir = name.endswith("/")
+            # ``ls -l`` emits date and time before the name; names may contain
+            # spaces, so retain all tokens after the timestamp instead of
+            # treating the time as the entry name.
+            if len(parts) < 9:
+                continue
+            name = " ".join(parts[8:])
+            is_dir = (mode & 0o170000) == 0o040000
             name = name.rstrip("/")
             if name in (".", ".."):
                 continue
@@ -1089,7 +1301,7 @@ class Ext234RW(RWBackend):
             tmp = Path(tf.name)
         try:
             # удалить если существует
-            self._debugfs(f"rm {path}")
+            self._debugfs(f"rm {path}", write=True)
             self._debugfs(f"write {tmp} {path}", write=True)
             self._flush_tmp()
         finally:
@@ -1107,8 +1319,27 @@ class Ext234RW(RWBackend):
             self._flush_tmp()
 
     def rename(self, src: str, dst: str) -> None:
-        self._debugfs(f"rename {src} {dst}", write=True)
-        self._flush_tmp()
+        # debugfs has no ``rename`` command.  Use a bounded dump/write/unlink
+        # sequence for regular files, preserving the source until the new
+        # directory entry has been created successfully.  Directory rename is
+        # intentionally rejected rather than pretending that a file-only
+        # emulation preserves an entire subtree.
+        entries = self.list(str(PurePosixPath(src).parent))
+        source = next((item for item in entries if item.path == src), None)
+        if source is None:
+            raise FileNotFoundError(src)
+        if source.is_dir:
+            raise NotImplementedError("ext directory rename is not supported by debugfs")
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            tmp = Path(tf.name)
+        try:
+            self._debugfs(f"dump {src} {tmp}")
+            self._debugfs(f"rm {dst}", write=True)
+            self._debugfs(f"write {tmp} {dst}", write=True)
+            self._debugfs(f"rm {src}", write=True)
+            self._flush_tmp()
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 # =============================================================================
@@ -1470,15 +1701,26 @@ class UniversalFSRW:
             volumes = detect_volumes(self.image)
             candidate = next((v for v in volumes if v.fstype != "raw"), None)
             if candidate is None:
-                raise RuntimeError("no filesystem detected")
-            fs_type, off = candidate.fstype, candidate.offset
+                # detect_volumes only sees signatures inside the scan window;
+                # the header at offset 0 is still worth one direct probe, and
+                # synthetic/small fixtures rely on exactly that fallback.
+                direct = probe_filesystem(self.image, 0)
+                if not direct or direct.lower() == "raw":
+                    raise RuntimeError("no filesystem detected")
+                fs_type, off = direct, 0
+            else:
+                fs_type, off = candidate.fstype, candidate.offset
             self.offset = off
+        # ``probe_filesystem`` returns display names such as ``FAT32`` or
+        # ``NTFS`` while the backend table is lowercase, so the match below
+        # must be case-insensitive.
+        fs_type_lower = str(fs_type).lower()
         for cls, types in [
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
             (NtfsRW, ("ntfs",)),
         ]:
-            if fs_type.startswith(types):
+            if fs_type_lower.startswith(types):
                 try:
                     self.backend = cls(self.image, off)
                     return

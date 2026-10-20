@@ -84,3 +84,30 @@ def test_failure_before_commit_keeps_original_image_unchanged(tmp_path, monkeypa
         writer.write_file("/new.ini", b"value=1\n")
 
     assert image.read_bytes() == before
+
+
+def test_free_space_and_delete_round_trip(tmp_path):
+    image = tmp_path / "filesystem.ext4"
+    _make_ext4(image)
+    writer = Ext234ImageWriter(str(image))
+    assert writer.free_space() is None or writer.free_space() > 0
+
+    writer.mkdir("/keep")
+    writer.write_file("/keep/one.ini", b"a=1\n")
+    writer.write_file("/keep/two.ini", b"b=2\n")
+
+    with pytest.raises(ExtWriteError, match="not empty"):
+        writer.delete("/keep")
+    with pytest.raises(ExtWriteError, match="root"):
+        writer.delete("/")
+
+    writer.delete("/keep", recursive=True)
+    # mke2fs always creates /lost+found, so only the created entries disappear.
+    assert [entry["name"] for entry in writer.list_dir("/") if entry["is_dir"]] == [
+        "lost+found"
+    ]
+
+    writer.write_file("/solo.ini", b"c=3\n")
+    writer.delete("/solo.ini")
+    names = [entry["name"] for entry in writer.list_dir("/") if not entry["is_dir"]]
+    assert names == []

@@ -24,6 +24,29 @@ python mountfile_dfir.py serve --db timeline.db --host 127.0.0.1 --port 8000
 сравнения времён (`mtime`, `ctime`, `atime`, `birth`) и выдаёт эвристические
 признаки.
 
+## Explicit plugin discovery
+
+Примеры `examples/plugins/yara.py` и `examples/plugins/timeline.py` экспортируют
+`PLUGINS`. Импорт не регистрирует и не запускает плагины автоматически;
+владелец процесса явно перечисляет доверенные файлы и открывает lifecycle:
+
+```python
+from mountfile.plugins import PluginRegistry
+
+registry = PluginRegistry()
+registry.discover(paths=[
+    "examples/plugins/yara.py",
+    "examples/plugins/timeline.py",
+])
+with registry.session("evidence.img", {"size": 4096}):
+    registry.file({"path": "/note.txt", "data": b"example", "size": 7})
+```
+
+`discover(paths=...)` импортирует исполняемый Python-код, поэтому загружайте
+только проверенные плагины. YARA-адаптер требует явно настроенных правил и
+опциональной зависимости `yara-python`; плагины не получают изменяемый handle
+на образ и не меняют поведение записи.
+
 ## Tutorial: PDF на FAT32
 
 ### Живой файл
@@ -275,3 +298,78 @@ print(result.offset, len(result.bytes))
 Для пустого или выровненного по границе кластера файла результат пустой и
 `offset` равен `None`. Проверяйте путь, cluster chain и offset независимо до
 вызова; slack может содержать остатки прежних данных.
+
+---
+
+## Пакетные DFIR-команды (issue #87)
+
+Помимо standalone-скриптов, те же возможности доступны через пакетный CLI
+(`python -m mountfile <команда>`). Все команды работают **read-only** и никогда
+не изменяют образ-источник.
+
+### Timeline (Task 1.1)
+
+```bash
+python -m mountfile timeline-build evidence.img -o timeline.db --csv timeline.csv
+python -m mountfile timeline-query --db timeline.db \
+    --start 2024-03-12T14:00 --end 2024-03-12T15:00 --event mtime --json
+```
+
+Схема: `timestamp | source | path | event | sha256`. События формируются по
+четырём меткам `pytsk3` (`created`, `mtime`, `atime`, `ctime`); `timeline-query`
+отвечает на вопрос «что происходило в окне …» — это хук для AI-интеграции.
+Разбор `$STANDARD_INFORMATION` против `$FILE_NAME` требует отдельного MFT-парсера
+и в эту команду не входит.
+
+### Content search (Task 1.2)
+
+```bash
+python -m mountfile search evidence.img "password=" --json
+python -m mountfile search evidence.img "powershell" --encoding utf-16le
+python -m mountfile search evidence.img "id=\d+" --regex
+python -m mountfile search evidence.img "AKIA" --files   # по содержимому файлов
+```
+
+Без `--files` поиск идёт потоково по сырым байтам с перекрытием чанков (находит
+строки в unallocated и slack), с `--files` — по содержимому каждого файла с
+указанием пути.
+
+### YARA (Task 1.3)
+
+```bash
+python -m mountfile yara-scan evidence.img --rules rules/ --json
+python -m mountfile yara-scan evidence.img --rules rules/pii.yar --targets unallocated
+```
+
+`--rules` принимает как один файл, так и каталог. Встроенные правила:
+`rules/pii.yar` (карты, IBAN, SSN, приватные ключи) и
+`rules/anti_forensics.yar` (CCleaner, timestomp-утилиты, очистка журналов,
+secure-delete). Требуется `pip install yara-python`.
+
+### Timestomp (Task 1.4)
+
+```bash
+python -m mountfile timestomp-scan evidence.img --skew 2.0 --json
+```
+
+Четыре независимых правила с причиной в отчёте: timestamp в будущем,
+`mtime == atime == ctime`, нулевые наносекунды и `$SI.mtime < $FN.mtime`
+(последнее — только если вызывающий код передал пару значений).
+
+### Slack (Task 1.6)
+
+```bash
+python -m mountfile slack-extract evidence.img -o slack/
+```
+
+Slack-область каждого файла выгружается в отдельный `.bin`. Offset считается
+абсолютным: `slack_end = (last_run.addr + last_run.len) * block_size`, поэтому
+данные читаются из правильного места образа.
+
+### Live diff (Task 2.2)
+
+```bash
+python -m mountfile live-diff before.img after.img -o diff.md
+```
+
+Отчёт Markdown: `added` / `modified` / `removed` со размерами и SHA-256.

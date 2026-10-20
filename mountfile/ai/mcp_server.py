@@ -219,7 +219,18 @@ class DefaultBackend:
     def list_partitions(self, image: Path) -> Any:
         from mountfile.partition import list_partitions
 
-        return list_partitions(str(image))
+        partitions = []
+        for partition in list_partitions(str(image)):
+            value = _json_value(partition)
+            row = dict(value) if isinstance(value, Mapping) else {"value": value}
+            # Partition.offset and the other useful values are properties, so
+            # they are absent from vars(partition) and must be copied explicitly.
+            for name in ("offset", "size_bytes", "size_mb", "type_name"):
+                field = getattr(partition, name, None)
+                if field is not None:
+                    row[name] = _json_value(field)
+            partitions.append(row)
+        return partitions
 
     def list_directory(self, image: Path, offset: int, path: str) -> Any:
         provider = self._provider(image, offset)
