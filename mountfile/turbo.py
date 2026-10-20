@@ -118,7 +118,7 @@ Progress = Optional[Callable[[int, int, str], None]]
 class TTLCache:
     """Bounded, thread-safe, per-entry TTL."""
 
-    __slots__ = ("_data", "_lock", "hits", "maxsize", "misses", "ttl")
+    __slots__ = ("_data", "_lock", "_order", "hits", "maxsize", "misses", "ttl")
 
     def __init__(self, maxsize: int = 1024, ttl: float = 30.0):
         self.maxsize, self.ttl = maxsize, ttl
@@ -723,6 +723,23 @@ class SqliteJournal:
 # ==========================================================================
 
 if HAS_QT:
+    # Qt6 moved every enum into a scoped enum class (Qt.ItemDataRole.UserRole);
+    # Qt5 exposes the same names flat on Qt (Qt.UserRole). Resolve once, here,
+    # instead of inside a class body — a missing attribute there made the whole
+    # module unimportable on PyQt6 (AttributeError at import time).
+    _Qt = QtCore.Qt
+    if hasattr(_Qt, "ItemDataRole"):
+        _ROLE_USER = int(_Qt.ItemDataRole.UserRole)
+        _ROLE_DISPLAY = _Qt.ItemDataRole.DisplayRole
+        _ORIENT_H = _Qt.Orientation.Horizontal
+        _SORT_ASC = _Qt.SortOrder.AscendingOrder
+        _SORT_DESC = _Qt.SortOrder.DescendingOrder
+    else:  # pragma: no cover - PyQt5 / Qt5
+        _ROLE_USER = int(_Qt.UserRole)
+        _ROLE_DISPLAY = _Qt.DisplayRole
+        _ORIENT_H = _Qt.Horizontal
+        _SORT_ASC = _Qt.AscendingOrder
+        _SORT_DESC = _Qt.DescendingOrder
 
     class _Signals(QtCore.QObject):
         started = QtCore.pyqtSignal()
@@ -805,7 +822,7 @@ if HAS_QT:
         """Virtualised table; thousands of rows render instantly."""
 
         COLUMNS = ("Имя", "Размер", "Тип", "Изменён")
-        RowRole = QtCore.Qt.UserRole + 1
+        RowRole = _ROLE_USER + 1
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -825,18 +842,18 @@ if HAS_QT:
         def columnCount(self, parent=QtCore.QModelIndex()):
             return len(self.COLUMNS)
 
-        def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):
-            if orientation == QtCore.Qt.Horizontal and role == QtCore.Qt.DisplayRole:
+        def headerData(self, section, orientation, role=_ROLE_DISPLAY):
+            if orientation == _ORIENT_H and role == _ROLE_DISPLAY:
                 return self.COLUMNS[section]
             return None
 
-        def data(self, index, role=QtCore.Qt.DisplayRole):
+        def data(self, index, role=_ROLE_DISPLAY):
             if not index.isValid():
                 return None
             row = self._rows[index.row()]
             if role == self.RowRole:
                 return row
-            if role != QtCore.Qt.DisplayRole:
+            if role != _ROLE_DISPLAY:
                 return None
             col = index.column()
             if col == 0:
@@ -859,9 +876,9 @@ if HAS_QT:
                     return str(ts)
             return None
 
-        def sort(self, column, order=QtCore.Qt.AscendingOrder):
+        def sort(self, column, order=_SORT_ASC):
             key = ("name", "size", "type", "mtime")[column]
-            reverse = order == QtCore.Qt.DescendingOrder
+            reverse = order == _SORT_DESC
             self._rows.sort(
                 key=lambda r: (r.get("type") != 2, _sortable(r.get(key))),
                 reverse=reverse,
