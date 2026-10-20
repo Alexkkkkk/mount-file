@@ -8,9 +8,11 @@ the same through this module - the single place where the editor is chosen:
 
 * Windows  - ``notepad.exe`` (Блокнот);
 * macOS    - ``open -t`` (the default text editor, i.e. TextEdit);
-* Linux    - ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR`` when set, else
-  the first editor found on ``PATH`` (gedit, kate, xed, pluma, mousepad,
-  leafpad, featherpad), else ``xdg-open``.
+* Linux    - the first editor found on ``PATH`` (gedit, kate, xed, pluma,
+  mousepad, leafpad, featherpad), else ``xdg-open``.
+
+``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR`` are honoured on **every**
+POSIX host - macOS included - and win over the per-OS default above.
 
 ``.txt`` is the primary extension; the other plain-text kinds listed in
 :data:`TEXT_EXTENSIONS` take the same route.
@@ -112,11 +114,13 @@ def editor_command(path):
     if os.name == "nt":  # pragma: no cover - Windows only
         exe = shutil.which("notepad.exe") or shutil.which("notepad") or "notepad.exe"
         return [exe, str(path)]
-    if sys.platform == "darwin":  # pragma: no cover - macOS only
-        return ["open", "-t", str(path)]
+    # An explicit MOUNTFILE_EDITOR / VISUAL / EDITOR wins on every POSIX host,
+    # macOS included - otherwise "$EDITOR" would be silently ignored there.
     from_env = _editor_from_env()
     if from_env:
         return from_env + [str(path)]
+    if sys.platform == "darwin":  # pragma: no cover - macOS only
+        return ["open", "-t", str(path)]
     for candidate in LINUX_EDITORS:
         exe = shutil.which(candidate)
         if exe:
