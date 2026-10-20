@@ -13,11 +13,16 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   parse:
     if: |
       github.event.issue.pull_request &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     outputs:
       cmd: ${{ steps.p.outputs.cmd }}
@@ -40,6 +45,7 @@ jobs:
     name: /release
     needs: parse
     if: needs.parse.outputs.cmd == 'release'
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

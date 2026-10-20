@@ -9,15 +9,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     name: Tests (${{ matrix.os }}, py${{ matrix.python }})
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.8", "3.12"]
+        python: ["3.10", "3.12"]
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -59,6 +64,7 @@ jobs:
 
   integration:
     name: Integration (pytsk3 + mkfs.vfat, Linux)
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     env:
       QT_QPA_PLATFORM: offscreen
@@ -97,6 +103,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.os }})
+    timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     needs: tests
     strategy:
@@ -143,6 +150,7 @@ jobs:
 
   gui-import:
     name: GUI import (Windows, PyQt6)
+    timeout-minutes: 30
     runs-on: windows-latest
     needs: tests
     steps:
@@ -162,6 +170,7 @@ jobs:
 
   gui:
     name: gui smoke test (offscreen)
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

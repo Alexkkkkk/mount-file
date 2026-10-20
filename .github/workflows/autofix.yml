@@ -24,8 +24,13 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   autofix:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     if: >-
       ${{ vars.ENABLE_AUTOFIX == 'true' &&

@@ -14,7 +14,7 @@ name = "mountfile"
 version = "1.26.0"
 description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Alexkkkkk" }]
 
