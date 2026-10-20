@@ -45,3 +45,27 @@ coverage.xml
 
 # local lint tool binary
 /actionlint
+
+# Упакованные ресурсы приложения: *.bin/icon.* перечислены выше как игнор,
+# но mountfile/data/ отгружается в колесе и обязан оставаться в git.
+!mountfile/data/*.bin
+!mountfile/data/*.ico
+!mountfile/data/*.icns
+!mountfile/data/*.png
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+~$*
+*.swp
+
+# mkdocs build output
+site/
+
+# misc tooling caches
+.tox/
+.nox/
+.ipynb_checkpoints/
+*.egg

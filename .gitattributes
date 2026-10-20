@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Alexkkkkk
+#
+# Нормализация переводов строк и правила для бинарных ресурсов.
+# Подробности: docs/structure.md
+
+* text=auto eol=lf
+
+*.py    text diff=python
+*.md    text
+*.yml   text
+*.yaml  text
+*.toml  text
+*.json  text
+*.yar   text
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.ico   binary
+*.icns  binary
+*.png   binary
+*.jpg   binary
+*.bin   binary
+*.img   binary
+*.raw   binary
+*.dump  binary
+
+# Статистика языков не должна раздуваться документацией и архивом.
+docs/**       linguist-documentation
+CHANGELOG.md  linguist-documentation
+archive/**    linguist-vendored

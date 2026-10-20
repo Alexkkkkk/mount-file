@@ -550,6 +550,10 @@ CI (`.github/workflows/ci.yml`) гоняет тесты на Ubuntu и Windows �
 
 ## Структура проекта
 
+Полная карта каталогов, правила размещения файлов и таблица всех GitHub
+Actions — в [docs/structure.md](docs/structure.md). Ниже — краткий обзор.
+
+
 ```text
 mount-file/
 ├── main.py                     точка входа GUI/CLI + диагностика

@@ -17,6 +17,25 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Alexkkkkk" }]
+keywords = ["forensics", "dfir", "disk-image", "nand", "emmc", "fat32", "qt"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Filesystems",
+]
+
+[project.urls]
+Homepage = "https://github.com/Alexkkkkk/mount-file"
+Documentation = "https://alexkkkkk.github.io/mount-file/"
+Changelog = "https://github.com/Alexkkkkk/mount-file/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Alexkkkkk/mount-file/issues"
 
 dependencies = [
     "PyQt6>=6.5",
@@ -84,14 +103,14 @@ mountfile = ["data/*.bin", "data/*.png", "data/*.ico", "data/*.icns"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501", "E402"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.10"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
