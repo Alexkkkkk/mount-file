@@ -302,6 +302,16 @@ def main():
     try:
         app = QApplication(sys.argv)
         app.setApplicationName("Mount File")
+        # Icon for the taskbar / dock / window manager. Cosmetic: a build
+        # without the artwork just skips it.
+        try:
+            from mountfile import appicon
+
+            _app_icon = appicon.app_icon()
+            if _app_icon is not None and not _app_icon.isNull():
+                app.setWindowIcon(_app_icon)
+        except Exception:
+            pass
         _install_olma_runtime()
         win = MainWindow()
         win.show()

@@ -520,6 +520,10 @@ class TcPanel(QWidget):
         self.cmb_drive = QComboBox()
         self.cmb_drive.setMinimumWidth(230)
         self.cmb_drive.setSizeAdjustPolicy(ComboAdjustToContents)
+        # Qt по умолчанию показывает 10 строк в дропдауне: дампы с десятками
+        # разделов прячут остальные тома за встроенным scroll. 64 — потолок,
+        # при котором любой практический дамп помещается целиком.
+        self.cmb_drive.setMaxVisibleItems(64)
         self.cmb_drive.currentIndexChanged.connect(self.drive_changed)
         bar.addWidget(self.cmb_drive)
         self.lbl_space = QLabel("")
@@ -1374,6 +1378,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Mount File — режим Total Commander")
         self.setMinimumSize(640, 400)
+        self._apply_app_icon()
 
         self.image_path = None
         self.volumes = []
@@ -1391,6 +1396,18 @@ class MainWindow(QMainWindow):
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._start_updater()
+
+    # ----------------------------------------------------------------- icon
+    def _apply_app_icon(self):
+        """Window icon from the packaged artwork (cosmetic, never raises)."""
+        try:
+            from . import appicon
+
+            icon = appicon.app_icon()
+            if icon is not None and not icon.isNull():
+                self.setWindowIcon(icon)
+        except Exception:  # pragma: no cover - icons are cosmetic
+            pass
 
     # -------------------------------------------------------- screen fit
     def screen_geometry(self):
