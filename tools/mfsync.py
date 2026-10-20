@@ -154,11 +154,11 @@ def ok(text):
 
 
 def warn(text):
-    print("  ! " + redact_secret(text))  # codeql[py/clear-text-logging-sensitive-data]: value is already sanitized by redact_secret()
+    print("  ! " + redact_secret(text))  # codeql[py/clear-text-logging-sensitive-data]:suppress value already sanitized by redact_secret()
 
 
 def fail(text):
-    print("  \u2716 " + redact_secret(text), file=sys.stderr)  # codeql[py/clear-text-logging-sensitive-data]: value is already sanitized by redact_secret()
+    print("  \u2716 " + redact_secret(text), file=sys.stderr)  # codeql[py/clear-text-logging-sensitive-data]:suppress value already sanitized by redact_secret()
 
 
 # --------------------------------------------------------------------------- git
