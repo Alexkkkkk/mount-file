@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
 """F4 text-edit save and encoding preservation tests."""
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -8,8 +7,20 @@ from types import SimpleNamespace
 
 import pytest
 
-if not (importlib.util.find_spec("PyQt6") or importlib.util.find_spec("PyQt5")):
-    pytest.skip("no Qt bindings installed", allow_module_level=True)
+# A real import, not find_spec(): the "test" job installs PyQt6 without the
+# system Qt runtime, so the package is present while `import PyQt6.QtWidgets`
+# still dies on libEGL.so.1. find_spec() therefore passed and the module raised
+# instead of skipping, failing the job. mountfile.qt_compat raises ImportError
+# in that case (same guard as tests/test_text_editor.py).
+try:  # pragma: no cover - depends on the environment
+    import mountfile.qt_compat as _qt_compat  # noqa: F401
+
+    HAVE_QT = True
+except ImportError:  # pragma: no cover
+    HAVE_QT = False
+
+if not HAVE_QT:  # pragma: no cover
+    pytest.skip("no usable Qt bindings", allow_module_level=True)
 
 from mountfile import tc_window
 from mountfile.ext_debugfs_writer import Ext234ImageWriter, Ext234Provider
