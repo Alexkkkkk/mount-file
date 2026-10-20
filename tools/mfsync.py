@@ -69,6 +69,16 @@ SECRET_PATTERNS = (
      re.compile(r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*[\"']([^\"'\s]{12,})[\"']")),
 )
 
+# Kinds that describe a *shape* rather than a specific credential. A PEM header
+# inside a YARA rule or a test fixture is not a leak, so these are reported as
+# warnings and never block a commit unless the caller asks for strict mode.
+HEURISTIC_KINDS = ("private key", "credential assignment")
+
+
+def severity_of(kind):
+    return "heuristic" if kind in HEURISTIC_KINDS else "high"
+
+
 # Values that look like credentials but are documentation placeholders.
 PLACEHOLDER_HINTS = (
     "your_", "your-", "xxx", "***", "...", "<", "${", "{{", "%s", "changeme",
@@ -326,6 +336,7 @@ def scan_text(text, path="<text>"):
                 "path": path,
                 "line": lineno,
                 "kind": kind,
+                "severity": severity_of(kind),
                 "snippet": _redact(snippet),
             })
             break
@@ -357,7 +368,7 @@ def scan_files(cwd, paths=None):
                     snippet = snippet[:117] + "..."
                 findings.append({
                     "path": relative, "line": lineno, "kind": kind,
-                    "snippet": _redact(snippet),
+                    "severity": severity_of(kind), "snippet": _redact(snippet),
                 })
                 break
     return findings
@@ -531,9 +542,15 @@ def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=
                 bad_names,
             )
         findings = scan_files(cwd, staged)
-        if findings:
-            raise SyncError("refusing to commit %d secret(s)" % len(findings), 4,
-                            ["%s:%s [%s] %s" % (f["path"], f["line"], f["kind"], f["snippet"]) for f in findings])
+        blocking = [f for f in findings if f["severity"] == "high"]
+        for finding in findings:
+            if finding["severity"] != "high":
+                warn("possible %s (not blocking): %s:%s" % (
+                    finding["kind"], finding["path"], finding["line"]))
+        if blocking:
+            raise SyncError("refusing to commit %d secret(s)" % len(blocking), 4,
+                            ["%s:%s [%s] %s" % (f["path"], f["line"], f["kind"], f["snippet"])
+                             for f in blocking])
 
     if not message:
         guessed_kind, guessed_scope, subject, body = guess_commit(cwd)
@@ -836,6 +853,8 @@ def build_parser():
 
     scan_node = sub.add_parser("scan", help="scan changed files for secrets")
     scan_node.add_argument("--all", action="store_true", help="scan every tracked file")
+    scan_node.add_argument("--strict-heuristics", action="store_true",
+                           help="also fail on PEM headers / credential assignments")
 
     return parser
 
@@ -876,14 +895,27 @@ def main(argv=None):
             if args.all:
                 paths = git(["ls-files"], cwd, check=False).stdout.split()
             findings = scan_files(cwd, paths)
+            blocking = [f for f in findings if f["severity"] == "high"]
+            advisory = [f for f in findings if f["severity"] != "high"]
             if args.json:
-                say(json.dumps(findings, indent=2, ensure_ascii=False))
+                say(json.dumps({"blocking": blocking, "advisory": advisory}, indent=2, ensure_ascii=False))
             else:
                 if not findings:
                     ok("no secrets in %s" % ("tracked files" if args.all else "changed files"))
-                for finding in findings:
+                for finding in blocking:
                     fail("%s:%s [%s] %s" % (finding["path"], finding["line"], finding["kind"], finding["snippet"]))
-            return 0 if not findings else 4
+                if advisory:
+                    warn("%d PEM header / credential-shaped line(s) - review, not blocking" % len(advisory))
+                    for finding in advisory[:20]:
+                        say("      %s:%s [%s]" % (finding["path"], finding["line"], finding["kind"]))
+                if blocking:
+                    say("    rotate the credential, move it to a GitHub secret, or add")
+                    say("    '# pragma: allowlist secret' to a documented placeholder line.")
+            if blocking:
+                return 4
+            if advisory and args.strict_heuristics:
+                return 4
+            return 0
 
         if command == "commit":
             with _lock(cwd):

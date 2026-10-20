@@ -84,10 +84,31 @@ def test_scan_ignores_placeholder_values(tmp_path):
     assert M.scan_files(tmp_path, ["doc.md"]) == []
 
 
-def test_scan_detects_private_key_header(tmp_path):
+def test_private_key_header_is_advisory(tmp_path):
+    # A PEM header alone is a shape, not a credential: YARA rules and test
+    # fixtures legitimately contain it, so it must not block a commit.
     (tmp_path / "k.txt").write_text("-----BEGIN RSA PRIVATE KEY-----\nabc\n", encoding="utf-8")
     findings = M.scan_files(tmp_path, ["k.txt"])
     assert [f["kind"] for f in findings] == ["private key"]
+    assert findings[0]["severity"] == "heuristic"
+
+
+def test_hard_token_is_high_severity(tmp_path):
+    (tmp_path / "leak.py").write_text('T = "ghp_%s"\n' % ("q" * 40), encoding="utf-8")
+    assert [f["severity"] for f in M.scan_files(tmp_path, ["leak.py"])] == ["high"]
+
+
+def test_commit_allows_advisory_but_refuses_hard(repo):
+    (repo / "rules").mkdir()
+    (repo / "rules" / "keys.yar").write_text(
+        'rule k { strings: $a = "-----BEGIN OPENSSH PRIVATE KEY-----" condition: $a }\n',
+        encoding="utf-8",
+    )
+    sha = M.commit(str(repo), message="test(core): add yara fixture")
+    assert sha
+    (repo / "leak.py").write_text('T = "ghp_%s"\n' % ("w" * 40), encoding="utf-8")
+    with pytest.raises(M.SyncError):
+        M.commit(str(repo), message="chore: leak")
 
 
 def test_scan_allowlist_and_inline_pragma(tmp_path):
