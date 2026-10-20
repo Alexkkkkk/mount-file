@@ -42,3 +42,6 @@ coverage.xml
 .coverage.*
 htmlcov/
 coverage.xml
+
+# local lint tool binary
+/actionlint
