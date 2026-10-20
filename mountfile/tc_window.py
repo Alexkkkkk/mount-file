@@ -1731,6 +1731,9 @@ class MainWindow(QMainWindow):
             self._action("Сводка образа и тома…", self.show_image_info)
         )
         m_tool.addAction(
+            self._action("Обзор всего образа…", self.show_whole_image)
+        )
+        m_tool.addAction(
             self._action("DFIR triage (только чтение)…", self.open_forensic_triage)
         )
         m_tool.addSeparator()
@@ -2004,6 +2007,77 @@ class MainWindow(QMainWindow):
                     )
                 )
         QMessageBox.information(self, "Сводка образа и тома", "\n".join(lines))
+
+    def show_whole_image(self):
+        """Show every detected volume together instead of one at a time.
+
+        Filesystems remain separate because their offsets and metadata are
+        independent. Double-clicking a row mounts that complete volume in the
+        active panel; the table itself is the whole-image view.
+        """
+        if not self.image_path:
+            QMessageBox.information(
+                self, "Обзор всего образа", "Сначала откройте образ (Ctrl+O)."
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(
+            "Обзор всего образа — %s" % os.path.basename(self.image_path)
+        )
+        dialog.resize(900, 460)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel(
+                "Образ: %s\nРазмер: %s. Найдено томов: %d. "
+                "Двойной клик открывает том целиком в активной панели."
+                % (
+                    self.image_path,
+                    tc_style.fmt_kb(os.path.getsize(self.image_path)),
+                    len(self.volumes),
+                )
+            )
+        )
+        table = QTableWidget(dialog)
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(
+            ("№", "Имя/описание", "ФС", "Offset", "Размер", "Источник")
+        )
+        table.setRowCount(len(self.volumes))
+        table.setSelectionBehavior(SelectRows)
+        table.setEditTriggers(NoEditTriggers)
+        for row, volume in enumerate(self.volumes):
+            offset = int(getattr(volume, "offset", 0))
+            size = getattr(volume, "size", None)
+            values = (
+                str(row + 1),
+                str(getattr(volume, "desc", "том")),
+                str(getattr(volume, "fstype", "unknown")),
+                "0x%X / LBA %d" % (offset, offset // 512),
+                tc_style.fmt_kb(size) if size else "н/д",
+                str(getattr(volume, "source", "detector")),
+            )
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        table.cellDoubleClicked.connect(
+            lambda row, _column: self._open_overview_volume(dialog, row)
+        )
+        layout.addWidget(table, 1)
+        buttons = QDialogButtonBox()
+        close_button = buttons.addButton(DlgClose)
+        close_button.clicked.connect(dialog.reject)
+        layout.addWidget(buttons)
+        exec_dialog(dialog)
+
+    def _open_overview_volume(self, dialog, row):
+        """Mount one complete volume selected from the whole-image table."""
+        if row < 0 or row >= len(self.volumes):
+            return
+        volume = self.volumes[row]
+        dialog.accept()
+        self.mount_volume(self.active_panel(), int(volume.offset))
+        self.log_msg("Открыт том из обзора образа: %s" % volume.desc)
 
     def open_forensic_triage(self):
         """Open bounded read-only hash/search/timeline helpers."""
@@ -2313,9 +2387,25 @@ class MainWindow(QMainWindow):
             try:
                 from .firmware import detect_volumes
 
-                return list(detect_volumes(path))
+                volumes = list(detect_volumes(path))
             except ImportError:
-                return [_PartitionVolume(p) for p in list_partitions(path)]
+                volumes = [_PartitionVolume(p) for p in list_partitions(path)]
+            # Signature scanning can see the same filesystem through more than
+            # one compatible probe. Present one row per physical volume so the
+            # whole-image view and drive selector do not show duplicates.
+            unique = []
+            seen = set()
+            for volume in volumes:
+                key = (
+                    int(getattr(volume, "offset", 0)),
+                    str(getattr(volume, "fstype", "")),
+                    getattr(volume, "size", None),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(volume)
+            return unique
         except Exception as e:
             self.log_msg("Сканирование томов не удалось: %s" % e)
             return []

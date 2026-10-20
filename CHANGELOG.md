@@ -6,6 +6,11 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Обзор образа целиком**: в меню «Инструменты» добавлена таблица всех
+  найденных томов сразу с файловой системой, размером, offset/LBA и источником
+  обнаружения. Двойной клик открывает выбранный том целиком в активной панели;
+  одинаковые сигнатуры одного физического тома больше не дублируются в списке.
+
 - **Non-FAT image writes in the GUI**: the Total Commander window now keeps
   native FAT32 writes and falls back to `UniversalFSRW` for ext2/3/4 via
   `debugfs`, NTFS via `ntfs-3g`, and supported loop-mounted filesystems.
