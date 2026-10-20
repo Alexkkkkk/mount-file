@@ -8,11 +8,12 @@ a local bare remote, so no network, no token and no GitHub API is touched.
 
 Run:  python -m pytest tests/test_mfsync.py -v
 """
-
 import importlib.util
 import os
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 
@@ -132,6 +133,18 @@ def test_scan_allowlist_and_inline_pragma(tmp_path):
     assert M.scan_files(tmp_path, ["settings.py"]) == []
 
 
+def test_scan_text_finds_and_redacts():
+    token = "ghp_" + "a" * 40
+    findings = M.scan_text('TOKEN = "%s"\n' % token)
+    assert [f["kind"] for f in findings] == ["github token"]
+    assert token not in findings[0]["snippet"]
+
+
+def test_scan_text_honours_allowlist_pragma():
+    text = 'TOKEN = "ghp_%s"  # pragma: allowlist secret\n' % ("a" * 40)
+    assert M.scan_text(text) == []
+
+
 def test_scan_skips_binary_and_oversized(tmp_path):
     (tmp_path / "blob.bin").write_bytes(b"\0\1\2github_pat_" + b"A" * 30)
     assert M.scan_files(tmp_path, ["blob.bin"]) == []
@@ -142,7 +155,7 @@ def test_sensitive_filenames():
     assert hits == ["a/.env", "certs/server.pem", "id_rsa"]
 
 
-def testredact_secret_removes_env_token(monkeypatch):
+def test_redact_secret_removes_env_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp_" + "z" * 36)
     text = M.redact_secret("push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36))
     assert "ghp_" not in text
@@ -357,10 +370,7 @@ def test_watch_commits_after_change(repo):
 
     M.sync = counting_sync
     try:
-        import threading
-
         def writer():
-            import time
             time.sleep(0.4)
             (repo / "watched.txt").write_text("w", encoding="utf-8")
 
