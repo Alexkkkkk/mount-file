@@ -6,6 +6,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
+# The portable CLI test matrix deliberately runs without Qt. Match the other
+# GUI test modules: import the compatibility layer first so a missing system
+# Qt runtime is reported as a skip, not as a collection-time failure.
+pytest.importorskip("mountfile.qt_compat", reason="Qt bindings are not installed")
+
 from mountfile import cli
 from mountfile.gui_cli import (
     CLI_COMMANDS,
