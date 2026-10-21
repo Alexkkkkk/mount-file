@@ -14,6 +14,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 [![License: MIT](https://img.shields.io/github/license/Alexkkkkk/mount-file?label=license&color=yellow)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+[![Install](https://img.shields.io/badge/install-one--command-brightgreen)](#%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BA%D0%B0)
 
 # Mount File
 
