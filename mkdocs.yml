@@ -55,5 +55,7 @@ nav:
   - Движок записи (MF-WE): write_engine.md
   - API: api.md
   - Demos: demos.md
+  - Синхронизация кода: sync.md
   - Разработчикам:
+      - Структура репозитория: structure.md
       - UniversalFSRW snippet: tc_window_universal_fs_rw_snippet.md
