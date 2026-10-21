@@ -43,7 +43,7 @@ import shutil
 import tempfile
 import threading
 import webbrowser
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
@@ -335,7 +335,7 @@ def _decode_editable_text(data):
             text = content.decode(encoding)
         except UnicodeDecodeError:
             return None
-    newline = "\r\n" if b"\r\n" in data else "\n"
+    newline = "\r\n" if b"\r\n" in data else "\r" if b"\r" in data else "\n"
     return text.replace("\r\n", "\n").replace("\r", "\n"), encoding, bom, newline
 
 
@@ -3196,25 +3196,27 @@ class MainWindow(QMainWindow):
     def _open_text_entry(self, panel, entry):
         """Открыть `entry` в редакторе и записать результат в журнал окна."""
         name = entry["name"]
-        process = None
+        original = None
         try:
             if panel.mode == "img":
                 if panel.provider is None:
                     raise RuntimeError("том не открыт")
+                full = panel.join(name)
+                if int(entry.get("size") or 0) > MAX_EDIT_BYTES:
+                    raise ValueError("файл превышает лимит редактора 2 MiB")
+                original = panel.provider.read_file(full)
+                if _decode_editable_text(original) is None:
+                    raise ValueError(
+                        "файл бинарный или превышает лимит редактора 2 MiB"
+                    )
                 target, encoding = text_editor.prepare_image_text(
-                    panel.provider, panel.join(name), self._text_temp_dir()
+                    panel.provider,
+                    full,
+                    self._text_temp_dir(),
+                    data=original,
                 )
                 note = "временная копия из образа: %s" % target
-                try:
-                    result = text_editor.open_in_editor(target, return_process=True)
-                except TypeError:
-                    # Compatibility with third-party/test editor adapters that
-                    # still implement the historical one-argument function.
-                    result = text_editor.open_in_editor(target)
-                if isinstance(result, tuple):
-                    argv, process = result
-                else:
-                    argv = result
+                argv = text_editor.open_in_editor(target)
             else:
                 target = panel.join(name)
                 encoding = "utf-8"
@@ -3228,47 +3230,66 @@ class MainWindow(QMainWindow):
             "Блокнот: %s -> %s (%s; кодировка %s)"
             % (name, " ".join(argv), note, encoding)
         )
-        if panel.mode == "img" and process is not None:
-            QTimer.singleShot(
-                250,
-                lambda: self._poll_image_editor(panel, entry, target, process),
+        if panel.mode == "img":
+            answer = QMessageBox.question(
+                self,
+                "Сохранить изменения в образ",
+                "Сохраните файл в редакторе и закройте его. Затем вернитесь сюда "
+                "и нажмите «Да», чтобы проверить копию и записать изменения "
+                "в образ. Перед записью будет создана резервная копия.\n\n%s"
+                % target,
+                MB_Yes | MB_No,
+                MB_No,
             )
+            if answer == MB_Yes:
+                self._import_image_text_copy(panel, entry, target, original)
+            else:
+                self.log_msg("Копия редактора не импортирована: %s" % name)
 
-    def _poll_image_editor(self, panel, entry, target, process):
-        """Import an external editor copy after its process has exited."""
-        if process.poll() is None:
-            QTimer.singleShot(
-                250,
-                lambda: self._poll_image_editor(panel, entry, target, process),
-            )
-            return
+    def _import_image_text_copy(self, panel, entry, target, original):
+        """Safely import the confirmed external-editor copy into its image."""
         try:
-            edited = Path(target).read_bytes()
+            before = os.stat(target)
+            if before.st_size > MAX_EDIT_BYTES:
+                raise ValueError("редактор сохранил файл больше лимита 2 MiB")
+            with open(target, "rb") as stream:
+                edited = stream.read()
+            after = os.stat(target)
+            if (before.st_size, before.st_mtime_ns) != (
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise RuntimeError("временная копия ещё изменяется; импорт отменён")
             decoded = _decode_editable_text(edited)
             if decoded is None:
-                raise ValueError("редактор сохранил бинарные или слишком большие данные")
+                raise ValueError("редактор сохранил бинарные данные")
             text = decoded[0]
             full = panel.join(entry["name"])
-            original = panel.provider.read_file(full)
             metadata = _decode_editable_text(original)
             if metadata is None:
                 raise ValueError("исходный файл больше не является текстовым")
             _, encoding, bom, newline = metadata
             updated = _encode_editable_text(text, encoding, bom, newline)
             if updated == original:
-                self.log_msg("Блокнот закрыт без изменений: %s" % full)
+                self.log_msg("Копия редактора не содержит изменений: %s" % full)
                 return
+            current = panel.provider.read_file(full)
+            if current != original:
+                raise RuntimeError(
+                    "файл в образе изменился после открытия редактора; "
+                    "обновление отменено во избежание потери изменений"
+                )
             if panel.writer is None:
                 raise RuntimeError("том открыт только для чтения: writer недоступен")
-            answer = QMessageBox.warning(
-                self,
-                "Сохранить изменения в образ",
-                "Блокнот изменил файл. Записать изменения в образ?\n\n%s\n\n"
-                "Перед записью будет создана резервная копия образа." % full,
-                MB_Yes | MB_No,
-            )
-            if answer != MB_Yes or not self._backup_before_write(panel):
+            if not self._backup_before_write(panel):
                 return
+            if panel.provider.read_file(full) != original:
+                raise RuntimeError(
+                    "файл в образе изменился во время резервного копирования; "
+                    "запись отменена"
+                )
+            if panel.writer is None:
+                raise RuntimeError("том открыт только для чтения: writer недоступен")
             panel.writer.write_file(panel.path, entry["name"], updated)
             panel.refresh()
             self.log_msg(
@@ -3316,11 +3337,7 @@ class MainWindow(QMainWindow):
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):
-        """F4: правка текстового файла в системном редакторе (Блокнот).
-
-        Локальный файл открывается как есть. Файл внутри образа открывается
-        временной копией, а сам образ меняется только импортом через F5.
-        """
+        """F4: edit image text in-app; open local text in the system editor."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir") or entry.get("up"):

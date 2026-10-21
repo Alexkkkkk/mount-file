@@ -113,28 +113,6 @@ def test_open_in_editor_starts_the_command(tmp_path):
     assert marker.read_text() == str(target)
 
 
-def test_open_in_editor_can_return_process_for_save_back(tmp_path):
-    if os.name == "nt":  # pragma: no cover - shell-скрипт только POSIX
-        pytest.skip("проверка запуска командой строки — только POSIX")
-    editor = tmp_path / "editor.sh"
-    editor.write_text('#!/bin/sh\nprintf "changed" > "$1"\n')
-    editor.chmod(0o755)
-    target = tmp_path / "note.txt"
-    target.write_text("before")
-    old = os.environ.get("MOUNTFILE_EDITOR")
-    os.environ["MOUNTFILE_EDITOR"] = str(editor)
-    try:
-        argv, process = text_editor.open_in_editor(target, return_process=True)
-        assert argv == [str(editor), str(target)]
-        assert process.wait(timeout=5) == 0
-        assert target.read_text() == "changed"
-    finally:
-        if old is None:
-            os.environ.pop("MOUNTFILE_EDITOR", None)
-        else:
-            os.environ["MOUNTFILE_EDITOR"] = old
-
-
 # --------------------------------------------------------------- кодировки
 def test_decode_for_editor_keeps_utf8_and_fixes_cp1251():
     assert text_editor.decode_for_editor("Привет".encode("utf-8")) == (
@@ -172,7 +150,7 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
 
-    from mountfile.qt_compat import QApplication
+    from mountfile.qt_compat import MB_No, QApplication, QMessageBox
     from mountfile.tc_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
@@ -191,11 +169,13 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
 
     monkeypatch.setattr(text_editor, "open_in_editor", fake_open)
     monkeypatch.setattr(win, "_text_temp_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: MB_No)
 
     win.open_text_file(panel)
 
     assert seen["path"].endswith("notes.txt"), seen
-    assert open(seen["path"], "rb").read().decode("utf-8-sig") == "текст"
+    with open(seen["path"], "rb") as stream:
+        assert stream.read().decode("utf-8-sig") == "текст"
     assert panel.provider.calls == ["/notes.txt"]
     log = win.log.toPlainText()
     assert "Блокнот" in log and "notes.txt" in log, log[-300:]
@@ -206,3 +186,146 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
 
     win.close()
     assert app is not None
+
+
+@needs_qt
+def test_external_editor_copy_is_imported_only_after_confirmation(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from mountfile import tc_window
+    from mountfile.qt_compat import MB_Yes, QMessageBox
+
+    original = "[main]\r\nname=старый\r\n".encode("cp1251")
+    updated = "[main]\r\nname=новый\r\n".encode("cp1251")
+
+    class Provider:
+        def __init__(self):
+            self.calls = 0
+
+        def read_file(self, path):
+            assert path == "/notes.ini"
+            self.calls += 1
+            return original
+
+    class Writer:
+        def __init__(self):
+            self.calls = []
+
+        def write_file(self, directory, name, data):
+            self.calls.append((directory, name, data))
+
+    class Panel:
+        mode = "img"
+        path = "/"
+
+        def __init__(self):
+            self.provider = Provider()
+            self.writer = Writer()
+            self.refreshed = False
+
+        def join(self, name):
+            return "/" + name
+
+        def refresh(self):
+            self.refreshed = True
+
+    class Window:
+        _import_image_text_copy = tc_window.MainWindow._import_image_text_copy
+
+        def __init__(self):
+            self.logs = []
+            self.backup_calls = 0
+
+        def _text_temp_dir(self):
+            return str(tmp_path)
+
+        def log_msg(self, message):
+            self.logs.append(message)
+
+        def _backup_before_write(self, panel):
+            self.backup_calls += 1
+            return True
+
+    panel = Panel()
+    window = Window()
+    entry = {"name": "notes.ini", "is_dir": False, "size": len(original)}
+
+    def fake_open(path):
+        Path(path).write_bytes(
+            b"\xef\xbb\xbf" + "[main]\r\nname=новый\r\n".encode("utf-8")
+        )
+        return ["fake-editor", str(path)]
+
+    monkeypatch.setattr(text_editor, "open_in_editor", fake_open)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: MB_Yes)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: None)
+
+    tc_window.MainWindow._open_text_entry(window, panel, entry)
+
+    assert panel.writer.calls == [("/", "notes.ini", updated)]
+    assert panel.refreshed
+    assert window.backup_calls == 1
+    assert any("записаны в образ" in message for message in window.logs)
+
+
+@needs_qt
+def test_external_editor_refuses_to_overwrite_concurrent_image_change(
+    tmp_path, monkeypatch
+):
+    from mountfile import tc_window
+    from mountfile.qt_compat import QMessageBox
+
+    original = b"key=before\r\n"
+
+    class Provider:
+        def read_file(self, path):
+            assert path == "/notes.ini"
+            return b"key=changed-elsewhere\r\n"
+
+    class Writer:
+        def __init__(self):
+            self.calls = []
+
+        def write_file(self, *args):
+            self.calls.append(args)
+
+    class Panel:
+        mode = "img"
+        path = "/"
+        provider = Provider()
+        writer = Writer()
+
+        def join(self, name):
+            return "/" + name
+
+    class Window:
+        def __init__(self):
+            self.logs = []
+            self.backup_calls = 0
+
+        def log_msg(self, message):
+            self.logs.append(message)
+
+        def _backup_before_write(self, panel):
+            self.backup_calls += 1
+            return True
+
+    target = tmp_path / "notes.ini"
+    target.write_bytes(b"key=edited\r\n")
+    errors = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[-1]),
+    )
+
+    window = Window()
+    panel = Panel()
+    entry = {"name": "notes.ini"}
+    tc_window.MainWindow._import_image_text_copy(
+        window, panel, entry, str(target), original
+    )
+
+    assert not panel.writer.calls
+    assert not window.backup_calls
+    assert errors and "изменился после открытия" in errors[0]
