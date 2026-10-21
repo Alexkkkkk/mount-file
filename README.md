@@ -14,6 +14,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 [![License: MIT](https://img.shields.io/github/license/Alexkkkkk/mount-file?label=license&color=yellow)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+[![Install](https://img.shields.io/badge/install-one--command-brightgreen)](#%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BA%D0%B0)
 
 # Mount File
 
@@ -195,6 +196,40 @@ python main.py
 ```bash
 python -m pip install .
 mountfile --help
+```
+
+### Автоустановка одним скриптом
+
+`install_mountfile.py` в корне репозитория делает всё сразу: создаёт `.venv`,
+ставит системные пакеты, pip-зависимости и сам проект. Работает на Windows,
+Linux и macOS — одна команда вместо ручных шагов выше.
+
+```bash
+python install_mountfile.py
+python install_mountfile.py --minimal     # без AI/API/DFIR
+python install_mountfile.py --win7        # Windows 7 (Python 3.8 + PyQt5)
+python install_mountfile.py --no-sys      # не ставить системные пакеты
+python install_mountfile.py --dry-run     # показать команды без запуска
+```
+
+| Флаг | Что делает |
+|---|---|
+| *(без флагов)* | системные пакеты (`apt`/`brew`), `BASE_DEPS` + AI/API/DFIR, мягкая установка `pytsk3`, `pip install -e .[api,dev]` |
+| `--minimal` | только `BASE_DEPS` и `pip install -e .` |
+| `--win7` | Python 3.8 + PyQt5 (`requirements-win7.txt`), без системных пакетов |
+| `--no-sys` | пропустить `apt-get` / `brew` |
+| `--dry-run` | напечатать команды и ничего не выполнять |
+
+Скрипт идемпотентен: готовый `.venv` переиспользуется, повторный запуск ничего
+не ломает. `pytsk3` ставится «мягко» — если колесо не собралось (нет компилятора),
+установка продолжается, и Mount File работает со встроенным движком FAT32.
+В конце печатается команда запуска: `.venv/bin/python main.py` на Linux/macOS
+и `.venv\Scripts\python.exe main.py` на Windows.
+
+После установки доступна и консольная команда:
+
+```bash
+.venv/bin/mountfile-install --dry-run
 ```
 
 ### Необязательные extras
