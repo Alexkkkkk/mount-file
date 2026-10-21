@@ -6,9 +6,14 @@ Licensed under the MIT License - see the LICENSE file for details.
 [![CI](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml)
 [![Quality](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml)
 [![Docs](https://github.com/Alexkkkkk/mount-file/actions/workflows/docs.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/docs.yml)
-[![Latest release](https://img.shields.io/github/v/release/Alexkkkkk/mount-file?sort=semver)](https://github.com/Alexkkkkk/mount-file/releases/latest)
+[![CodeQL](https://github.com/Alexkkkkk/mount-file/actions/workflows/codeql.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/codeql.yml)
+[![Security](https://github.com/Alexkkkkk/mount-file/actions/workflows/security.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/security.yml)
+[![Docker](https://github.com/Alexkkkkk/mount-file/actions/workflows/docker.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/docker.yml)
+[![Nightly](https://github.com/Alexkkkkk/mount-file/actions/workflows/nightly.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/nightly.yml)
+[![Latest release](https://img.shields.io/github/v/release/Alexkkkkk/mount-file?sort=semver&label=release)](https://github.com/Alexkkkkk/mount-file/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/Alexkkkkk/mount-file?label=license&color=yellow)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
 
 # Mount File
 
@@ -726,4 +731,41 @@ mount-file/
 
 ## Лицензия
 
-[MIT](LICENSE) © 2026 Alexkkkkk.
+[![License: MIT](https://img.shields.io/github/license/Alexkkkkk/mount-file?label=license&color=yellow)](LICENSE)
+
+Проект распространяется по лицензии **MIT** — полный текст лежит в файле
+[`LICENSE`](LICENSE) в корне репозитория
+(`SPDX-License-Identifier: MIT`). GitHub определяет её автоматически, поэтому
+лицензия видна и в шапке репозитория, и в бейдже выше.
+
+Что это значит на практике:
+
+| Разрешено | Условия | Гарантии |
+|---|---|---|
+| использование, копирование, изменение, слияние, публикация, распространение, сублицензирование и продажа копий | сохранить уведомление об авторских правах и текст лицензии в копиях или существенных частях ПО | ПО поставляется «как есть», без явных и подразумеваемых гарантий; автор не отвечает за убытки |
+
+```text
+MIT License
+
+Copyright (c) 2026 Alexkkkkk
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+[LICENSE](LICENSE) © 2026 Alexkkkkk.
