@@ -517,6 +517,7 @@ def test_lock_rejects_concurrent_run(repo):
         assert info.value.code == 3
     finally:
         first.__exit__(None, None, None)
+    assert not os.path.exists(first.path)
     # released: a second lock can be taken
     with M._lock(str(repo)):
         pass

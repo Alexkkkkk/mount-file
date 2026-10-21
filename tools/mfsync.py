@@ -711,8 +711,11 @@ class _lock(object):
         if self.held:
             try:
                 with open(self.path, "r", encoding="ascii", errors="replace") as handle:
-                    if handle.read() == self.token:
-                        os.unlink(self.path)
+                    owned = handle.read() == self.token
+                # Windows may reject unlinking an open file. Read and close
+                # the handle first, then remove only our own lock.
+                if owned:
+                    os.unlink(self.path)
             except OSError:
                 pass
         return False
