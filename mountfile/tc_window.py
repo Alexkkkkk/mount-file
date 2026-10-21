@@ -320,17 +320,25 @@ class _ExtPanelWriter:
         return self.backend.filesystem_size
 
 
-def _decode_editable_text(data):
+def _decode_editable_text(data, encoding=None):
     """Return normalized text and its encoding/newline metadata, or None."""
     if len(data) > 2 * 1024 * 1024 or b"\x00" in data:
         return None
     bom = data.startswith(b"\xef\xbb\xbf")
     content = data[3:] if bom else data
-    encoding = "utf-8"
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        encoding = "cp1251"
+    if encoding is None:
+        encoding = "utf-8"
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            encoding = "cp1251"
+            try:
+                text = content.decode(encoding)
+            except UnicodeDecodeError:
+                return None
+    else:
+        if encoding not in ("utf-8", "cp1251", "cp866"):
+            return None
         try:
             text = content.decode(encoding)
         except UnicodeDecodeError:
@@ -3205,16 +3213,21 @@ class MainWindow(QMainWindow):
                 if int(entry.get("size") or 0) > MAX_EDIT_BYTES:
                     raise ValueError("файл превышает лимит редактора 2 MiB")
                 original = panel.provider.read_file(full)
-                if _decode_editable_text(original) is None:
+                _, encoding = text_editor.decode_for_editor(original)
+                if encoding == "binary" or _decode_editable_text(
+                    original, encoding
+                ) is None:
                     raise ValueError(
                         "файл бинарный или превышает лимит редактора 2 MiB"
                     )
-                target, encoding = text_editor.prepare_image_text(
+                target, prepared_encoding = text_editor.prepare_image_text(
                     panel.provider,
                     full,
                     self._text_temp_dir(),
                     data=original,
                 )
+                if prepared_encoding != encoding:
+                    raise RuntimeError("не удалось согласовать кодировку временной копии")
                 note = "временная копия из образа: %s" % target
                 argv = text_editor.open_in_editor(target)
             else:
@@ -3242,11 +3255,11 @@ class MainWindow(QMainWindow):
                 MB_No,
             )
             if answer == MB_Yes:
-                self._import_image_text_copy(panel, entry, target, original)
+                self._import_image_text_copy(panel, entry, target, original, encoding)
             else:
                 self.log_msg("Копия редактора не импортирована: %s" % name)
 
-    def _import_image_text_copy(self, panel, entry, target, original):
+    def _import_image_text_copy(self, panel, entry, target, original, encoding):
         """Safely import the confirmed external-editor copy into its image."""
         try:
             before = os.stat(target)
@@ -3262,13 +3275,15 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("временная копия ещё изменяется; импорт отменён")
             decoded = _decode_editable_text(edited)
             if decoded is None:
+                decoded = _decode_editable_text(edited, encoding)
+            if decoded is None:
                 raise ValueError("редактор сохранил бинарные данные")
             text = decoded[0]
             full = panel.join(entry["name"])
-            metadata = _decode_editable_text(original)
+            metadata = _decode_editable_text(original, encoding)
             if metadata is None:
                 raise ValueError("исходный файл больше не является текстовым")
-            _, encoding, bom, newline = metadata
+            _, _, bom, newline = metadata
             updated = _encode_editable_text(text, encoding, bom, newline)
             if updated == original:
                 self.log_msg("Копия редактора не содержит изменений: %s" % full)

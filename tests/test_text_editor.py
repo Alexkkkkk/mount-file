@@ -189,14 +189,17 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
 
 
 @needs_qt
-def test_external_editor_copy_is_imported_only_after_confirmation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("encoding", ["cp1251", "cp866"])
+def test_external_editor_copy_is_imported_only_after_confirmation(
+    tmp_path, monkeypatch, encoding
+):
     from pathlib import Path
 
     from mountfile import tc_window
     from mountfile.qt_compat import MB_Yes, QMessageBox
 
-    original = "[main]\r\nname=старый\r\n".encode("cp1251")
-    updated = "[main]\r\nname=новый\r\n".encode("cp1251")
+    original = "[main]\r\nname=старый Ш\r\n".encode(encoding)
+    updated = "[main]\r\nname=новый Ш\r\n".encode(encoding)
 
     class Provider:
         def __init__(self):
@@ -252,7 +255,8 @@ def test_external_editor_copy_is_imported_only_after_confirmation(tmp_path, monk
 
     def fake_open(path):
         Path(path).write_bytes(
-            b"\xef\xbb\xbf" + "[main]\r\nname=новый\r\n".encode("utf-8")
+            b"\xef\xbb\xbf"
+            + "[main]\r\nname=новый Ш\r\n".encode("utf-8")
         )
         return ["fake-editor", str(path)]
 
@@ -323,7 +327,7 @@ def test_external_editor_refuses_to_overwrite_concurrent_image_change(
     panel = Panel()
     entry = {"name": "notes.ini"}
     tc_window.MainWindow._import_image_text_copy(
-        window, panel, entry, str(target), original
+        window, panel, entry, str(target), original, "utf-8"
     )
 
     assert not panel.writer.calls
