@@ -43,7 +43,7 @@ import shutil
 import tempfile
 import threading
 import webbrowser
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
@@ -3181,7 +3181,8 @@ class MainWindow(QMainWindow):
         Windows - Блокнот (``notepad.exe``), macOS - ``open -t``, Linux -
         ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе первый
         найденный редактор, иначе ``xdg-open``. Файл внутри образа сначала
-        извлекается во временный каталог, поэтому сам образ не меняется.
+        извлекается во временный каталог; после закрытия редактора изменённая
+        копия предлагается к записи обратно в образ.
         """
         p = panel or self.active_panel()
         entry = p.selected_entry()
@@ -3195,6 +3196,7 @@ class MainWindow(QMainWindow):
     def _open_text_entry(self, panel, entry):
         """Открыть `entry` в редакторе и записать результат в журнал окна."""
         name = entry["name"]
+        process = None
         try:
             if panel.mode == "img":
                 if panel.provider is None:
@@ -3203,11 +3205,21 @@ class MainWindow(QMainWindow):
                     panel.provider, panel.join(name), self._text_temp_dir()
                 )
                 note = "временная копия из образа: %s" % target
+                try:
+                    result = text_editor.open_in_editor(target, return_process=True)
+                except TypeError:
+                    # Compatibility with third-party/test editor adapters that
+                    # still implement the historical one-argument function.
+                    result = text_editor.open_in_editor(target)
+                if isinstance(result, tuple):
+                    argv, process = result
+                else:
+                    argv = result
             else:
                 target = panel.join(name)
                 encoding = "utf-8"
                 note = str(target)
-            argv = text_editor.open_in_editor(target)
+                argv = text_editor.open_in_editor(target)
         except Exception as e:
             QMessageBox.critical(self, "Блокнот", str(e))
             self.log_msg("Блокнот: не удалось открыть %s: %s" % (name, e))
@@ -3216,6 +3228,60 @@ class MainWindow(QMainWindow):
             "Блокнот: %s -> %s (%s; кодировка %s)"
             % (name, " ".join(argv), note, encoding)
         )
+        if panel.mode == "img" and process is not None:
+            QTimer.singleShot(
+                250,
+                lambda: self._poll_image_editor(panel, entry, target, process),
+            )
+
+    def _poll_image_editor(self, panel, entry, target, process):
+        """Import an external editor copy after its process has exited."""
+        if process.poll() is None:
+            QTimer.singleShot(
+                250,
+                lambda: self._poll_image_editor(panel, entry, target, process),
+            )
+            return
+        try:
+            edited = Path(target).read_bytes()
+            decoded = _decode_editable_text(edited)
+            if decoded is None:
+                raise ValueError("редактор сохранил бинарные или слишком большие данные")
+            text = decoded[0]
+            full = panel.join(entry["name"])
+            original = panel.provider.read_file(full)
+            metadata = _decode_editable_text(original)
+            if metadata is None:
+                raise ValueError("исходный файл больше не является текстовым")
+            _, encoding, bom, newline = metadata
+            updated = _encode_editable_text(text, encoding, bom, newline)
+            if updated == original:
+                self.log_msg("Блокнот закрыт без изменений: %s" % full)
+                return
+            if panel.writer is None:
+                raise RuntimeError("том открыт только для чтения: writer недоступен")
+            answer = QMessageBox.warning(
+                self,
+                "Сохранить изменения в образ",
+                "Блокнот изменил файл. Записать изменения в образ?\n\n%s\n\n"
+                "Перед записью будет создана резервная копия образа." % full,
+                MB_Yes | MB_No,
+            )
+            if answer != MB_Yes or not self._backup_before_write(panel):
+                return
+            panel.writer.write_file(panel.path, entry["name"], updated)
+            panel.refresh()
+            self.log_msg(
+                "Изменения из Блокнота записаны в образ: %s (%d байт)"
+                % (full, len(updated))
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Сохранение из Блокнота не удалось",
+                "Образ не изменён или операция остановлена:\n%s" % exc,
+            )
+            self.log_msg("Блокнот: сохранение в образ не удалось: %s" % exc)
 
     def f3_view(self):
         """F3 / Enter: текстовый файл идёт в редактор, остальное в HEX."""

@@ -19,10 +19,10 @@ POSIX host - macOS included - and win over the per-OS default above.
 
 A file that lives inside an image cannot be handed to an external editor
 directly, so :func:`prepare_image_text` writes a temporary copy on the host
-first. The editor opens and saves that copy; the image itself is never
-modified. Text bytes that are not valid UTF-8 are re-encoded to UTF-8 with a
-BOM for the copy (CP1251 / CP866 are tried), otherwise Блокнот shows
-mojibake instead of Cyrillic.
+first. The GUI can request the editor process and, after it exits, safely
+import changed bytes back into the image. Text bytes that are not valid UTF-8
+are re-encoded to UTF-8 with a BOM for the copy (CP1251 / CP866 are tried),
+otherwise Блокнот shows mojibake instead of Cyrillic.
 """
 
 from __future__ import annotations
@@ -131,11 +131,12 @@ def editor_command(path):
     return None
 
 
-def open_in_editor(path):
+def open_in_editor(path, *, return_process=False):
     """Start the system editor on `path` and return the argv used.
 
-    The editor runs detached - the GUI never waits for it to exit. Raises
-    :class:`RuntimeError` when no editor is available on this machine.
+    The historical return value is an argv list.  With ``return_process=True``
+    return ``(argv, Popen)`` so a GUI can observe editor exit without blocking
+    its event loop. Raises :class:`RuntimeError` when no editor is available.
     """
     argv = editor_command(path)
     if argv is None:
@@ -143,8 +144,8 @@ def open_in_editor(path):
             "текстовый редактор не найден: задайте MOUNTFILE_EDITOR "
             "(например, MOUNTFILE_EDITOR=notepad.exe)"
         )
-    subprocess.Popen(argv, stdin=subprocess.DEVNULL, close_fds=True)
-    return argv
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, close_fds=True)
+    return (argv, process) if return_process else argv
 
 
 def decode_for_editor(data):

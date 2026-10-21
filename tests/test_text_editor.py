@@ -113,6 +113,28 @@ def test_open_in_editor_starts_the_command(tmp_path):
     assert marker.read_text() == str(target)
 
 
+def test_open_in_editor_can_return_process_for_save_back(tmp_path):
+    if os.name == "nt":  # pragma: no cover - shell-скрипт только POSIX
+        pytest.skip("проверка запуска командой строки — только POSIX")
+    editor = tmp_path / "editor.sh"
+    editor.write_text('#!/bin/sh\nprintf "changed" > "$1"\n')
+    editor.chmod(0o755)
+    target = tmp_path / "note.txt"
+    target.write_text("before")
+    old = os.environ.get("MOUNTFILE_EDITOR")
+    os.environ["MOUNTFILE_EDITOR"] = str(editor)
+    try:
+        argv, process = text_editor.open_in_editor(target, return_process=True)
+        assert argv == [str(editor), str(target)]
+        assert process.wait(timeout=5) == 0
+        assert target.read_text() == "changed"
+    finally:
+        if old is None:
+            os.environ.pop("MOUNTFILE_EDITOR", None)
+        else:
+            os.environ["MOUNTFILE_EDITOR"] = old
+
+
 # --------------------------------------------------------------- кодировки
 def test_decode_for_editor_keeps_utf8_and_fixes_cp1251():
     assert text_editor.decode_for_editor("Привет".encode("utf-8")) == (
