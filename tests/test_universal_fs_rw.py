@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
 from mountfile.universal_fs_rw import (
     Fat32RW,
+    LoopMountRW,
     UniversalFSRW,
     _image_path_parent_name,
 )
@@ -44,6 +45,25 @@ def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):
     image.write_bytes(b"not a filesystem")
     with pytest.raises(RuntimeError, match="no filesystem detected"):
         UniversalFSRW(image, auto_backup=False)
+
+
+@pytest.mark.parametrize("fs_type", ["iso9660", "squashfs", "jffs2", "ubifs"])
+def test_inherently_read_only_formats_fail_closed_before_mount(tmp_path, fs_type):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"read-only format placeholder")
+    backend = LoopMountRW(image, 0, fs_type)
+    info = backend.info()
+    assert info.writable is False
+    assert info.write_strategy == "read-only-format"
+    with pytest.raises(RuntimeError, match="inherently read-only"):
+        backend.write_file("/evidence.bin", b"must not mutate")
+
+
+def test_loop_mount_normalizes_detector_display_names(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"placeholder")
+    assert LoopMountRW(image, 0, "HFS+").fs_type == "hfsplus"
+    assert LoopMountRW(image, 0, "FAT16").fs_type == "vfat"
 
 
 def test_failed_overwrite_allocation_preserves_original_file(tmp_path, monkeypatch):
