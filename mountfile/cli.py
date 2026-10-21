@@ -28,6 +28,7 @@ import sys
 from . import __version__
 from .autopick import auto_select, format_candidates, format_choice
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
+from .dfir_slack import read_file_slack
 from .dfir_timeline import export_timeline_csv
 from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
@@ -71,7 +72,9 @@ COMMANDS = (
     "timeline-export",
     "timestomp",
     "yara",
-    "unallocated-scan",    "timeline-build",
+    "unallocated-scan",
+    "slack",
+    "timeline-build",
     "timeline-query",
     "search",
     "yara-scan",
@@ -521,6 +524,28 @@ def cmd_unallocated_scan(args):
     return OK if count else ERROR
 
 
+def cmd_slack(args):
+    """Extract only a caller-resolved final-cluster slack region."""
+    result = read_file_slack(
+        args.image,
+        args.last_cluster_offset,
+        args.file_size,
+        args.cluster_size,
+    )
+    summary = {
+        "offset": result.offset,
+        "length": len(result.bytes),
+        "has_slack": result.has_slack,
+    }
+    if args.output is not None:
+        # Exclusive creation prevents accidental replacement of existing data.
+        with open(args.output, "xb") as stream:
+            stream.write(result.bytes)
+        summary["output"] = args.output
+    print(json.dumps(summary, ensure_ascii=False))
+    return OK
+
+
 # ----------------------------------------------------------------- parser
 def _add_target(sp):
     sp.add_argument("image", help="raw disk image (.img/.bin/.dump/...)")
@@ -938,6 +963,27 @@ def build_parser():
     sp.add_argument("-o", "--output", required=True, help="output directory")
     sp.add_argument("--min-slack", type=int, default=1)
     sp.set_defaults(func=cmd_slack_extract)
+
+    sp = sub.add_parser(
+        "slack",
+        help="extract final-cluster slack from an explicitly resolved file extent",
+    )
+    sp.add_argument("image", help="raw disk image (opened read-only)")
+    sp.add_argument(
+        "--slack-only",
+        action="store_true",
+        required=True,
+        help="explicitly select slack-only extraction; no filesystem path resolution is performed",
+    )
+    sp.add_argument("--last-cluster-offset", required=True, type=_parse_offset)
+    sp.add_argument("--file-size", required=True, type=_parse_offset)
+    sp.add_argument("--cluster-size", required=True, type=_parse_offset)
+    sp.add_argument(
+        "-o",
+        "--output",
+        help="create a new file for extracted slack (never overwrite)",
+    )
+    sp.set_defaults(func=cmd_slack)
 
     sp = sub.add_parser(
         "live-diff", help="diff two images (or one image before/after) into Markdown"

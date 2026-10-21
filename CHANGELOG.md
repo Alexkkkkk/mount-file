@@ -17,6 +17,10 @@ file only tracks the releases themselves.
   используется текущий writer, кодировка и переводы строк исходного файла
   сохраняются.
 
+- Добавлена read-only команда `python -m mountfile slack --slack-only`: она
+  принимает подтверждённые вызывающим offset/размер последнего кластера,
+  извлекает только slack и создаёт выходной файл без перезаписи существующего.
+
 - **RW capability matrix**: display filesystem names are normalized for loop
   mounts (`HFS+`/FAT variants), writable formats use the existing OS backend,
   and ISO9660/SquashFS/JFFS2/UBIFS now fail closed as explicit read-only
