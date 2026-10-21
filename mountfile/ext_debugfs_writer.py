@@ -36,7 +36,9 @@ def normalize_image_path(path, allow_root=False):
     parts = [part for part in raw.split("/") if part not in ("", ".")]
     if not parts and allow_root:
         return "/"
-    if not parts or any(part == ".." or not _SAFE_COMPONENT.match(part) for part in parts):
+    if not parts or any(
+        part == ".." or not _SAFE_COMPONENT.match(part) for part in parts
+    ):
         raise ExtWriteError(
             "ext write accepts only simple ASCII path names without spaces or shell characters"
         )
@@ -100,7 +102,9 @@ class Ext234ImageWriter:
         if self.filesystem_size <= 0:
             raise ExtWriteError("invalid ext filesystem size")
         if self.volume_size is not None and self.filesystem_size > self.volume_size:
-            raise ExtWriteError("ext filesystem extent exceeds selected partition bounds")
+            raise ExtWriteError(
+                "ext filesystem extent exceeds selected partition bounds"
+            )
         if self.offset + self.filesystem_size > os.path.getsize(self.image_path):
             raise ExtWriteError("ext filesystem extent exceeds image bounds")
 
@@ -127,7 +131,9 @@ class Ext234ImageWriter:
             while remaining:
                 data = src.read(min(_CHUNK, remaining))
                 if not data:
-                    raise ExtWriteError("unexpected end of image while copying ext extent")
+                    raise ExtWriteError(
+                        "unexpected end of image while copying ext extent"
+                    )
                 dst.write(data)
                 remaining -= len(data)
             dst.flush()
@@ -140,7 +146,10 @@ class Ext234ImageWriter:
             rollback_path = os.path.join(work, "original.ext")
             self._copy_extent(self.image_path, rollback_path)
             try:
-                with open(self.image_path, "r+b") as image, open(modified_path, "rb") as src:
+                with (
+                    open(self.image_path, "r+b") as image,
+                    open(modified_path, "rb") as src,
+                ):
                     image.seek(self.offset)
                     remaining = self.filesystem_size
                     while remaining:
@@ -153,12 +162,15 @@ class Ext234ImageWriter:
                     os.fsync(image.fileno())
                     actual = self._hash_extent(image, self.offset)
                     if actual != expected:
-                        raise ExtWriteError("committed ext extent failed SHA-256 verification")
+                        raise ExtWriteError(
+                            "committed ext extent failed SHA-256 verification"
+                        )
             except Exception:
                 try:
-                    with open(self.image_path, "r+b") as image, open(
-                        rollback_path, "rb"
-                    ) as original:
+                    with (
+                        open(self.image_path, "r+b") as image,
+                        open(rollback_path, "rb") as original,
+                    ):
                         image.seek(self.offset)
                         shutil.copyfileobj(original, image, _CHUNK)
                         image.flush()
@@ -180,7 +192,9 @@ class Ext234ImageWriter:
             while remaining:
                 chunk = stream.read(min(_CHUNK, remaining))
                 if not chunk:
-                    raise ExtWriteError("unexpected end of ext extent during verification")
+                    raise ExtWriteError(
+                        "unexpected end of ext extent during verification"
+                    )
                 digest.update(chunk)
                 remaining -= len(chunk)
 
@@ -217,9 +231,7 @@ class Ext234ImageWriter:
         with tempfile.TemporaryDirectory(prefix="mountfile-ext-list-") as work:
             filesystem = os.path.join(work, "filesystem.ext")
             self._copy_extent(self.image_path, filesystem)
-            output = self._run(
-                filesystem, f"ls -l {_debugfs_quote(image_path)}"
-            )
+            output = self._run(filesystem, f"ls -l {_debugfs_quote(image_path)}")
         entries = []
         for line in output.splitlines():
             parts = line.split(None, 8)
@@ -256,9 +268,7 @@ class Ext234ImageWriter:
                 stream.flush()
                 os.fsync(stream.fileno())
             # Remove-if-present is done only on the disposable working extent.
-            self._run(
-                working, f"rm {_debugfs_quote(image_path)}", write=True
-            )
+            self._run(working, f"rm {_debugfs_quote(image_path)}", write=True)
             output = self._run(
                 working,
                 f"write {_debugfs_quote(source)} {_debugfs_quote(image_path)}",
@@ -273,7 +283,9 @@ class Ext234ImageWriter:
             )
             with open(check, "rb") as stream:
                 if stream.read() != data:
-                    raise ExtWriteError("read-back verification failed; image was not changed")
+                    raise ExtWriteError(
+                        "read-back verification failed; image was not changed"
+                    )
 
         self._with_working_extent(apply)
 
@@ -281,30 +293,36 @@ class Ext234ImageWriter:
         image_path = normalize_image_path(path)
 
         def apply(working, _work):
-            self._run(
-                working, f"mkdir {_debugfs_quote(image_path)}", write=True
-            )
+            self._run(working, f"mkdir {_debugfs_quote(image_path)}", write=True)
+
         self._with_working_extent(apply)
 
     def rename(self, source, destination):
         src = normalize_image_path(source)
         dst = normalize_image_path(destination)
+
         def apply(working, _work):
             self._run(
                 working,
                 f"rename {_debugfs_quote(src)} {_debugfs_quote(dst)}",
                 write=True,
             )
+
         self._with_working_extent(apply)
 
     def delete(self, path, recursive=False):
         image_path = normalize_image_path(path, allow_root=True)
         if image_path == "/":
             raise ExtWriteError("refusing to delete the filesystem root")
-        entries = {entry["name"]: entry for entry in self.list_dir(image_path)} \
-            if self._is_dir(image_path) else {}
+        entries = (
+            {entry["name"]: entry for entry in self.list_dir(image_path)}
+            if self._is_dir(image_path)
+            else {}
+        )
         if entries and not recursive:
-            raise ExtWriteError("directory is not empty; recursive delete not confirmed")
+            raise ExtWriteError(
+                "directory is not empty; recursive delete not confirmed"
+            )
 
         def remove_dir(working, target):
             for name, entry in sorted(entries.items()):
@@ -333,8 +351,7 @@ class Ext234ImageWriter:
         parent = path.rsplit("/", 1)[0] or "/"
         name = path.rsplit("/", 1)[-1]
         return any(
-            entry["name"] == name and entry["is_dir"]
-            for entry in self.list_dir(parent)
+            entry["name"] == name and entry["is_dir"] for entry in self.list_dir(parent)
         )
 
     def free_space(self):

@@ -43,9 +43,8 @@ import threading
 import time
 import traceback
 import zlib
-from typing import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # --------------------------------------------------------------------------
 # Optional accelerators

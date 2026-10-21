@@ -20,8 +20,11 @@ pytest.importorskip(
 )
 
 from mountfile.ai_format_advisor_v2 import Calibration  # noqa: E402
-from mountfile.ai_format_advisor_v2 import (GitHubReporter, HypothesisEngine,
-                                            build_fingerprint)
+from mountfile.ai_format_advisor_v2 import (
+    GitHubReporter,
+    HypothesisEngine,
+    build_fingerprint,
+)
 
 
 def test_fingerprint_of_a_text_file(tmp_path):

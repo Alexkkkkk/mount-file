@@ -31,10 +31,10 @@ from enum import Enum
 from pathlib import Path
 from typing import BinaryIO, Optional
 
-
 # ---------------------------------------------------------------------------
 # 0. Типы
 # ---------------------------------------------------------------------------
+
 
 class FsType(str, Enum):
     FAT32 = "fat32"
@@ -77,6 +77,7 @@ class TransactionRecord:
 # ---------------------------------------------------------------------------
 # 1. Hash-chain журнал транзакций
 # ---------------------------------------------------------------------------
+
 
 class Journal:
     """
@@ -164,6 +165,7 @@ class Journal:
 # 2. Абстрактный RW-слой
 # ---------------------------------------------------------------------------
 
+
 class UniversalRW(ABC):
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         self.image_path = image_path
@@ -182,7 +184,9 @@ class UniversalRW(ABC):
         self._close_backend()
         self.journal.close()
 
-    def create_file(self, path: str, data: BinaryIO, *, overwrite: bool = False) -> None:
+    def create_file(
+        self, path: str, data: BinaryIO, *, overwrite: bool = False
+    ) -> None:
         self._require_rw()
         tx = self.journal.begin("create_file", path)
         try:
@@ -248,9 +252,7 @@ class UniversalRW(ABC):
     # --- внутренние --------------------------------------------------------
 
     def _make_full_backup(self) -> None:
-        backup = self.image_path.with_suffix(
-            self.image_path.suffix + ".full-backup"
-        )
+        backup = self.image_path.with_suffix(self.image_path.suffix + ".full-backup")
         if not backup.exists():
             shutil.copy2(self.image_path, backup)
         self._backup_made = True
@@ -281,6 +283,7 @@ class UniversalRW(ABC):
 # 3. FAT32 (нативный — заглушка под mountfile/fat32.py)
 # ---------------------------------------------------------------------------
 
+
 class Fat32RW(UniversalRW):
     def _open_backend(self) -> None:
         # Здесь должен быть вызов mountfile/fat32.py
@@ -292,7 +295,9 @@ class Fat32RW(UniversalRW):
 
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
         # TODO: подключить mountfile/fat32.py
-        raise NotImplementedError("FAT32 native backend — подключите mountfile/fat32.py")
+        raise NotImplementedError(
+            "FAT32 native backend — подключите mountfile/fat32.py"
+        )
 
     def _create_dir(self, path: str) -> None:
         raise NotImplementedError("FAT32 native backend")
@@ -314,15 +319,14 @@ class Fat32RW(UniversalRW):
 # 4. ext4 через debugfs
 # ---------------------------------------------------------------------------
 
+
 class Ext4RW(UniversalRW):
     def _debugfs(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         cmd = ["debugfs", "-w", str(self.image_path), *args]
         try:
             return subprocess.run(cmd, capture_output=True, text=True, check=check)
         except FileNotFoundError:
-            raise StrategyUnavailable(
-                "debugfs не найден. Установите e2fsprogs."
-            )
+            raise StrategyUnavailable("debugfs не найден. Установите e2fsprogs.")
 
     def _open_backend(self) -> None:
         self._debugfs("-R", "stats", check=False)
@@ -370,6 +374,7 @@ class Ext4RW(UniversalRW):
 # ---------------------------------------------------------------------------
 # 5. NTFS через ntfs-3g (FUSE)
 # ---------------------------------------------------------------------------
+
 
 class NtfsRW(UniversalRW):
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
@@ -443,6 +448,7 @@ class NtfsRW(UniversalRW):
 # 6. Фабрика
 # ---------------------------------------------------------------------------
 
+
 def detect_fs(image_path: Path) -> FsType:
     """
     Простое определение ФС по сигнатурам.
@@ -463,8 +469,9 @@ def detect_fs(image_path: Path) -> FsType:
     raise RWError("Не удалось определить ФС. Укажите явно.")
 
 
-def create_rw(image_path: Path, fs: Optional[FsType] = None,
-              mode: Mode = Mode.RO) -> UniversalRW:
+def create_rw(
+    image_path: Path, fs: Optional[FsType] = None, mode: Mode = Mode.RO
+) -> UniversalRW:
     fs = fs or detect_fs(image_path)
     if fs == FsType.FAT32:
         return Fat32RW(image_path, mode)
@@ -506,8 +513,7 @@ if __name__ == "__main__":
 
         if mode == Mode.RW:
             rw.create_dir("/test_mf")
-            rw.create_file("/test_mf/hello.txt",
-                           io.BytesIO(b"hello from universal rw"))
+            rw.create_file("/test_mf/hello.txt", io.BytesIO(b"hello from universal rw"))
             print("Запись выполнена (если стратегия доступна).")
         else:
             print("RO-режим: запись отключена.")
@@ -515,7 +521,9 @@ if __name__ == "__main__":
         rw.close()
     except StrategyUnavailable as e:
         print(f"safe-mode: {e}")
-        print("Установите соответствующую утилиту (debugfs / ntfs-3g) "
-              "и повторите запуск.")
+        print(
+            "Установите соответствующую утилиту (debugfs / ntfs-3g) "
+            "и повторите запуск."
+        )
     except Exception as e:
         print(f"Ошибка: {type(e).__name__}: {e}")

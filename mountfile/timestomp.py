@@ -56,7 +56,11 @@ class TimestompFinding:
     detail: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"path": self.path, "reasons": list(self.reasons), "detail": dict(self.detail)}
+        return {
+            "path": self.path,
+            "reasons": list(self.reasons),
+            "detail": dict(self.detail),
+        }
 
 
 def _seconds(value: Any) -> Optional[float]:
@@ -139,7 +143,9 @@ def analyse_timestamps(
 
     if not reasons:
         return None
-    return TimestompFinding(path=label, reasons=tuple(dict.fromkeys(reasons)), detail=detail)
+    return TimestompFinding(
+        path=label, reasons=tuple(dict.fromkeys(reasons)), detail=detail
+    )
 
 
 def analyse_records(

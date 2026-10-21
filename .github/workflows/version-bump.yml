@@ -4,6 +4,8 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  pull_request:
+    types: [closed]
   workflow_dispatch:
     inputs:
       patch:
@@ -17,11 +19,26 @@ concurrency:
   group: repository-maintenance-write
   cancel-in-progress: false
 jobs:
+  test-merged-release:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      startsWith(github.event.pull_request.head.ref, 'automation/release-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Run complete CI against the merged, protected main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
   bump:
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
@@ -106,8 +123,9 @@ jobs:
           EXISTING=$(gh pr list --head "$BRANCH" --base main --state all --json number --jq 'length')
           if [ "$EXISTING" = '0' ]; then
             gh pr create --base main --head "$BRANCH" \
+              --label auto-merge \
               --title "chore(release): synchronize $VERSION" \
-              --body 'Updates package and build metadata together. Merge only after checks pass. The next successful main CI tags the tested commit and starts release builds. If created with GITHUB_TOKEN, approve its workflows on GitHub.'
+              --body 'Updates package and build metadata together. Auto-merge is enabled only after required CI, security and sync gates pass for this exact commit. Merge triggers a fresh full CI run on protected main, then tags that tested commit and starts release builds.'
           fi
       - name: Tag tested commit and start release
         if: steps.plan.outputs.has_release_change == 'true' && steps.plan.outputs.needs_version_pr == 'false'

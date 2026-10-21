@@ -27,14 +27,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image  # noqa: E402
 
 from mountfile.fat32 import Fat32  # noqa: E402
-from mountfile_universal_rw import FsType, Mode, RWError  # noqa: E402
-from mountfile_rw_complete import (  # noqa: E402
+from mountfile_rw_complete import Fat32Adapter  # noqa: E402
+from mountfile_rw_complete import (
     DryRunFat32,
-    Fat32Adapter,
     VerificationEngine,
     create_rw_full,
     mcp_handle,
 )
+from mountfile_universal_rw import FsType, Mode, RWError  # noqa: E402
 
 CLI = REPO_ROOT / "mountfile_rw_complete.py"
 
@@ -69,7 +69,9 @@ def _write(tmp_path, path, data):
 def _cli(*args):
     return subprocess.run(
         [sys.executable, str(CLI), *[str(a) for a in args]],
-        capture_output=True, text=True, cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
     )
 
 
@@ -198,7 +200,9 @@ def test_verification_engine_accepts_a_freshly_written_image(tmp_path):
 @pytest.mark.skipif(shutil.which("fsck.fat") is None, reason="dosfstools not installed")
 def test_written_image_passes_the_external_fat_checker(tmp_path):
     image = _write(tmp_path, "/EVIDENCE.TXT", b"evidence")
-    proc = subprocess.run(["fsck.fat", "-n", str(image)], capture_output=True, text=True)
+    proc = subprocess.run(
+        ["fsck.fat", "-n", str(image)], capture_output=True, text=True
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
@@ -208,7 +212,9 @@ def test_cli_put_mkdir_mv_verify_journal_and_audit(tmp_path):
     payload = tmp_path / "payload.bin"
     payload.write_bytes(b"payload-42")
 
-    assert _cli("mkdir", image, "/CASES").returncode == 0, _cli("mkdir", image, "/CASES").stderr
+    assert _cli("mkdir", image, "/CASES").returncode == 0, _cli(
+        "mkdir", image, "/CASES"
+    ).stderr
     put = _cli("put", image, payload, "/CASES/PAYLOAD.BIN")
     assert put.returncode == 0, put.stderr
     assert _native_read(image, "/CASES/PAYLOAD.BIN") == b"payload-42"
@@ -273,7 +279,10 @@ def test_mcp_stdio_answers_one_request_per_line(tmp_path):
     request = json.dumps({"tool": "verify_image", "params": {"image": str(image)}})
     proc = subprocess.run(
         [sys.executable, str(CLI), "mcp"],
-        input=request + "\n", capture_output=True, text=True, cwd=str(REPO_ROOT),
+        input=request + "\n",
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1])["ok"] is True

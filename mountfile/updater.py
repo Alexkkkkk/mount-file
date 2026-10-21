@@ -314,9 +314,10 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
     partial = dest + ".part"
     got = 0
     try:
-        with _request(asset.get("browser_download_url"), timeout) as resp, open(
-            partial, "wb"
-        ) as fh:
+        with (
+            _request(asset.get("browser_download_url"), timeout) as resp,
+            open(partial, "wb") as fh,
+        ):
             while True:
                 chunk = resp.read(CHUNK)
                 if not chunk:

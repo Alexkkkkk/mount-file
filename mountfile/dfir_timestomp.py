@@ -17,7 +17,6 @@ from datetime import date, datetime, timezone
 from numbers import Real
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Tuple, Union
 
-
 TimestampValue = Union[Real, date]
 
 
@@ -156,10 +155,14 @@ def _timestamp_seconds(value: TimestampValue, *, field: str) -> float:
         # Naive datetimes have no timezone claim in the input.  Treating them as
         # UTC here keeps analysis deterministic instead of consulting the host
         # machine's local timezone.
-        candidate = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        candidate = (
+            value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        )
         seconds = candidate.timestamp()
     elif isinstance(value, date):
-        seconds = datetime(value.year, value.month, value.day, tzinfo=timezone.utc).timestamp()
+        seconds = datetime(
+            value.year, value.month, value.day, tzinfo=timezone.utc
+        ).timestamp()
     elif isinstance(value, Real):
         seconds = float(value)
     else:
@@ -193,8 +196,13 @@ def _coerce_record(record: Any) -> TimestampRecord:
     return TimestampRecord(
         path=str(path),
         record_id=None if record_id is None else str(record_id),
-        created=_value_from(record, ("created", "creation", "creation_time", "birth", "birth_time", "ctime")),
-        modified=_value_from(record, ("modified", "modification", "modification_time", "mtime")),
+        created=_value_from(
+            record,
+            ("created", "creation", "creation_time", "birth", "birth_time", "ctime"),
+        ),
+        modified=_value_from(
+            record, ("modified", "modification", "modification_time", "mtime")
+        ),
         accessed=_value_from(record, ("accessed", "access", "access_time", "atime")),
     )
 
@@ -214,7 +222,9 @@ def _validate_nonnegative(value: Any, *, name: str) -> float:
 def _validate_thresholds(thresholds: TimestompThresholds) -> TimestompThresholds:
     if not isinstance(thresholds, TimestompThresholds):
         raise TypeError("thresholds must be a TimestompThresholds instance")
-    ordering = _validate_nonnegative(thresholds.ordering_tolerance, name="ordering_tolerance")
+    ordering = _validate_nonnegative(
+        thresholds.ordering_tolerance, name="ordering_tolerance"
+    )
     boundary_tolerance = _validate_nonnegative(
         thresholds.boundary_tolerance, name="boundary_tolerance"
     )
@@ -411,7 +421,9 @@ def analyze_timestomp(
                             timestamps={name: value},
                         )
                     )
-            for boundary, boundary_value in zip(thresholds.boundary_values, boundary_seconds):
+            for boundary, boundary_value in zip(
+                thresholds.boundary_values, boundary_seconds
+            ):
                 if abs(value_seconds - boundary_value) <= thresholds.boundary_tolerance:
                     findings.append(
                         _finding(

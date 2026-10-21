@@ -8,7 +8,6 @@ import pytest
 
 from mountfile.universal_fs_rw import UniversalFSRW
 
-
 HAVE_EXT_TOOLS = all(shutil.which(name) for name in ("mkfs.ext4", "debugfs"))
 
 

@@ -100,7 +100,7 @@ def test_autofix_does_not_remove_reexports_or_publish_untested_changes():
     assert '--target-version py38' in text
     assert 'python -m pytest tests/ -q' in text
     assert text.index('python -m pytest tests/ -q') < text.index('gh pr create')
-    assert '--label auto-merge' not in text
+    assert "--label auto-merge" in text
 
 
 def test_chatops_reuses_ci_gated_release_pipeline():
@@ -112,6 +112,16 @@ def test_chatops_reuses_ci_gated_release_pipeline():
     assert 'gh workflow run mfsync.yml' in text
     assert 'git tag ' not in text
     assert 'x-access-token:' not in text
+
+
+def test_merged_release_pr_dispatches_full_main_ci_before_tagging():
+    text = workflow('version-bump.yml')
+    assert "types: [closed]" in text
+    assert "github.event.pull_request.merged == true" in text
+    assert "head.ref, 'automation/release-'" in text
+    assert "gh workflow run ci.yml" in text
+    assert "workflow_run.event == 'workflow_dispatch'" in text
+    assert "--label auto-merge" in text
 
 
 def test_workflow_quality_validation_is_integrity_checked():

@@ -63,7 +63,11 @@ def test_requires_explicit_size_for_callable_and_bounds_it():
         calls.append((offset, length))
         return image[offset : offset + length]
 
-    hits = list(scan_unallocated(read_at, [(0, len(image))], image_size=len(image), chunk_size=4))
+    hits = list(
+        scan_unallocated(
+            read_at, [(0, len(image))], image_size=len(image), chunk_size=4
+        )
+    )
     assert [(hit.offset, hit.signature) for hit in hits] == [(6, "pe")]
     assert all(length <= 4 for _offset, length in calls)
 

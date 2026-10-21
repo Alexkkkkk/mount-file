@@ -33,7 +33,17 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from types import MappingProxyType, ModuleType
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
 __all__ = [
     "DEFAULT_ENTRY_POINT_GROUP",
@@ -85,7 +95,6 @@ class PluginStatus:
     @property
     def available(self) -> bool:
         return self.state in ("available", "degraded")
-
 
 
 def _freeze(value: Any) -> Any:
@@ -182,7 +191,9 @@ class OpenEvent:
     metadata: Mapping[str, Any]
 
     @classmethod
-    def from_value(cls, value: Any, metadata: Optional[Mapping[str, Any]] = None) -> "OpenEvent":
+    def from_value(
+        cls, value: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> "OpenEvent":
         if isinstance(value, cls):
             if not metadata:
                 return value
@@ -234,13 +245,17 @@ class FileEvent:
         return self.path
 
     @classmethod
-    def from_value(cls, value: Any, metadata: Optional[Mapping[str, Any]] = None) -> "FileEvent":
+    def from_value(
+        cls, value: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> "FileEvent":
         if isinstance(value, cls):
             if not metadata:
                 return value
             merged = dict(value.metadata)
             merged.update(metadata)
-            return cls(value.path, value.size, value.offset, value.data, _freeze(merged))
+            return cls(
+                value.path, value.size, value.offset, value.data, _freeze(merged)
+            )
 
         source = value
         supplied: Dict[str, Any] = {}
@@ -305,14 +320,18 @@ class PluginRegistry:
 
     HOOKS = ("on_open", "on_file", "on_close")
 
-    def __init__(self, plugins: Optional[Iterable[Any]] = None, *, discover: bool = False) -> None:
+    def __init__(
+        self, plugins: Optional[Iterable[Any]] = None, *, discover: bool = False
+    ) -> None:
         self._states: List[_PluginState] = []
         self._errors: List[PluginFailure] = []
         self._active = False
         # Kept as a public compatibility view for callers of the original
         # prototype API.  Registration still goes through the stateful paths
         # below so failures can be associated with a plugin name.
-        self.hooks: Dict[str, List[Callable[..., Any]]] = {hook: [] for hook in self.HOOKS}
+        self.hooks: Dict[str, List[Callable[..., Any]]] = {
+            hook: [] for hook in self.HOOKS
+        }
         if plugins:
             for plugin in plugins:
                 self.register(plugin)
@@ -354,8 +373,14 @@ class PluginRegistry:
             callback = func if func is not None else plugin
             if not callable(callback):
                 raise PluginRegistrationError("hook callback is not callable")
-            callback_name = name or (plugin if isinstance(plugin, str) else getattr(callback, "__name__", "callback"))
-            callback_plugin = type("_CallbackPlugin", (), {"name": str(callback_name), hook: callback})()
+            callback_name = name or (
+                plugin
+                if isinstance(plugin, str)
+                else getattr(callback, "__name__", "callback")
+            )
+            callback_plugin = type(
+                "_CallbackPlugin", (), {"name": str(callback_name), hook: callback}
+            )()
             return self.register(callback_plugin)
 
         plugin = self._instantiate(plugin)
@@ -364,9 +389,14 @@ class PluginRegistry:
             plugin_name = plugin.__class__.__name__
         plugin_name = plugin_name.strip()
         if not any(state.name == plugin_name for state in self._states):
-            hooks = [getattr(plugin, hook, None) for hook in ("on_open", "on_file", "on_close")]
+            hooks = [
+                getattr(plugin, hook, None)
+                for hook in ("on_open", "on_file", "on_close")
+            ]
             if not any(callable(hook) for hook in hooks):
-                raise PluginRegistrationError("plugin %r has no lifecycle hooks" % plugin_name)
+                raise PluginRegistrationError(
+                    "plugin %r has no lifecycle hooks" % plugin_name
+                )
             self._states.append(_PluginState(plugin, plugin_name))
             for hook_name in self.HOOKS:
                 callback = getattr(plugin, hook_name, None)
@@ -381,11 +411,15 @@ class PluginRegistry:
         try:
             self.register(plugin, name=name)
         except Exception as exc:
-            self._record_failure(name or getattr(plugin, "name", repr(plugin)), "registration", exc)
+            self._record_failure(
+                name or getattr(plugin, "name", repr(plugin)), "registration", exc
+            )
             return False
         return True
 
-    def open(self, image: Any, metadata: Optional[Mapping[str, Any]] = None) -> OpenEvent:
+    def open(
+        self, image: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> OpenEvent:
         """Start a session and call every registered ``on_open`` hook."""
 
         if self._active:
@@ -403,12 +437,16 @@ class PluginRegistry:
                     self._isolate(state, "on_open", exc)
         return event
 
-    def on_open(self, image: Any, metadata: Optional[Mapping[str, Any]] = None) -> OpenEvent:
+    def on_open(
+        self, image: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> OpenEvent:
         """Hook-shaped alias for :meth:`open`."""
 
         return self.open(image, metadata)
 
-    def file(self, file: Any, metadata: Optional[Mapping[str, Any]] = None) -> FileEvent:
+    def file(
+        self, file: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> FileEvent:
         """Call ``on_file`` hooks with an immutable file snapshot."""
 
         if not self._active:
@@ -425,7 +463,9 @@ class PluginRegistry:
                     self._isolate(state, "on_file", exc)
         return event
 
-    def on_file(self, file: Any, metadata: Optional[Mapping[str, Any]] = None) -> FileEvent:
+    def on_file(
+        self, file: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> FileEvent:
         """Hook-shaped alias for :meth:`file`."""
 
         return self.file(file, metadata)
@@ -510,7 +550,8 @@ class PluginRegistry:
         positional = [
             parameter
             for parameter in parameters
-            if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+            if parameter.kind
+            in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
         ]
         return len(positional) >= 2
 
@@ -525,12 +566,18 @@ class PluginRegistry:
             if self._accepts_two_positional(callback):
                 event = args[0]
                 return callback(event.path, event.data)
-        elif hook == "on_file" and len(args) == 2 and not self._accepts_two_positional(callback):
+        elif (
+            hook == "on_file"
+            and len(args) == 2
+            and not self._accepts_two_positional(callback)
+        ):
             return callback(FileEvent.from_value({"path": args[0], "data": args[1]}))
         return callback(*args, **dict(kwargs or {}))
 
     @contextmanager
-    def session(self, image: Any, metadata: Optional[Mapping[str, Any]] = None) -> Iterator["PluginRegistry"]:
+    def session(
+        self, image: Any, metadata: Optional[Mapping[str, Any]] = None
+    ) -> Iterator["PluginRegistry"]:
         """Run a complete open/close lifecycle around a caller's loop."""
 
         self.open(image, metadata)
@@ -567,7 +614,10 @@ class PluginRegistry:
             if path.suffix != ".py" or not path.is_file():
                 continue
             origin = str(path)
-            module_name = "mountfile_plugin_%s" % hashlib.sha256(origin.encode("utf-8")).hexdigest()[:16]
+            module_name = (
+                "mountfile_plugin_%s"
+                % hashlib.sha256(origin.encode("utf-8")).hexdigest()[:16]
+            )
             try:
                 spec = importlib.util.spec_from_file_location(module_name, origin)
                 if spec is None or spec.loader is None:
@@ -607,7 +657,13 @@ class PluginRegistry:
             selected = list(discovered.select(group=group))
         else:  # pragma: no cover - Python 3.8 compatibility path
             selected = list(discovered.get(group, ()))
-        return sorted(selected, key=lambda item: (str(getattr(item, "name", "")), str(getattr(item, "value", ""))))
+        return sorted(
+            selected,
+            key=lambda item: (
+                str(getattr(item, "name", "")),
+                str(getattr(item, "value", "")),
+            ),
+        )
 
     @staticmethod
     def _instantiate(plugin: Any) -> Any:
@@ -630,10 +686,16 @@ class PluginRegistry:
                     return
             return
         if isinstance(export, (list, tuple, set, frozenset)):
-            for item in sorted(export, key=lambda item: str(getattr(item, "name", item.__class__.__name__))):
+            for item in sorted(
+                export,
+                key=lambda item: str(getattr(item, "name", item.__class__.__name__)),
+            ):
                 self._register_export(item, origin)
             return
-        if callable(export) and not any(callable(getattr(export, hook, None)) for hook in ("on_open", "on_file", "on_close")):
+        if callable(export) and not any(
+            callable(getattr(export, hook, None))
+            for hook in ("on_open", "on_file", "on_close")
+        ):
             export = export()
         self.register(export)
 

@@ -122,7 +122,9 @@ def _text_regex_hits(
     except LookupError:
         return
     for match in rx.finditer(text):
-        yield base + match.start() * char_size, (match.end() - match.start()) * char_size, False
+        yield base + match.start() * char_size, (
+            match.end() - match.start()
+        ) * char_size, False
 
 
 def search_blob(
@@ -158,7 +160,11 @@ def search_blob(
                         offset=offset,
                         length=length,
                         context=_context(
-                            blob, offset - base_offset, offset - base_offset + length, context, enc
+                            blob,
+                            offset - base_offset,
+                            offset - base_offset + length,
+                            context,
+                            enc,
                         ),
                         path=path,
                         encoding=enc,
@@ -292,7 +298,9 @@ def search_fs(
     return results
 
 
-def search_files(image_path: os.PathLike | str, pattern: str, **kwargs: Any) -> list[ContentHit]:
+def search_files(
+    image_path: os.PathLike | str, pattern: str, **kwargs: Any
+) -> list[ContentHit]:
     """Filesystem-aware content search over ``image_path`` (needs pytsk3)."""
 
     from .timeline import open_tsk_fs  # local import keeps pytsk3 optional

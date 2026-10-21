@@ -11,13 +11,32 @@ from .extract import extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import detect_volumes
 from .hexview import HexView
-from .qt_compat import (BottomDock, ComboAdjustToMinimumContentsLengthWithIcon,
-                        DisplayRole, Horizontal, MB_No, MB_Yes,
-                        QAbstractItemModel, QAction, QComboBox, QDockWidget,
-                        QFileDialog, QInputDialog, QLabel, QMainWindow,
-                        QMessageBox, QModelIndex, QPlainTextEdit, QPushButton,
-                        QSplitter, QTabWidget, QTreeView, SC_Open,
-                        SingleSelection, Stretch)
+from .qt_compat import (
+    BottomDock,
+    ComboAdjustToMinimumContentsLengthWithIcon,
+    DisplayRole,
+    Horizontal,
+    MB_No,
+    MB_Yes,
+    QAbstractItemModel,
+    QAction,
+    QComboBox,
+    QDockWidget,
+    QFileDialog,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QModelIndex,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QTreeView,
+    SC_Open,
+    SingleSelection,
+    Stretch,
+)
 from .vfs import TskError, TskImage
 
 

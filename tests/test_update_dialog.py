@@ -78,7 +78,9 @@ def test_dedent_markdown_removes_common_indent():
 
 
 def test_looks_like_sha256():
-    assert ud.looks_like_sha256("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    assert ud.looks_like_sha256(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
     assert not ud.looks_like_sha256("abc")
 
 
@@ -93,9 +95,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(self.payload)))
         self.end_headers()
-        body = self.payload[: max(1, len(self.payload) // 2)] if self.truncate else self.payload
+        body = (
+            self.payload[: max(1, len(self.payload) // 2)]
+            if self.truncate
+            else self.payload
+        )
         for start in range(0, len(body), 8192):
-            self.wfile.write(body[start:start + 8192])
+            self.wfile.write(body[start : start + 8192])
 
     def log_message(self, *args):  # noqa: D102 - без шума в тестах
         pass
@@ -222,7 +228,10 @@ def test_download_worker_reports_unknown_size_as_minus_one(tmp_path, http_server
 def test_windows_swap_bat_is_bounded_and_silent(tmp_path, monkeypatch):
     monkeypatch.setattr(ud.tempfile, "gettempdir", lambda: str(tmp_path))
     script = ud._windows_swap_bat(
-        "C:\\new\\MountFile.exe", "C:\\app\\MountFile.exe", 4242, str(tmp_path / "u.log")
+        "C:\\new\\MountFile.exe",
+        "C:\\app\\MountFile.exe",
+        4242,
+        str(tmp_path / "u.log"),
     )
     text = open(script, encoding="utf-8").read()
     assert text.startswith("@echo off")

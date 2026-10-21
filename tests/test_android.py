@@ -42,7 +42,9 @@ def _sparse_image(chunks, *, block_size=4, total_blocks=None, major=1):
         )
     )
     for chunk_type, block_count, payload in chunks:
-        encoded.extend(struct.pack("<HHII", chunk_type, 0, block_count, 12 + len(payload)))
+        encoded.extend(
+            struct.pack("<HHII", chunk_type, 0, block_count, 12 + len(payload))
+        )
         encoded.extend(payload)
     return bytes(encoded)
 
@@ -62,7 +64,12 @@ def test_sparse_header_and_bounds_checked_chunk_iteration():
 
     assert header.block_size == 4
     assert header.total_blocks == 4
-    assert [chunk.type_name for chunk in chunks] == ["raw", "fill", "dont-care", "crc32"]
+    assert [chunk.type_name for chunk in chunks] == [
+        "raw",
+        "fill",
+        "dont-care",
+        "crc32",
+    ]
     assert chunks[0].data.tobytes() == b"abcdefgh"
     assert chunks[0].block_start == 0
     assert chunks[2].data_size == 0
@@ -77,12 +84,16 @@ def test_sparse_rejects_truncated_payload_and_unknown_type():
 
     unknown = bytearray(_sparse_image([(CHUNK_TYPE_DONT_CARE, 1, b"")]))
     struct.pack_into("<H", unknown, 28, 0xCAFE)
-    with pytest.raises(UnsupportedAndroidFormatError, match="unsupported Android sparse chunk"):
+    with pytest.raises(
+        UnsupportedAndroidFormatError, match="unsupported Android sparse chunk"
+    ):
         list(iter_sparse_chunks(bytes(unknown)))
 
 
 def _legacy_boot(version):
-    size = {0: 1632, 1: BOOT_IMAGE_HEADER_V1_SIZE, 2: BOOT_IMAGE_HEADER_V2_SIZE}[version]
+    size = {0: 1632, 1: BOOT_IMAGE_HEADER_V1_SIZE, 2: BOOT_IMAGE_HEADER_V2_SIZE}[
+        version
+    ]
     image = bytearray(size)
     image[:8] = ANDROID_BOOT_MAGIC
     struct.pack_into(
@@ -148,7 +159,9 @@ def test_boot_modern_header_metadata(version):
 
     assert header.version == version
     assert header.page_size == 4096
-    assert header.header_size == (BOOT_IMAGE_HEADER_V4_SIZE if version == 4 else BOOT_IMAGE_HEADER_V3_SIZE)
+    assert header.header_size == (
+        BOOT_IMAGE_HEADER_V4_SIZE if version == 4 else BOOT_IMAGE_HEADER_V3_SIZE
+    )
     assert header.cmdline == "androidboot.slot_suffix=_a"
     assert header.reserved == (1, 2, 3, 4)
     assert header.signature_size == (4096 if version == 4 else None)

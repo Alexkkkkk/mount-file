@@ -27,10 +27,24 @@ def test_empty_image_search_is_safe(tmp_path):
 def test_timeline_csv_and_timestomp_cli(tmp_path, capsys):
     csv_path = tmp_path / "timeline.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=["path", "mtime", "atime", "ctime", "birth"])
+        writer = csv.DictWriter(
+            stream, fieldnames=["path", "mtime", "atime", "ctime", "birth"]
+        )
         writer.writeheader()
-        writer.writerow({"path": "/suspicious", "mtime": "1", "atime": "1", "ctime": "10", "birth": ""})
-    records = list(__import__("mountfile.dfir", fromlist=["read_timeline_csv"]).read_timeline_csv(csv_path))
+        writer.writerow(
+            {
+                "path": "/suspicious",
+                "mtime": "1",
+                "atime": "1",
+                "ctime": "10",
+                "birth": "",
+            }
+        )
+    records = list(
+        __import__("mountfile.dfir", fromlist=["read_timeline_csv"]).read_timeline_csv(
+            csv_path
+        )
+    )
     assert len(list(detect_timestomp(records))) == 1
     assert main(["timeline", "image.raw", "--csv", str(csv_path)]) == 0
     assert "Records: 1" in capsys.readouterr().out
@@ -46,7 +60,9 @@ def test_utf16_search(tmp_path):
 
 def test_timeline_export_cli_normalizes_timestamps_to_utc(tmp_path, capsys):
     source = tmp_path / "timeline.csv"
-    source.write_text("path,mtime,atime,ctime,birth\n/evidence/a,1700000000,,,,\n", encoding="utf-8")
+    source.write_text(
+        "path,mtime,atime,ctime,birth\n/evidence/a,1700000000,,,,\n", encoding="utf-8"
+    )
     output = tmp_path / "normalized.csv"
 
     assert main(["timeline-export", "--csv", str(source), "--output", str(output)]) == 0
@@ -64,7 +80,9 @@ def test_unallocated_scan_cli_uses_only_explicit_ranges(tmp_path, capsys):
     ranges.write_text(json.dumps([[6, 8]]), encoding="utf-8")
 
     assert main(["unallocated-scan", str(image), "--ranges", str(ranges)]) == 0
-    rows = [line for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    rows = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("{")
+    ]
     assert len(rows) == 1
     assert json.loads(rows[0])["offset"] == 6
 
@@ -86,9 +104,7 @@ def test_yara_cli_uses_user_rules_and_prints_json(tmp_path, monkeypatch, capsys)
     assert '"rule": "sample"' in capsys.readouterr().out
 
 
-def test_slack_cli_extracts_only_explicit_slack_and_never_overwrites(
-    tmp_path, capsys
-):
+def test_slack_cli_extracts_only_explicit_slack_and_never_overwrites(tmp_path, capsys):
     image = tmp_path / "image.bin"
     image.write_bytes(b"ABCslack")
     output = tmp_path / "slack.bin"

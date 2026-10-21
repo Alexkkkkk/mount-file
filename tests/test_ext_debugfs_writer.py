@@ -5,7 +5,11 @@ import subprocess
 
 import pytest
 
-from mountfile.ext_debugfs_writer import Ext234ImageWriter, Ext234Provider, ExtWriteError
+from mountfile.ext_debugfs_writer import (
+    Ext234ImageWriter,
+    Ext234Provider,
+    ExtWriteError,
+)
 
 DEBUGFS = shutil.which("debugfs")
 MKE2FS = shutil.which("mke2fs")

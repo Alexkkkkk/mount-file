@@ -60,7 +60,10 @@ def test_answer_cites_snippets_and_is_explicit_when_no_evidence(tmp_path):
     assert "lines 1-3" in answer
 
     assert retriever.retrieve("unicorns and completely unrelated text") == []
-    assert retriever.answer("unicorns and completely unrelated text") == NO_EVIDENCE_MESSAGE
+    assert (
+        retriever.answer("unicorns and completely unrelated text")
+        == NO_EVIDENCE_MESSAGE
+    )
 
 
 def test_indexes_repository_docs_markdown(tmp_path):

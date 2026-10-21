@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 
 from mountfile.ai.mcp_server import (
-    DefaultBackend,
     MCP_AVAILABLE,
+    TOOL_NAMES,
+    DefaultBackend,
     MountFileMcpServer,
     OperationUnavailable,
     PathValidationError,
-    TOOL_NAMES,
     create_server,
 )
 
@@ -30,7 +30,9 @@ class FakeBackend:
         return [{"name": "note.txt", "path": "/note.txt", "is_dir": False}]
 
     def search_files(self, image, offset, pattern, start, include_deleted):
-        self.calls.append(("search_files", image, offset, pattern, start, include_deleted))
+        self.calls.append(
+            ("search_files", image, offset, pattern, start, include_deleted)
+        )
         return [{"name": "note.txt", "path": "/note.txt"}]
 
     def extract_file(self, image, offset, path, destination):

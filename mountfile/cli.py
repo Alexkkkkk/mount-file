@@ -32,7 +32,11 @@ from .dfir_slack import read_file_slack
 from .dfir_timeline import export_timeline_csv
 from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
+from .extract import ExtractError, extract_path
+from .fat32 import Fat32, Fat32Error, Fat32Provider
+from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
+from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .search_content import SearchError, search_files, search_image
 from .slack import SlackError, extract_slack
 from .timeline import (
@@ -43,12 +47,8 @@ from .timeline import (
     query_timeline,
 )
 from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
-from .yara_scan import TARGETS, YaraScanError, scan_image
-from .extract import ExtractError, extract_path
-from .fat32 import Fat32, Fat32Error, Fat32Provider
-from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
-from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .vfs import TskError, TskImage
+from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
@@ -81,7 +81,6 @@ COMMANDS = (
     "timestomp-scan",
     "slack-extract",
     "live-diff",
-
 )
 
 _READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
@@ -461,7 +460,9 @@ def cmd_hash(args):
 
 def _timeline_records(args):
     if not args.csv:
-        raise ValueError("--csv is required: filesystem-aware collection is not yet enabled")
+        raise ValueError(
+            "--csv is required: filesystem-aware collection is not yet enabled"
+        )
     return list(read_timeline_csv(args.csv))
 
 
@@ -470,7 +471,13 @@ def cmd_timeline(args):
     for record in records[: args.limit]:
         print(
             "%s\t%s\t%s\t%s\t%s"
-            % (record.path, record.mtime or "", record.atime or "", record.ctime or "", record.sha256 or "")
+            % (
+                record.path,
+                record.mtime or "",
+                record.atime or "",
+                record.ctime or "",
+                record.sha256 or "",
+            )
         )
     print("Records: %d" % len(records))
     return OK
@@ -581,7 +588,6 @@ def _add_target(sp):
         action="store_true",
         help="copy the image to <image>.bak before writing",
     )
-
 
 
 # ---------------------------------------------------------- issue #87 commands
@@ -696,7 +702,11 @@ def cmd_timestomp_scan(args):
         print("error: %s" % exc, file=sys.stderr)
         return ERROR
     if args.json:
-        print(json.dumps([item.as_dict() for item in findings], ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                [item.as_dict() for item in findings], ensure_ascii=False, indent=2
+            )
+        )
     else:
         for item in findings:
             print("%s\t%s" % (item.path, ", ".join(item.reasons)))
@@ -853,7 +863,9 @@ def build_parser():
     sp.add_argument("image")
     sp.add_argument("pattern")
     sp.add_argument("--regex", action="store_true")
-    sp.add_argument("--encoding", choices=("utf-8", "utf-16le", "latin-1", "raw"), default="utf-8")
+    sp.add_argument(
+        "--encoding", choices=("utf-8", "utf-16le", "latin-1", "raw"), default="utf-8"
+    )
     sp.add_argument("--context", type=int, default=64)
     sp.add_argument("--max-results", type=int, default=1000)
     sp.set_defaults(func=cmd_grep)
@@ -868,7 +880,9 @@ def build_parser():
     sp.add_argument("--limit", type=int, default=1000)
     sp.set_defaults(func=cmd_timeline)
 
-    sp = sub.add_parser("timestomp", help="flag conservative timestamp anomalies from CSV")
+    sp = sub.add_parser(
+        "timestomp", help="flag conservative timestamp anomalies from CSV"
+    )
     sp.add_argument("image", help="image label retained for a stable CLI shape")
     sp.add_argument("--csv", required=True, help="CSV with path and timestamp columns")
     sp.add_argument("--skew", type=float, default=2.0)
@@ -876,13 +890,16 @@ def build_parser():
     sp.set_defaults(func=cmd_timestomp)
 
     sp = sub.add_parser(
-        "timeline-export", help="normalize caller-supplied timeline CSV timestamps to UTC"
+        "timeline-export",
+        help="normalize caller-supplied timeline CSV timestamps to UTC",
     )
     sp.add_argument("--csv", required=True, help="CSV with path and timestamp columns")
     sp.add_argument("--output", required=True, help="normalized CSV output path")
     sp.set_defaults(func=cmd_timeline_export)
 
-    sp = sub.add_parser("yara", help="scan a file/image read-only with a YARA rule file")
+    sp = sub.add_parser(
+        "yara", help="scan a file/image read-only with a YARA rule file"
+    )
     sp.add_argument("image")
     sp.add_argument("--rules", required=True, help="user-supplied YARA source file")
     sp.set_defaults(func=cmd_yara)
@@ -915,7 +932,8 @@ def build_parser():
     sp.set_defaults(func=cmd_timeline_build)
 
     sp = sub.add_parser(
-        "timeline-query", help="query a timeline database by time window and/or event type"
+        "timeline-query",
+        help="query a timeline database by time window and/or event type",
     )
     sp.add_argument("--db", required=True, help="SQLite timeline database")
     sp.add_argument("--start", default=None, help="inclusive lower bound (ISO-8601)")
@@ -960,7 +978,9 @@ def build_parser():
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_timestomp_scan)
 
-    sp = sub.add_parser("slack-extract", help="extract file slack space into a directory")
+    sp = sub.add_parser(
+        "slack-extract", help="extract file slack space into a directory"
+    )
     sp.add_argument("image")
     sp.add_argument("-o", "--output", required=True, help="output directory")
     sp.add_argument("--min-slack", type=int, default=1)
@@ -992,7 +1012,9 @@ def build_parser():
     )
     sp.add_argument("before")
     sp.add_argument("after")
-    sp.add_argument("-o", "--output", default=None, help="Markdown path (stdout when omitted)")
+    sp.add_argument(
+        "-o", "--output", default=None, help="Markdown path (stdout when omitted)"
+    )
     sp.set_defaults(func=cmd_live_diff)
 
     return p

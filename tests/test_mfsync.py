@@ -8,6 +8,7 @@ a local bare remote, so no network, no token and no GitHub API is touched.
 
 Run:  python -m pytest tests/test_mfsync.py -v
 """
+
 import importlib.util
 import os
 import subprocess
@@ -37,8 +38,11 @@ M = _load_module()
 
 def run_git(cwd, *args):
     proc = subprocess.run(
-        ["git"] + list(args), cwd=str(cwd),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+        ["git"] + list(args),
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
@@ -93,8 +97,7 @@ def test_scan_detects_github_pat(tmp_path):
 
 def test_scan_ignores_placeholder_values(tmp_path):
     (tmp_path / "doc.md").write_text(
-        'Set password = "your_password_here" first.\n'
-        'api_key = "${API_KEY}"\n',
+        'Set password = "your_password_here" first.\n' 'api_key = "${API_KEY}"\n',
         encoding="utf-8",
     )
     assert M.scan_files(tmp_path, ["doc.md"]) == []
@@ -181,7 +184,9 @@ def test_redact_secret_removes_env_token(monkeypatch):
 
 
 def test_version_parity_ok(repo):
-    (repo / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8"
+    )
     (repo / "mountfile").mkdir()
     (repo / "mountfile" / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
     report = M.check_version_parity(str(repo))
@@ -388,14 +393,19 @@ def test_pull_fails_closed_when_autostash_fails(repo, monkeypatch):
     assert not any(command[0] in ("rebase", "merge") for command in calls)
 
 
-@pytest.mark.parametrize("marker, operation", [
-    ("MERGE_HEAD", "merge"),
-    ("rebase-merge", "rebase"),
-    ("CHERRY_PICK_HEAD", "cherry-pick"),
-])
+@pytest.mark.parametrize(
+    "marker, operation",
+    [
+        ("MERGE_HEAD", "merge"),
+        ("rebase-merge", "rebase"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+    ],
+)
 def test_pull_refuses_in_progress_git_operation(repo, marker, operation):
     marker_path = run_git(repo, "rev-parse", "--git-path", marker)
-    marker_path = os.path.join(str(repo), marker_path) if not os.path.isabs(marker_path) else marker_path
+    marker_path = (
+        os.path.join(str(repo), marker_path) if not os.path.isabs(marker_path) else marker_path
+    )
     if marker == "rebase-merge":
         os.makedirs(marker_path)
     else:
@@ -459,7 +469,9 @@ def test_open_pr_reuses_stable_source_base_branch(repo, monkeypatch):
     pushes, requests = [], []
 
     monkeypatch.setattr(M, "remote_slug", lambda _cwd: ("owner", "project"))
-    monkeypatch.setattr(M, "push", lambda _cwd, branch=None, **_kwargs: pushes.append(branch) or branch)
+    monkeypatch.setattr(
+        M, "push", lambda _cwd, branch=None, **_kwargs: pushes.append(branch) or branch
+    )
 
     def fake_api(method, path, payload=None, token=None):
         requests.append((method, path, payload, token))
@@ -470,8 +482,12 @@ def test_open_pr_reuses_stable_source_base_branch(repo, monkeypatch):
     monkeypatch.setattr(M, "api", fake_api)
     result = M.open_pr(str(repo), base="main", token="test-token")
     assert pushes == ["sync/feature-demo-to-main"]
-    assert result == {"url": "https://example.invalid/pr/9", "number": 9,
-                      "head": "sync/feature-demo-to-main", "existing": True}
+    assert result == {
+        "url": "https://example.invalid/pr/9",
+        "number": 9,
+        "head": "sync/feature-demo-to-main",
+        "existing": True,
+    }
     assert [request[0] for request in requests] == ["GET"]
     assert "head=owner%3Async%2Ffeature-demo-to-main" in requests[0][1]
 
@@ -531,6 +547,7 @@ def test_watch_commits_after_change(repo):
 
     M.sync = counting_sync
     try:
+
         def writer():
             time.sleep(0.4)
             (repo / "watched.txt").write_text("w", encoding="utf-8")

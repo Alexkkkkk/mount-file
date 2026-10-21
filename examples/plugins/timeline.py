@@ -20,7 +20,9 @@ class TimelinePlugin:
 
     name = "timeline"
 
-    def __init__(self, *, require_pandas: bool = False, pandas_module: Optional[Any] = None) -> None:
+    def __init__(
+        self, *, require_pandas: bool = False, pandas_module: Optional[Any] = None
+    ) -> None:
         self._pandas = pandas_module
         self._require_pandas = require_pandas
         self._events = []
@@ -32,9 +34,15 @@ class TimelinePlugin:
                 self._pandas = importlib.import_module("pandas")
             except Exception as exc:
                 if require_pandas:
-                    self._set_status("unavailable", "optional dependency pandas is unavailable: %s" % exc)
+                    self._set_status(
+                        "unavailable",
+                        "optional dependency pandas is unavailable: %s" % exc,
+                    )
                 else:
-                    self._set_status("degraded", "pandas is unavailable; using stdlib event records: %s" % exc)
+                    self._set_status(
+                        "degraded",
+                        "pandas is unavailable; using stdlib event records: %s" % exc,
+                    )
 
     @property
     def available(self) -> bool:
@@ -101,4 +109,11 @@ TimelineAdapter = TimelinePlugin
 create_timeline_plugin = create_plugin
 PLUGINS = (TimelinePlugin,)
 
-__all__ = ["PLUGINS", "TimelineAdapter", "TimelinePlugin", "create_plugin", "create_timeline_plugin", "register"]
+__all__ = [
+    "PLUGINS",
+    "TimelineAdapter",
+    "TimelinePlugin",
+    "create_plugin",
+    "create_timeline_plugin",
+    "register",
+]

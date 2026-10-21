@@ -148,7 +148,9 @@ class EngineJournal:
                     return "0" * 64
         return "0" * 64
 
-    def append(self, *, tx: str, op: str, path: str, status: str, extra: dict | None = None) -> JournalEntry:
+    def append(
+        self, *, tx: str, op: str, path: str, status: str, extra: dict | None = None
+    ) -> JournalEntry:
         entry = JournalEntry(
             ts=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             image=str(self.path),
@@ -161,7 +163,9 @@ class EngineJournal:
         )
         entry.hash = entry.compute()
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry.to_dict(), sort_keys=True, default=str) + "\n")
+            handle.write(
+                json.dumps(entry.to_dict(), sort_keys=True, default=str) + "\n"
+            )
         self._prev = entry.hash
         return entry
 
@@ -221,7 +225,9 @@ def _default_snapshot_dir() -> Path:
 # structural probe (raw, independent of the backend)
 # ---------------------------------------------------------------------------
 def _power_of_two(value: Any, low: int, high: int) -> bool:
-    return isinstance(value, int) and low <= value <= high and (value & (value - 1)) == 0
+    return (
+        isinstance(value, int) and low <= value <= high and (value & (value - 1)) == 0
+    )
 
 
 def _read_raw_safe(image: Path, offset: int, length: int) -> bytes:
@@ -285,7 +291,11 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
         raise WriteEngineError("offset 0x%X is past the end of %s" % (offset, image))
 
     boot = _read_raw(image, offset, 512)
-    check("boot sector present", len(boot) == 512, "%d bytes readable at 0x%X" % (len(boot), offset))
+    check(
+        "boot sector present",
+        len(boot) == 512,
+        "%d bytes readable at 0x%X" % (len(boot), offset),
+    )
 
     if fs_type == "fat":
         bps = struct.unpack_from("<H", boot, 11)[0]
@@ -293,17 +303,39 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
         reserved = struct.unpack_from("<H", boot, 14)[0]
         num_fats = boot[16] if len(boot) > 16 else 0
         root_entries = struct.unpack_from("<H", boot, 17)[0]
-        total_sectors = struct.unpack_from("<H", boot, 19)[0] or struct.unpack_from("<I", boot, 32)[0]
-        fat_size = struct.unpack_from("<H", boot, 22)[0] or struct.unpack_from("<I", boot, 36)[0]
-        check("FAT boot signature 0x55AA", boot[510:512] == b"\x55\xaa", repr(boot[510:512]))
-        check("bytes per sector", _power_of_two(bps, 512, 4096), "bytes_per_sector=%d" % bps)
-        check("sectors per cluster", _power_of_two(spc, 1, 128), "sectors_per_cluster=%d" % spc)
+        total_sectors = (
+            struct.unpack_from("<H", boot, 19)[0]
+            or struct.unpack_from("<I", boot, 32)[0]
+        )
+        fat_size = (
+            struct.unpack_from("<H", boot, 22)[0]
+            or struct.unpack_from("<I", boot, 36)[0]
+        )
+        check(
+            "FAT boot signature 0x55AA",
+            boot[510:512] == b"\x55\xaa",
+            repr(boot[510:512]),
+        )
+        check(
+            "bytes per sector",
+            _power_of_two(bps, 512, 4096),
+            "bytes_per_sector=%d" % bps,
+        )
+        check(
+            "sectors per cluster",
+            _power_of_two(spc, 1, 128),
+            "sectors_per_cluster=%d" % spc,
+        )
         check("reserved sector count", reserved >= 1, "reserved_sectors=%d" % reserved)
         check("fat size", fat_size > 0, "fat_size_sectors=%d" % fat_size)
         check("total sectors", total_sectors > 0, "total_sectors=%d" % total_sectors)
         if root_entries and bps:
             root_sectors = (root_entries * 32 + bps - 1) // bps
-            check("root directory fits", root_sectors > 0, "root_entries=%d" % root_entries)
+            check(
+                "root directory fits",
+                root_sectors > 0,
+                "root_entries=%d" % root_entries,
+            )
         if num_fats >= 1 and bps and fat_size:
             first = _read_raw(image, offset + reserved * bps, fat_size * bps)
             if first:
@@ -314,9 +346,13 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
                     "first FAT byte=0x%02X" % media,
                 )
             else:
-                check("FAT first copy readable", False, "no bytes at the first FAT copy")
+                check(
+                    "FAT first copy readable", False, "no bytes at the first FAT copy"
+                )
             if num_fats > 1:
-                second = _read_raw(image, offset + (reserved + fat_size) * bps, fat_size * bps)
+                second = _read_raw(
+                    image, offset + (reserved + fat_size) * bps, fat_size * bps
+                )
                 check(
                     "FAT copies identical",
                     first == second,
@@ -326,7 +362,8 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
             check(
                 "volume fits in the image",
                 offset + reserved * bps <= total,
-                "data area starts at 0x%X, image is %d bytes" % (offset + reserved * bps, total),
+                "data area starts at 0x%X, image is %d bytes"
+                % (offset + reserved * bps, total),
             )
     elif fs_type == "ntfs":
         check(
@@ -335,7 +372,11 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
             "OEM=%r" % boot[3:11],
         )
         bps = struct.unpack_from("<H", boot, 11)[0]
-        check("bytes per sector", _power_of_two(bps, 512, 4096), "bytes_per_sector=%d" % bps)
+        check(
+            "bytes per sector",
+            _power_of_two(bps, 512, 4096),
+            "bytes_per_sector=%d" % bps,
+        )
         check(
             "NTFS $Volume dirty bit",
             None,
@@ -343,16 +384,32 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
         )
     elif fs_type == "ext":
         superblock = _read_raw(image, offset + EXT_MAGIC_OFFSET, 1024)
-        magic = struct.unpack_from("<H", superblock, 56)[0] if len(superblock) >= 58 else 0
-        check("ext superblock magic", magic == EXT_SUPERBLOCK_MAGIC, "magic=0x%04X" % magic)
-        state = struct.unpack_from("<H", superblock, 58)[0] if len(superblock) >= 60 else 0
+        magic = (
+            struct.unpack_from("<H", superblock, 56)[0] if len(superblock) >= 58 else 0
+        )
+        check(
+            "ext superblock magic",
+            magic == EXT_SUPERBLOCK_MAGIC,
+            "magic=0x%04X" % magic,
+        )
+        state = (
+            struct.unpack_from("<H", superblock, 58)[0] if len(superblock) >= 60 else 0
+        )
         check(
             "ext cleanly unmounted",
             state == 1,
-            "s_state=%d (%s)" % (state, "clean" if state == 1 else "not cleanly unmounted / errors flagged"),
+            "s_state=%d (%s)"
+            % (
+                state,
+                "clean" if state == 1 else "not cleanly unmounted / errors flagged",
+            ),
         )
     else:
-        check("filesystem detection", False, "no known filesystem signature at 0x%X" % offset)
+        check(
+            "filesystem detection",
+            False,
+            "no known filesystem signature at 0x%X" % offset,
+        )
 
     return {
         "image": str(image),
@@ -448,7 +505,9 @@ class WriteEngine:
         self.allow_damaged = bool(allow_damaged)
         self.keep_snapshots = int(keep_snapshots)
         self.backup_enabled = bool(backup)
-        self.snapshot_dir = Path(snapshot_dir) if snapshot_dir is not None else _default_snapshot_dir()
+        self.snapshot_dir = (
+            Path(snapshot_dir) if snapshot_dir is not None else _default_snapshot_dir()
+        )
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.journal = EngineJournal(journal_path)
         self._session_snapshot: Path | None = None
@@ -468,8 +527,13 @@ class WriteEngine:
         try:
             return damage_report(self.image, self.offset or 0)
         except Exception as exc:  # unreadable geometry must not crash the facade
-            return {"image": str(self.image), "offset": self.offset or 0, "fs_type": "unknown",
-                    "checks": [], "problems": ["structural probe failed: %s" % exc]}
+            return {
+                "image": str(self.image),
+                "offset": self.offset or 0,
+                "fs_type": "unknown",
+                "checks": [],
+                "problems": ["structural probe failed: %s" % exc],
+            }
 
     def _open_backend(self) -> UniversalFSRW:
         if not self.image.exists():
@@ -489,7 +553,9 @@ class WriteEngine:
 
     def close(self) -> None:
         if self._active is not None:
-            self.rollback(self._active.id, reason="engine closed with an open transaction")
+            self.rollback(
+                self._active.id, reason="engine closed with an open transaction"
+            )
         self._fs.close()
 
     def __enter__(self) -> "WriteEngine":
@@ -524,12 +590,15 @@ class WriteEngine:
     def begin(self, label: str = "") -> Transaction:
         if self._active is not None:
             raise TransactionError(
-                "transaction %s is already active; MF-WE does not nest transactions" % self._active.id
+                "transaction %s is already active; MF-WE does not nest transactions"
+                % self._active.id
             )
         tx = Transaction(self, uuid.uuid4().hex[:12], label)
         self._active = tx
         self._transactions[tx.id] = tx
-        self.journal.append(tx=tx.id, op="begin", path="/", status="open", extra={"label": label})
+        self.journal.append(
+            tx=tx.id, op="begin", path="/", status="open", extra={"label": label}
+        )
         return tx
 
     def transaction(self, label: str = "") -> Transaction:
@@ -547,16 +616,22 @@ class WriteEngine:
             "dry_run": self.dry_run,
             "operations": len(tx.entries),
             "sha256_after": post,
-            "sha256_before": tx.entries[0].extra.get("sha256_before") if tx.entries else None,
+            "sha256_before": (
+                tx.entries[0].extra.get("sha256_before") if tx.entries else None
+            ),
             "snapshot": str(tx.snapshot) if tx.snapshot else None,
         }
         tx.status = "committed"
         tx.finished = _dt.datetime.now(_dt.timezone.utc).isoformat()
-        self.journal.append(tx=tx.id, op="commit", path="/", status="committed", extra=result)
+        self.journal.append(
+            tx=tx.id, op="commit", path="/", status="committed", extra=result
+        )
         self._release(tx)
         return result
 
-    def rollback(self, tx_id: str | None = None, *, reason: str = "explicit rollback") -> bool:
+    def rollback(
+        self, tx_id: str | None = None, *, reason: str = "explicit rollback"
+    ) -> bool:
         tx = self._transaction(tx_id)
         restored = False
         if tx.snapshot is not None and tx.snapshot.exists():
@@ -571,7 +646,11 @@ class WriteEngine:
             op="rollback",
             path="/",
             status="rolled_back",
-            extra={"reason": reason, "restored": restored, "snapshot": str(tx.snapshot) if tx.snapshot else None},
+            extra={
+                "reason": reason,
+                "restored": restored,
+                "snapshot": str(tx.snapshot) if tx.snapshot else None,
+            },
         )
         self._release(tx)
         return restored
@@ -667,7 +746,8 @@ class WriteEngine:
             {
                 "name": "image size unchanged",
                 "ok": size == self._initial_size,
-                "detail": "size=%d bytes, initial=%d bytes" % (size, self._initial_size),
+                "detail": "size=%d bytes, initial=%d bytes"
+                % (size, self._initial_size),
             }
         )
         structural = self._probe()
@@ -679,14 +759,18 @@ class WriteEngine:
                 "detail": "external checker result (None = tool/dependency unavailable)",
             }
         )
-        problems = [("%s: %s" % (c["name"], c["detail"])) for c in checks if c["ok"] is False]
+        problems = [
+            ("%s: %s" % (c["name"], c["detail"])) for c in checks if c["ok"] is False
+        ]
         return {
             "image": str(self.image),
             "fs_type": structural["fs_type"],
             "ok": not problems,
             "checks": checks,
             "problems": problems,
-            "session_backup": str(self._session_snapshot) if self._session_snapshot else None,
+            "session_backup": (
+                str(self._session_snapshot) if self._session_snapshot else None
+            ),
             "journal": self.journal.verify_chain(),
         }
 
@@ -708,45 +792,72 @@ class WriteEngine:
     def write_file(self, path: str, data: bytes) -> JournalEntry:
         """Create or overwrite a file inside the image."""
         payload = bytes(data)
-        return self._apply("write_file", path, {"size": len(payload)}, lambda: self._fs.write_file(path, payload))
+        return self._apply(
+            "write_file",
+            path,
+            {"size": len(payload)},
+            lambda: self._fs.write_file(path, payload),
+        )
 
     def mkdir(self, path: str) -> JournalEntry:
         return self._apply("mkdir", path, {}, lambda: self._fs.mkdir(path))
 
     def delete(self, path: str, recursive: bool = False) -> JournalEntry:
         return self._apply(
-            "delete", path, {"recursive": bool(recursive)}, lambda: self._fs.delete(path, recursive=recursive)
+            "delete",
+            path,
+            {"recursive": bool(recursive)},
+            lambda: self._fs.delete(path, recursive=recursive),
         )
 
     def rename(self, src: str, dst: str) -> JournalEntry:
         self._validate_path(src)
         self._validate_path(dst)
-        return self._apply("rename", src, {"dst": dst}, lambda: self._fs.rename(src, dst))
+        return self._apply(
+            "rename", src, {"dst": dst}, lambda: self._fs.rename(src, dst)
+        )
 
     def copy(self, src: str, dst: str) -> JournalEntry:
         """Read-then-write copy (the read side is always available)."""
         self._require_rw("copy")
         self._validate_path(dst)
         data = self._fs.read(src)
-        return self._apply("copy", dst, {"src": src, "size": len(data)}, lambda: self._fs.write_file(dst, data))
+        return self._apply(
+            "copy",
+            dst,
+            {"src": src, "size": len(data)},
+            lambda: self._fs.write_file(dst, data),
+        )
 
     def chmod(self, path: str, mode: int) -> JournalEntry:
-        return self._ext_only("chmod", path, {"mode": "%04o" % mode}, lambda: self._debugfs_out(
-            "sif %s mode 0%o" % (self._debugfs_path(path), mode)
-        ))
+        return self._ext_only(
+            "chmod",
+            path,
+            {"mode": "%04o" % mode},
+            lambda: self._debugfs_out(
+                "sif %s mode 0%o" % (self._debugfs_path(path), mode)
+            ),
+        )
 
     def chown(self, path: str, uid: int, gid: int) -> JournalEntry:
         return self._ext_only(
             "chown",
             path,
             {"uid": int(uid), "gid": int(gid)},
-            lambda: self._debugfs_out("sif %s uid %d" % (self._debugfs_path(path), int(uid)))
-            or self._debugfs_out("sif %s gid %d" % (self._debugfs_path(path), int(gid))),
+            lambda: self._debugfs_out(
+                "sif %s uid %d" % (self._debugfs_path(path), int(uid))
+            )
+            or self._debugfs_out(
+                "sif %s gid %d" % (self._debugfs_path(path), int(gid))
+            ),
         )
 
     def symlink(self, path: str, target: str) -> JournalEntry:
         return self._ext_only(
-            "symlink", path, {"target": target}, lambda: self._debugfs_out("symlink %s %s" % (path, target))
+            "symlink",
+            path,
+            {"target": target},
+            lambda: self._debugfs_out("symlink %s %s" % (path, target)),
         )
 
     # -- internals ----------------------------------------------------------
@@ -759,7 +870,9 @@ class WriteEngine:
                 % (op, type(backend).__name__)
             )
         if not shutil.which("debugfs"):
-            raise UnsupportedOperationError("%s needs the `debugfs` tool (e2fsprogs) on PATH" % op)
+            raise UnsupportedOperationError(
+                "%s needs the `debugfs` tool (e2fsprogs) on PATH" % op
+            )
         return self._apply(op, path, extra, mutate)
 
     def _debugfs_out(self, command: str) -> None:
@@ -778,7 +891,9 @@ class WriteEngine:
             # validate the plan without creating a snapshot or writing a byte
             self._validate_preconditions(op, path, extra)
             extra.setdefault("sha256_before", self._identity())
-            entry = self.journal.append(tx=tx.id, op=op, path=path, status="planned", extra=extra)
+            entry = self.journal.append(
+                tx=tx.id, op=op, path=path, status="planned", extra=extra
+            )
             tx.entries.append(entry)
             if owned:
                 self.commit(tx.id)
@@ -790,14 +905,20 @@ class WriteEngine:
             mutate()
         except Exception as exc:
             entry = self.journal.append(
-                tx=tx.id, op=op, path=path, status="failed", extra=dict(extra, error=str(exc))
+                tx=tx.id,
+                op=op,
+                path=path,
+                status="failed",
+                extra=dict(extra, error=str(exc)),
             )
             tx.entries.append(entry)
             if owned:
                 self.rollback(tx.id, reason="%s failed: %s" % (op, exc))
             raise
         extra["sha256_after"] = self._identity()
-        entry = self.journal.append(tx=tx.id, op=op, path=path, status="applied", extra=extra)
+        entry = self.journal.append(
+            tx=tx.id, op=op, path=path, status="applied", extra=extra
+        )
         tx.entries.append(entry)
         if owned:
             self.commit(tx.id)
@@ -806,7 +927,8 @@ class WriteEngine:
     def _require_rw(self, op: str) -> None:
         if self.read_only:
             raise ReadOnlyError(
-                "%s refuses to run: the engine is read-only (pass read_only=False to enable writes)" % op
+                "%s refuses to run: the engine is read-only (pass read_only=False to enable writes)"
+                % op
             )
 
     def _validate_path(self, path: str) -> None:
@@ -823,8 +945,12 @@ class WriteEngine:
         parent = str(PurePosixPath(str(path).replace("\\", "/")).parent) or "/"
         parent_exists = parent == "/" or self.backend.exists(parent)
         if op in ("write_file", "mkdir", "copy") and not parent_exists:
-            raise WriteEngineError("parent directory does not exist in the image: %s" % parent)
-        if op in ("delete", "rename", "chmod", "chown") and not self.backend.exists(path):
+            raise WriteEngineError(
+                "parent directory does not exist in the image: %s" % parent
+            )
+        if op in ("delete", "rename", "chmod", "chown") and not self.backend.exists(
+            path
+        ):
             raise WriteEngineError("path does not exist in the image: %s" % path)
         if op in ("write_file", "mkdir") and self.backend.exists(path):
             log.info("%s will overwrite an existing entry: %s", op, path)
@@ -847,7 +973,9 @@ class WriteEngine:
             "read_only": self.read_only,
             "dry_run": self.dry_run,
             "allow_damaged": self.allow_damaged,
-            "session_snapshot": str(self._session_snapshot) if self._session_snapshot else None,
+            "session_snapshot": (
+                str(self._session_snapshot) if self._session_snapshot else None
+            ),
             "damage": self.damage,
             "active_transaction": self._active.to_dict() if self._active else None,
             "transactions": [tx.to_dict() for tx in self._transactions.values()],
@@ -859,7 +987,10 @@ def _run(args: list[str]) -> Optional[tuple[int, str]]:
 
     try:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover - tool missing/hung
+    except (
+        OSError,
+        subprocess.SubprocessError,
+    ):  # pragma: no cover - tool missing/hung
         return None
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 

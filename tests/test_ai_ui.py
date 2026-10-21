@@ -27,10 +27,10 @@ pytest.importorskip(
 )
 
 from mountfile import ai  # noqa: E402
-from mountfile.ai import AiResult  # noqa: E402
-from mountfile.qt_compat import QApplication, QMenu, QToolBar  # noqa: E402
 from mountfile import ai_format_advisor  # noqa: E402
 from mountfile import tc_window  # noqa: E402
+from mountfile.ai import AiResult  # noqa: E402
+from mountfile.qt_compat import QApplication, QMenu, QToolBar  # noqa: E402
 from mountfile.tc_window import AiDialog, MainWindow  # noqa: E402
 
 
@@ -127,7 +127,9 @@ def test_format_advisor_uses_metadata_only_and_does_not_call_backend(win, monkey
     monkeypatch.setattr(ai_format_advisor, "Remember", MemoryRemember)
     monkeypatch.setattr(tc_window, "QMessageBox", MessageBox)
     monkeypatch.setattr(
-        ai, "build_backend", lambda *args, **kwargs: pytest.fail("backend must not be called")
+        ai,
+        "build_backend",
+        lambda *args, **kwargs: pytest.fail("backend must not be called"),
     )
 
     win._on_advise()

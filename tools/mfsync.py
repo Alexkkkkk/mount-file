@@ -48,13 +48,42 @@ PROTECTED_BRANCHES = ("main", "master")
 
 # Directories and file types that never take part in the watch snapshot.
 IGNORED_DIRS = (
-    ".git", "__pycache__", ".venv", "venv", "env", "build", "dist", "out",
-    "parts", "vfs_out", "node_modules", ".pytest_cache", ".ruff_cache",
-    ".mypy_cache", ".idea", ".vscode", ".mfsync", ".olma", "htmlcov",
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "build",
+    "dist",
+    "out",
+    "parts",
+    "vfs_out",
+    "node_modules",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".idea",
+    ".vscode",
+    ".mfsync",
+    ".olma",
+    "htmlcov",
 )
 IGNORED_SUFFIXES = (
-    ".pyc", ".pyo", ".so", ".dll", ".dylib", ".exe", ".img", ".bin", ".raw",
-    ".dump", ".dd", ".zip", ".7z", ".log", ".coverage",
+    ".pyc",
+    ".pyo",
+    ".so",
+    ".dll",
+    ".dylib",
+    ".exe",
+    ".img",
+    ".bin",
+    ".raw",
+    ".dump",
+    ".dd",
+    ".zip",
+    ".7z",
+    ".log",
+    ".coverage",
 )
 
 # (kind, pattern). Patterns are deliberately narrow: a false positive blocks a
@@ -65,9 +94,16 @@ SECRET_PATTERNS = (
     ("aws access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("slack token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}")),
     ("openai key", re.compile(r"\bsk-[A-Za-z0-9]{32,}")),
-    ("private key", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")),
-    ("credential assignment",
-     re.compile(r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*[\"']([^\"'\s]{12,})[\"']")),
+    (
+        "private key",
+        re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----"),
+    ),
+    (
+        "credential assignment",
+        re.compile(
+            r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\s*[:=]\s*[\"']([^\"'\s]{12,})[\"']"
+        ),
+    ),
 )
 
 # Kinds that describe a *shape* rather than a specific credential. A PEM header
@@ -82,9 +118,28 @@ def severity_of(kind):
 
 # Values that look like credentials but are documentation placeholders.
 PLACEHOLDER_HINTS = (
-    "your_", "your-", "xxx", "***", "...", "<", "${", "{{", "%s", "changeme",
-    "example", "placeholder", "dummy", "redacted", "todo", "os.environ",
-    "getenv", "secret_value", "token_here", "not_a_real", "fake", "sample",
+    "your_",
+    "your-",
+    "xxx",
+    "***",
+    "...",
+    "<",
+    "${",
+    "{{",
+    "%s",
+    "changeme",
+    "example",
+    "placeholder",
+    "dummy",
+    "redacted",
+    "todo",
+    "os.environ",
+    "getenv",
+    "secret_value",
+    "token_here",
+    "not_a_real",
+    "fake",
+    "sample",
 )
 
 # Files whose own content legitimately contains credential-shaped strings.
@@ -95,29 +150,77 @@ SCAN_ALLOWLIST = (
     "SECURITY.md",
 )
 
-SENSITIVE_NAMES = (".env", "id_rsa", "id_ed25519", "id_dsa", ".netrc", ".pypirc", "credentials.json")
+SENSITIVE_NAMES = (
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+    "id_dsa",
+    ".netrc",
+    ".pypirc",
+    "credentials.json",
+)
 SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks")
 
 MAX_SCAN_BYTES = 2 * 1024 * 1024
 
 SCOPE_RULES = (
-    (("mountfile/fat32.py", "mountfile/ext_debugfs_writer.py", "mountfile/write_engine.py",
-      "mountfile/universal_fs_rw.py", "mountfile_rw_complete.py", "mountfile_rw_v2.py",
-      "mountfile_universal_rw.py", "mountfile/dfir_universal",
-       "mountfile/rw/"), "rw"),
-    (("mountfile/dfir", "mountfile_dfir", "rules/", "mountfile/timeline.py",
-      "mountfile/timestomp.py", "mountfile/unallocated.py", "mountfile/yara_scan.py"), "dfir"),
+    (
+        (
+            "mountfile/fat32.py",
+            "mountfile/ext_debugfs_writer.py",
+            "mountfile/write_engine.py",
+            "mountfile/universal_fs_rw.py",
+            "mountfile_rw_complete.py",
+            "mountfile_rw_v2.py",
+            "mountfile_universal_rw.py",
+            "mountfile/dfir_universal",
+            "mountfile/rw/",
+        ),
+        "rw",
+    ),
+    (
+        (
+            "mountfile/dfir",
+            "mountfile_dfir",
+            "rules/",
+            "mountfile/timeline.py",
+            "mountfile/timestomp.py",
+            "mountfile/unallocated.py",
+            "mountfile/yara_scan.py",
+        ),
+        "dfir",
+    ),
     (("mountfile/ai", "mountfile_ai.py", "mountfile/ai_format_advisor"), "ai"),
     (("mountfile/olma", "mountfile/olma_watch.py", "rules/olma"), "olma"),
-    (("mountfile/tc_window.py", "mountfile/tc_style.py", "mountfile/mainwindow.py",
-      "mountfile/hexview.py", "mountfile/text_editor.py", "mountfile/update_dialog.py"), "gui"),
-    (("mountfile/turbo.py", "mountfile/vfs.py", "mountfile/partition.py",
-      "mountfile/registry.py", "mountfile/autopick.py"), "core"),
+    (
+        (
+            "mountfile/tc_window.py",
+            "mountfile/tc_style.py",
+            "mountfile/mainwindow.py",
+            "mountfile/hexview.py",
+            "mountfile/text_editor.py",
+            "mountfile/update_dialog.py",
+        ),
+        "gui",
+    ),
+    (
+        (
+            "mountfile/turbo.py",
+            "mountfile/vfs.py",
+            "mountfile/partition.py",
+            "mountfile/registry.py",
+            "mountfile/autopick.py",
+        ),
+        "core",
+    ),
     ((".github/workflows/", ".github/actions/"), "ci"),
     (("docs/", "mkdocs.yml", "README.md", "CHANGELOG.md"), "docs"),
     (("tests/",), "test"),
     (("tools/", "scripts/", "Makefile", "tidy_repo.py"), "tooling"),
-    (("pyproject.toml", "requirements", "Dockerfile", "docker-compose", "build_exe"), "build"),
+    (
+        ("pyproject.toml", "requirements", "Dockerfile", "docker-compose", "build_exe"),
+        "build",
+    ),
 )
 
 
@@ -181,8 +284,12 @@ def git(args, cwd, check=True, timeout=300):
     cmd = [GIT] + list(args)
     try:
         proc = subprocess.run(
-            cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            universal_newlines=True, timeout=timeout,
+            cmd,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=timeout,
         )
     except OSError as exc:
         raise SyncError("cannot run git: %s" % exc)
@@ -274,7 +381,10 @@ def remote_slug(cwd):
 
 VERSION_SOURCES = (
     ("pyproject.toml", re.compile(r'(?m)^\s*version\s*=\s*"([^"]+)"')),
-    ("mountfile/__init__.py", re.compile(r'(?m)^\s*(?:__version__|VERSION)\s*=\s*["\']([^"\']+)["\']')),
+    (
+        "mountfile/__init__.py",
+        re.compile(r'(?m)^\s*(?:__version__|VERSION)\s*=\s*["\']([^"\']+)["\']'),
+    ),
 )
 
 
@@ -480,7 +590,10 @@ def guess_commit(cwd):
         else:
             subject = "update %s" % os.path.basename(name)
     else:
-        subject = "update %d files (%s)" % (len(paths), ", ".join(sorted({_scope_for(p) for p in paths})[:3]))
+        subject = "update %d files (%s)" % (
+            len(paths),
+            ", ".join(sorted({_scope_for(p) for p in paths})[:3]),
+        )
 
     lines = ["%s(%s): %s" % (kind, scope, subject), ""]
     for code, path in entries[:12]:
@@ -580,7 +693,12 @@ def _active_operation(cwd):
 
 def pull(cwd, remote="origin", rebase=True):
     """fetch + rebase with autostash. Never leaves a rebase in progress."""
-    result = {"fetched": False, "rebased": False, "stashed": False, "mode": "rebase" if rebase else "merge"}
+    result = {
+        "fetched": False,
+        "rebased": False,
+        "stashed": False,
+        "mode": "rebase" if rebase else "merge",
+    }
     operation = _active_operation(cwd)
     if operation:
         raise SyncError("cannot pull while a %s is in progress" % operation, 2)
@@ -597,7 +715,9 @@ def pull(cwd, remote="origin", rebase=True):
 
     stashed = False
     if dirty_entries(cwd):
-        stash = git(["stash", "push", "--include-untracked", "-m", "mfsync autostash"], cwd, check=False)
+        stash = git(
+            ["stash", "push", "--include-untracked", "-m", "mfsync autostash"], cwd, check=False
+        )
         if stash.returncode != 0:
             detail = redact_secret((stash.stderr or stash.stdout).strip())
             raise SyncError("autostash failed; refusing to pull", 2, [detail] if detail else [])
@@ -607,7 +727,9 @@ def pull(cwd, remote="origin", rebase=True):
     step = ["rebase", upstream] if rebase else ["merge", "--no-edit", upstream]
     run = git(step, cwd, check=False)
     if run.returncode != 0:
-        conflicts = git(["diff", "--name-only", "--diff-filter=U"], cwd, check=False).stdout.splitlines()
+        conflicts = git(
+            ["diff", "--name-only", "--diff-filter=U"], cwd, check=False
+        ).stdout.splitlines()
         git(["rebase", "--abort"] if rebase else ["merge", "--abort"], cwd, check=False)
         if stashed:
             git(["stash", "pop"], cwd, check=False)
@@ -622,8 +744,11 @@ def pull(cwd, remote="origin", rebase=True):
         pop = git(["stash", "pop"], cwd, check=False)
         if pop.returncode != 0:
             raise SyncError(
-                "local changes could not be re-applied on top of %s" % upstream, 2,
-                git(["diff", "--name-only", "--diff-filter=U"], cwd, check=False).stdout.splitlines(),
+                "local changes could not be re-applied on top of %s" % upstream,
+                2,
+                git(
+                    ["diff", "--name-only", "--diff-filter=U"], cwd, check=False
+                ).stdout.splitlines(),
             )
     return result
 
@@ -643,19 +768,27 @@ def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=
         bad_names = sensitive_filenames(staged)
         if bad_names and not allow_sensitive:
             raise SyncError(
-                "refusing to commit credential-like files", 4,
+                "refusing to commit credential-like files",
+                4,
                 bad_names,
             )
         findings = scan_files(cwd, staged, staged=True)
         blocking = [f for f in findings if f["severity"] == "high"]
         for finding in findings:
             if finding["severity"] != "high":
-                warn("possible %s (not blocking): %s:%s" % (
-                    finding["kind"], finding["path"], finding["line"]))
+                warn(
+                    "possible %s (not blocking): %s:%s"
+                    % (finding["kind"], finding["path"], finding["line"])
+                )
         if blocking:
-            raise SyncError("refusing to commit %d secret(s)" % len(blocking), 4,
-                            ["%s:%s [%s] %s" % (f["path"], f["line"], f["kind"], f["snippet"])
-                             for f in blocking])
+            raise SyncError(
+                "refusing to commit %d secret(s)" % len(blocking),
+                4,
+                [
+                    "%s:%s [%s] %s" % (f["path"], f["line"], f["kind"], f["snippet"])
+                    for f in blocking
+                ],
+            )
 
     if not message:
         guessed_kind, guessed_scope, subject, body = guess_commit(cwd)
@@ -671,9 +804,17 @@ def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=
 
 def needs_pr_fallback(output):
     lowered = (output or "").lower()
-    return any(token in lowered for token in ("gh013", "protected branch", "required status check",
-                                              "changes must be made through a pull request",
-                                              "ruleset", "pull request"))
+    return any(
+        token in lowered
+        for token in (
+            "gh013",
+            "protected branch",
+            "required status check",
+            "changes must be made through a pull request",
+            "ruleset",
+            "pull request",
+        )
+    )
 
 
 def push(cwd, branch=None, remote="origin", force_with_lease=False):
@@ -685,7 +826,9 @@ def push(cwd, branch=None, remote="origin", force_with_lease=False):
     if proc.returncode != 0:
         output = (proc.stderr or "") + (proc.stdout or "")
         if needs_pr_fallback(output):
-            raise SyncError("push rejected by branch protection", 5, [redact_secret(output.strip())])
+            raise SyncError(
+                "push rejected by branch protection", 5, [redact_secret(output.strip())]
+            )
         raise SyncError("push failed: %s" % redact_secret(output.strip()))
     return branch
 
@@ -693,7 +836,9 @@ def push(cwd, branch=None, remote="origin", force_with_lease=False):
 def api(method, path, payload=None, token=None):
     data = json.dumps(payload).encode() if payload is not None else None
     request = urllib.request.Request(
-        API_ROOT + path, data=data, method=method,
+        API_ROOT + path,
+        data=data,
+        method=method,
         headers={
             "Accept": "application/vnd.github+json",
             "Content-Type": "application/json",
@@ -706,7 +851,10 @@ def api(method, path, payload=None, token=None):
             return json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
-        raise SyncError("GitHub API %s %s -> %s: %s" % (method, path, exc.code, redact_secret(body)[:400]), exc.code)
+        raise SyncError(
+            "GitHub API %s %s -> %s: %s" % (method, path, exc.code, redact_secret(body)[:400]),
+            exc.code,
+        )
     except urllib.error.URLError as exc:
         raise SyncError("GitHub API unreachable: %s" % exc.reason, 6)
 
@@ -731,6 +879,7 @@ def _default_pr_base(cwd, base=None, source=None):
 
 def _stable_sync_branch(source, base):
     """Build the same safe sync branch for the same source/base pair."""
+
     def clean(value):
         value = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
         return value or "head"
@@ -764,28 +913,59 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
     push(cwd, head_branch)
 
     if not title:
-        _kind, _scope, subject, _body = guess_commit(cwd) if dirty_entries(cwd) else ("chore", source, "sync %s" % source, "")
+        _kind, _scope, subject, _body = (
+            guess_commit(cwd) if dirty_entries(cwd) else ("chore", source, "sync %s" % source, "")
+        )
         title = subject
     if not body:
-        log = git(["log", "--oneline", "%s..HEAD" % ("origin/%s" % base)], cwd, check=False).stdout.strip()
-        body = "Автоматическая синхронизация `%s` → `%s`.\n\n```\n%s\n```\n" % (source, base, log or "no new commits")
+        log = git(
+            ["log", "--oneline", "%s..HEAD" % ("origin/%s" % base)], cwd, check=False
+        ).stdout.strip()
+        body = "Автоматическая синхронизация `%s` → `%s`.\n\n```\n%s\n```\n" % (
+            source,
+            base,
+            log or "no new commits",
+        )
 
-    query = urllib.parse.urlencode({"state": "open", "head": "%s:%s" % (owner, head_branch), "base": base})
+    query = urllib.parse.urlencode(
+        {"state": "open", "head": "%s:%s" % (owner, head_branch), "base": base}
+    )
     found = api("GET", "/repos/%s/%s/pulls?%s" % (owner, name, query), token=token)
     if found:
-        return {"url": found[0].get("html_url", ""), "number": found[0].get("number"),
-                "head": head_branch, "existing": True}
+        return {
+            "url": found[0].get("html_url", ""),
+            "number": found[0].get("number"),
+            "head": head_branch,
+            "existing": True,
+        }
 
     try:
-        created = api("POST", "/repos/%s/%s/pulls" % (owner, name), {
-            "head": head_branch, "base": base, "title": title, "body": body,
-        }, token=token)
-        return {"url": created.get("html_url", ""), "number": created.get("number"), "head": head_branch}
+        created = api(
+            "POST",
+            "/repos/%s/%s/pulls" % (owner, name),
+            {
+                "head": head_branch,
+                "base": base,
+                "title": title,
+                "body": body,
+            },
+            token=token,
+        )
+        return {
+            "url": created.get("html_url", ""),
+            "number": created.get("number"),
+            "head": head_branch,
+        }
     except SyncError as exc:
         if exc.code == 422:
             found = api("GET", "/repos/%s/%s/pulls?%s" % (owner, name, query), token=token)
             if found:
-                return {"url": found[0].get("html_url", ""), "number": found[0].get("number"), "head": head_branch, "existing": True}
+                return {
+                    "url": found[0].get("html_url", ""),
+                    "number": found[0].get("number"),
+                    "head": head_branch,
+                    "existing": True,
+                }
         raise
 
 
@@ -815,7 +995,13 @@ def status(cwd):
 
 def print_status(report):
     say("mfsync \u2014 %s" % report["root"])
-    say("  branch   : %s%s" % (report["branch"], "  \u2192 " + report["upstream"] if report["upstream"] else "  (no upstream)"))
+    say(
+        "  branch   : %s%s"
+        % (
+            report["branch"],
+            ("  \u2192 " + report["upstream"] if report["upstream"] else "  (no upstream)"),
+        )
+    )
     say("  sync     : %d ahead, %d behind" % (report["ahead"], report["behind"]))
     if report["dirty"]:
         say("  local    : %d changed file(s)" % report["dirty"])
@@ -830,20 +1016,45 @@ def print_status(report):
     if version["ok"]:
         say("  version  : %s (parity OK)" % version["values"][0])
     else:
-        say("  version  : MISMATCH %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(versions.items())))
+        say(
+            "  version  : MISMATCH %s"
+            % ", ".join("%s=%s" % (k, v) for k, v in sorted(versions.items()))
+        )
     if version["tag"]:
-        say("  tag      : %s%s" % (version["tag"], "" if version["tag_matches"] else "  (differs from version)"))
-    say("  token    : %s" % ("available in env" if report["has_token"] else "not set (PR mode disabled)"))
+        say(
+            "  tag      : %s%s"
+            % (
+                version["tag"],
+                "" if version["tag_matches"] else "  (differs from version)",
+            )
+        )
+    say(
+        "  token    : %s"
+        % ("available in env" if report["has_token"] else "not set (PR mode disabled)")
+    )
 
 
-def sync(cwd, message=None, kind=None, scope=None, do_push=True, pr=False, base=None,
-         scan=True, remote="origin", allow_empty=False):
+def sync(
+    cwd,
+    message=None,
+    kind=None,
+    scope=None,
+    do_push=True,
+    pr=False,
+    base=None,
+    scan=True,
+    remote="origin",
+    allow_empty=False,
+):
     """pull --rebase, commit, push (with automatic PR fallback). Returns a report."""
     report = {"pulled": None, "commit": "", "pushed": "", "pr": None}
     version = check_version_parity(cwd)
     report["version"] = version
     if not version["ok"]:
-        warn("version parity broken: %s" % ", ".join("%s=%s" % (k, v) for k, v in version["versions"].items()))
+        warn(
+            "version parity broken: %s"
+            % ", ".join("%s=%s" % (k, v) for k, v in version["versions"].items())
+        )
 
     try:
         report["pulled"] = pull(cwd, remote=remote)
@@ -859,7 +1070,9 @@ def sync(cwd, message=None, kind=None, scope=None, do_push=True, pr=False, base=
         return report
 
     branch = current_branch(cwd)
-    wants_pr = pr or not upstream_ref(cwd) or (branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd))
+    wants_pr = (
+        pr or not upstream_ref(cwd) or (branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd))
+    )
     pr_base = _default_pr_base(cwd, base=base, source=branch)
     if wants_pr:
         # Explicit PR mode, or a branch protection ruleset is active on the base.
@@ -894,7 +1107,15 @@ def needs_pr_by_policy(cwd):
     return (proc.stdout or "").strip() in ("1", "true", "yes")
 
 
-def watch(cwd, interval=1.0, debounce=2.0, do_push=False, pr=False, max_cycles=None, message=None):
+def watch(
+    cwd,
+    interval=1.0,
+    debounce=2.0,
+    do_push=False,
+    pr=False,
+    max_cycles=None,
+    message=None,
+):
     """Debounce watcher: after the tree has been quiet for ``debounce`` seconds, sync."""
     do_push = do_push or pr
     say("watching %s (debounce %.1fs, push=%s, Ctrl+C to stop)" % (cwd, debounce, do_push))
@@ -971,12 +1192,19 @@ def build_parser():
     # the CI workflows call it. SUPPRESS keeps the top-level value when the flag
     # is only given before the subcommand.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
-                        help="machine-readable output")
+    common.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="machine-readable output",
+    )
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("status", parents=[common],
-                   help="branch, ahead/behind, dirty files, version parity")
+    sub.add_parser(
+        "status",
+        parents=[common],
+        help="branch, ahead/behind, dirty files, version parity",
+    )
 
     check = sub.add_parser("check", parents=[common], help="release/sync gates (version parity)")
     check.add_argument("--strict", action="store_true", help="non-zero exit on version mismatch")
@@ -984,15 +1212,25 @@ def build_parser():
     for name, help_text in (("sync", "pull --rebase + commit + push"),):
         node = sub.add_parser(name, parents=[common], help=help_text)
         node.add_argument("-m", "--message", help="explicit commit message")
-        node.add_argument("--type", dest="kind", help="conventional type override (feat/fix/docs/...)")
+        node.add_argument(
+            "--type", dest="kind", help="conventional type override (feat/fix/docs/...)"
+        )
         node.add_argument("--scope", help="conventional scope override")
         node.add_argument("--no-push", action="store_true", help="commit locally, do not push")
-        node.add_argument("--pr", action="store_true", help="open a pull request instead of pushing")
+        node.add_argument(
+            "--pr", action="store_true", help="open a pull request instead of pushing"
+        )
         node.add_argument("--base", help="PR base branch (default: current/main)")
-        node.add_argument("--no-scan", action="store_true", help="skip the secret scanner (not recommended)")
+        node.add_argument(
+            "--no-scan",
+            action="store_true",
+            help="skip the secret scanner (not recommended)",
+        )
         node.add_argument("--remote", default="origin")
 
-    commit_node = sub.add_parser("commit", parents=[common], help="stage everything and commit (no network)")
+    commit_node = sub.add_parser(
+        "commit", parents=[common], help="stage everything and commit (no network)"
+    )
     commit_node.add_argument("-m", "--message")
     commit_node.add_argument("--type", dest="kind")
     commit_node.add_argument("--scope")
@@ -1021,8 +1259,11 @@ def build_parser():
 
     scan_node = sub.add_parser("scan", parents=[common], help="scan changed files for secrets")
     scan_node.add_argument("--all", action="store_true", help="scan every tracked file")
-    scan_node.add_argument("--strict-heuristics", action="store_true",
-                           help="also fail on PEM headers / credential assignments")
+    scan_node.add_argument(
+        "--strict-heuristics",
+        action="store_true",
+        help="also fail on PEM headers / credential assignments",
+    )
 
     return parser
 
@@ -1053,9 +1294,18 @@ def main(argv=None):
                 if report["ok"]:
                     ok("version parity: %s" % report["values"][0])
                 else:
-                    fail("version parity broken: %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(report["versions"].items())))
+                    fail(
+                        "version parity broken: %s"
+                        % ", ".join("%s=%s" % (k, v) for k, v in sorted(report["versions"].items()))
+                    )
                 if report["tag"]:
-                    say("  latest tag: %s%s" % (report["tag"], "" if report["tag_matches"] else "  (differs from __version__)"))
+                    say(
+                        "  latest tag: %s%s"
+                        % (
+                            report["tag"],
+                            ("" if report["tag_matches"] else "  (differs from __version__)"),
+                        )
+                    )
             return 0 if report["ok"] or not args.strict else 1
 
         if command == "scan":
@@ -1066,16 +1316,35 @@ def main(argv=None):
             blocking = [f for f in findings if f["severity"] == "high"]
             advisory = [f for f in findings if f["severity"] != "high"]
             if args.json:
-                say(json.dumps({"blocking": blocking, "advisory": advisory}, indent=2, ensure_ascii=False))
+                say(
+                    json.dumps(
+                        {"blocking": blocking, "advisory": advisory},
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                )
             else:
                 if not findings:
                     ok("no secrets in %s" % ("tracked files" if args.all else "changed files"))
                 for finding in blocking:
-                    fail("%s:%s [%s] %s" % (finding["path"], finding["line"], finding["kind"], finding["snippet"]))
+                    fail(
+                        "%s:%s [%s] %s"
+                        % (
+                            finding["path"],
+                            finding["line"],
+                            finding["kind"],
+                            finding["snippet"],
+                        )
+                    )
                 if advisory:
-                    warn("%d PEM header / credential-shaped line(s) - review, not blocking" % len(advisory))
+                    warn(
+                        "%d PEM header / credential-shaped line(s) - review, not blocking"
+                        % len(advisory)
+                    )
                     for finding in advisory[:20]:
-                        say("      %s:%s [%s]" % (finding["path"], finding["line"], finding["kind"]))
+                        say(
+                            "      %s:%s [%s]" % (finding["path"], finding["line"], finding["kind"])
+                        )
                 if blocking:
                     say("    rotate the credential, move it to a GitHub secret, or add")
                     say("    '# pragma: allowlist secret' to a documented placeholder line.")
@@ -1087,7 +1356,13 @@ def main(argv=None):
 
         if command == "commit":
             with _lock(cwd):
-                sha = commit(cwd, message=args.message, kind=args.kind, scope=args.scope, scan=not args.no_scan)
+                sha = commit(
+                    cwd,
+                    message=args.message,
+                    kind=args.kind,
+                    scope=args.scope,
+                    scan=not args.no_scan,
+                )
             if sha:
                 ok("commit %s" % sha[:8])
             else:
@@ -1100,13 +1375,23 @@ def main(argv=None):
             if result.get("skipped"):
                 warn(result["skipped"])
             else:
-                ok("pulled %s%s" % ("rebase" if result["mode"] == "rebase" else "merge",
-                                    " (autostash restored)" if result["stashed"] else ""))
+                ok(
+                    "pulled %s%s"
+                    % (
+                        "rebase" if result["mode"] == "rebase" else "merge",
+                        " (autostash restored)" if result["stashed"] else "",
+                    )
+                )
             return 0
 
         if command == "push":
             with _lock(cwd):
-                branch = push(cwd, branch=args.branch, remote=args.remote, force_with_lease=args.force_with_lease)
+                branch = push(
+                    cwd,
+                    branch=args.branch,
+                    remote=args.remote,
+                    force_with_lease=args.force_with_lease,
+                )
             ok("pushed %s" % branch)
             return 0
 
@@ -1118,9 +1403,17 @@ def main(argv=None):
 
         if command == "sync":
             with _lock(cwd):
-                report = sync(cwd, message=args.message, kind=args.kind, scope=args.scope,
-                              do_push=not args.no_push, pr=args.pr, base=args.base,
-                              scan=not args.no_scan, remote=args.remote)
+                report = sync(
+                    cwd,
+                    message=args.message,
+                    kind=args.kind,
+                    scope=args.scope,
+                    do_push=not args.no_push,
+                    pr=args.pr,
+                    base=args.base,
+                    scan=not args.no_scan,
+                    remote=args.remote,
+                )
             if args.json:
                 say(json.dumps(report, indent=2, ensure_ascii=False))
                 return 0
@@ -1139,9 +1432,19 @@ def main(argv=None):
             return 0
 
         if command == "watch":
-            return 0 if watch(cwd, interval=args.interval, debounce=args.debounce,
-                              do_push=args.push, pr=args.pr, max_cycles=args.max_cycles,
-                              message=args.message) else 0
+            return (
+                0
+                if watch(
+                    cwd,
+                    interval=args.interval,
+                    debounce=args.debounce,
+                    do_push=args.push,
+                    pr=args.pr,
+                    max_cycles=args.max_cycles,
+                    message=args.message,
+                )
+                else 0
+            )
 
         fail("unknown command: %s" % command)
         return 1
