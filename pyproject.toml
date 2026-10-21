@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Alexkkkkk
 #
 # Конфигурация python-semantic-release v9 для проекта mount-file.
-# Версия проекта живёт в mountfile/__init__.py и обновляется
-# автоматически при каждом релизном прогоне Auto Release.
+# Каноническая версия хранится синхронно в mountfile/__init__.py и
+# [project].version и обновляется единым релизным процессом.
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mountfile"
-version = "1.26.0"
+version = "1.49.1"
 description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
 readme = "README.md"
 dependencies = [
@@ -121,9 +121,10 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 
 [tool.semantic_release]
-# v9: ключ во множественном числе и списком, старое version_variable
-# из v7 больше не поддерживается.
+# v9 обновляет обе канонические версии одним релизным коммитом: Python-
+# переменную пакета и TOML-ключ [project].version. Второго pipeline нет.
 version_variables = ["mountfile/__init__.py:__version__"]
+version_toml = ["pyproject.toml:project.version"]
 commit_parser = "conventional"
 tag_format = "v{version}"
 # [skip ci] обязателен: иначе коммит semantic-release сам запускает

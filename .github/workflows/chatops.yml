@@ -1,83 +1,51 @@
 name: chatops
-
-# Commands in a pull-request comment:
-#   /release  - compute the next version and push its tag (release pipeline)
-#   /autofix  - run the autofix workflow right now
-# Only the owner, members and collaborators may trigger them.
-
+# Exact commands from owners/members/collaborators only. Operates on main,
+# never on code from the PR where the comment was written.
 on:
   issue_comment:
     types: [created]
-
 permissions:
-  contents: write
-  pull-requests: write
-
+  contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+  group: chatops-${{ github.event.comment.id }}
+  cancel-in-progress: false
 jobs:
   parse:
-    if: |
+    if: >-
       github.event.issue.pull_request &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    timeout-minutes: 30
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     outputs:
-      cmd: ${{ steps.p.outputs.cmd }}
+      cmd: ${{ steps.command.outputs.cmd }}
     steps:
-      - id: p
+      - id: command
         env:
           BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
-          for c in release autofix; do
-            if printf '%s' "$BODY" | grep -qE "(^|[[:space:]])/$c([[:space:]]|$)"; then
-              echo "cmd=$c" >> "$GITHUB_OUTPUT"
-              echo "detected /$c"
-              exit 0
-            fi
-          done
-          echo "no known command"
-
-  release:
-    name: /release
+          case "$BODY" in
+            /release) echo 'cmd=release' >> "$GITHUB_OUTPUT" ;;
+            /autofix) echo 'cmd=autofix' >> "$GITHUB_OUTPUT" ;;
+            /sync) echo 'cmd=sync' >> "$GITHUB_OUTPUT" ;;
+            *) echo 'No exact supported command.' ;;
+          esac
+  dispatch:
     needs: parse
-    if: needs.parse.outputs.cmd == 'release'
-    timeout-minutes: 30
+    if: needs.parse.outputs.cmd != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      COMMAND: ${{ needs.parse.outputs.cmd }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Tag the next version and push it
-        env:
-          TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Start the native workflow on main
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
-          LAST=${LAST:-v0.0.0}
-          MAJ=$(echo "$LAST" | sed -E 's/^v([0-9]+).*/\1/')
-          MIN=$(echo "$LAST" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
-          PAT=$(echo "$LAST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
-          TAG="v$MAJ.$MIN.$((PAT + 1))"
-          echo "tagging $TAG (previous: $LAST)"
-          git tag -a "$TAG" -m "release $TAG"
-          git push "https://x-access-token:$TOKEN@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
-      - name: React with a rocket
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/issues/comments/${{ github.event.comment.id }}/reactions" \
-            -X POST -f content=rocket >/dev/null
-
-  autofix:
-    name: /autofix
-    needs: parse
-    if: needs.parse.outputs.cmd == 'autofix'
-    uses: ./.github/workflows/autofix.yml
-    secrets: inherit
+          case "$COMMAND" in
+            release) gh workflow run version-bump.yml --repo "$GITHUB_REPOSITORY" --ref main -f patch=true ;;
+            autofix) gh workflow run autofix.yml --repo "$GITHUB_REPOSITORY" --ref main ;;
+            sync) gh workflow run mfsync.yml --repo "$GITHUB_REPOSITORY" --ref main -f mode=verify ;;
+          esac

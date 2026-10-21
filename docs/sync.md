@@ -1,181 +1,128 @@
-# Синхронизация кода с GitHub
+# Синхронизация кода и автоматизация
 
-`tools/mfsync.py` — один локальный инструмент, который закрывает всю рутину
-вокруг синхронизации рабочей копии с удалённым репозиторием:
+`tools/mfsync.py` синхронизирует одну рабочую копию с её Git remote. GitHub Actions проверяет отправленные изменения и управляет релизами. Это разные задачи: workflow на GitHub не видит несохранённые или неотправленные файлы другого компьютера и не является резервной копией всех его файлов.
 
-```bash
-python tools/mfsync.py status      # ветка, ahead/behind, изменения, версия
-python tools/mfsync.py sync        # fetch + rebase + commit + push одной командой
-python tools/mfsync.py sync --pr   # то же, но через pull request
-python tools/mfsync.py watch --push   # авто-синхронизация при сохранении файла
-python tools/mfsync.py scan --all  # проверка на утёкшие секреты
-```
+## Быстрый старт
 
-Требований к окружению три: Python 3.8+, установленный `git` и — только для
-режима PR — токен в переменной окружения. Сторонних зависимостей нет
-(только stdlib), поэтому инструмент работает и на Windows 7 из
-`requirements-win7.txt`, и в CI.
-
-## Зачем это, а не `git pull && git push`
-
-| Проблема | Что делает `mfsync` |
-|---|---|
-| Забыли `git pull` перед работой | `sync` всегда начинает с `fetch --prune` + `rebase @{u}` |
-| Незакоммиченные правки мешают rebase | автоматический `stash --include-untracked` и восстановление после rebase |
-| Конфликт оставил репозиторий в `rebase` | конфликт откатывается (`rebase --abort`), stash возвращается, список файлов выводится |
-| Некрасивая история `update`, `fix2`, `asdf` | сообщение генерируется из diff в формате Conventional Commits |
-| Случайно закоммичен токен/`.env`/`*.pem` | сканер секретов блокирует commit до записи в историю |
-| Правила `main` запрещают push (GH013) | push автоматически уходит в ветку `sync/*` и открывает PR |
-| Версия в `pyproject.toml` и `__init__.py` разошлась | `status`/`check` показывают расхождение и сверяют с последним тегом |
-| Два наблюдателя синхронизируют один репозиторий | файловый lock `.git/mfsync.lock` |
-
-## Команды
-
-### `status`
-
-Показывает ветку и upstream, `ahead/behind`, изменённые файлы, совпадение
-версий (`pyproject.toml` ↔ `mountfile/__init__.py` ↔ последний тег) и наличие
-токена в окружении. `--json` — для машинной обработки и для CI.
-
-### `sync`
+Нужны Git и Python 3.8+. Сам синхронизатор использует только стандартную библиотеку. Запускайте команды из клона репозитория на том компьютере, где меняете код.
 
 ```bash
-python tools/mfsync.py sync                       # авто-сообщение коммита
-python tools/mfsync.py sync -m "fix(rw): cluster chain"
-python tools/mfsync.py sync --type fix --scope fat32
-python tools/mfsync.py sync --no-push             # только локальный коммит
-python tools/mfsync.py sync --pr --base main      # PR вместо push в main
+python tools/mfsync.py status
+python tools/mfsync.py scan --all
+python tools/mfsync.py check --strict
+python tools/mfsync.py sync --pr --base main
 ```
 
-Порядок шагов неизменен: `fetch` → `rebase` (со stash) → сканер секретов →
-`commit` → `push`. Если push отклонён защитой ветки, инструмент повторяет
-публикацию в ветку `sync/<branch>-<timestamp>` и открывает pull request.
-
-### `watch`
+Первый запуск Git настройте своей учётной записью. Для push Git использует установленный credential helper или SSH. Для создания PR нужен `GH_TOKEN`, `GITHUB_TOKEN` или `MFSYNC_TOKEN` в окружении. Токен не подставляется в URL remote и не сохраняется синхронизатором. Права токена ограничьте нужным репозиторием; для PR нужны Contents и Pull requests с записью, а изменение workflow может требовать отдельного разрешения Workflows.
 
 ```bash
-python tools/mfsync.py watch                 # коммит после паузы в 2 с
-python tools/mfsync.py watch --push          # коммит + push
-python tools/mfsync.py watch --pr            # коммит + PR
-python tools/mfsync.py watch --debounce 5    # ждать 5 с тишины
+gh auth login
+gh auth setup-git
+# Только для текущего процесса/сеанса; не добавляйте вывод в логи.
+export GH_TOKEN="$(gh auth token)"
+git config mfsync.prOnly true
+python tools/mfsync.py sync --pr --base main
 ```
 
-Наблюдатель считает снимок дерева (mtime + размер) и срабатывает только когда
-файлы перестали меняться — серия сохранений из IDE даёт один коммит, а не
-десять. Игнорируются `build/`, `dist/`, `__pycache__/`, `*.img`, `*.bin`,
-`.venv/` и прочие артефакты из `.gitignore`.
+На Windows ту же переменную можно установить в PowerShell:
 
-### `pull`, `push`, `commit`, `pr`, `scan`, `check`
+```powershell
+$env:GH_TOKEN = gh auth token
+python tools/mfsync.py sync --pr --base main
+```
 
-Отдельные команды для тех же операций — удобно встраивать в свои скрипты:
+Не отправляйте токены в сообщения, файлы проекта или аргументы URL. Если токен уже был раскрыт, отзовите его в GitHub и выпустите новый. Секреты для Actions добавляются через Settings → Secrets and variables → Actions.
+
+## Что делает sync
+
+Порядок: fetch → rebase upstream с сохранением локальных изменений → staging → проверка содержимого index → commit с обычными Git hooks → push или PR. Ошибка fetch, stash или незавершённая операция merge/rebase/cherry-pick останавливает процесс до публикации. Конфликт rebase прерывается; при конфликте восстановления stash нужно вручную разрешить отмеченные файлы, исходный stash не теряется.
+
+`sync --no-push` оставляет новый коммит локально. Сообщение можно задать через `-m`, либо инструмент соберёт Conventional Commit из изменённых путей. Сканер проверяет именно данные подготовленного коммита, а не только текущие файлы рабочей копии. Он блокирует распознаваемые токены и опасные имена файлов. Это дополнительная защита, не замена полноценному secret scanning: неизвестные форматы, большие файлы и бинарные данные требуют отдельной проверки.
 
 ```bash
-python tools/mfsync.py pull --merge      # merge вместо rebase
-python tools/mfsync.py push --force-with-lease
-python tools/mfsync.py commit -m "docs: sync guide"
-python tools/mfsync.py pr --base main
-python tools/mfsync.py scan --all --json
-python tools/mfsync.py check --strict     # exit 1 при расхождении версий
+python tools/mfsync.py sync -m "fix(rw): validate cluster chain" --pr --base main
+python tools/mfsync.py sync --no-push
+python tools/mfsync.py status --json
 ```
 
-## Секреты
+При PR-синхронизации ветка стабильна для пары исходная/базовая ветка: повторные запуски обновляют существующий PR, не создавая новый на каждое сохранение. Когда нет коммитов относительно базы, пустой PR не создаётся. Обычный push не переписывает чужую историю; при отказе защиты `main` используется PR. Если стабильная удалённая ветка разошлась с локальной историей, push останавливается, а не использует force.
 
-Токен читается из `GH_TOKEN`, `GITHUB_TOKEN` или `MFSYNC_TOKEN` в момент
-вызова. Он не пишется ни в `.git/config`, ни в отчёты, ни в вывод: любая
-строка перед печатью проходит через `redact_secret()`, а URL вида
-`https://x-access-token:...@github.com/...` маскируется.
+Lock размещается в Git directory текущей рабочей копии, поэтому поддерживаются linked worktree. Живая блокировка не снимается только потому, что стала старой. Не запускайте два наблюдателя одной рабочей копии.
+
+## Автосинхронизация при сохранении
 
 ```bash
-# bash / zsh
-export GH_TOKEN="$(cat ~/.config/gh/token)"
-# PowerShell
-$env:GH_TOKEN = Get-Content "$HOME\.config\gh\token"
+python tools/mfsync.py watch --pr --debounce 5
 ```
 
-Сканер перед коммитом проверяет **только те файлы, которые входят в коммит**
-(не всю историю), и распознаёт: `github_pat_*`, `ghp_*`/`gho_*`, ключи AWS
-`AKIA*`, токены Slack `xox[baprs]-*`, `sk-*`, заголовки приватных ключей и
-присваивания `password = "..."`/`api_key: "..."`.
+Наблюдатель ждёт пять секунд без изменений, затем делает sync и обновляет PR. `--pr` включает отправку; добавлять `--push` не обязательно. Без `--pr` и `--push` наблюдатель создаёт только локальные коммиты. `Ctrl+C` останавливает наблюдение.
 
-Ложные срабатывания снимаются двумя способами:
+Наблюдатель должен быть запущен на рабочем компьютере. Он не установлен как служба автоматически. Закрытие терминала или выключение компьютера прекращает работу. Для постоянной службы сначала определите ОС, путь клона и безопасный способ авторизации; не используйте временный CI runner или временную сессию для такой службы.
 
-* строка-документация с плейсхолдером (`your_token_here`, `${API_KEY}`,
-  `<token>`, `changeme`) не считается секретом;
-* явный маркер `# pragma: allowlist secret` в конце строки.
+Образы дисков, дампы, виртуальные окружения и build artifacts не входят в обычный снимок watcher. Не храните forensic-материалы в репозитории исходников. Git ignore и резервное копирование данных настраиваются отдельно.
 
-Файлы `.env`, `*.pem`, `*.key`, `*.p12`, `id_rsa`, `.netrc` и подобные
-блокируются по имени.
+## Проверки в GitHub
 
-## Ветки и защита `main`
+На PR и push работают существующие CI, Quality, Security, Sync Guard, CodeQL, Docker и документация. Новый итоговый `CI-Gate` становится успешным только после тестовой матрицы, integration, бинарных сборок и GUI-проверок. В Quality добавлен actionlint с закреплённой контрольной суммой: неправильный workflow теперь является ошибкой проверки.
 
-Если в репозитории включён ruleset «Changes must be made through a pull
-request», прямой push вернёт `GH013`. `mfsync` распознаёт это и переключается
-на PR-режим — либо сразу, если указан `--pr`:
+`mfsync` выполняет отчёт, сканер секретов, проверку совпадения версий и регрессионные тесты автоматизации. Ежедневный запуск в 03:17 UTC только проверяет репозиторий. Он не создаёт коммит в чистом клоне и не обещает синхронизировать другой компьютер.
+
+В Actions → mfsync → Run workflow доступны `verify`, `commit`, `pr`. Запись разрешена только для явного ручного запроса после успешного Verify. Ввод пользователя передаётся через environment, не вставляется в shell-код. Пишущие maintenance workflow используют общий concurrency group, без отмены операции посреди записи. Коммиты не содержат `[skip ci]`, поэтому проверки PR не подавляются.
+
+## Единая релизная версия
+
+Согласованы `mountfile/__init__.py` и `[project].version` в `pyproject.toml`. Не редактируйте только один из них.
 
 ```bash
-python tools/mfsync.py sync --pr
+python scripts/stamp_version.py v1.2.3
+python scripts/stamp_version.py v1.2.3 --check
+python scripts/release_plan.py --json
+python tools/mfsync.py check --strict
 ```
 
-PR создаётся через REST API (`POST /repos/{owner}/{repo}/pulls`) с заголовком и
-телом, собранными из `git log` относительно базовой ветки.
+`stamp_version.py` валидирует обе цели до изменений и обновляет только нужные поля. `--check` ничего не записывает и возвращает ошибку при расхождении с заданным тегом. `mfsync check --strict` проверяет совпадение исходных файлов; несовпадение с предыдущим релизным тегом может быть нормальным состоянием подготовленного release PR.
 
-## CI
+Планировщик учитывает стабильные теги-предки текущего HEAD и Conventional Commits: `feat` → minor, `fix`/`perf` → patch, `!` или `BREAKING CHANGE` → major. Другие ветки и prerelease-теги не увеличивают текущую релизную версию. Сам релизный коммит не запускает бесконечный bump.
 
-`.github/workflows/sync-guard.yml` запускает на каждый push и PR:
+После успешного CI в `main` workflow `version-bump` проверяет, что SHA всё ещё актуален. Если версия требует обновления, создаётся `automation/release-<version>` PR с обоими файлами. После его merge и успешного CI тегируется именно проверенный, уже версионированный коммит. Затем явно запускаются `create-release` и `release`: события от встроенного `GITHUB_TOKEN` не используются как неявная гарантия запуска следующей стадии.
 
-* `mfsync check --strict` — расхождение версий ломает сборку;
-* `mfsync scan --all` — утёкший секрет в отслеживаемом файле ломает сборку;
-* `mfsync status --json` — отчёт в лог job'а.
+Одинаковая версия проставляется перед сборкой Windows, Linux и macOS. У бинарников проверяется наличие файлов SHA-256. Если все попытки загрузки assets неудачны, publish завершается ошибкой, а не ложным успехом. Старые теги и опубликованные релизы не перезаписываются планировщиком.
 
-Секреты в workflow не нужны: используются только `GITHUB_TOKEN` от Actions
-для чтения репозитория.
+## Автоформатирование и автообъединение
 
-## Автозапуск в GitHub Actions
+`autofix` запускается вручную, командой `/autofix` или на push в `main`, если repository variable `ENABLE_AUTOFIX=true`. Он использует закреплённые версии isort/black, одинаковую длину строки и совместимый порядок isort → black. Он не применяет UP/F401-преобразования, способные удалить re-export или сломать Python 3.8. Перед публикацией запускаются проверки синтаксиса, секретов и тесты. Результат оформляется как PR, без автоматического approve и без force-push.
 
-`.github/workflows/mfsync.yml` запускает `mfsync` в CI на встроенном
-`secrets.GITHUB_TOKEN` — личный PAT в workflow не используется ни на одной
-строке.
+Автообъединение требует явной метки `auto-merge`, доверенного автора и ветки того же репозитория. Оно сверяет head SHA и ждёт `CI-Gate`, `quality-gate`, `dependency-review`, Sync Guard и Verify. Отрицательный результат или отсутствующая проверка оставляет PR открытым. `--admin` и обход защиты не используются. Major-обновления зависимостей и workflow нужно отдельно просматривать перед добавлением метки.
 
-| Событие | Что выполняется |
-|---|---|
-| `push` в `main`, `feat/**`, `sync/**` | job **Verify**: `status`, `scan --all`, `check --strict`, self-tests, JSON-артефакт, summary. Только чтение |
-| `pull_request` в `main` | то же самое — это required check для PR |
-| `schedule` (03:17 UTC) | **Verify** + **Autosync** с `commit` |
-| `workflow_dispatch` с `mode=verify` | только **Verify** |
-| `workflow_dispatch` с `mode=commit` / `mode=pr` | **Verify** + **Autosync** (push или PR) |
+Dependabot продолжает предлагать обновления зависимостей и Actions согласно `.github/dependabot.yml`; новый конкурентный бот не добавлен. Проверенные version-sync и formatting PR автоматически получают `auto-merge`; Dependabot PR с такой меткой тоже может объединиться после обязательных проверок. Все остальные PR требуют явной метки, то есть автообъединение не включено без разбора для пользовательского кода.
 
-Локальные режимы (`watch`, интерактивный `sync`) в CI не запускаются: у job'а
-нет терминала, а watcher завершился бы по таймауту. Поэтому workflow вызывает
-только конечные команды `status`, `scan`, `check`, `sync`.
+После объединения release-version PR его workflow явно повторно запускает полный CI на новом `main`; только успешная проверка именно актуального SHA разрешает следующий этап релиза. Это необходимо, потому что события push, созданные `GITHUB_TOKEN`, не запускают обычные workflow. AI-self-heal остаётся отдельной opt-in возможностью (`ENABLE_AI_AUTOMATION=true`, `OPENAI_API_KEY`), ограниченной падениями push в доверенный `main`.
 
-Защита от циклов — четыре независимых слоя:
+## Разрешения ботов
 
-1. write-job недостижим по `push`: его `if` требует `workflow_dispatch` или
-   `schedule`, а `mode=verify` его пропускает;
-2. коммиты бота содержат `[skip ci]`;
-3. `concurrency: mfsync-write` сериализует писателей, `cancel-in-progress:
-   false`;
-4. job наследует права только `contents: write` + `pull-requests: write`.
+Для основных проверок и релизов достаточно встроенного `GITHUB_TOKEN`. GitHub может требовать ручного одобрения workflow у PR, созданных этим токеном. Для полностью unattended PR можно настроить отдельный GitHub App или секрет `AUTOMATION_TOKEN` с минимальными правами. Опубликованный ранее личный токен использовать для этого нельзя.
 
-Если `main` защищён ruleset'ом, `mfsync` сам уходит в ветку `sync/*` и открывает
-PR — для этого в job'е и запрошено `pull-requests: write`.
+В Settings → Actions → General должно быть разрешено создание PR workflow. Не ослабляйте ruleset `main` ради автоматизации. Рекомендуемые обязательные проверки: `CI-Gate`, `quality-gate`, `dependency-review`, `Version parity + secret scan`. Изменение файлов workflow может потребовать разрешения Workflows у используемой GitHub App/токена.
 
-## Make-цели
+Для полностью unattended работы однократно добавьте секрет репозитория `AUTOMATION_TOKEN` в Settings → Secrets and variables → Actions. Используйте отдельный fine-grained token только для этого репозитория и задайте минимальные `Contents: write`, `Pull requests: write`, `Actions: write`; для правил PR при необходимости также `Checks: read`. Не используйте PAT, опубликованный в чате. Отзовите его, выпустите новый и добавьте секрет напрямую в Settings — никогда не отправляйте секрет в чат или код. Без `AUTOMATION_TOKEN` GitHub может задержать проверки PR, созданного `GITHUB_TOKEN`, до ручного одобрения, а его разрешений может не хватить для автообъединения workflow-файлов; в таком режиме требование полного отсутствия участия человека не гарантируется.
+
+## ChatOps
+
+В комментарии к PR владелец, участник или collaborator может отправить ровно одну команду:
+
+```text
+/release
+/autofix
+/sync
+```
+
+`/release` запрашивает patch через общий version-bump и CI gate, а не создаёт непроверенный тег. `/autofix` запускает форматирование `main`, `/sync` запускает read-only проверку. Код самого PR не выполняется привилегированным обработчиком комментария.
+
+## Тестирование
 
 ```bash
-make sync          # pull + commit + push
-make sync-status   # статус
-make sync-check    # проверка версий
-make sync-pr       # синхронизация через PR
-make sync-watch    # наблюдатель с push
+python -m pytest tests/test_mfsync.py tests/test_release_version.py tests/test_automation_workflows.py -q
+python -m pytest tests/ -q
 ```
 
-## Тесты
-
-```bash
-python -m pytest tests/test_mfsync.py -v
-```
-
-29+2 теста гоняют настоящий `git` во временном репозитории с локальным bare
-remote: rebase с autostash, конфликт и чистый откат, блокировку секретов,
-генерацию сообщений, fallback на PR, lock и наблюдатель. Сети не требуется.
+Тесты синхронизации и версионирования используют временные локальные Git-репозитории и mock API: сеть и личные токены не требуются. Actionlint отдельно проверяет реальный синтаксис всех GitHub Actions workflow.

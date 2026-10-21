@@ -30,16 +30,17 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 | | |
 |---|---|
-| **Актуальный релиз** | [v1.48.1](https://github.com/Alexkkkkk/mount-file/releases/latest) (к каждому `.exe` приложен `.sha256`) |
+| **Актуальный релиз** | [GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases/latest) (к каждому бинарнику приложен `.sha256`) |
 | **Документация** | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
-| **Версия в файлах репозитория** | `1.26.0` (`mountfile/__init__.py`, `pyproject.toml`) — не совпадает с последним тегом |
+| **Версия в файлах репозитория** | `mountfile/__init__.py` и `pyproject.toml` согласованы; проверка: `python tools/mfsync.py check --strict` |
 | **Лицензия** | [MIT](LICENSE) |
 | **Платформы** | Windows 10/11, Windows 7 (Python 3.8 + PyQt5), Linux, macOS |
 
-> **Про версию.** В файлах репозитория указано `1.26.0` (`mountfile/__init__.py`,
-> `pyproject.toml`), а последний релизный тег — `v1.48.1`; workflow
-> `version-bump.yml` при этом завершается успешно. Расхождение не скрывается:
-> ориентируйтесь на тег релиза, а не на строку версии в файле.
+> **Про версию.** Релизный процесс сначала обновляет обе версии через PR,
+> затем после успешного CI в `main` создаёт тег проверенного коммита.
+> `scripts/stamp_version.py <tag> --check` сверяет файлы с конкретным тегом.
+> Сборки Windows, Linux и macOS получают одинаковую версию из тега.
+> Подробности и безопасная локальная синхронизация — [в руководстве](docs/sync.md).
 
 > **Статус проекта.** Issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
 > это roadmap, а не заявление о готовой forensic-платформе. Штатно

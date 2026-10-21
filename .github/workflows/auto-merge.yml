@@ -1,92 +1,72 @@
 name: auto-merge
-
-# Approves and squash-merges pull requests that are ready:
-#   * dependabot PRs, and
-#   * any PR labeled "auto-merge" (e.g. the autofix PR).
-# Merge method: squash; the head branch is deleted automatically.
-#
-# Ordering proof: `gh pr checks --watch --required` waits for the REQUIRED
-# checks of the branch ruleset only - never for this job's own check, so
-# there is no self-deadlock. Enabling GitHub's native auto-merge with
-# `gh pr merge --auto` makes the merge happen server-side the moment the
-# required checks turn green, and the final step verifies it really merged.
-
+# Explicit opt-in label, trusted same-repository author, successful gates.
+# No blanket approval and no bypass of branch protection.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, ready_for_review]
-
 permissions:
-  contents: write
-  pull-requests: write
-
+  contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: auto-merge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 jobs:
   auto-merge:
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
-    if: |
+    if: >-
       github.event.pull_request.state == 'open' &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'auto-merge') &&
       (github.event.pull_request.user.login == 'dependabot[bot]' ||
-       contains(github.event.pull_request.labels.*.name, 'auto-merge'))
+       github.event.pull_request.user.login == 'github-actions[bot]' ||
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+    env:
+      GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - name: Log the PR checks (informational)
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr checks "$PR_URL" --watch --required --interval 20 || true
-
-      - name: Approve the pull request
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr review --approve "$PR_URL" || echo "approval not required or already given"
-
-      - name: Enable the merge (squash) on green
-        id: attempt
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --squash --delete-branch --auto "$PR_URL"
-
-      # A GitHub App (and this includes the default GITHUB_TOKEN) is not
-      # allowed to create or update files under .github/workflows/, so PRs
-      # that bump workflow actions cannot be merged programmatically. Those
-      # are flagged instead of failing the job - a personal token is the
-      # only way to merge them automatically.
-      - name: Flag PRs that need a manual merge (workflow files)
-        if: steps.attempt.outcome == 'failure'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+      - name: Wait for exact-head quality, security, sync and full CI gates
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const required = ['CI-Gate', 'quality-gate', 'dependency-review',
+              'Version parity + secret scan', 'Verify (status, secrets, versions, tests)'];
+            const deadline = Date.now() + 15 * 60 * 1000;
+            while (Date.now() < deadline) {
+              const pr = (await github.rest.pulls.get({...context.repo,
+                pull_number: context.payload.pull_request.number})).data;
+              if (pr.head.sha !== process.env.EXPECTED_SHA || pr.state !== 'open') {
+                core.setFailed('PR changed or closed; refusing to merge an unverified head.');
+                return;
+              }
+              const checks = await github.paginate(github.rest.checks.listForRef,
+                {...context.repo, ref: pr.head.sha, per_page: 100});
+              const latest = name => checks.filter(c => c.name === name &&
+                c.app?.slug === 'github-actions').sort((a,b) => b.id-a.id)[0];
+              const gates = required.map(latest);
+              if (gates.some(c => c?.status === 'completed' && c.conclusion !== 'success')) {
+                core.setFailed('A mandatory gate failed; automatic merge is blocked.');
+                return;
+              }
+              if (gates.every(c => c?.conclusion === 'success')) {
+                core.info('All mandatory gates passed for the exact PR head.');
+                return;
+              }
+              await new Promise(resolve => setTimeout(resolve, 20000));
+            }
+            core.setFailed('Gates missing or still pending; PR remains open for review.');
+      - name: Request squash merge without bypassing protection
         run: |
-          gh label create needs-manual-merge --force \
-            --description "Must be merged with a personal token (workflow files)" --color d93f0b || true
-          gh pr edit "$PR_URL" --add-label needs-manual-merge || true
-          gh pr comment "$PR_URL" --body "Automated merging is blocked for this PR: it changes files under \`.github/workflows/\`, which a GitHub App may not merge without the \`workflows\` permission. Please merge it manually (or push the update with a personal token)." || true
-
-      - name: Verify the merge actually happened
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          set -euo pipefail
+          gh pr merge "$PR_URL" --squash --auto --match-head-commit "$EXPECTED_SHA" --delete-branch
+      - name: Report actual merge state
         run: |
-          set -uo pipefail
-          for i in $(seq 1 30); do
-            STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
-            echo "attempt $i: state=$STATE"
-            case "$STATE" in
-              MERGED) echo "merged"; exit 0 ;;
-              CLOSED) echo "::error::PR closed without merging"; exit 1 ;;
-            esac
-            sleep 20
-          done
-          if [ "${{ steps.attempt.outcome }}" = "failure" ]; then
-            echo "::warning::PR left open on purpose - it changes workflow files and needs a manual merge (label needs-manual-merge)"
-            exit 0
-          fi
-          echo "::error::PR was not merged within 10 minutes"; exit 1
+          set -euo pipefail
+          gh pr view "$PR_URL" --json state,autoMergeRequest,url
+          echo 'Merge requested after checks; GitHub branch rules still apply.' >> "$GITHUB_STEP_SUMMARY"

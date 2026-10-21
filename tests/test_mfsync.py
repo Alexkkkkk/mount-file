@@ -8,6 +8,7 @@ a local bare remote, so no network, no token and no GitHub API is touched.
 
 Run:  python -m pytest tests/test_mfsync.py -v
 """
+
 import importlib.util
 import os
 import subprocess
@@ -149,6 +150,21 @@ def test_scan_text_honours_allowlist_pragma():
     assert M.scan_text(text) == []
 
 
+def test_scan_staged_blob_not_replaced_worktree(repo):
+    """The commit gate must inspect exactly what is in the Git index."""
+    token = "ghp_" + "s" * 40
+    target = repo / "staged.py"
+    target.write_text('TOKEN = "%s"\n' % token, encoding="utf-8")
+    run_git(repo, "add", "staged.py")
+    target.write_text('TOKEN = "safe"\n', encoding="utf-8")
+
+    assert M.scan_files(str(repo), ["staged.py"]) == []
+    findings = M.scan_files(str(repo), ["staged.py"], staged=True)
+    assert len(findings) == 1
+    assert findings[0]["kind"] == "github token"
+    assert token not in findings[0]["snippet"]
+
+
 def test_scan_skips_binary_and_oversized(tmp_path):
     (tmp_path / "blob.bin").write_bytes(b"\0\1\2github_pat_" + b"A" * 30)
     assert M.scan_files(tmp_path, ["blob.bin"]) == []
@@ -269,6 +285,42 @@ def test_commit_noop_returns_empty(repo):
     assert M.commit(str(repo)) == ""
 
 
+def test_commit_runs_pre_commit_hook(repo):
+    """Commits must not silently bypass the repository's pre-commit policy."""
+    hooks = run_git(repo, "rev-parse", "--git-path", "hooks")
+    hooks_path = os.path.join(str(repo), hooks) if not os.path.isabs(hooks) else hooks
+    os.makedirs(hooks_path, exist_ok=True)
+    hook = os.path.join(hooks_path, "pre-commit")
+    with open(hook, "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\necho hook-blocked >&2\nexit 1\n")
+    os.chmod(hook, 0o755)
+    (repo / "hooked.py").write_text("x = 1\n", encoding="utf-8")
+
+    with pytest.raises(M.SyncError) as info:
+        M.commit(str(repo), message="test(core): verify hooks")
+    assert "commit failed" in str(info.value)
+    assert "test(core): verify hooks" not in run_git(repo, "log", "--format=%s")
+
+
+def test_ahead_behind_parses_tab_separated_counts(repo, tmp_path):
+    """rev-list emits 'behind<TAB>ahead', not one line per value."""
+    other = tmp_path / "other"
+    run_git(tmp_path, "clone", str(tmp_path / "remote.git"), str(other))
+    run_git(other, "config", "user.email", "o@example.com")
+    run_git(other, "config", "user.name", "Other")
+    (other / "theirs.txt").write_text("theirs\n", encoding="utf-8")
+    run_git(other, "add", "theirs.txt")
+    run_git(other, "commit", "-m", "feat: theirs")
+    run_git(other, "push", "origin", "main")
+
+    (repo / "ours.txt").write_text("ours\n", encoding="utf-8")
+    run_git(repo, "add", "ours.txt")
+    run_git(repo, "commit", "-m", "feat: ours")
+    run_git(repo, "fetch", "origin")
+
+    assert M.ahead_behind(str(repo)) == (1, 1)
+
+
 def test_pull_rebases_remote_commits(repo, tmp_path):
     # a second clone pushes a commit, the first one is behind
     other = tmp_path / "other"
@@ -324,6 +376,67 @@ def test_pull_conflict_aborts_cleanly(repo, tmp_path):
     assert run_git(repo, "log", "-1", "--format=%s") == "docs: ours"
 
 
+def test_pull_fails_closed_when_fetch_fails(repo, tmp_path):
+    run_git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+    with pytest.raises(M.SyncError) as info:
+        M.pull(str(repo))
+    assert info.value.code == 2
+    assert "fetch failed" in str(info.value)
+
+
+def test_pull_fails_closed_when_autostash_fails(repo, monkeypatch):
+    (repo / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+    original_git = M.git
+    calls = []
+
+    def fail_stash(args, cwd, check=True, timeout=300):
+        calls.append(args)
+        if args[:2] == ["stash", "push"]:
+            return subprocess.CompletedProcess(
+                ["git"] + list(args), 1, "", "stash blocked"
+            )
+        return original_git(args, cwd, check=check, timeout=timeout)
+
+    monkeypatch.setattr(M, "git", fail_stash)
+    with pytest.raises(M.SyncError) as info:
+        M.pull(str(repo))
+    assert info.value.code == 2
+    assert "autostash failed" in str(info.value)
+    assert not any(command[0] in ("rebase", "merge") for command in calls)
+
+
+@pytest.mark.parametrize(
+    "marker, operation",
+    [
+        ("MERGE_HEAD", "merge"),
+        ("rebase-merge", "rebase"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+    ],
+)
+def test_pull_refuses_in_progress_git_operation(repo, marker, operation):
+    marker_path = run_git(repo, "rev-parse", "--git-path", marker)
+    marker_path = (
+        os.path.join(str(repo), marker_path)
+        if not os.path.isabs(marker_path)
+        else marker_path
+    )
+    if marker == "rebase-merge":
+        os.makedirs(marker_path)
+    else:
+        with open(marker_path, "w", encoding="utf-8") as handle:
+            handle.write("test\n")
+    try:
+        with pytest.raises(M.SyncError) as info:
+            M.pull(str(repo))
+        assert info.value.code == 2
+        assert operation in str(info.value)
+    finally:
+        if os.path.isdir(marker_path):
+            os.rmdir(marker_path)
+        elif os.path.exists(marker_path):
+            os.unlink(marker_path)
+
+
 def test_sync_without_push(repo):
     (repo / "x.txt").write_text("x", encoding="utf-8")
     report = M.sync(str(repo), do_push=False)
@@ -353,6 +466,48 @@ def test_sync_requires_pr_when_push_rejected(repo, monkeypatch):
     assert calls["base"] in ("main", "master")
 
 
+def test_sync_pr_with_no_changes_does_not_open_empty_pr(repo, monkeypatch):
+    called = []
+
+    def should_not_open(*_args, **_kwargs):
+        called.append(True)
+        raise AssertionError("an empty PR must not be opened")
+
+    monkeypatch.setattr(M, "open_pr", should_not_open)
+    report = M.sync(str(repo), pr=True, do_push=True)
+    assert report["pr"] is None
+    assert "nothing to push" in report["message"]
+    assert called == []
+
+
+def test_open_pr_reuses_stable_source_base_branch(repo, monkeypatch):
+    run_git(repo, "checkout", "-b", "feature/demo")
+    pushes, requests = [], []
+
+    monkeypatch.setattr(M, "remote_slug", lambda _cwd: ("owner", "project"))
+    monkeypatch.setattr(
+        M, "push", lambda _cwd, branch=None, **_kwargs: pushes.append(branch) or branch
+    )
+
+    def fake_api(method, path, payload=None, token=None):
+        requests.append((method, path, payload, token))
+        if method == "GET":
+            return [{"html_url": "https://example.invalid/pr/9", "number": 9}]
+        raise AssertionError("existing PR should be reused instead of POSTed")
+
+    monkeypatch.setattr(M, "api", fake_api)
+    result = M.open_pr(str(repo), base="main", token="test-token")
+    assert pushes == ["sync/feature-demo-to-main"]
+    assert result == {
+        "url": "https://example.invalid/pr/9",
+        "number": 9,
+        "head": "sync/feature-demo-to-main",
+        "existing": True,
+    }
+    assert [request[0] for request in requests] == ["GET"]
+    assert "head=owner%3Async%2Ffeature-demo-to-main" in requests[0][1]
+
+
 def test_lock_rejects_concurrent_run(repo):
     first = M._lock(str(repo))
     first.__enter__()
@@ -362,9 +517,38 @@ def test_lock_rejects_concurrent_run(repo):
         assert info.value.code == 3
     finally:
         first.__exit__(None, None, None)
+    assert not os.path.exists(first.path)
     # released: a second lock can be taken
     with M._lock(str(repo)):
         pass
+
+
+def test_pid_is_running_current_process():
+    # In particular on Windows, probing pid 0 with os.kill may terminate the
+    # process. The lock check must use a non-destructive process query.
+    assert M._pid_is_running(os.getpid()) is True
+
+
+def test_lock_keeps_live_old_lock(repo):
+    first = M._lock(str(repo))
+    first.__enter__()
+    try:
+        old = time.time() - 7200
+        os.utime(first.path, (old, old))
+        with pytest.raises(M.SyncError) as info:
+            M._lock(str(repo)).__enter__()
+        assert info.value.code == 3
+        assert os.path.exists(first.path)
+    finally:
+        first.__exit__(None, None, None)
+
+
+def test_lock_supports_linked_worktree(repo, tmp_path):
+    linked = tmp_path / "linked"
+    run_git(repo, "worktree", "add", "-b", "linked-lock-test", str(linked))
+    with M._lock(str(linked)) as lock:
+        assert os.path.exists(lock.path)
+        assert lock.path != os.path.join(str(linked), ".git", "mfsync.lock")
 
 
 def test_snapshot_ignores_build_artifacts(repo):
@@ -399,6 +583,43 @@ def test_watch_commits_after_change(repo):
         M.sync = original
     assert cycles == [1]
     assert "watched.txt" in run_git(repo, "show", "--name-only", "--format=", "HEAD")
+
+
+def test_watch_waits_for_full_debounce_interval(repo, monkeypatch):
+    calls = []
+
+    def fake_sync(_cwd, **kwargs):
+        calls.append(kwargs)
+        return {"commit": "", "pushed": "", "pr": None}
+
+    monkeypatch.setattr(M, "sync", fake_sync)
+
+    def writer():
+        time.sleep(0.03)
+        (repo / "debounced.txt").write_text("change\n", encoding="utf-8")
+
+    thread = threading.Thread(target=writer)
+    started = time.monotonic()
+    thread.start()
+    M.watch(str(repo), interval=0.01, debounce=0.12, max_cycles=1)
+    thread.join()
+    assert time.monotonic() - started >= 0.10
+    assert len(calls) == 1
+
+
+def test_watch_pr_enables_push_without_push_flag(repo, monkeypatch):
+    snapshots = iter([{}, {"changed.txt": (1, 1)}, {"changed.txt": (1, 1)}])
+    calls = []
+
+    monkeypatch.setattr(M, "_snapshot", lambda _cwd: next(snapshots))
+
+    def fake_sync(_cwd, **kwargs):
+        calls.append(kwargs)
+        return {"commit": "", "pushed": "", "pr": None}
+
+    monkeypatch.setattr(M, "sync", fake_sync)
+    M.watch(str(repo), interval=0, debounce=0, pr=True, max_cycles=1)
+    assert calls == [{"message": None, "do_push": True, "pr": True}]
 
 
 def test_cli_status_json(repo, capsys):

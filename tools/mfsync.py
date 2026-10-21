@@ -38,6 +38,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 GIT = os.environ.get("MFSYNC_GIT", "git")
@@ -321,15 +322,27 @@ def upstream_ref(cwd):
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+def git_path(cwd, name):
+    """Return a Git-internal path, including for a linked worktree."""
+    proc = git(["rev-parse", "--git-path", name], cwd, check=False)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise SyncError("cannot resolve Git path for %s" % name)
+    path = proc.stdout.strip()
+    return path if os.path.isabs(path) else os.path.abspath(os.path.join(cwd, path))
+
+
 def ahead_behind(cwd):
     if not upstream_ref(cwd):
         return 0, 0
     proc = git(["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd, check=False)
     if proc.returncode != 0:
         return 0, 0
-    parts = proc.stdout.splitlines()
+    # rev-list emits two whitespace-separated fields (normally tab-separated),
+    # in left/right order: upstream-only (behind), then HEAD-only (ahead).
+    parts = proc.stdout.split()
     try:
-        return int(parts[0]), int(parts[1])
+        behind, ahead = int(parts[0]), int(parts[1])
+        return ahead, behind
     except (IndexError, ValueError):
         return 0, 0
 
@@ -437,6 +450,24 @@ def _iter_candidate_lines(path):
         yield lineno, line
 
 
+def _iter_staged_candidate_lines(cwd, relative):
+    """Yield text lines from the index blob for ``relative``, not the worktree.
+
+    The commit gate stages first.  Reading ``:path`` therefore closes the race
+    where the worktree is edited after staging but before scanning/committing.
+    """
+    proc = git(["show", ":%s" % relative], cwd, check=False)
+    if proc.returncode != 0:
+        return
+    blob = proc.stdout
+    if not blob or len(blob.encode("utf-8", "replace")) > MAX_SCAN_BYTES:
+        return
+    if "\0" in blob[:4096]:
+        return
+    for lineno, line in enumerate(blob.splitlines(), 1):
+        yield lineno, line
+
+
 def _looks_placeholder(value):
     lowered = value.lower()
     return any(hint in lowered for hint in PLACEHOLDER_HINTS)
@@ -481,17 +512,21 @@ def scan_text(text, path="<text>"):
     return findings
 
 
-def scan_files(cwd, paths=None):
-    """Scan the files about to be committed (all changed files by default)."""
+def scan_files(cwd, paths=None, staged=False):
+    """Scan changed worktree files, or index blobs when ``staged`` is true."""
     findings = []
     targets = paths if paths is not None else changed_files(cwd)
     for relative in targets:
         if relative.replace("\\", "/") in SCAN_ALLOWLIST:
             continue
-        absolute = os.path.join(cwd, relative)
-        if not os.path.isfile(absolute):
-            continue
-        for lineno, line in _iter_candidate_lines(absolute):
+        if staged:
+            candidates = _iter_staged_candidate_lines(cwd, relative)
+        else:
+            absolute = os.path.join(cwd, relative)
+            if not os.path.isfile(absolute):
+                continue
+            candidates = _iter_candidate_lines(absolute)
+        for lineno, line in candidates:
             finding = _match_line(line)
             if finding:
                 finding["path"] = relative
@@ -579,37 +614,127 @@ def guess_commit(cwd):
 # --------------------------------------------------------------------- actions
 
 
+def _pid_is_running(pid):
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # Windows implements os.kill(pid, 0) via TerminateProcess on some
+        # Python/runtime combinations. Query the process handle instead: the
+        # probe must never terminate the owner (or the pytest runner).
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        )
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            # ERROR_INVALID_PARAMETER means no process owns this PID. Access
+            # denied and all other failures fail closed: assume it is alive.
+            return ctypes.get_last_error() != 87
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        # An unexpected OS error must fail closed rather than steal a lock.
+        return True
+    return True
+
+
 class _lock(object):
-    """Very small lock so two watchers cannot sync the same tree at once."""
+    """Small per-worktree lock that is safe against live, old lock files."""
 
     def __init__(self, cwd, timeout=0):
-        self.path = os.path.join(cwd, ".git", "mfsync.lock")
+        self.path = git_path(cwd, "mfsync.lock")
         self.timeout = timeout
         self.held = False
+        self.token = "%s:%s" % (os.getpid(), time.time_ns())
+
+    def _owner_pid(self):
+        try:
+            with open(self.path, "r", encoding="ascii", errors="replace") as handle:
+                return int(handle.read().strip().split(":", 1)[0])
+        except (OSError, ValueError):
+            return None
 
     def __enter__(self):
-        try:
-            handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(handle, str(os.getpid()).encode())
-            os.close(handle)
+        while True:
+            try:
+                handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                owner = self._owner_pid()
+                if owner is not None and not _pid_is_running(owner):
+                    # A dead PID, rather than age alone, is the evidence needed
+                    # to reclaim a crashed process's lock.
+                    try:
+                        os.unlink(self.path)
+                    except OSError:
+                        pass
+                    continue
+                try:
+                    age = time.time() - os.path.getmtime(self.path)
+                except OSError:
+                    age = 0
+                raise SyncError(
+                    "another mfsync run holds %s (%.0fs old)" % (self.path, age), 3
+                )
+            try:
+                os.write(handle, self.token.encode("ascii"))
+            finally:
+                os.close(handle)
             self.held = True
             return self
-        except FileExistsError:
-            age = time.time() - os.path.getmtime(self.path)
-            if age > 3600:
-                os.unlink(self.path)
-                return self.__enter__()
-            raise SyncError(
-                "another mfsync run holds %s (%.0fs old)" % (self.path, age), 3
-            )
 
     def __exit__(self, *_exc):
         if self.held:
             try:
-                os.unlink(self.path)
+                with open(self.path, "r", encoding="ascii", errors="replace") as handle:
+                    owned = handle.read() == self.token
+                # Windows may reject unlinking an open file. Read and close
+                # the handle first, then remove only our own lock.
+                if owned:
+                    os.unlink(self.path)
             except OSError:
                 pass
         return False
+
+
+def _active_operation(cwd):
+    """Return a human-readable active Git operation, if any."""
+    markers = (
+        ("merge", "MERGE_HEAD"),
+        ("rebase", "REBASE_HEAD"),
+        ("rebase", "rebase-merge"),
+        ("rebase", "rebase-apply"),
+        ("cherry-pick", "CHERRY_PICK_HEAD"),
+        ("cherry-pick", "sequencer"),
+    )
+    for operation, marker in markers:
+        if os.path.exists(git_path(cwd, marker)):
+            return operation
+    return ""
 
 
 def pull(cwd, remote="origin", rebase=True):
@@ -620,14 +745,16 @@ def pull(cwd, remote="origin", rebase=True):
         "stashed": False,
         "mode": "rebase" if rebase else "merge",
     }
+    operation = _active_operation(cwd)
+    if operation:
+        raise SyncError("cannot pull while a %s is in progress" % operation, 2)
     fetch = git(["fetch", "--prune", "--tags", remote], cwd, check=False)
     result["fetched"] = fetch.returncode == 0
     if fetch.returncode != 0:
-        warn(
-            "fetch failed (offline?): %s"
-            % (fetch.stderr or fetch.stdout).strip().splitlines()[:1]
+        detail = redact_secret((fetch.stderr or fetch.stdout).strip())
+        raise SyncError(
+            "fetch failed; refusing to continue", 2, [detail] if detail else []
         )
-        return result
 
     upstream = upstream_ref(cwd)
     if not upstream:
@@ -641,8 +768,13 @@ def pull(cwd, remote="origin", rebase=True):
             cwd,
             check=False,
         )
-        stashed = stash.returncode == 0
-        result["stashed"] = stashed
+        if stash.returncode != 0:
+            detail = redact_secret((stash.stderr or stash.stdout).strip())
+            raise SyncError(
+                "autostash failed; refusing to pull", 2, [detail] if detail else []
+            )
+        stashed = True
+        result["stashed"] = True
 
     step = ["rebase", upstream] if rebase else ["merge", "--no-edit", upstream]
     run = git(step, cwd, check=False)
@@ -694,7 +826,7 @@ def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=
                 4,
                 bad_names,
             )
-        findings = scan_files(cwd, staged)
+        findings = scan_files(cwd, staged, staged=True)
         blocking = [f for f in findings if f["severity"] == "high"]
         for finding in findings:
             if finding["severity"] != "high":
@@ -718,7 +850,7 @@ def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=
         scope = scope or guessed_scope
         message = "%s(%s): %s\n\n%s" % (kind, scope, subject, body)
 
-    result = git(["commit", "--no-verify", "-m", message], cwd, check=False)
+    result = git(["commit", "-m", message], cwd, check=False)
     if result.returncode != 0:
         raise SyncError("commit failed: %s" % (result.stderr or result.stdout).strip())
     return git(["rev-parse", "HEAD"], cwd).stdout.strip()
@@ -790,6 +922,37 @@ def token_from_env():
     return ""
 
 
+def _default_pr_base(cwd, base=None, source=None):
+    """Choose the protected base without making a feature branch its own base."""
+    if base:
+        return base
+    source = source or current_branch(cwd)
+    if source in PROTECTED_BRANCHES:
+        return source
+    return "main" if _remote_branch_exists(cwd, "main") else "master"
+
+
+def _stable_sync_branch(source, base):
+    """Build the same safe sync branch for the same source/base pair."""
+
+    def clean(value):
+        value = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")
+        return value or "head"
+
+    return "sync/%s-to-%s" % (clean(source), clean(base))
+
+
+def _pr_has_changes(cwd, base):
+    """Whether HEAD has commits that a PR against ``base`` could contain."""
+    proc = git(["rev-list", "--count", "origin/%s..HEAD" % base], cwd, check=False)
+    if proc.returncode != 0:
+        return False
+    try:
+        return int(proc.stdout.strip()) > 0
+    except ValueError:
+        return False
+
+
 def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
     """Push HEAD to a sync/* branch and open a pull request against ``base``."""
     owner, name = remote_slug(cwd)
@@ -802,10 +965,8 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
         )
 
     source = current_branch(cwd)
-    base = base or (
-        PROTECTED_BRANCHES[0] if _remote_branch_exists(cwd, "main") else "master"
-    )
-    head_branch = branch or ("sync/%s-%s" % (source, time.strftime("%Y%m%d-%H%M%S")))
+    base = _default_pr_base(cwd, base=base, source=source)
+    head_branch = branch or _stable_sync_branch(source, base)
     push(cwd, head_branch)
 
     if not title:
@@ -824,6 +985,18 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
             base,
             log or "no new commits",
         )
+
+    query = urllib.parse.urlencode(
+        {"state": "open", "head": "%s:%s" % (owner, head_branch), "base": base}
+    )
+    found = api("GET", "/repos/%s/%s/pulls?%s" % (owner, name, query), token=token)
+    if found:
+        return {
+            "url": found[0].get("html_url", ""),
+            "number": found[0].get("number"),
+            "head": head_branch,
+            "existing": True,
+        }
 
     try:
         created = api(
@@ -845,10 +1018,7 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
     except SyncError as exc:
         if exc.code == 422:
             found = api(
-                "GET",
-                "/repos/%s/%s/pulls?state=open&head=%s:%s"
-                % (owner, name, owner, head_branch),
-                token=token,
+                "GET", "/repos/%s/%s/pulls?%s" % (owner, name, query), token=token
             )
             if found:
                 return {
@@ -968,15 +1138,23 @@ def sync(
         return report
 
     branch = current_branch(cwd)
-    if (
+    wants_pr = (
         pr
         or not upstream_ref(cwd)
         or (branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd))
-    ):
+    )
+    pr_base = _default_pr_base(cwd, base=base, source=branch)
+    if wants_pr:
         # Explicit PR mode, or a branch protection ruleset is active on the base.
-        report["pr"] = open_pr(
-            cwd, base=base or branch if branch in PROTECTED_BRANCHES else base
-        )
+        if not _pr_has_changes(cwd, pr_base):
+            report["message"] = "nothing to push or open as a pull request"
+            return report
+        report["pr"] = open_pr(cwd, base=pr_base)
+        return report
+
+    ahead, _behind = ahead_behind(cwd)
+    if not ahead:
+        report["message"] = "nothing to push"
         return report
 
     try:
@@ -984,7 +1162,10 @@ def sync(
     except SyncError as exc:
         if exc.code == 5:
             warn("branch protection rejected the push - opening a pull request instead")
-            report["pr"] = open_pr(cwd, base=base or branch)
+            if not _pr_has_changes(cwd, pr_base):
+                report["message"] = "nothing to open as a pull request"
+                return report
+            report["pr"] = open_pr(cwd, base=pr_base)
         else:
             raise
     return report
@@ -1006,6 +1187,7 @@ def watch(
     message=None,
 ):
     """Debounce watcher: after the tree has been quiet for ``debounce`` seconds, sync."""
+    do_push = do_push or pr
     say(
         "watching %s (debounce %.1fs, push=%s, Ctrl+C to stop)"
         % (cwd, debounce, do_push)
@@ -1019,12 +1201,16 @@ def watch(
             continue
         # wait for quiet
         pending = current
+        quiet_since = time.monotonic()
         while True:
             time.sleep(interval)
             newer = _snapshot(cwd)
-            if newer == pending:
+            if newer != pending:
+                pending = newer
+                quiet_since = time.monotonic()
+                continue
+            if time.monotonic() - quiet_since >= debounce:
                 break
-            pending = newer
         changed = sorted(set(pending) ^ set(snapshot))
         snapshot = pending
         if not changed:

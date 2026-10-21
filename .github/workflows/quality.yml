@@ -38,6 +38,18 @@ jobs:
         run: isort --check-only --diff .
       - name: Byte-compile all sources
         run: python -m compileall -q mountfile main.py tests
+      - name: Validate GitHub Actions workflows with a checksum-pinned actionlint
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --location --retry 3 \
+            'https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz' \
+            -o "$ARCHIVE"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$ARCHIVE" | sha256sum --check -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
 
   test:
     timeout-minutes: 30
@@ -60,12 +72,7 @@ jobs:
           python -m pip install pytest
           python -m pip install -r requirements.txt || echo "::warning title=Optional deps::runtime deps (PyQt6/pytsk3) unavailable for Python ${{ matrix.python-version }} - tests run without them"
       - name: Run tests
-        run: |
-          set +e
-          python -m pytest -q tests
-          code=$?
-          if [ $code -eq 5 ]; then echo "::warning title=No tests::pytest collected no tests"; exit 0; fi
-          exit $code
+        run: python -m pytest -q tests
 
   quality-gate:
     needs: [lint, test]

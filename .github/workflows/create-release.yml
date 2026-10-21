@@ -42,6 +42,11 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo '::error::Expected a stable vMAJOR.MINOR.PATCH tag'
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$TAG^{commit}" >/dev/null
           echo "tag: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -71,9 +76,9 @@ jobs:
       - name: Start the build stage
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.rel.outputs.tag }}"
           gh workflow run release.yml \
             --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
           echo "dispatched release for $TAG"

@@ -1,87 +1,77 @@
 name: autofix
-
-# ruff / black / isort fix the code after every push to main and open a
-# PULL REQUEST labeled "auto-merge" instead of pushing to main directly.
-# A direct push failed before with:
-#   "GH013: Repository rule violations - Changes must be made through a
-#    pull request" (the protect-main ruleset).
-# The PR is created with AUTOMATION_TOKEN so that CI, CodeQL, Security
-# and Quality actually run on it (GITHUB_TOKEN-created PRs stay silent).
-# auto-merge then waits for the checks and squash-merges it.
-#
-# Loop protection: the merge commit message contains "autofix" and the
-# job refuses to run on such commits. The workflow is opt-in because the
-# formatter's collections.abc rewrite is not Python 3.8-compatible.
-# Enable it only after validating the formatter configuration with the
-# repository variable ENABLE_AUTOFIX=true.
-
+# Formatting only: no UP/F401 rewrites that can break Python 3.8 or reexports.
+# Runs on main when enabled, or explicitly from Actions / ChatOps.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
   workflow_call:
-
 permissions:
-  contents: write
-  pull-requests: write
-
+  contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+  group: repository-maintenance-write
+  cancel-in-progress: false
 jobs:
   autofix:
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
     if: >-
-      ${{ vars.ENABLE_AUTOFIX == 'true' &&
-          !startsWith(github.event.head_commit.message || '', 'chore: autofix') }}
+      github.ref == 'refs/heads/main' &&
+      (vars.ENABLE_AUTOFIX == 'true' || github.event_name == 'workflow_dispatch') &&
+      !startsWith(github.event.head_commit.message || '', 'chore: autofix')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+      QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
-
-      - name: Install fixers
-        run: pip install ruff black isort
-
-      - name: "ruff --fix (F401 unused imports, F821 undefined names, ...)"
-        run: ruff check --fix mountfile tests main.py || true
-
-      - name: black (formatting)
-        run: black --quiet mountfile tests main.py || true
-
-      - name: isort (import order)
-        run: isort --quiet mountfile tests main.py || true
-
-      - name: Verify the code still compiles
-        run: python -m compileall -q mountfile main.py
-
-      - name: Open a pull request with the fixes
-        env:
-          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install reproducible formatters and test dependencies
+        run: |
+          python -m pip install 'ruff==0.4.10' 'black==24.4.2' 'isort==5.13.2' pytest \
+            'fastapi>=0.115,<1' 'uvicorn>=0.30,<1' 'httpx>=0.27,<1'
+      - name: Format imports then code without semantic rewrites
+        run: |
+          isort --profile black --line-length 100 mountfile tests main.py
+          black --line-length 100 --target-version py38 mountfile tests main.py
+          isort --profile black --line-length 100 --check-only mountfile tests main.py
+          black --line-length 100 --target-version py38 --check mountfile tests main.py
+      - name: Require syntax, secret and regression checks before publishing fixes
+        run: |
+          ruff check mountfile tests main.py --select E9,F63,F7,F82
+          python -m compileall -q mountfile tests main.py
+          python tools/mfsync.py scan --all
+          python -m pytest tests/ -q
+      - name: Open or reuse a reviewed formatting PR
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No automatic fixes needed."
+          if git diff --quiet; then
+            echo 'No formatting changes needed.'
             exit 0
           fi
-          gh label create auto-merge --force \
-            --description "Merged automatically once CI is green" --color 0e8a16 >/dev/null 2>&1 || true
-          BRANCH="autofix/${GITHUB_SHA::8}"
-          git checkout -b "$BRANCH"
-          git commit -m "chore: autofix (ruff/black/isort)"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "chore: autofix (ruff/black/isort)" \
-            --label auto-merge \
-            --head "$BRANCH" \
-            --body "Automatic fixes produced by the \`autofix\` workflow.
-          - ruff: unused imports / undefined names
-          - black + isort: formatting and import order
-
-          Merging is handled by the \`auto-merge\` workflow once CI is green."
-          echo "opened the autofix PR from $BRANCH"
+          BRANCH="autofix/$(git rev-parse --short=12 HEAD)"
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch -c "$BRANCH"
+            git add mountfile tests main.py
+            git commit -m 'chore: autofix (formatting only)'
+            git push -u origin "$BRANCH"
+          fi
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --state all --json number --jq 'length')
+          if [ "$EXISTING" = '0' ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --label auto-merge \
+              --title 'chore: autofix (formatting only)' \
+              --body 'Reproducible isort/black formatting, with syntax and full regression checks before publication. Auto-merge is enabled only after all required quality, security and sync gates pass for this exact commit.'
+          fi
