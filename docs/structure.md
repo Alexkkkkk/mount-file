@@ -11,7 +11,8 @@
 | `mountfile/` | основной пакет: GUI, CLI, FS-слой, DFIR, AI, OLMA | любая новая логика живёт **здесь**, а не в корне |
 | `mountfile.py` | автономный одностраничный инструмент (GUI+CLI, без `pytsk3`) | поставляется как отдельный бинарник, зависимостей из `mountfile/` не тянет |
 | `mountfile_all.py` | лаунчер «всё сразу»: CLI + API + тесты | используется `make all-in-one` |
-| `mountfile_universal_rw.py`, `mountfile_rw_complete.py`, `mountfile_rw_v2.py` | публичные RW-обёртки, объявленные в `[project.scripts]` | вынесены в корень намеренно: их импортируют как top-level модули |
+| `mountfile/rw/` | универсальный RW-слой: `universal.py`, `complete.py`, `v2.py` | вся логика записи живёт **здесь** |
+| `mountfile_universal_rw.py`, `mountfile_rw_complete.py`, `mountfile_rw_v2.py` | тонкие шимы (≈10 строк) на `mountfile/rw/*` | имена сохранены ради `[project.scripts]` и внешних импортов; правится реализация в пакете, не шим |
 | `mountfile_ai.py` | AI-слой верхнего уровня | legacy-энтрипойнт, новый код — в `mountfile/ai/` |
 | `mountfile_dfir.py`, `mountfile_dfir_tools.py` | DFIR-энтрипойнты | legacy, новый код — в `mountfile/dfir*.py` |
 | `mountfile_grep.py` | автономный grep по образу | standalone-утилита |

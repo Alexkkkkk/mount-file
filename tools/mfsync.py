@@ -102,7 +102,8 @@ MAX_SCAN_BYTES = 2 * 1024 * 1024
 SCOPE_RULES = (
     (("mountfile/fat32.py", "mountfile/ext_debugfs_writer.py", "mountfile/write_engine.py",
       "mountfile/universal_fs_rw.py", "mountfile_rw_complete.py", "mountfile_rw_v2.py",
-      "mountfile_universal_rw.py", "mountfile/dfir_universal"), "rw"),
+      "mountfile_universal_rw.py", "mountfile/dfir_universal",
+       "mountfile/rw/"), "rw"),
     (("mountfile/dfir", "mountfile_dfir", "rules/", "mountfile/timeline.py",
       "mountfile/timestomp.py", "mountfile/unallocated.py", "mountfile/yara_scan.py"), "dfir"),
     (("mountfile/ai", "mountfile_ai.py", "mountfile/ai_format_advisor"), "ai"),
