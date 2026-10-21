@@ -30,9 +30,7 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 # Release tags are deliberately stable SemVer only.  Restricting the input
 # prevents a tag from injecting TOML/Python syntax into either source file.
-VERSION_RE = re.compile(
-    r"^(?:v)?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
-)
+VERSION_RE = re.compile(r"^(?:v)?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 PACKAGE_VERSION_RE = re.compile(
     r"^(?P<prefix>\s*__version__\s*=\s*)(?P<quote>['\"])(?P<value>[^'\"\r\n]*)(?P=quote)(?P<suffix>\s*(?:#.*)?)$"
 )
@@ -50,7 +48,9 @@ class StampError(Exception):
 def _normalise_version(raw_version: str) -> str:
     match = VERSION_RE.fullmatch(raw_version.strip())
     if not match:
-        raise StampError("refusing to stamp a malformed stable version/tag: %r" % raw_version)
+        raise StampError(
+            "refusing to stamp a malformed stable version/tag: %r" % raw_version
+        )
     return ".".join(match.groups())
 
 
@@ -94,7 +94,9 @@ def _prepare_package(text: str, version: str) -> Tuple[str, str]:
         content, _ = _line_ending(line)
         if PACKAGE_VERSION_RE.fullmatch(content):
             indexes.append(index)
-    return _replace_one_line(lines, indexes, PACKAGE_VERSION_RE, version, "__version__ assignment")
+    return _replace_one_line(
+        lines, indexes, PACKAGE_VERSION_RE, version, "__version__ assignment"
+    )
 
 
 def _project_table_range(lines: List[str]) -> Tuple[int, int]:

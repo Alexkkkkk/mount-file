@@ -106,7 +106,9 @@ def test_scan_ignores_placeholder_values(tmp_path):
 def test_private_key_header_is_advisory(tmp_path):
     # A PEM header alone is a shape, not a credential: YARA rules and test
     # fixtures legitimately contain it, so it must not block a commit.
-    (tmp_path / "k.txt").write_text("-----BEGIN RSA PRIVATE KEY-----\nabc\n", encoding="utf-8")
+    (tmp_path / "k.txt").write_text(
+        "-----BEGIN RSA PRIVATE KEY-----\nabc\n", encoding="utf-8"
+    )
     findings = M.scan_files(tmp_path, ["k.txt"])
     assert [f["kind"] for f in findings] == ["private key"]
     assert findings[0]["severity"] == "heuristic"
@@ -175,7 +177,9 @@ def test_sensitive_filenames():
 
 def test_redact_secret_removes_env_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp_" + "z" * 36)
-    text = M.redact_secret("push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36))
+    text = M.redact_secret(
+        "push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36)
+    )
     assert "ghp_" not in text
     assert "***" in text
 
@@ -188,16 +192,22 @@ def test_version_parity_ok(repo):
         '[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8"
     )
     (repo / "mountfile").mkdir()
-    (repo / "mountfile" / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+    (repo / "mountfile" / "__init__.py").write_text(
+        '__version__ = "1.2.3"\n', encoding="utf-8"
+    )
     report = M.check_version_parity(str(repo))
     assert report["ok"] is True
     assert report["values"] == ["1.2.3"]
 
 
 def test_version_parity_mismatch(repo):
-    (repo / "pyproject.toml").write_text('[project]\nversion = "1.2.3"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nversion = "1.2.3"\n', encoding="utf-8"
+    )
     (repo / "mountfile").mkdir()
-    (repo / "mountfile" / "__init__.py").write_text('__version__ = "1.2.4"\n', encoding="utf-8")
+    (repo / "mountfile" / "__init__.py").write_text(
+        '__version__ = "1.2.4"\n', encoding="utf-8"
+    )
     report = M.check_version_parity(str(repo))
     assert report["ok"] is False
     assert sorted(report["values"]) == ["1.2.3", "1.2.4"]
@@ -382,7 +392,9 @@ def test_pull_fails_closed_when_autostash_fails(repo, monkeypatch):
     def fail_stash(args, cwd, check=True, timeout=300):
         calls.append(args)
         if args[:2] == ["stash", "push"]:
-            return subprocess.CompletedProcess(["git"] + list(args), 1, "", "stash blocked")
+            return subprocess.CompletedProcess(
+                ["git"] + list(args), 1, "", "stash blocked"
+            )
         return original_git(args, cwd, check=check, timeout=timeout)
 
     monkeypatch.setattr(M, "git", fail_stash)
@@ -404,7 +416,9 @@ def test_pull_fails_closed_when_autostash_fails(repo, monkeypatch):
 def test_pull_refuses_in_progress_git_operation(repo, marker, operation):
     marker_path = run_git(repo, "rev-parse", "--git-path", marker)
     marker_path = (
-        os.path.join(str(repo), marker_path) if not os.path.isabs(marker_path) else marker_path
+        os.path.join(str(repo), marker_path)
+        if not os.path.isabs(marker_path)
+        else marker_path
     )
     if marker == "rebase-merge":
         os.makedirs(marker_path)
@@ -428,7 +442,9 @@ def test_sync_without_push(repo):
     report = M.sync(str(repo), do_push=False)
     assert report["commit"]
     assert report["pushed"] == ""
-    assert run_git(repo, "rev-parse", "HEAD") != run_git(repo, "rev-parse", "origin/main")
+    assert run_git(repo, "rev-parse", "HEAD") != run_git(
+        repo, "rev-parse", "origin/main"
+    )
 
 
 def test_sync_requires_pr_when_push_rejected(repo, monkeypatch):
@@ -607,9 +623,13 @@ def test_cli_status_json(repo, capsys):
 
 
 def test_cli_check_strict_fails_on_mismatch(repo, capsys):
-    (repo / "pyproject.toml").write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nversion = "9.9.9"\n', encoding="utf-8"
+    )
     (repo / "mountfile").mkdir()
-    (repo / "mountfile" / "__init__.py").write_text('__version__ = "9.9.8"\n', encoding="utf-8")
+    (repo / "mountfile" / "__init__.py").write_text(
+        '__version__ = "9.9.8"\n', encoding="utf-8"
+    )
     assert M.main(["--cwd", str(repo), "check"]) == 0
     assert M.main(["--cwd", str(repo), "check", "--strict"]) == 1
 

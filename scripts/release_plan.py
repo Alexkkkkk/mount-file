@@ -67,7 +67,11 @@ def _run_git(repository: pathlib.Path, arguments: Sequence[str]) -> str:
     except OSError as exc:
         raise PlanError("could not execute git: %s" % exc)
     if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "unknown git failure"
+        detail = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or "unknown git failure"
+        )
         raise PlanError("git %s failed: %s" % (" ".join(arguments), detail))
     return completed.stdout
 
@@ -79,7 +83,9 @@ def _parse_stable_tag(tag: str) -> Optional[VersionTuple]:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
-def _previous_tag(repository: pathlib.Path) -> Tuple[Optional[str], Optional[VersionTuple]]:
+def _previous_tag(
+    repository: pathlib.Path,
+) -> Tuple[Optional[str], Optional[VersionTuple]]:
     """Return the greatest stable SemVer tag that is an ancestor of HEAD."""
     tags = _run_git(repository, ["tag", "--merged", "HEAD"]).splitlines()
     candidates = []
@@ -93,13 +99,13 @@ def _previous_tag(repository: pathlib.Path) -> Tuple[Optional[str], Optional[Ver
     return tag, version
 
 
-def _commits_since(repository: pathlib.Path, previous_tag: Optional[str]) -> Iterable[Tuple[str, str]]:
+def _commits_since(
+    repository: pathlib.Path, previous_tag: Optional[str]
+) -> Iterable[Tuple[str, str]]:
     revision_range = "%s..HEAD" % previous_tag if previous_tag else "HEAD"
     # NUL/record-separator delimiters cannot occur in Git commit subject/body
     # text, unlike ordinary newlines used by BREAKING CHANGE footers.
-    output = _run_git(
-        repository, ["log", "--format=%s%x1f%b%x1e", revision_range]
-    )
+    output = _run_git(repository, ["log", "--format=%s%x1f%b%x1e", revision_range])
     for record in output.split("\x1e"):
         # git appends a newline after each pretty-format record.  Once split
         # on the explicit record separator, that newline is not a commit.
@@ -186,7 +192,10 @@ def _version_from_package(path: pathlib.Path) -> str:
     matches = [PACKAGE_VERSION_RE.fullmatch(line) for line in lines]
     found = [match.group("value") for match in matches if match is not None]
     if len(found) != 1:
-        raise PlanError("expected exactly one __version__ assignment in %s, found %d" % (path, len(found)))
+        raise PlanError(
+            "expected exactly one __version__ assignment in %s, found %d"
+            % (path, len(found))
+        )
     if _parse_version(found[0]) is None:
         raise PlanError("package version is not stable SemVer: %s" % found[0])
     return found[0]
@@ -197,9 +206,14 @@ def _version_from_project(path: pathlib.Path) -> str:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
         raise PlanError("could not read %s: %s" % (path, exc))
-    headers = [index for index, line in enumerate(lines) if PROJECT_HEADER_RE.fullmatch(line)]
+    headers = [
+        index for index, line in enumerate(lines) if PROJECT_HEADER_RE.fullmatch(line)
+    ]
     if len(headers) != 1:
-        raise PlanError("expected exactly one [project] table in %s, found %d" % (path, len(headers)))
+        raise PlanError(
+            "expected exactly one [project] table in %s, found %d"
+            % (path, len(headers))
+        )
 
     start = headers[0] + 1
     end = len(lines)
@@ -211,7 +225,8 @@ def _version_from_project(path: pathlib.Path) -> str:
     found = [match.group("value") for match in matches if match is not None]
     if len(found) != 1:
         raise PlanError(
-            "expected exactly one version in [project] in %s, found %d" % (path, len(found))
+            "expected exactly one version in [project] in %s, found %d"
+            % (path, len(found))
         )
     if _parse_version(found[0]) is None:
         raise PlanError("project version is not stable SemVer: %s" % found[0])
@@ -266,7 +281,8 @@ def make_plan(repository: pathlib.Path, force_patch: bool = False) -> Dict[str, 
         tag = "v" + version
 
     needs_version_pr = bool(
-        has_release_change and (package_version != version or project_version != version)
+        has_release_change
+        and (package_version != version or project_version != version)
     )
     return {
         "previous": previous_tag,

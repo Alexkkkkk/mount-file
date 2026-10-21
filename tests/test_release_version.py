@@ -6,13 +6,14 @@ import shutil
 import subprocess
 import sys
 
-
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1]
 STAMP_SCRIPT = SOURCE_ROOT / "scripts" / "stamp_version.py"
 PLAN_SCRIPT = SOURCE_ROOT / "scripts" / "release_plan.py"
 
 
-def _write_version_files(repository, version="1.0.0", package_version=None, project_version=None):
+def _write_version_files(
+    repository, version="1.0.0", package_version=None, project_version=None
+):
     package_version = package_version or version
     project_version = project_version or version
     package = repository / "mountfile"
@@ -21,7 +22,7 @@ def _write_version_files(repository, version="1.0.0", package_version=None, proj
         '__version__ = "%s"\n' % package_version, encoding="utf-8"
     )
     (repository / "pyproject.toml").write_text(
-        "[project]\nname = \"demo\"\nversion = \"%s\"\n" % project_version,
+        '[project]\nname = "demo"\nversion = "%s"\n' % project_version,
         encoding="utf-8",
     )
 
@@ -67,7 +68,9 @@ def test_stamp_is_idempotent_and_check_validates_both_targets(tmp_path):
 
     checked = _run_stamp(repository, "--check", "v1.2.3")
     assert checked.returncode == 0, checked.stderr
-    project.write_text(project.read_text(encoding="utf-8").replace("1.2.3", "1.2.2"), encoding="utf-8")
+    project.write_text(
+        project.read_text(encoding="utf-8").replace("1.2.3", "1.2.2"), encoding="utf-8"
+    )
     mismatch = _run_stamp(repository, "--check", "v1.2.3")
     assert mismatch.returncode == 1
     assert "pyproject.toml" in mismatch.stderr
@@ -104,7 +107,7 @@ def test_stamp_does_not_write_package_when_project_version_is_missing(tmp_path):
     repository = _stamp_repository(tmp_path)
     package = repository / "mountfile" / "__init__.py"
     project = repository / "pyproject.toml"
-    project.write_text("[project]\nname = \"demo\"\n", encoding="utf-8")
+    project.write_text('[project]\nname = "demo"\n', encoding="utf-8")
     before_package = package.read_bytes()
 
     result = _run_stamp(repository, "1.2.3")
@@ -119,12 +122,12 @@ def test_stamp_changes_only_version_in_exact_project_table(tmp_path):
     project = repository / "pyproject.toml"
     project.write_text(
         "[project]\n"
-        "name = \"demo\"\n"
-        "version = \"1.0.0\"\n"
+        'name = "demo"\n'
+        'version = "1.0.0"\n'
         "[project.urls]\n"
-        "version = \"https://example.invalid/version\"\n"
+        'version = "https://example.invalid/version"\n'
         "[tool.unrelated]\n"
-        "version = \"keep-me\"\n",
+        'version = "keep-me"\n',
         encoding="utf-8",
     )
 
@@ -163,7 +166,9 @@ def _release_repository(tmp_path, version="1.0.0"):
 
 def _commit(repository, subject, body=None):
     history = repository / "history.txt"
-    history.write_text(history.read_text(encoding="utf-8") + subject + "\n", encoding="utf-8")
+    history.write_text(
+        history.read_text(encoding="utf-8") + subject + "\n", encoding="utf-8"
+    )
     _git(repository, "add", "history.txt")
     arguments = ["commit", "-qm", subject]
     if body is not None:
@@ -173,7 +178,14 @@ def _commit(repository, subject, body=None):
 
 def _plan(repository, *arguments):
     result = subprocess.run(
-        [sys.executable, str(PLAN_SCRIPT), "--json", "--cwd", str(repository), *arguments],
+        [
+            sys.executable,
+            str(PLAN_SCRIPT),
+            "--json",
+            "--cwd",
+            str(repository),
+            *arguments,
+        ],
         text=True,
         encoding="utf-8",
         capture_output=True,
@@ -241,9 +253,7 @@ def test_release_plan_tags_a_merged_manual_patch_pr_without_a_feat_or_fix(tmp_pa
 
 def test_pending_release_requires_version_parity_and_one_semantic_step(tmp_path):
     mismatched = _release_repository(tmp_path / "mismatched", "1.2.3")
-    _write_version_files(
-        mismatched, package_version="1.2.4", project_version="1.2.3"
-    )
+    _write_version_files(mismatched, package_version="1.2.4", project_version="1.2.3")
     _git(mismatched, "add", "mountfile/__init__.py", "pyproject.toml")
     _git(mismatched, "commit", "-qm", "chore(release): synchronize 1.2.4")
     assert _plan(mismatched)["has_release_change"] is False
@@ -259,7 +269,11 @@ def test_release_plan_has_no_release_for_irrelevant_or_ignored_commits(tmp_path)
     repository = _release_repository(tmp_path, "1.2.3")
     _commit(repository, "docs: improve examples")
     _commit(repository, "chore(sync): mirror metadata")
-    _commit(repository, "chore: autofix formatting only", "BREAKING CHANGE: ignored automation")
+    _commit(
+        repository,
+        "chore: autofix formatting only",
+        "BREAKING CHANGE: ignored automation",
+    )
 
     plan = _plan(repository)
 

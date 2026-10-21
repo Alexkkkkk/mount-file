@@ -295,7 +295,8 @@ def git(args, cwd, check=True, timeout=300):
         raise SyncError("cannot run git: %s" % exc)
     if check and proc.returncode != 0:
         raise SyncError(
-            "git %s failed: %s" % (" ".join(args), (proc.stderr or proc.stdout).strip()),
+            "git %s failed: %s"
+            % (" ".join(args), (proc.stderr or proc.stdout).strip()),
             proc.returncode,
         )
     return proc
@@ -315,7 +316,9 @@ def current_branch(cwd):
 
 
 def upstream_ref(cwd):
-    proc = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd, check=False)
+    proc = git(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd, check=False
+    )
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
@@ -346,7 +349,9 @@ def ahead_behind(cwd):
 
 def dirty_entries(cwd):
     """Return [(status, path)] for every local modification, incl. untracked."""
-    proc = git(["status", "--porcelain", "-z", "--untracked-files=all"], cwd, check=False)
+    proc = git(
+        ["status", "--porcelain", "-z", "--untracked-files=all"], cwd, check=False
+    )
     if proc.returncode != 0:
         return []
     entries, fields, index = [], [f for f in proc.stdout.split("\0") if f], 0
@@ -580,7 +585,9 @@ def guess_commit(cwd):
         kind = "feat"
 
     if paths and len(deleted) == len(paths):
-        subject = "remove %s" % (paths[0] if len(paths) == 1 else "%d obsolete files" % len(paths))
+        subject = "remove %s" % (
+            paths[0] if len(paths) == 1 else "%d obsolete files" % len(paths)
+        )
     elif len(paths) == 1:
         name = paths[0].replace("\\", "/")
         if kind == "docs":
@@ -656,7 +663,9 @@ class _lock(object):
                     age = time.time() - os.path.getmtime(self.path)
                 except OSError:
                     age = 0
-                raise SyncError("another mfsync run holds %s (%.0fs old)" % (self.path, age), 3)
+                raise SyncError(
+                    "another mfsync run holds %s (%.0fs old)" % (self.path, age), 3
+                )
             try:
                 os.write(handle, self.token.encode("ascii"))
             finally:
@@ -706,7 +715,9 @@ def pull(cwd, remote="origin", rebase=True):
     result["fetched"] = fetch.returncode == 0
     if fetch.returncode != 0:
         detail = redact_secret((fetch.stderr or fetch.stdout).strip())
-        raise SyncError("fetch failed; refusing to continue", 2, [detail] if detail else [])
+        raise SyncError(
+            "fetch failed; refusing to continue", 2, [detail] if detail else []
+        )
 
     upstream = upstream_ref(cwd)
     if not upstream:
@@ -716,11 +727,15 @@ def pull(cwd, remote="origin", rebase=True):
     stashed = False
     if dirty_entries(cwd):
         stash = git(
-            ["stash", "push", "--include-untracked", "-m", "mfsync autostash"], cwd, check=False
+            ["stash", "push", "--include-untracked", "-m", "mfsync autostash"],
+            cwd,
+            check=False,
         )
         if stash.returncode != 0:
             detail = redact_secret((stash.stderr or stash.stdout).strip())
-            raise SyncError("autostash failed; refusing to pull", 2, [detail] if detail else [])
+            raise SyncError(
+                "autostash failed; refusing to pull", 2, [detail] if detail else []
+            )
         stashed = True
         result["stashed"] = True
 
@@ -760,7 +775,9 @@ def stage_all(cwd):
 def commit(cwd, message=None, kind=None, scope=None, scan=True, allow_sensitive=False):
     """Stage everything and commit. Returns the new sha, or '' if nothing to do."""
     stage_all(cwd)
-    staged = git(["diff", "--cached", "--name-only"], cwd, check=False).stdout.splitlines()
+    staged = git(
+        ["diff", "--cached", "--name-only"], cwd, check=False
+    ).stdout.splitlines()
     if not staged:
         return ""
 
@@ -852,7 +869,8 @@ def api(method, path, payload=None, token=None):
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
         raise SyncError(
-            "GitHub API %s %s -> %s: %s" % (method, path, exc.code, redact_secret(body)[:400]),
+            "GitHub API %s %s -> %s: %s"
+            % (method, path, exc.code, redact_secret(body)[:400]),
             exc.code,
         )
     except urllib.error.URLError as exc:
@@ -905,7 +923,9 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
         raise SyncError("origin is not a github.com remote", 6)
     token = token or token_from_env()
     if not token:
-        raise SyncError("no token in %s - cannot open a pull request" % "/".join(TOKEN_ENV), 6)
+        raise SyncError(
+            "no token in %s - cannot open a pull request" % "/".join(TOKEN_ENV), 6
+        )
 
     source = current_branch(cwd)
     base = _default_pr_base(cwd, base=base, source=source)
@@ -914,7 +934,9 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
 
     if not title:
         _kind, _scope, subject, _body = (
-            guess_commit(cwd) if dirty_entries(cwd) else ("chore", source, "sync %s" % source, "")
+            guess_commit(cwd)
+            if dirty_entries(cwd)
+            else ("chore", source, "sync %s" % source, "")
         )
         title = subject
     if not body:
@@ -958,7 +980,9 @@ def open_pr(cwd, base=None, title=None, body=None, branch=None, token=None):
         }
     except SyncError as exc:
         if exc.code == 422:
-            found = api("GET", "/repos/%s/%s/pulls?%s" % (owner, name, query), token=token)
+            found = api(
+                "GET", "/repos/%s/%s/pulls?%s" % (owner, name, query), token=token
+            )
             if found:
                 return {
                     "url": found[0].get("html_url", ""),
@@ -999,7 +1023,11 @@ def print_status(report):
         "  branch   : %s%s"
         % (
             report["branch"],
-            ("  \u2192 " + report["upstream"] if report["upstream"] else "  (no upstream)"),
+            (
+                "  \u2192 " + report["upstream"]
+                if report["upstream"]
+                else "  (no upstream)"
+            ),
         )
     )
     say("  sync     : %d ahead, %d behind" % (report["ahead"], report["behind"]))
@@ -1008,7 +1036,10 @@ def print_status(report):
         for code, path in report["files"]:
             say("             %s %s" % (code, path))
         if report["dirty"] > len(report["files"]):
-            say("             ... and %d more" % (report["dirty"] - len(report["files"])))
+            say(
+                "             ... and %d more"
+                % (report["dirty"] - len(report["files"]))
+            )
     else:
         say("  local    : clean")
     version = report["version"]
@@ -1071,7 +1102,9 @@ def sync(
 
     branch = current_branch(cwd)
     wants_pr = (
-        pr or not upstream_ref(cwd) or (branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd))
+        pr
+        or not upstream_ref(cwd)
+        or (branch in PROTECTED_BRANCHES and needs_pr_by_policy(cwd))
     )
     pr_base = _default_pr_base(cwd, base=base, source=branch)
     if wants_pr:
@@ -1118,7 +1151,10 @@ def watch(
 ):
     """Debounce watcher: after the tree has been quiet for ``debounce`` seconds, sync."""
     do_push = do_push or pr
-    say("watching %s (debounce %.1fs, push=%s, Ctrl+C to stop)" % (cwd, debounce, do_push))
+    say(
+        "watching %s (debounce %.1fs, push=%s, Ctrl+C to stop)"
+        % (cwd, debounce, do_push)
+    )
     snapshot = _snapshot(cwd)
     cycles = 0
     while True:
@@ -1206,8 +1242,12 @@ def build_parser():
         help="branch, ahead/behind, dirty files, version parity",
     )
 
-    check = sub.add_parser("check", parents=[common], help="release/sync gates (version parity)")
-    check.add_argument("--strict", action="store_true", help="non-zero exit on version mismatch")
+    check = sub.add_parser(
+        "check", parents=[common], help="release/sync gates (version parity)"
+    )
+    check.add_argument(
+        "--strict", action="store_true", help="non-zero exit on version mismatch"
+    )
 
     for name, help_text in (("sync", "pull --rebase + commit + push"),):
         node = sub.add_parser(name, parents=[common], help=help_text)
@@ -1216,7 +1256,9 @@ def build_parser():
             "--type", dest="kind", help="conventional type override (feat/fix/docs/...)"
         )
         node.add_argument("--scope", help="conventional scope override")
-        node.add_argument("--no-push", action="store_true", help="commit locally, do not push")
+        node.add_argument(
+            "--no-push", action="store_true", help="commit locally, do not push"
+        )
         node.add_argument(
             "--pr", action="store_true", help="open a pull request instead of pushing"
         )
@@ -1236,15 +1278,21 @@ def build_parser():
     commit_node.add_argument("--scope")
     commit_node.add_argument("--no-scan", action="store_true")
 
-    pull_node = sub.add_parser("pull", parents=[common], help="fetch + rebase with autostash")
-    pull_node.add_argument("--merge", action="store_true", help="merge instead of rebase")
+    pull_node = sub.add_parser(
+        "pull", parents=[common], help="fetch + rebase with autostash"
+    )
+    pull_node.add_argument(
+        "--merge", action="store_true", help="merge instead of rebase"
+    )
 
     push_node = sub.add_parser("push", parents=[common], help="push the current branch")
     push_node.add_argument("--branch")
     push_node.add_argument("--remote", default="origin")
     push_node.add_argument("--force-with-lease", action="store_true")
 
-    pr_node = sub.add_parser("pr", parents=[common], help="push to sync/* and open a pull request")
+    pr_node = sub.add_parser(
+        "pr", parents=[common], help="push to sync/* and open a pull request"
+    )
     pr_node.add_argument("--base")
     pr_node.add_argument("--title")
     pr_node.add_argument("--body")
@@ -1253,11 +1301,15 @@ def build_parser():
     watch_node.add_argument("--interval", type=float, default=1.0)
     watch_node.add_argument("--debounce", type=float, default=2.0)
     watch_node.add_argument("--push", action="store_true", help="push after each cycle")
-    watch_node.add_argument("--pr", action="store_true", help="open a PR after each cycle")
+    watch_node.add_argument(
+        "--pr", action="store_true", help="open a PR after each cycle"
+    )
     watch_node.add_argument("--max-cycles", type=int, default=None)
     watch_node.add_argument("-m", "--message")
 
-    scan_node = sub.add_parser("scan", parents=[common], help="scan changed files for secrets")
+    scan_node = sub.add_parser(
+        "scan", parents=[common], help="scan changed files for secrets"
+    )
     scan_node.add_argument("--all", action="store_true", help="scan every tracked file")
     scan_node.add_argument(
         "--strict-heuristics",
@@ -1296,14 +1348,21 @@ def main(argv=None):
                 else:
                     fail(
                         "version parity broken: %s"
-                        % ", ".join("%s=%s" % (k, v) for k, v in sorted(report["versions"].items()))
+                        % ", ".join(
+                            "%s=%s" % (k, v)
+                            for k, v in sorted(report["versions"].items())
+                        )
                     )
                 if report["tag"]:
                     say(
                         "  latest tag: %s%s"
                         % (
                             report["tag"],
-                            ("" if report["tag_matches"] else "  (differs from __version__)"),
+                            (
+                                ""
+                                if report["tag_matches"]
+                                else "  (differs from __version__)"
+                            ),
                         )
                     )
             return 0 if report["ok"] or not args.strict else 1
@@ -1325,7 +1384,10 @@ def main(argv=None):
                 )
             else:
                 if not findings:
-                    ok("no secrets in %s" % ("tracked files" if args.all else "changed files"))
+                    ok(
+                        "no secrets in %s"
+                        % ("tracked files" if args.all else "changed files")
+                    )
                 for finding in blocking:
                     fail(
                         "%s:%s [%s] %s"
@@ -1343,11 +1405,14 @@ def main(argv=None):
                     )
                     for finding in advisory[:20]:
                         say(
-                            "      %s:%s [%s]" % (finding["path"], finding["line"], finding["kind"])
+                            "      %s:%s [%s]"
+                            % (finding["path"], finding["line"], finding["kind"])
                         )
                 if blocking:
                     say("    rotate the credential, move it to a GitHub secret, or add")
-                    say("    '# pragma: allowlist secret' to a documented placeholder line.")
+                    say(
+                        "    '# pragma: allowlist secret' to a documented placeholder line."
+                    )
             if blocking:
                 return 4
             if advisory and args.strict_heuristics:
@@ -1424,7 +1489,10 @@ def main(argv=None):
             else:
                 ok("nothing to commit")
             if report["pr"]:
-                ok("pull request #%s %s" % (report["pr"].get("number"), report["pr"]["url"]))
+                ok(
+                    "pull request #%s %s"
+                    % (report["pr"].get("number"), report["pr"]["url"])
+                )
             elif report["pushed"]:
                 ok("pushed %s" % report["pushed"])
             else:
@@ -1453,7 +1521,9 @@ def main(argv=None):
         for line in exc.details:
             say("    " + str(line))
         if exc.code == 2:
-            say("    resolve the files above by hand, then run: python tools/mfsync.py sync")
+            say(
+                "    resolve the files above by hand, then run: python tools/mfsync.py sync"
+            )
         if exc.code == 4:
             say("    move the value to an environment variable / GitHub secret, or add")
             say("    '# pragma: allowlist secret' to a documented placeholder line.")
