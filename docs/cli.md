@@ -15,6 +15,7 @@ python main.py volumes dump.img
 ```bash
 python -m mountfile grep dump.img "password=" --encoding utf-8
 python -m mountfile hash dump.img
+python -m mountfile evidence-manifest evidence.img --output evidence.img.manifest.json
 python -m mountfile timeline dump.img --csv timeline.csv
 python -m mountfile timestomp dump.img --csv timeline.csv
 python -m mountfile search dump.img "credential" --files --max-results 100
@@ -29,7 +30,11 @@ python -m mountfile slack dump.img --slack-only \
 ```
 
 `grep` возвращает ограниченные byte offsets и контекст, `hash` вычисляет
-SHA-256, а `timeline`/`timestomp` принимают CSV внешнего коллектора. Отдельные
+SHA-256, а `evidence-manifest` потоково считает SHA-256 одного файла и создаёт
+новый JSON-файл только по явному `--output`; исходник открывается только для
+чтения, а существующий output никогда не перезаписывается. Эта команда не
+определяет формат контейнера и не считает логический media-stream hash. Команды
+`timeline`/`timestomp` принимают CSV внешнего коллектора. Отдельные
 `timeline-build`, `timeline-query`, `search`, `yara-scan`, `timestomp-scan` и
 `slack-extract` — filesystem-aware команды package CLI; они требуют доступного
 filesystem backend (обычно `pytsk3`/`libtsk`), а для YARA дополнительно нужен
@@ -44,7 +49,7 @@ filesystem backend (обычно `pytsk3`/`libtsk`), а для YARA дополн
 chain: это должен сделать вызывающий код.
 
 GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`) использует реестр этих
-подкоманд напрямую. Все 26 команд имеют в интерфейсе контекстную справку из
+подкоманд напрямую. Все 27 команд имеют в интерфейсе контекстную справку из
 того же CLI parser; аргументы передаются по одному на строку, без shell.
 
 | Команда | Назначение | Запись в образ |
@@ -62,6 +67,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 | `split` | разбить дамп по секции `[PARTITIONS]` файла `udev` | создаёт файлы в каталоге вывода |
 | `grep` | поиск строки/regex в байтах сырого образа | нет |
 | `hash` | SHA-256 образа | нет |
+| `evidence-manifest` | потоковый SHA-256 одного файла и отдельный JSON manifest | создаёт новый manifest |
 | `timeline` / `timestomp` | просмотр timeline CSV / проверка аномалий | нет |
 | `timeline-export` | нормализация timestamp CSV в UTC | создаёт CSV |
 | `yara` | YARA-сканирование по исходникам правил | нет |

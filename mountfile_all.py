@@ -471,6 +471,8 @@ def print_cheatsheet() -> None:
     python main.py ls <img> / --auto     # авто-подбор для любой команды
     python main.py grep <img> "password=" --encoding utf-16le
     python main.py hash <img>            # SHA-256 identity (read-only)
+    python -m mountfile evidence-manifest <img> --output <img>.manifest.json
+                                          # read-only byte hash; no format detection
     python main.py timeline <img> --csv timeline.csv
     python main.py timestomp <img> --csv timeline.csv
     python main.py timeline-export --csv timeline.csv --output utc.csv
