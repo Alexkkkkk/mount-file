@@ -34,7 +34,10 @@ jobs:
     # Только если основной workflow упал
     if: >-
       ${{ vars.ENABLE_AI_AUTOMATION == 'true' &&
-          github.event.workflow_run.conclusion == 'failure' }}
+          github.event.workflow_run.conclusion == 'failure' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
 
@@ -42,7 +45,7 @@ jobs:
       - name: Checkout failing ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
           fetch-depth: 0
 
       - name: Setup Python

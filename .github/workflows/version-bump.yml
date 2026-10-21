@@ -1,99 +1,132 @@
 name: version-bump
-
-# Automatic semantic versioning from conventional commits:
-#   feat:         -> minor
-#   fix: / perf:  -> patch
-#   any type!:    -> major (breaking change)
-# minor is evaluated before patch, so a fix in the same release cannot
-# downgrade a feat.
-#
-# The tag is pushed with the workflow's own GITHUB_TOKEN (which the tag
-# ruleset allows - only branches are protected). A tag pushed with
-# GITHUB_TOKEN does not fire other workflows by itself, therefore the
-# next stage is started explicitly with `gh workflow run`
-# (workflow_dispatch IS allowed to be triggered by GITHUB_TOKEN - it is
-# the documented exception to the recursion rule).
-
+# Tag only a tested main commit, with matching package/build versions.
 on:
-  push:
-    branches: [main]
-
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      patch:
+        description: 'Request a patch release even without a feat/fix commit'
+        required: false
+        default: false
+        type: boolean
 permissions:
-  contents: write
-  actions: write
-
+  contents: read
 concurrency:
-  group: version-bump
+  group: repository-maintenance-write
   cancel-in-progress: false
-
 jobs:
   bump:
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
     if: >-
-      !startsWith(github.event.head_commit.message, 'chore(release)') &&
-      !startsWith(github.event.head_commit.message, 'chore: autofix') &&
-      !contains(github.event.head_commit.message, '[skip version]')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REQUEST_PATCH: ${{ inputs.patch || false }}
+      TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # Never execute a PR/fork checkout in a privileged workflow_run.
+          ref: main
           fetch-depth: 0
-
-      - name: Compute the next version
-        id: ver
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - name: Verify latest main SHA has successful CI
+        id: eligible
         run: |
           set -euo pipefail
-          if git tag --points-at HEAD | grep -q '^v'; then
-            echo "HEAD is already tagged, nothing to do."
+          SHA=$(git rev-parse HEAD)
+          if [ "$SHA" != "$TESTED_SHA" ]; then
+            echo 'Newer main commit exists; its CI owns the release.'
             exit 0
           fi
-          LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
-          if [ -z "$LAST" ]; then
-            echo "next=v0.1.0" >> "$GITHUB_OUTPUT"
+          STATE=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name == "CI-Gate" and .app.slug == "github-actions")] | sort_by(.started_at) | last | .conclusion')
+          if [ "$STATE" != 'success' ]; then
+            echo 'CI-Gate has not passed; refusing to release.'
             exit 0
           fi
-          echo "last tag: $LAST"
-          LOG=$(git log "$LAST..HEAD" --no-merges --pretty=format:'%s')
-          echo "commits since $LAST:"; echo "$LOG"
-          BUMP=none
-          if echo "$LOG" | grep -qE '^[a-z]+(\([^)]*\))?!:';        then BUMP=major
-          elif echo "$LOG" | grep -qE '^feat(\([^)]*\))?:';        then BUMP=minor
-          elif echo "$LOG" | grep -qE '^(fix|perf)(\([^)]*\))?:';  then BUMP=patch
-          fi
-          echo "bump: $BUMP"
-          if [ "$BUMP" = "none" ]; then exit 0; fi
-          MAJ=$(echo "$LAST" | sed -E 's/^v([0-9]+).*/\1/')
-          MIN=$(echo "$LAST" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
-          PAT=$(echo "$LAST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
-          case "$BUMP" in
-            major) MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
-            minor) MIN=$((MIN + 1)); PAT=0 ;;
-            patch) PAT=$((PAT + 1)) ;;
-          esac
-          echo "next=v$MAJ.$MIN.$PAT" >> "$GITHUB_OUTPUT"
-
-      - name: Push the tag
-        if: steps.ver.outputs.next != ''
+          echo 'proceed=true' >> "$GITHUB_OUTPUT"
+      - name: Plan release
+        if: steps.eligible.outputs.proceed == 'true'
+        id: plan
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          TAG="${{ steps.ver.outputs.next }}"
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
-            echo "tag $TAG already exists on the remote, skipping."
+          FLAGS=()
+          if [ "$REQUEST_PATCH" = 'true' ]; then FLAGS+=(--patch); fi
+          python scripts/release_plan.py --json "${FLAGS[@]}" > "$RUNNER_TEMP/release-plan.json"
+          cat "$RUNNER_TEMP/release-plan.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release-plan.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key in ('tag', 'version', 'needs_version_pr', 'has_release_change'):
+                  value = plan[key]
+                  if isinstance(value, bool):
+                      value = str(value).lower()
+                  output.write(f'{key}={value}\n')
+          PY
+      - name: Update source versions through a pull request
+        if: steps.plan.outputs.has_release_change == 'true' && steps.plan.outputs.needs_version_pr == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          BRANCH="automation/release-$VERSION"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Release branch $BRANCH exists; leaving it unchanged."
+          else
+            python scripts/stamp_version.py "$TAG"
+            python tools/mfsync.py check --strict
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch -c "$BRANCH"
+            git add mountfile/__init__.py pyproject.toml
+            git commit -m "chore(release): synchronize $VERSION"
+            # Token comes from the runner environment, never from a URL.
+            git -c http.https://github.com/.extraheader= -c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' push -u origin "$BRANCH"
+          fi
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --state all --json number --jq 'length')
+          if [ "$EXISTING" = '0' ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore(release): synchronize $VERSION" \
+              --body 'Updates package and build metadata together. Merge only after checks pass. The next successful main CI tags the tested commit and starts release builds. If created with GITHUB_TOKEN, approve its workflows on GitHub.'
+          fi
+      - name: Tag tested commit and start release
+        if: steps.plan.outputs.has_release_change == 'true' && steps.plan.outputs.needs_version_pr == 'false'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/stamp_version.py "$TAG" --check
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG exists; never overwriting it."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          REMOTE_SHA=$(git ls-remote --heads origin main | cut -f1)
+          if [ "$REMOTE_SHA" != "$TESTED_SHA" ]; then
+            echo 'Main advanced while planning; its next CI owns the release.'
             exit 0
           fi
           git tag -a "$TAG" -m "release $TAG"
           git push origin "$TAG"
-          echo "pushed $TAG"
-
-      - name: Start the release stage
-        if: steps.ver.outputs.next != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh workflow run create-release.yml \
-            --repo "$GITHUB_REPOSITORY" --ref main \
-            -f tag="${{ steps.ver.outputs.next }}"
-          echo "dispatched create-release for ${{ steps.ver.outputs.next }}"
+          gh workflow run create-release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"

@@ -69,3 +69,10 @@ site/
 .nox/
 .ipynb_checkpoints/
 *.egg
+
+# Local credentials/configuration must never enter source synchronization.
+.env
+.env.*
+!.env.example
+!.env.sample
+.mfsync/

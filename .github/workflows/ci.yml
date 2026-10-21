@@ -194,3 +194,25 @@ jobs:
         run: |
           python -c "from mountfile.mainwindow import MainWindow; print('GUI import OK')"
           python -m pytest tests/ -v
+  ci-gate:
+    name: CI-Gate
+    needs: [tests, integration, build, gui-import, gui]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      TESTS: ${{ needs.tests.result }}
+      INTEGRATION: ${{ needs.integration.result }}
+      BUILD: ${{ needs.build.result }}
+      GUI_IMPORT: ${{ needs.gui-import.result }}
+      GUI: ${{ needs.gui.result }}
+    steps:
+      - name: Require every CI stage to succeed
+        run: |
+          set -euo pipefail
+          for result in "$TESTS" "$INTEGRATION" "$BUILD" "$GUI_IMPORT" "$GUI"; do
+            if [ "$result" != 'success' ]; then
+              echo "::error::A required CI stage ended with $result"
+              exit 1
+            fi
+          done

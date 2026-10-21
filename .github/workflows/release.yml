@@ -46,13 +46,15 @@ jobs:
           echo "tag: $TAG"
           # Backfill-aware: rebuild only when at least one expected asset
           # (Windows exe, Linux binary, macOS binary) is still missing.
-          HAVE=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          HAVE=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)
           MISSING=0
-          for pat in '\.exe$' 'MountFile-linux-x86-64$' 'MountFile-macos-arm64$'; do
-            if ! echo "$HAVE" | grep -q "$pat"; then
-              echo "missing asset matching: $pat"
-              MISSING=1
-            fi
+          for asset in MountFile.exe MountFile-win10-x64.exe MountFile-linux-x86-64 MountFile-macos-arm64; do
+            for expected in "$asset" "$asset.sha256"; do
+              if ! echo "$HAVE" | grep -Fxq "$expected"; then
+                echo "missing asset: $expected"
+                MISSING=1
+              fi
+            done
           done
           if [ "$MISSING" -eq 0 ]; then
             echo "release $TAG already carries all binaries - nothing to rebuild."
@@ -156,9 +158,11 @@ jobs:
 
       - name: Stamp the release version into the package
         shell: pwsh
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          python scripts/stamp_version.py "${{ github.event.release.tag_name || inputs.tag }}"
-          if ($LASTEXITCODE -ne 0) { throw 'could not stamp the version into mountfile/__init__.py' }
+          python scripts/stamp_version.py $env:TAG
+          if ($LASTEXITCODE -ne 0) { throw 'could not synchronize package/build versions' }
 
       - name: Build one-file executable
         shell: pwsh
@@ -247,6 +251,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install PyQt6 pyinstaller
           python -m pip install pytsk3 || echo "pytsk3 unavailable - building with the built-in FAT32 engine only"
+      - name: Stamp package and build metadata from the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python scripts/stamp_version.py "$TAG"
       - name: Build
         run: NAME=${{ matrix.name }} ./build_exe.sh
       - name: Smoke test the binary
@@ -317,11 +325,16 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes || true
             sleep 15
           done
+          UPLOADED=false
           for i in 1 2 3 4 5; do
             if gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" dist/MountFile* --clobber; then
-              echo "upload OK on attempt $i"; break
+              echo "upload OK on attempt $i"; UPLOADED=true; break
             fi
             echo "upload attempt $i failed, retrying in 15s..."; sleep 15
           done
+          if [ "$UPLOADED" != true ]; then
+            echo '::error::All release upload attempts failed'
+            exit 1
+          fi
           echo "--- assets now in $TAG ---"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
