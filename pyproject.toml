@@ -84,12 +84,14 @@ fuzz = [
 mountfile = "mountfile.__main__:main"
 mountfile-rw = "mountfile_rw_complete:main"
 mountfile-rw-v2 = "mountfile_rw_v2:main"
+mountfile-install = "install_mountfile:main"
 
 [tool.setuptools]
 # Top-level RW modules are referenced by [project.scripts] below; without
 # py-modules setuptools ships only the ``mountfile`` package and the
 # ``mountfile-rw`` / ``mountfile-rw-v2`` entry points never get installed.
 py-modules = [
+    "install_mountfile",
     "mountfile_universal_rw",
     "mountfile_rw_complete",
     "mountfile_rw_v2",
