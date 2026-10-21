@@ -24,13 +24,7 @@ if not HAVE_QT:  # pragma: no cover
 
 from mountfile import tc_window
 from mountfile.ext_debugfs_writer import Ext234ImageWriter, Ext234Provider
-from mountfile.qt_compat import (
-    DialogAccepted,
-    MB_No,
-    MB_Yes,
-    QApplication,
-    QMessageBox,
-)
+from mountfile.qt_compat import DialogAccepted, MB_No, MB_Yes, QApplication, QMessageBox
 
 
 @pytest.fixture(scope="module")
@@ -48,9 +42,9 @@ def test_editable_text_preserves_cp1251_bom_and_crlf():
     assert decoded is not None
     text, encoding, bom, newline = decoded
     assert "name=Привет" in text
-    assert tc_window._encode_editable_text(text + "\nkey=value", encoding, bom, newline) == (
-        b"\xef\xbb\xbf[main]\r\nname=\xcf\xf0\xe8\xe2\xe5\xf2\r\n\r\nkey=value"
-    )
+    assert tc_window._encode_editable_text(
+        text + "\nkey=value", encoding, bom, newline
+    ) == (b"\xef\xbb\xbf[main]\r\nname=\xcf\xf0\xe8\xe2\xe5\xf2\r\n\r\nkey=value")
 
 
 def test_local_edit_uses_atomic_replace(tmp_path):
@@ -212,7 +206,11 @@ def test_f4_saves_existing_ext4_ini_through_real_backend(monkeypatch, tmp_path, 
             self.ends_with_newline = text.endswith("\n")
 
         def text(self):
-            return self.updated + ("\n" if self.ends_with_newline and not self.updated.endswith("\n") else "")
+            return self.updated + (
+                "\n"
+                if self.ends_with_newline and not self.updated.endswith("\n")
+                else ""
+            )
 
     def edit_dialog(dialog):
         dialog.updated = "UARTOnOff=1"

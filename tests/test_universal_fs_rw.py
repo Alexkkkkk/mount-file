@@ -5,6 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
+
 from mountfile.universal_fs_rw import (
     Fat32RW,
     LoopMountRW,
@@ -112,7 +113,9 @@ def test_failed_overwrite_data_write_preserves_original_and_releases_new_chain(
         fs.close()
 
 
-def test_new_file_with_no_directory_slot_releases_allocated_chain(tmp_path, monkeypatch):
+def test_new_file_with_no_directory_slot_releases_allocated_chain(
+    tmp_path, monkeypatch
+):
     _, fs = _open_fat_rw(tmp_path)
     try:
         next_free = fs._find_free_cluster(1)[0]

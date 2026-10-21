@@ -4,7 +4,12 @@ from io import BytesIO
 
 import pytest
 
-from mountfile.dfir_slack import InvalidSlackBounds, SlackResult, extract_slack, read_file_slack
+from mountfile.dfir_slack import (
+    InvalidSlackBounds,
+    SlackResult,
+    extract_slack,
+    read_file_slack,
+)
 
 
 def test_extracts_only_final_cluster_slack_at_absolute_offset(tmp_path):
@@ -37,11 +42,15 @@ def test_stream_position_and_evidence_bytes_are_preserved():
 def test_empty_and_cluster_aligned_files_explicitly_have_no_slack():
     image = b"abcdefgh"
 
-    assert read_file_slack(image, last_cluster_offset=0, file_size=0, cluster_size=4) == (
+    assert read_file_slack(
+        image, last_cluster_offset=0, file_size=0, cluster_size=4
+    ) == (
         b"",
         None,
     )
-    assert read_file_slack(image, last_cluster_offset=4, file_size=8, cluster_size=4) == (
+    assert read_file_slack(
+        image, last_cluster_offset=4, file_size=8, cluster_size=4
+    ) == (
         b"",
         None,
     )

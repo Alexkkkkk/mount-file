@@ -27,7 +27,9 @@ def _load_yara() -> Any:
 
     try:
         return importlib.import_module("yara")
-    except Exception as exc:  # pragma: no cover - exact loader error is platform-specific
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - exact loader error is platform-specific
         raise YaraUnavailableError(
             "YARA scanning requires the optional 'yara-python' package; "
             "install it with 'python -m pip install yara-python' and retry"
@@ -41,7 +43,9 @@ def _compiled_rules(rules: Any, yara_module: Optional[Any]) -> Any:
     if callable(matcher):
         return rules
     if rules is None:
-        raise ValueError("rules must be YARA source, a rule-file path, or compiled rules")
+        raise ValueError(
+            "rules must be YARA source, a rule-file path, or compiled rules"
+        )
 
     module = yara_module if yara_module is not None else _load_yara()
     compile_rules = getattr(module, "compile", None)

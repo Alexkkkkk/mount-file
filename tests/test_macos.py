@@ -50,7 +50,9 @@ def test_apfs_missing_tool_is_explicit_and_does_not_mount(monkeypatch, tmp_path)
     image = _volume(tmp_path, macos.APFS_CONTAINER_SIGNATURE)
     calls = []
     monkeypatch.setattr(macos.shutil, "which", lambda name: None)
-    monkeypatch.setattr(macos.subprocess, "Popen", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(
+        macos.subprocess, "Popen", lambda *args, **kwargs: calls.append(args)
+    )
 
     with pytest.raises(macos.AdapterUnavailableError, match="apfs-fuse"):
         macos.APFSFuseAdapter(image)

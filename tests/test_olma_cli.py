@@ -48,8 +48,8 @@ def project(tmp_path):
     root.mkdir()
     (root / "mod.py").write_text(
         "def load(p):\n"
-        "    f = open(p)\n"          # OL001: open() without with
-        "    data = f.read()\n"      # OL002/OL009: read() with no size
+        "    f = open(p)\n"  # OL001: open() without with
+        "    data = f.read()\n"  # OL002/OL009: read() with no size
         "    return data\n",
         encoding="utf-8",
     )
@@ -217,7 +217,9 @@ def test_fix_apply_reports_counts(capsys, monkeypatch):
 
     def fake_fix(*, dry_run=True, root=None):
         seen["dry_run"] = dry_run
-        return [FixResult(file="mod.py", line=2, rule_id="OL001", applied=True, detail="d")]
+        return [
+            FixResult(file="mod.py", line=2, rule_id="OL001", applied=True, detail="d")
+        ]
 
     monkeypatch.setattr(facade, "fix", fake_fix)
     assert olma_cli.olma_main(["fix", "--apply"]) == 0
@@ -231,7 +233,11 @@ def test_fix_lists_skipped_results(capsys, monkeypatch):
     monkeypatch.setattr(
         facade,
         "fix",
-        lambda **kw: [FixResult(file="a.py", line=1, rule_id="OL002", applied=False, detail="skip")],
+        lambda **kw: [
+            FixResult(
+                file="a.py", line=1, rule_id="OL002", applied=False, detail="skip"
+            )
+        ],
     )
     assert olma_cli.olma_main(["fix"]) == 0
     assert "[SKIP]" in capsys.readouterr().out
@@ -389,7 +395,14 @@ def test_publish_pr_publishes_collected_changes(capsys, project, monkeypatch):
     monkeypatch.setattr("mountfile.olma.github.from_env", lambda repo, dry_run: Gh())
     assert (
         olma_cli.olma_main(
-            ["publish-pr", "--apply", "--root", str(project), "--branch-prefix", "olma-x"]
+            [
+                "publish-pr",
+                "--apply",
+                "--root",
+                str(project),
+                "--branch-prefix",
+                "olma-x",
+            ]
         )
         == 0
     )
@@ -458,7 +471,10 @@ def test_sync_with_apply_runs_smoke_and_skips_publish(capsys, project, monkeypat
     monkeypatch.setattr(facade, "analyze", lambda root=None: [_issue()])
     monkeypatch.setattr(facade, "fix", lambda **kw: [])
     monkeypatch.setattr(facade, "trace_stats", lambda: {})
-    assert olma_cli.olma_main(["sync", "--apply", "--no-publish", "--root", str(project)]) == 0
+    assert (
+        olma_cli.olma_main(["sync", "--apply", "--no-publish", "--root", str(project)])
+        == 0
+    )
     out = capsys.readouterr().out
     assert "smoke:" in out
 

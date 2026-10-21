@@ -40,11 +40,16 @@ class YaraPlugin:
             try:
                 self._yara = importlib.import_module("yara")
             except Exception as exc:
-                self._set_status("unavailable", "optional dependency yara-python is unavailable: %s" % exc)
+                self._set_status(
+                    "unavailable",
+                    "optional dependency yara-python is unavailable: %s" % exc,
+                )
         if self._yara is not None and (rules is not None or rule_path is not None):
             self._set_status("available", "yara-python loaded; rules compile on open")
         elif self._yara is not None:
-            self._set_status("unconfigured", "provide rules or rule_path to enable scanning")
+            self._set_status(
+                "unconfigured", "provide rules or rule_path to enable scanning"
+            )
 
     @property
     def available(self) -> bool:
@@ -73,7 +78,9 @@ class YaraPlugin:
                 self._compiled = self._yara.compile(source=source)
         except Exception as exc:
             self._compiled = None
-            self._set_status("unavailable", "YARA rules could not be compiled: %s" % exc)
+            self._set_status(
+                "unavailable", "YARA rules could not be compiled: %s" % exc
+            )
 
     def on_file(self, event: FileEvent, data: Optional[bytes] = None) -> None:
         if self._compiled is None:
@@ -88,7 +95,9 @@ class YaraPlugin:
             for match in found or ():
                 rule = getattr(match, "rule", str(match))
                 tags = tuple(getattr(match, "tags", ()) or ())
-                self._matches.append({"path": event.path, "rule": str(rule), "tags": tags})
+                self._matches.append(
+                    {"path": event.path, "rule": str(rule), "tags": tags}
+                )
         except Exception as exc:
             self._set_status("unavailable", "YARA scan failed: %s" % exc)
 
@@ -118,4 +127,11 @@ YaraAdapter = YaraPlugin
 create_yara_plugin = create_plugin
 PLUGINS = (YaraPlugin,)
 
-__all__ = ["PLUGINS", "YaraAdapter", "YaraPlugin", "create_plugin", "create_yara_plugin", "register"]
+__all__ = [
+    "PLUGINS",
+    "YaraAdapter",
+    "YaraPlugin",
+    "create_plugin",
+    "create_yara_plugin",
+    "register",
+]

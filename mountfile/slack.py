@@ -123,7 +123,9 @@ def find_slack_regions_from_fs(
     return regions
 
 
-def find_slack_regions(image_path: os.PathLike | str, **kwargs: Any) -> list[SlackRegion]:
+def find_slack_regions(
+    image_path: os.PathLike | str, **kwargs: Any
+) -> list[SlackRegion]:
     """Locate slack regions in ``image_path`` (needs pytsk3)."""
 
     from .timeline import open_tsk_fs
@@ -143,7 +145,9 @@ def read_region(image_path: os.PathLike | str, offset: int, length: int) -> byte
 
 def _safe_name(path: str) -> str:
     cleaned = path.strip("/").replace("/", "_").replace("\\", "_") or "root"
-    return "".join(char if char.isalnum() or char in "._-" else "_" for char in cleaned)[:120]
+    return "".join(
+        char if char.isalnum() or char in "._-" else "_" for char in cleaned
+    )[:120]
 
 
 def extract_slack(

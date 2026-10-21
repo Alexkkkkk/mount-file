@@ -51,10 +51,10 @@ from mountfile.rw.universal import (
 # this standalone module as a compatibility entry point for existing scripts.
 from mountfile.universal_fs_rw import JournalV2 as PackageJournalV2
 
-
 # ===========================================================================
 # 1. Journal v2: реальный rollback по offset/length
 # ===========================================================================
+
 
 class JournalV2(Journal):
     """
@@ -141,8 +141,15 @@ class JournalV2(Journal):
             "FROM journal WHERE committed=0 AND backup_path IS NOT NULL"
         ).fetchall()
         return [
-            {"tx_id": r[0], "op": r[1], "path": r[2], "offset": r[3],
-             "length": r[4], "backup": r[5], "created_at": r[6]}
+            {
+                "tx_id": r[0],
+                "op": r[1],
+                "path": r[2],
+                "offset": r[3],
+                "length": r[4],
+                "backup": r[5],
+                "created_at": r[6],
+            }
             for r in rows
         ]
 
@@ -153,6 +160,7 @@ class JournalV2(Journal):
 
 # Use the package implementation rather than the historical duplicate above.
 JournalV2 = PackageJournalV2
+
 
 class VerifiedFat32Adapter(Fat32Adapter):
     """
@@ -225,9 +233,7 @@ class VerifiedFat32Adapter(Fat32Adapter):
         report = self.verifier.verify(self.image_path, FsType.FAT32)
         if not report.ok:
             self.journal.rollback()
-            raise RWError(
-                f"verify провалился после {op}({path}): {report.details}"
-            )
+            raise RWError(f"verify провалился после {op}({path}): {report.details}")
 
 
 class VerifiedExt4RW(Ext4RW):
@@ -258,8 +264,9 @@ class VerifiedNtfsRW(NtfsRW):
             raise RWError(f"ntfs verify failed: {report.details}")
 
 
-def create_verified(image_path: Path, fs: Optional[FsType] = None,
-                    mode: Mode = Mode.RO):
+def create_verified(
+    image_path: Path, fs: Optional[FsType] = None, mode: Mode = Mode.RO
+):
     """Фабрика проверенных бэкендов."""
     fs = fs or detect_fs(image_path)
     if fs == FsType.FAT32:
@@ -274,6 +281,7 @@ def create_verified(image_path: Path, fs: Optional[FsType] = None,
 # ===========================================================================
 # 3. MountFileBridge: RO-мост к существующему Mount File
 # ===========================================================================
+
 
 class MountFileBridge:
     """
@@ -295,6 +303,7 @@ class MountFileBridge:
         """
         try:
             from mountfile import cli as mf_cli  # type: ignore
+
             return mf_cli
         except Exception:
             return None
@@ -315,8 +324,7 @@ class MountFileBridge:
         try:
             fs = self._native()
             return [
-                {"name": e.name, "type": "dir" if e.is_dir else "file",
-                 "size": e.size}
+                {"name": e.name, "type": "dir" if e.is_dir else "file", "size": e.size}
                 for e in fs.list_dir(fs.find_dir(path))
             ]
         except ImportError:
@@ -362,8 +370,10 @@ class MountFileBridge:
         fs = self._tsk()
         d = fs.open_dir(path)
         return [
-            {"name": e.info.name.name.decode("utf-8", "replace"),
-             "type": "dir" if e.info.meta.type == 2 else "file"}
+            {
+                "name": e.info.name.name.decode("utf-8", "replace"),
+                "type": "dir" if e.info.meta.type == 2 else "file",
+            }
             for e in d
         ]
 
@@ -383,6 +393,7 @@ class MountFileBridge:
 # 4. Property-тесты (hypothesis)
 # ===========================================================================
 
+
 def _make_fake_image(tmp: Path) -> Path:
     """Минимальный валидный FAT32-загрузочный сектор (для in-memory тестов)."""
     img = tmp / "test.img"
@@ -392,7 +403,7 @@ def _make_fake_image(tmp: Path) -> Path:
     boot[11:13] = (512).to_bytes(2, "little")
     boot[13] = 1
     boot[14:16] = (32).to_bytes(2, "little")  # reserved sectors
-    boot[16] = 2                              # num FATs
+    boot[16] = 2  # num FATs
     boot[21] = 0xF8
     boot[82:90] = b"FAT32   "
     boot[510:512] = b"\x55\xaa"
@@ -415,8 +426,7 @@ def test_hash_chain_invariant():
     """Каждая запись ссылается на sha256 предыдущей."""
     with _fake_fat32_journal() as (img, j):
         tx1 = j.begin("create", "/a")
-        j._conn.execute("UPDATE journal SET sha256=? WHERE tx_id=?",
-                        ("a" * 64, tx1))
+        j._conn.execute("UPDATE journal SET sha256=? WHERE tx_id=?", ("a" * 64, tx1))
         j._conn.commit()
         j._last_hash = "a" * 64
         tx2 = j.begin("delete", "/a")
@@ -457,16 +467,23 @@ def test_uncommitted_listed():
 # --- hypothesis --------------------------------------------------------------
 
 try:
-    from hypothesis import given, settings, strategies as st
+    from hypothesis import given, settings
+    from hypothesis import strategies as st
 
-    @given(ops=st.lists(
-        st.tuples(
-            st.sampled_from(["create", "delete", "rename"]),
-            st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126),
-                    min_size=1, max_size=20),
-        ),
-        min_size=1, max_size=10,
-    ))
+    @given(
+        ops=st.lists(
+            st.tuples(
+                st.sampled_from(["create", "delete", "rename"]),
+                st.text(
+                    alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+                    min_size=1,
+                    max_size=20,
+                ),
+            ),
+            min_size=1,
+            max_size=10,
+        )
+    )
     @settings(max_examples=20, deadline=None)
     def test_random_op_sequence_leaves_valid_image(ops):
         """
@@ -490,6 +507,7 @@ try:
                     j.rollback(tx)
             report = VerificationEngine().verify(img, FsType.FAT32)
             assert report.ok, report.details
+
 except ImportError:
     # hypothesis не установлен — пропускаем
     pass
@@ -498,6 +516,7 @@ except ImportError:
 # ===========================================================================
 # 5. Fuzz-тесты (atheris)
 # ===========================================================================
+
 
 def _fuzz_one(data: bytes) -> None:
     """
@@ -531,6 +550,7 @@ def run_fuzz(seconds: int = 30) -> int:
         print("atheris не установлен — пропуск fuzz.")
         return 0
     import sys as _sys
+
     atheris.Setup([_sys.argv[0]], _fuzz_one)
     atheris.Fuzz()
     return 0
@@ -539,6 +559,7 @@ def run_fuzz(seconds: int = 30) -> int:
 # ===========================================================================
 # 6. CLI
 # ===========================================================================
+
 
 def cmd_migrate(args) -> int:
     image = Path(args.image)
@@ -553,9 +574,11 @@ def cmd_migrate(args) -> int:
 def cmd_selftest(args) -> int:
     print("=== selftest v2 ===")
     failures = 0
-    for test in (test_hash_chain_invariant,
-                 test_rollback_restores_bytes,
-                 test_uncommitted_listed):
+    for test in (
+        test_hash_chain_invariant,
+        test_rollback_restores_bytes,
+        test_uncommitted_listed,
+    ):
         try:
             test()
             print(f"ok: {test.__name__}")
@@ -584,6 +607,7 @@ def cmd_fuzz(args) -> int:
 
 def build_parser():
     import argparse
+
     p = argparse.ArgumentParser(prog="mountfile-rw-v2")
     sub = p.add_subparsers(dest="cmd", required=True)
 

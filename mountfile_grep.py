@@ -25,7 +25,9 @@ OVERLAP = 4096
 
 def _compile_pattern(pattern: str, use_regex: bool, unicode_mode: bool) -> re.Pattern:
     """Компилирует шаблон с учётом флагов."""
-    flags = re.IGNORECASE if not use_regex else 0  # Для regex регистрозависимость по умолчанию
+    flags = (
+        re.IGNORECASE if not use_regex else 0
+    )  # Для regex регистрозависимость по умолчанию
     if unicode_mode:
         # Для UTF-16LE ищем в декодированном тексте
         return re.compile(pattern, flags | re.UNICODE)
@@ -105,7 +107,11 @@ def search_content(
                 context = context_bytes.decode("utf-8", errors="replace")
                 yield {
                     "offset": byte_offset,
-                    "match": match.group().decode("utf-8", errors="replace") if not use_regex else match.group().decode("utf-8", errors="replace"),
+                    "match": (
+                        match.group().decode("utf-8", errors="replace")
+                        if not use_regex
+                        else match.group().decode("utf-8", errors="replace")
+                    ),
                     "context": context,
                 }
                 found += 1

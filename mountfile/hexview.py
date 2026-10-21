@@ -5,10 +5,24 @@
 
 from __future__ import annotations
 
-from .qt_compat import (FONT_TYPEWRITER, MOUSE_LEFT, Key_Down, Key_Left,
-                        Key_PageDown, Key_PageUp, Key_Right, Key_Up,
-                        QAbstractScrollArea, QColor, QFont, QFontMetrics,
-                        QPainter, QPen, event_pos, font_char_width)
+from .qt_compat import (
+    FONT_TYPEWRITER,
+    MOUSE_LEFT,
+    Key_Down,
+    Key_Left,
+    Key_PageDown,
+    Key_PageUp,
+    Key_Right,
+    Key_Up,
+    QAbstractScrollArea,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPen,
+    event_pos,
+    font_char_width,
+)
 
 
 class HexView(QAbstractScrollArea):

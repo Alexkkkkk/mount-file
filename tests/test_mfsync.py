@@ -37,8 +37,11 @@ M = _load_module()
 
 def run_git(cwd, *args):
     proc = subprocess.run(
-        ["git"] + list(args), cwd=str(cwd),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+        ["git"] + list(args),
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
@@ -93,8 +96,7 @@ def test_scan_detects_github_pat(tmp_path):
 
 def test_scan_ignores_placeholder_values(tmp_path):
     (tmp_path / "doc.md").write_text(
-        'Set password = "your_password_here" first.\n'
-        'api_key = "${API_KEY}"\n',
+        'Set password = "your_password_here" first.\n' 'api_key = "${API_KEY}"\n',
         encoding="utf-8",
     )
     assert M.scan_files(tmp_path, ["doc.md"]) == []
@@ -103,7 +105,9 @@ def test_scan_ignores_placeholder_values(tmp_path):
 def test_private_key_header_is_advisory(tmp_path):
     # A PEM header alone is a shape, not a credential: YARA rules and test
     # fixtures legitimately contain it, so it must not block a commit.
-    (tmp_path / "k.txt").write_text("-----BEGIN RSA PRIVATE KEY-----\nabc\n", encoding="utf-8")
+    (tmp_path / "k.txt").write_text(
+        "-----BEGIN RSA PRIVATE KEY-----\nabc\n", encoding="utf-8"
+    )
     findings = M.scan_files(tmp_path, ["k.txt"])
     assert [f["kind"] for f in findings] == ["private key"]
     assert findings[0]["severity"] == "heuristic"
@@ -157,7 +161,9 @@ def test_sensitive_filenames():
 
 def test_redact_secret_removes_env_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp_" + "z" * 36)
-    text = M.redact_secret("push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36))
+    text = M.redact_secret(
+        "push https://x-access-token:ghp_%s@github.com/o/r" % ("z" * 36)
+    )
     assert "ghp_" not in text
     assert "***" in text
 
@@ -166,18 +172,26 @@ def test_redact_secret_removes_env_token(monkeypatch):
 
 
 def test_version_parity_ok(repo):
-    (repo / "pyproject.toml").write_text('[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8"
+    )
     (repo / "mountfile").mkdir()
-    (repo / "mountfile" / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+    (repo / "mountfile" / "__init__.py").write_text(
+        '__version__ = "1.2.3"\n', encoding="utf-8"
+    )
     report = M.check_version_parity(str(repo))
     assert report["ok"] is True
     assert report["values"] == ["1.2.3"]
 
 
 def test_version_parity_mismatch(repo):
-    (repo / "pyproject.toml").write_text('[project]\nversion = "1.2.3"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nversion = "1.2.3"\n', encoding="utf-8"
+    )
     (repo / "mountfile").mkdir()
-    (repo / "mountfile" / "__init__.py").write_text('__version__ = "1.2.4"\n', encoding="utf-8")
+    (repo / "mountfile" / "__init__.py").write_text(
+        '__version__ = "1.2.4"\n', encoding="utf-8"
+    )
     report = M.check_version_parity(str(repo))
     assert report["ok"] is False
     assert sorted(report["values"]) == ["1.2.3", "1.2.4"]
@@ -315,7 +329,9 @@ def test_sync_without_push(repo):
     report = M.sync(str(repo), do_push=False)
     assert report["commit"]
     assert report["pushed"] == ""
-    assert run_git(repo, "rev-parse", "HEAD") != run_git(repo, "rev-parse", "origin/main")
+    assert run_git(repo, "rev-parse", "HEAD") != run_git(
+        repo, "rev-parse", "origin/main"
+    )
 
 
 def test_sync_requires_pr_when_push_rejected(repo, monkeypatch):
@@ -370,6 +386,7 @@ def test_watch_commits_after_change(repo):
 
     M.sync = counting_sync
     try:
+
         def writer():
             time.sleep(0.4)
             (repo / "watched.txt").write_text("w", encoding="utf-8")
@@ -392,9 +409,13 @@ def test_cli_status_json(repo, capsys):
 
 
 def test_cli_check_strict_fails_on_mismatch(repo, capsys):
-    (repo / "pyproject.toml").write_text('[project]\nversion = "9.9.9"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nversion = "9.9.9"\n', encoding="utf-8"
+    )
     (repo / "mountfile").mkdir()
-    (repo / "mountfile" / "__init__.py").write_text('__version__ = "9.9.8"\n', encoding="utf-8")
+    (repo / "mountfile" / "__init__.py").write_text(
+        '__version__ = "9.9.8"\n', encoding="utf-8"
+    )
     assert M.main(["--cwd", str(repo), "check"]) == 0
     assert M.main(["--cwd", str(repo), "check", "--strict"]) == 1
 

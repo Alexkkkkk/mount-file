@@ -17,7 +17,14 @@
 
 from __future__ import annotations
 
-import argparse, ast, os, py_compile, shutil, subprocess, sys, tempfile
+import argparse
+import ast
+import os
+import py_compile
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 MARKER = "# MOUNTFILE_FIX"
@@ -27,6 +34,7 @@ BAK = ".bak"
 # --------------------------------------------------------------------------- #
 # Утилиты
 # --------------------------------------------------------------------------- #
+
 
 def find_root(start: Path) -> Path:
     cur = start.resolve()
@@ -1535,7 +1543,7 @@ def create_olma_package(root: Path, *, dry: bool) -> int:
 # ПАТЧИ СУЩЕСТВУЮЩИХ МОДУЛЕЙ
 # =========================================================================== #
 
-OLMA_INTEGRATION_BLOCK = '''
+OLMA_INTEGRATION_BLOCK = """
 # --- MOUNTFILE_FIX: OLMA integration ---------------------------------------
 try:
     from mountfile.olma import olma as _olma
@@ -1545,7 +1553,7 @@ except Exception as _olma_err:  # noqa: BLE001
     import sys as _sys
     print(f"[OLMA] init warning: {_olma_err}", file=_sys.stderr)
 # --- /MOUNTFILE_FIX --------------------------------------------------------
-'''
+"""
 
 
 def patch_main(text: str) -> str:
@@ -1553,7 +1561,7 @@ def patch_main(text: str) -> str:
     if "_olma_main" in text:
         return text
 
-    helper = '''
+    helper = """
 
 # --- MOUNTFILE_FIX: OLMA CLI -----------------------------------------------
 
@@ -1590,7 +1598,7 @@ def _mf_diag() -> int:
     return 0
 
 # --- /MOUNTFILE_FIX --------------------------------------------------------
-'''
+"""
     text = insert_after_imports(text, helper)
 
     # Автоинициализация OLMA после импортов
@@ -1601,12 +1609,12 @@ def _mf_diag() -> int:
         text = text.replace(
             'if __name__ == "__main__":',
             'if __name__ == "__main__":\n'
-            '    import sys as _sys\n'
+            "    import sys as _sys\n"
             '    if "--diag" in _sys.argv:\n'
-            '        raise SystemExit(_mf_diag())\n'
+            "        raise SystemExit(_mf_diag())\n"
             '    if "--olma" in _sys.argv:\n'
             '        idx = _sys.argv.index("--olma")\n'
-            '        raise SystemExit(_olma_main(_sys.argv[idx + 1:]))',
+            "        raise SystemExit(_olma_main(_sys.argv[idx + 1:]))",
             1,
         )
     return text
@@ -1661,7 +1669,7 @@ __all__ = ["QtCore", "QtGui", "QtWidgets", "Qt", "pyqtSignal", "pyqtSlot",
 def patch_fat32(text: str) -> str:
     if "OlmaChain" in text:
         return text
-    block = '''
+    block = """
 # --- MOUNTFILE_FIX: OLMA FAT32 helpers -------------------------------------
 try:
     from mountfile.olma.core import (
@@ -1701,14 +1709,14 @@ def _safe_free_chain(fat_get, fat_set, start, mc=FAT32_MAX_CLUSTER):
         pass
     return freed
 # --- /MOUNTFILE_FIX --------------------------------------------------------
-'''
+"""
     return insert_after_imports(text, block)
 
 
 def patch_partition(text: str) -> str:
     if "OlmaPartitionTable" in text:
         return text
-    block = '''
+    block = """
 # --- MOUNTFILE_FIX: OLMA partition helpers ---------------------------------
 try:
     from mountfile.olma.core import (
@@ -1745,14 +1753,14 @@ def _clamp_partition(start, size, total):
     p = OlmaPartition(0, start, size).clamp(total)
     return p.start_sector, p.size_sectors
 # --- /MOUNTFILE_FIX --------------------------------------------------------
-'''
+"""
     return insert_after_imports(text, block)
 
 
 def patch_vfs(text: str) -> str:
     if "safe_read" in text and "OlmaHandle" in text:
         return text
-    block = '''
+    block = """
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
     from mountfile.olma.core import OlmaHandle, OlmaError
@@ -1780,14 +1788,14 @@ def safe_read_exact(fh, offset, size):
     d = safe_read(fh, offset, size)
     return d if len(d) == size else None
 # --- /MOUNTFILE_FIX --------------------------------------------------------
-'''
+"""
     return insert_after_imports(text, block)
 
 
 def patch_updater(text: str) -> str:
     if "_safe_download" in text:
         return text
-    block = '''
+    block = """
 # --- MOUNTFILE_FIX: OLMA safe updater --------------------------------------
 try:
     from mountfile.olma.core import (
@@ -1813,13 +1821,14 @@ def _atomic_write(path, data):
         return
     with _OlmaTx(path) as tx: tx.write_all(data)
 # --- /MOUNTFILE_FIX --------------------------------------------------------
-'''
+"""
     return insert_after_imports(text, block)
 
 
 def patch_requirements(root: Path, *, dry: bool) -> bool:
     p = root / "requirements.txt"
-    if not p.exists(): return False
+    if not p.exists():
+        return False
     t = read(p)
     if MARKER in t:
         print(f"  [ok] {p.name}")
@@ -1843,6 +1852,7 @@ def patch_requirements(root: Path, *, dry: bool) -> bool:
 # =========================================================================== #
 # ОРКЕСТРАЦИЯ
 # =========================================================================== #
+
 
 def apply_all(root: Path, *, dry: bool, force: bool) -> int:
     print(f"Корень проекта: {root}")
@@ -1880,7 +1890,8 @@ def check_all(root: Path) -> int:
     print(f"Проверка синтаксиса в: {root}")
     bad = 0
     for p in sorted(root.rglob("*.py")):
-        if p.name == Path(__file__).name: continue
+        if p.name == Path(__file__).name:
+            continue
         if not syntax_ok(p) or not compile_file(p):
             bad += 1
     print("  Все файлы корректны." if bad == 0 else f"  Проблем: {bad}")
@@ -1907,29 +1918,38 @@ def revert_all(root: Path) -> int:
 def run_smoke(root: Path) -> int:
     print("Smoke-тест (OLMA full)...")
     tests = [
-        ["python", "-c",
-         "from mountfile.olma import olma; "
-         "print('OLMA import OK')"],
-        ["python", "-c",
-         "from mountfile.olma import olma; "
-         "iss = olma.analyze(); "
-         "print(f'OLMA analyze: {len(iss)} issues')"],
-        ["python", "-c",
-         "from mountfile.olma import olma; "
-         "print('OLMA report:', len(olma.report(fmt='text')))"],
+        ["python", "-c", "from mountfile.olma import olma; " "print('OLMA import OK')"],
+        [
+            "python",
+            "-c",
+            "from mountfile.olma import olma; "
+            "iss = olma.analyze(); "
+            "print(f'OLMA analyze: {len(iss)} issues')",
+        ],
+        [
+            "python",
+            "-c",
+            "from mountfile.olma import olma; "
+            "print('OLMA report:', len(olma.report(fmt='text')))",
+        ],
         ["python", "main.py", "--diag"],
         ["python", "main.py", "--olma", "rules"],
     ]
     rc = 0
     for cmd in tests:
         try:
-            r = subprocess.run(cmd, cwd=str(root), capture_output=True,
-                               text=True, timeout=90)
+            r = subprocess.run(
+                cmd, cwd=str(root), capture_output=True, text=True, timeout=90
+            )
             ok = r.returncode == 0
-            print(f"  [{'ok' if ok else 'warn'}] {' '.join(cmd[:3])} -> RC={r.returncode}")
+            print(
+                f"  [{'ok' if ok else 'warn'}] {' '.join(cmd[:3])} -> RC={r.returncode}"
+            )
             if not ok:
-                if r.stderr: print("    err:", r.stderr.strip().splitlines()[-1])
-                if rc == 0: rc = r.returncode
+                if r.stderr:
+                    print("    err:", r.stderr.strip().splitlines()[-1])
+                if rc == 0:
+                    rc = r.returncode
         except subprocess.TimeoutExpired:
             print(f"  [timeout] {' '.join(cmd[:3])}")
             rc = 1
@@ -1950,11 +1970,14 @@ def main(argv=None) -> int:
 
     root = Path(args.root).resolve() if args.root else find_root(Path.cwd())
 
-    if args.revert: return 0 if revert_all(root) >= 0 else 1
-    if args.check: return 1 if check_all(root) > 0 else 0
+    if args.revert:
+        return 0 if revert_all(root) >= 0 else 1
+    if args.check:
+        return 1 if check_all(root) > 0 else 0
 
     apply_all(root, dry=args.dry_run, force=args.force)
-    if args.dry_run: return 0
+    if args.dry_run:
+        return 0
 
     bad = check_all(root)
     if bad > 0:
@@ -1963,7 +1986,8 @@ def main(argv=None) -> int:
 
     if args.smoke:
         rc = run_smoke(root)
-        if rc != 0: return rc
+        if rc != 0:
+            return rc
 
     print("\\nГотово. Дальше:")
     print("  python main.py --olma analyze        # статический анализ")
@@ -1982,6 +2006,7 @@ if __name__ == "__main__":
 
 # --- сохранено из ветки #39 при восстановлении ---
 
+
 def _insert_after_imports(text: str, block: str) -> str:
     lines = text.splitlines(keepends=True)
     last = 0
@@ -1994,6 +2019,7 @@ def _insert_after_imports(text: str, block: str) -> str:
     lines.insert(last + 1, block)
     return "".join(lines)
 
+
 def _insert_header(text: str, header: str) -> str:
     lines = text.splitlines(keepends=True)
     at = 0
@@ -2002,6 +2028,7 @@ def _insert_header(text: str, header: str) -> str:
             at = i + 1
     lines.insert(at, header)
     return "".join(lines)
+
 
 def create_olma_module(root: Path, *, dry_run: bool) -> bool:
     p = root / "mountfile" / "olma.py"
@@ -2015,6 +2042,7 @@ def create_olma_module(root: Path, *, dry_run: bool) -> bool:
     print(f"  [created] {p.name} ({len(OLMA_TEMPLATE.splitlines())} строк)")
     return True
 
+
 def create_qt_compat(root: Path, *, dry_run: bool) -> bool:
     p = root / "mountfile" / "qt_compat.py"
     if dry_run:
@@ -2024,6 +2052,7 @@ def create_qt_compat(root: Path, *, dry_run: bool) -> bool:
     p.write_text(QT_COMPAT_TEMPLATE, encoding="utf-8")
     print(f"  [fixed] {p.name} (канонический слой Qt)")
     return True
+
 
 def find_project_root(start: Path) -> Path:
     cur = start.resolve()

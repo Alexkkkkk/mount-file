@@ -56,9 +56,7 @@ log = logging.getLogger("mountfile.universal_fs_rw")
 # filesystem semantics that a loop mount can safely provide.  Refusing a
 # mutation is preferable to mounting them with a misleading ``rw`` option and
 # reporting success after the kernel silently kept the image read-only.
-INHERENTLY_READ_ONLY_FS = frozenset(
-    {"iso9660", "iso", "squashfs", "jffs2", "ubifs"}
-)
+INHERENTLY_READ_ONLY_FS = frozenset({"iso9660", "iso", "squashfs", "jffs2", "ubifs"})
 
 
 def _normalise_mount_fs(fs_type: str) -> str:
@@ -206,9 +204,7 @@ class JournalV2:
         self._last_hash = self._get_last_hash()
 
     def _migrate(self):
-        columns = {
-            row[1] for row in self._conn.execute("PRAGMA table_info(journal)")
-        }
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(journal)")}
         if "offset" not in columns:
             self._conn.execute("ALTER TABLE journal ADD COLUMN offset INTEGER")
         if "length" not in columns:
@@ -294,8 +290,12 @@ class JournalV2:
         ).fetchall()
         return [
             {
-                "tx_id": row[0], "op": row[1], "path": row[2],
-                "offset": row[3], "length": row[4], "backup": row[5],
+                "tx_id": row[0],
+                "op": row[1],
+                "path": row[2],
+                "offset": row[3],
+                "length": row[4],
+                "backup": row[5],
                 "created_at": row[6],
             }
             for row in rows
@@ -796,9 +796,12 @@ class Fat32RW(RWBackend):
             base, ext = name.rsplit(".", 1)
         else:
             base, ext = name, ""
-        base = "".join(
-            c for c in base.upper() if c.isascii() and (c.isalnum() or c in "_~")
-        ) or "FILE"
+        base = (
+            "".join(
+                c for c in base.upper() if c.isascii() and (c.isalnum() or c in "_~")
+            )
+            or "FILE"
+        )
         ext = "".join(c for c in ext.upper() if c.isascii() and c.isalnum())[:3]
         direct = base[:8].ljust(8).encode("ascii") + ext.ljust(3).encode("ascii")
         if self._is_83_name(name) and direct not in used:
@@ -806,10 +809,9 @@ class Fat32RW(RWBackend):
         for number in range(1, 100000):
             suffix = f"~{number}"
             stem = base[: max(1, 8 - len(suffix))]
-            candidate = (
-                (stem + suffix).ljust(8).encode("ascii")
-                + ext[:3].ljust(3).encode("ascii")
-            )
+            candidate = (stem + suffix).ljust(8).encode("ascii") + ext[:3].ljust(
+                3
+            ).encode("ascii")
             if candidate not in used:
                 return candidate
         raise RuntimeError("cannot generate a unique FAT 8.3 alias")
@@ -856,9 +858,7 @@ class Fat32RW(RWBackend):
             cursor = 0
             for start, count in ((1, 5), (14, 6), (28, 2)):
                 for slot in range(count):
-                    struct.pack_into(
-                        "<H", entry, start + 2 * slot, chunk[cursor]
-                    )
+                    struct.pack_into("<H", entry, start + 2 * slot, chunk[cursor])
                     cursor += 1
             out += bytes(entry)
         return out
@@ -991,12 +991,16 @@ class Fat32RW(RWBackend):
             if idx is None:
                 if clusters:
                     self._free_chain(clusters[0])
-                raise RuntimeError(f"directory entry not found while overwriting {path}")
+                raise RuntimeError(
+                    f"directory entry not found while overwriting {path}"
+                )
             buf = bytearray(raw)
             first_cluster = clusters[0] if clusters else 0
             struct.pack_into("<H", buf, idx + 26, first_cluster & 0xFFFF)
             struct.pack_into(
-                "<H", buf, idx + 20,
+                "<H",
+                buf,
+                idx + 20,
                 (first_cluster >> 16) & 0xFFFF if self.fat_type == 32 else 0,
             )
             struct.pack_into("<I", buf, idx + 28, len(data))
@@ -1006,7 +1010,9 @@ class Fat32RW(RWBackend):
         else:
             first_cluster = clusters[0] if clusters else 0
             try:
-                self._create_in_dir(parent_cluster, name, first_cluster, len(data), False)
+                self._create_in_dir(
+                    parent_cluster, name, first_cluster, len(data), False
+                )
             except ValueError:
                 if clusters:
                     self._free_chain(clusters[0])
@@ -1350,7 +1356,9 @@ class Ext234RW(RWBackend):
         if source is None:
             raise FileNotFoundError(src)
         if source.is_dir:
-            raise NotImplementedError("ext directory rename is not supported by debugfs")
+            raise NotImplementedError(
+                "ext directory rename is not supported by debugfs"
+            )
         with tempfile.NamedTemporaryFile(delete=False) as tf:
             tmp = Path(tf.name)
         try:
@@ -1561,6 +1569,7 @@ class LoopMountRW(RWBackend):
 
     def delete(self, path: str, recursive: bool = False) -> None:
         self._assert_writable()
+
         def _do(mp: Path):
             p = mp / path.lstrip("/")
             if p.is_dir():

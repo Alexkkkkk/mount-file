@@ -35,7 +35,7 @@ pytest.importorskip(
 
 from mountfile import tc_window  # noqa: E402
 from mountfile.qt_compat import QApplication  # noqa: E402
-from mountfile.tc_window import MainWindow, _ORPHAN_THREADS  # noqa: E402
+from mountfile.tc_window import _ORPHAN_THREADS, MainWindow  # noqa: E402
 
 
 @pytest.fixture(scope="module")

@@ -11,12 +11,12 @@ Mount File — универсальная автоустановка завис�
     python install_mountfile.py --dry-run     # показать команды без запуска
 """
 
-import os
-import sys
-import subprocess
-import platform
 import argparse
+import os
+import platform
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 # ------------------------------------------------------------
@@ -25,7 +25,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.resolve()
 VENV_DIR = BASE_DIR / ".venv"
 
-SYSTEM = platform.system()          # Windows / Linux / Darwin
+SYSTEM = platform.system()  # Windows / Linux / Darwin
 IS_WINDOWS = SYSTEM == "Windows"
 IS_LINUX = SYSTEM == "Linux"
 IS_MAC = SYSTEM == "Darwin"
@@ -62,12 +62,23 @@ WIN7_DEPS = [
 
 # Системные пакеты
 LINUX_APT = [
-    "libgl1", "libegl1", "libxkbcommon-x11-0", "libdbus-1-3",
-    "libxcb-cursor0", "libxcb-icccm4", "libxcb-image0",
-    "libxcb-keysyms1", "libxcb-randr0", "libxcb-render-util0",
-    "libxcb-shape0", "dosfstools", "mtools", "e2fsprogs",
+    "libgl1",
+    "libegl1",
+    "libxkbcommon-x11-0",
+    "libdbus-1-3",
+    "libxcb-cursor0",
+    "libxcb-icccm4",
+    "libxcb-image0",
+    "libxcb-keysyms1",
+    "libxcb-randr0",
+    "libxcb-render-util0",
+    "libxcb-shape0",
+    "dosfstools",
+    "mtools",
+    "e2fsprogs",
 ]
 MAC_BREW = ["qt@6", "e2fsprogs"]
+
 
 # ------------------------------------------------------------
 # УТИЛИТЫ
@@ -79,8 +90,11 @@ def run(cmd, check=False, capture=False, dry_run=False, quiet=False):
         return None
     try:
         return subprocess.run(
-            cmd, check=check, shell=isinstance(cmd, str),
-            capture_output=capture, text=capture,
+            cmd,
+            check=check,
+            shell=isinstance(cmd, str),
+            capture_output=capture,
+            text=capture,
         )
     except subprocess.CalledProcessError as e:
         print(f"  ❌ Ошибка (код {e.returncode})")
@@ -100,6 +114,7 @@ def is_admin():
     if IS_WINDOWS:
         try:
             import ctypes
+
             return ctypes.windll.shell32.IsUserAnAdmin() != 0
         except Exception:
             return False
@@ -169,7 +184,9 @@ def install_system_mac(dry_run=False):
 def install_system_windows():
     if not have("py") and not have("python"):
         print("⚠️  Python не найден в PATH. Скачайте: https://python.org")
-    print("ℹ️  Для pytsk3/yara на Windows может понадобиться 'Microsoft C++ Build Tools'.")
+    print(
+        "ℹ️  Для pytsk3/yara на Windows может понадобиться 'Microsoft C++ Build Tools'."
+    )
     print("    https://visualstudio.microsoft.com/visual-cpp-build-tools/")
 
 
@@ -180,15 +197,21 @@ def pip_install(py, packages, dry_run=False):
     if not packages:
         return
     print(f"📦 pip install ({len(packages)} пакетов)...")
-    run([py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
-        dry_run=dry_run)
+    run(
+        [py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+        dry_run=dry_run,
+    )
     run([py, "-m", "pip", "install"] + packages, dry_run=dry_run)
 
 
 def try_pytsk3(py, dry_run=False):
     print("🔍 pytsk3 (NTFS/EXT) — попытка установки...")
-    res = run([py, "-m", "pip", "install", "pytsk3"],
-              dry_run=dry_run, capture=True, quiet=True)
+    res = run(
+        [py, "-m", "pip", "install", "pytsk3"],
+        dry_run=dry_run,
+        capture=True,
+        quiet=True,
+    )
     if dry_run:
         return
     if res is None or res.returncode != 0:
@@ -204,9 +227,13 @@ def try_pytsk3(py, dry_run=False):
 # ------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--minimal", action="store_true", help="Только базовые зависимости")
+    parser.add_argument(
+        "--minimal", action="store_true", help="Только базовые зависимости"
+    )
     parser.add_argument("--win7", action="store_true", help="Режим Windows 7")
-    parser.add_argument("--no-sys", action="store_true", help="Не ставить системные пакеты")
+    parser.add_argument(
+        "--no-sys", action="store_true", help="Не ставить системные пакеты"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Показать команды")
     args = parser.parse_args()
 

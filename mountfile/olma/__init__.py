@@ -15,11 +15,27 @@ from __future__ import annotations
 
 from .analyzer import Issue, OlmaAnalyzer
 from .cli import olma_main
-from .core import (FAT32_BAD, FAT32_EOC_MIN, FAT32_MAX_CLUSTER, SECTOR,
-                   OlmaBoundsError, OlmaBuffer, OlmaChain, OlmaCluster,
-                   OlmaError, OlmaHandle, OlmaIntegrityError, OlmaPartition,
-                   OlmaPartitionTable, OlmaStateError, OlmaTransaction,
-                   OlmaView, OlmaXorDecoder, safe_download, verify_sha256)
+from .core import (
+    FAT32_BAD,
+    FAT32_EOC_MIN,
+    FAT32_MAX_CLUSTER,
+    SECTOR,
+    OlmaBoundsError,
+    OlmaBuffer,
+    OlmaChain,
+    OlmaCluster,
+    OlmaError,
+    OlmaHandle,
+    OlmaIntegrityError,
+    OlmaPartition,
+    OlmaPartitionTable,
+    OlmaStateError,
+    OlmaTransaction,
+    OlmaView,
+    OlmaXorDecoder,
+    safe_download,
+    verify_sha256,
+)
 from .fixer import FixResult, OlmaFixer
 from .github import GhResult, OlmaGitHub, OlmaGitHubError, from_env
 from .learn import OlmaKnowledgeBase, OlmaLearner

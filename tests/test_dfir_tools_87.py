@@ -22,8 +22,21 @@ UTC = timezone.utc
 
 # --------------------------------------------------------------------- helpers
 class FakeMeta:
-    def __init__(self, *, size=0, addr=1, mtime=None, atime=None, ctime=None, crtime=None,
-                 mtime_nano=0, atime_nano=0, ctime_nano=0, crtime_nano=0, kind=1):
+    def __init__(
+        self,
+        *,
+        size=0,
+        addr=1,
+        mtime=None,
+        atime=None,
+        ctime=None,
+        crtime=None,
+        mtime_nano=0,
+        atime_nano=0,
+        ctime_nano=0,
+        crtime_nano=0,
+        kind=1,
+    ):
         self.size = size
         self.addr = addr
         self.mtime = mtime
@@ -51,7 +64,7 @@ class FakeEntry:
         self._children = children or []
 
     def read_random(self, offset, length):
-        return self._data[offset:offset + length]
+        return self._data[offset : offset + length]
 
     def as_directory(self):
         return FakeDirectory(self._children)
@@ -106,12 +119,25 @@ def test_collect_events_from_fs_returns_nothing_without_timestamps():
 
 def test_collect_events_from_fs_builds_four_timestamp_events():
     fs = FakeFs([])
-    fs._root = FakeDirectory([
-        FakeEntry("b.txt", b"x", meta=FakeMeta(
-            size=1, mtime=1700000000, atime=1700000001, ctime=1700000002, crtime=1699999999,
-            mtime_nano=123456700, atime_nano=1, ctime_nano=1, crtime_nano=1,
-        ))
-    ])
+    fs._root = FakeDirectory(
+        [
+            FakeEntry(
+                "b.txt",
+                b"x",
+                meta=FakeMeta(
+                    size=1,
+                    mtime=1700000000,
+                    atime=1700000001,
+                    ctime=1700000002,
+                    crtime=1699999999,
+                    mtime_nano=123456700,
+                    atime_nano=1,
+                    ctime_nano=1,
+                    crtime_nano=1,
+                ),
+            )
+        ]
+    )
     events = list(timeline.collect_events_from_fs(fs, hash_limit=None))
     assert [e.event for e in events] == ["created", "mtime", "atime", "ctime"]
     assert all(e.timestamp.tzinfo is not None for e in events)
@@ -120,9 +146,9 @@ def test_collect_events_from_fs_builds_four_timestamp_events():
 
 def test_collect_events_hashes_small_files():
     fs = FakeFs([])
-    fs._root = FakeDirectory([
-        FakeEntry("h.txt", b"abc", meta=FakeMeta(size=3, mtime=1700000000))
-    ])
+    fs._root = FakeDirectory(
+        [FakeEntry("h.txt", b"abc", meta=FakeMeta(size=3, mtime=1700000000))]
+    )
     events = list(timeline.collect_events_from_fs(fs, hash_limit=1024))
     assert events[0].sha256 == __import__("hashlib").sha256(b"abc").hexdigest()
 
@@ -136,8 +162,12 @@ def test_timeline_event_rejects_naive_timestamp():
 
 def test_sqlite_and_csv_roundtrip(tmp_path):
     events = [
-        timeline.TimelineEvent(datetime(2024, 1, 1, 12, 0, tzinfo=UTC), "pytsk3", "/a.txt", "mtime", "aa"),
-        timeline.TimelineEvent(datetime(2024, 1, 1, 13, 0, tzinfo=UTC), "pytsk3", "/a.txt", "atime", None),
+        timeline.TimelineEvent(
+            datetime(2024, 1, 1, 12, 0, tzinfo=UTC), "pytsk3", "/a.txt", "mtime", "aa"
+        ),
+        timeline.TimelineEvent(
+            datetime(2024, 1, 1, 13, 0, tzinfo=UTC), "pytsk3", "/a.txt", "atime", None
+        ),
     ]
     db = tmp_path / "timeline.db"
     csv_path = tmp_path / "timeline.csv"
@@ -159,12 +189,21 @@ def test_sqlite_and_csv_roundtrip(tmp_path):
 
 def test_query_timeline_filters_by_window_and_event(tmp_path):
     db = tmp_path / "t.db"
-    timeline.write_sqlite([
-        timeline.TimelineEvent(datetime(2024, 3, 12, 14, 30, tzinfo=UTC), "s", "/x", "mtime"),
-        timeline.TimelineEvent(datetime(2024, 3, 12, 16, 30, tzinfo=UTC), "s", "/x", "atime"),
-    ], db)
+    timeline.write_sqlite(
+        [
+            timeline.TimelineEvent(
+                datetime(2024, 3, 12, 14, 30, tzinfo=UTC), "s", "/x", "mtime"
+            ),
+            timeline.TimelineEvent(
+                datetime(2024, 3, 12, 16, 30, tzinfo=UTC), "s", "/x", "atime"
+            ),
+        ],
+        db,
+    )
     window = timeline.query_timeline(
-        db, start=datetime(2024, 3, 12, 14, 0, tzinfo=UTC), end=datetime(2024, 3, 12, 15, 0, tzinfo=UTC)
+        db,
+        start=datetime(2024, 3, 12, 14, 0, tzinfo=UTC),
+        end=datetime(2024, 3, 12, 15, 0, tzinfo=UTC),
     )
     assert len(window) == 1
     assert window[0]["event"] == "mtime"
@@ -342,7 +381,13 @@ def test_timestomp_flags_equal_mac():
 def test_timestomp_flags_si_lt_fn():
     now = datetime(2024, 1, 1, tzinfo=UTC).timestamp()
     finding = timestomp.analyse_timestamps(
-        {"path": "/x", "mtime": now - 500, "mtime_nano": 5, "si_mtime": now - 500, "fn_mtime": now - 100},
+        {
+            "path": "/x",
+            "mtime": now - 500,
+            "mtime_nano": 5,
+            "si_mtime": now - 500,
+            "fn_mtime": now - 100,
+        },
         now=now,
     )
     assert finding is not None
@@ -360,11 +405,21 @@ def test_timestomp_flags_zero_nanoseconds():
 
 def test_timestomp_clean_record_is_not_flagged():
     now = datetime(2024, 1, 1, tzinfo=UTC).timestamp()
-    assert timestomp.analyse_timestamps(
-        {"path": "/ok", "mtime": now - 500, "atime": now - 300, "ctime": now - 200,
-         "mtime_nano": 1234, "atime_nano": 999, "ctime_nano": 42},
-        now=now,
-    ) is None
+    assert (
+        timestomp.analyse_timestamps(
+            {
+                "path": "/ok",
+                "mtime": now - 500,
+                "atime": now - 300,
+                "ctime": now - 200,
+                "mtime_nano": 1234,
+                "atime_nano": 999,
+                "ctime_nano": 42,
+            },
+            now=now,
+        )
+        is None
+    )
 
 
 def test_timestomp_rejects_negative_skew():
@@ -375,19 +430,34 @@ def test_timestomp_rejects_negative_skew():
 def test_timestomp_summarise_counts_reasons():
     findings = [
         timestomp.TimestompFinding("/a", (timestomp.REASON_FUTURE,)),
-        timestomp.TimestompFinding("/b", (timestomp.REASON_FUTURE, timestomp.REASON_EQUAL_MAC)),
+        timestomp.TimestompFinding(
+            "/b", (timestomp.REASON_FUTURE, timestomp.REASON_EQUAL_MAC)
+        ),
     ]
-    assert timestomp.summarise(findings) == {timestomp.REASON_FUTURE: 2, timestomp.REASON_EQUAL_MAC: 1}
+    assert timestomp.summarise(findings) == {
+        timestomp.REASON_FUTURE: 2,
+        timestomp.REASON_EQUAL_MAC: 1,
+    }
 
 
 def test_timestomp_analyse_fs_reads_pytsk3_like_metadata():
     now = datetime(2024, 1, 1, tzinfo=UTC).timestamp()
     fs = FakeFs([])
-    fs._root = FakeDirectory([
-        FakeEntry("t.exe", b"x", meta=FakeMeta(
-            size=1, mtime=now + 100000, atime=now - 10, ctime=now - 20, mtime_nano=7,
-        ))
-    ])
+    fs._root = FakeDirectory(
+        [
+            FakeEntry(
+                "t.exe",
+                b"x",
+                meta=FakeMeta(
+                    size=1,
+                    mtime=now + 100000,
+                    atime=now - 10,
+                    ctime=now - 20,
+                    mtime_nano=7,
+                ),
+            )
+        ]
+    )
     findings = timestomp.analyse_fs(fs, now=now)
     assert len(findings) == 1
     assert findings[0].path == "/t.exe"
@@ -420,7 +490,7 @@ def test_find_slack_regions_from_fs_and_extract(tmp_path):
     assert regions[0].offset == (4 + 2) * 512 - 24
 
     payload = bytearray(4096)
-    payload[regions[0].offset:regions[0].offset + 24] = b"S" * 24
+    payload[regions[0].offset : regions[0].offset + 24] = b"S" * 24
     image = tmp_path / "img.bin"
     image.write_bytes(bytes(payload))
     written = slack.extract_slack(image, tmp_path / "out", regions=regions)
@@ -433,7 +503,11 @@ def test_find_slack_regions_from_fs_and_extract(tmp_path):
 def test_iter_slack_bytes_streams(tmp_path):
     image = tmp_path / "img.bin"
     image.write_bytes(b"A" * 100)
-    regions = [slack.SlackRegion(path="/x", offset=10, length=50, allocated_size=100, real_size=50)]
+    regions = [
+        slack.SlackRegion(
+            path="/x", offset=10, length=50, allocated_size=100, real_size=50
+        )
+    ]
     chunks = list(slack.iter_slack_bytes(image, regions, chunk=20))
     assert b"".join(data for _r, data in chunks) == b"A" * 50
 
@@ -482,8 +556,12 @@ def test_live_diff_compare_without_baseline_raises():
 
 def test_markdown_report_contains_sections():
     entries = [
-        live_diff.DiffEntry("/new.txt", live_diff.ADDED, after_sha="a" * 64, after_size=10),
-        live_diff.DiffEntry("/gone.txt", live_diff.REMOVED, before_sha="b" * 64, before_size=20),
+        live_diff.DiffEntry(
+            "/new.txt", live_diff.ADDED, after_sha="a" * 64, after_size=10
+        ),
+        live_diff.DiffEntry(
+            "/gone.txt", live_diff.REMOVED, before_sha="b" * 64, before_size=20
+        ),
     ]
     report = live_diff.to_markdown(entries, title="Session diff")
     assert "# Session diff" in report
@@ -491,11 +569,17 @@ def test_markdown_report_contains_sections():
     assert "## Modified (0)" in report
     assert "## Removed (1)" in report
     assert "`/new.txt`" in report
-    assert live_diff.summarise(entries) == {live_diff.ADDED: 1, live_diff.MODIFIED: 0, live_diff.REMOVED: 1}
+    assert live_diff.summarise(entries) == {
+        live_diff.ADDED: 1,
+        live_diff.MODIFIED: 0,
+        live_diff.REMOVED: 1,
+    }
 
 
 def test_write_markdown_writes_file(tmp_path):
-    entries = [live_diff.DiffEntry("/x", live_diff.ADDED, after_sha="c" * 64, after_size=1)]
+    entries = [
+        live_diff.DiffEntry("/x", live_diff.ADDED, after_sha="c" * 64, after_size=1)
+    ]
     out = tmp_path / "nested" / "diff.md"
     assert live_diff.write_markdown(entries, out) == 1
     assert out.read_text(encoding="utf-8").startswith("# Live diff")
@@ -510,8 +594,15 @@ def test_diff_entry_rejects_unknown_status():
 def test_cli_exposes_new_dfir_commands():
     from mountfile.cli import COMMANDS, build_parser
 
-    for name in ("timeline-build", "timeline-query", "search", "yara-scan",
-                 "timestomp-scan", "slack-extract", "live-diff"):
+    for name in (
+        "timeline-build",
+        "timeline-query",
+        "search",
+        "yara-scan",
+        "timestomp-scan",
+        "slack-extract",
+        "live-diff",
+    ):
         assert name in COMMANDS, name
 
     parser = build_parser()
@@ -528,7 +619,11 @@ def test_cli_exposes_new_dfir_commands():
 def test_cli_timeline_build_end_to_end(tmp_path, monkeypatch):
     from mountfile import cli
 
-    events = [timeline.TimelineEvent(datetime(2024, 1, 1, tzinfo=UTC), "pytsk3", "/a", "mtime", "ff")]
+    events = [
+        timeline.TimelineEvent(
+            datetime(2024, 1, 1, tzinfo=UTC), "pytsk3", "/a", "mtime", "ff"
+        )
+    ]
 
     def fake_build(image, *, db_path=None, csv_path=None, **kwargs):
         timeline.write_sqlite(events, db_path)
@@ -560,8 +655,11 @@ def test_cli_live_diff_writes_markdown(tmp_path, monkeypatch):
     from mountfile import cli
 
     monkeypatch.setattr(
-        cli, "diff_images",
-        lambda *a, **k: [live_diff.DiffEntry("/a", live_diff.ADDED, after_sha="d" * 64, after_size=1)],
+        cli,
+        "diff_images",
+        lambda *a, **k: [
+            live_diff.DiffEntry("/a", live_diff.ADDED, after_sha="d" * 64, after_size=1)
+        ],
         raising=False,
     )
     out = tmp_path / "diff.md"

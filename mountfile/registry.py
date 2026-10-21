@@ -20,8 +20,17 @@ import importlib.util
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Sequence, Tuple, Union
-
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 PathLike = Union[str, os.PathLike]
 _MISSING = object()
@@ -170,7 +179,9 @@ def _normalise_backend_name(name: str) -> str:
     value = _BACKEND_ALIASES.get(value, value)
     if value not in _BACKENDS and value != "auto":
         choices = ", ".join(sorted(_BACKENDS))
-        raise ValueError("unknown registry backend {!r}; choose auto, {}".format(name, choices))
+        raise ValueError(
+            "unknown registry backend {!r}; choose auto, {}".format(name, choices)
+        )
     return value
 
 
@@ -202,7 +213,9 @@ def available_backends() -> Dict[str, bool]:
     }
 
 
-def _dependency_error(backend: str, detail: Optional[str] = None) -> OptionalDependencyError:
+def _dependency_error(
+    backend: str, detail: Optional[str] = None
+) -> OptionalDependencyError:
     package_name, import_name = _BACKENDS[backend]
     message = (
         "Registry backend {!r} is unavailable: install optional package {!r} "
@@ -272,7 +285,9 @@ def _read_signature(source: Any) -> bytes:
                 pass
 
 
-def identify_registry_file(source: Any, *, filename: Optional[PathLike] = None) -> RegistryFileInfo:
+def identify_registry_file(
+    source: Any, *, filename: Optional[PathLike] = None
+) -> RegistryFileInfo:
     """Identify a supported hive name without parsing or modifying the source.
 
     ``source`` may be a path, a file-like object, or bytes.  Bytes and streams
@@ -295,7 +310,9 @@ def identify_registry_file(source: Any, *, filename: Optional[PathLike] = None) 
             path=path,
             is_registry_hive=True,
         )
-    return RegistryFileInfo(kind=RegistryFileType.UNKNOWN, name=name, path=path, is_registry_hive=False)
+    return RegistryFileInfo(
+        kind=RegistryFileType.UNKNOWN, name=name, path=path, is_registry_hive=False
+    )
 
 
 # Common detector spellings used by small integrations.
@@ -454,7 +471,9 @@ class PythonRegistryAdapter:
     def iter_keys(self, handle: Any) -> Iterator[Any]:
         root = _root(handle)
         if root is None:
-            raise RegistryParseError("python-registry handle does not expose a root key")
+            raise RegistryParseError(
+                "python-registry handle does not expose a root key"
+            )
         return _walk_keys(root)
 
 
@@ -513,7 +532,11 @@ def _select_adapter(backend: str) -> Any:
         statuses = available_backends()
         for candidate in ("python-registry", "regipy"):
             if statuses[candidate]:
-                return PythonRegistryAdapter() if candidate == "python-registry" else RegipyAdapter()
+                return (
+                    PythonRegistryAdapter()
+                    if candidate == "python-registry"
+                    else RegipyAdapter()
+                )
         raise OptionalDependencyError(
             "No optional Windows Registry backend is installed; install "
             "'python-registry' or 'regipy' to parse registry hives."
@@ -540,7 +563,9 @@ class RegistryParser:
         if not self.file_info.is_registry_hive:
             raise UnsupportedRegistryError(
                 "unsupported registry input {!r}; expected SAM, SYSTEM, SOFTWARE, "
-                "NTUSER.DAT, or a file with the regf hive signature".format(self.file_info.name)
+                "NTUSER.DAT, or a file with the regf hive signature".format(
+                    self.file_info.name
+                )
             )
         self.backend = _normalise_backend_name(backend)
         self.adapter = adapter if adapter is not None else _select_adapter(self.backend)
@@ -555,7 +580,9 @@ class RegistryParser:
         if self._handle is _MISSING:
             opener = getattr(self.adapter, "open", None)
             if not callable(opener):
-                raise RegistryParseError("registry adapter does not expose open(source)")
+                raise RegistryParseError(
+                    "registry adapter does not expose open(source)"
+                )
             try:
                 self._handle = opener(self.source)
             except OptionalDependencyError:
@@ -587,7 +614,9 @@ class RegistryParser:
         handle = self._open()
         iterator = getattr(self.adapter, "iter_keys", None)
         if not callable(iterator):
-            raise RegistryParseError("registry adapter does not expose iter_keys(handle)")
+            raise RegistryParseError(
+                "registry adapter does not expose iter_keys(handle)"
+            )
         try:
             values = iterator(handle)
             return iter(values)

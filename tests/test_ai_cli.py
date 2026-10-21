@@ -26,9 +26,20 @@ def test_mcp_command_builds_and_runs_stdio_server(monkeypatch, tmp_path):
     image = tmp_path / "case.img"
     workspace = tmp_path / "outputs"
 
-    assert cli.main(
-        ["mcp", "--image", str(image), "--workspace", str(workspace), "--name", "test"]
-    ) == 0
+    assert (
+        cli.main(
+            [
+                "mcp",
+                "--image",
+                str(image),
+                "--workspace",
+                str(workspace),
+                "--name",
+                "test",
+            ]
+        )
+        == 0
+    )
     assert calls == [
         {"image_root": str(image), "workspace": str(workspace), "name": "test"}
     ]

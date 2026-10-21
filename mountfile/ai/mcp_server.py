@@ -60,19 +60,17 @@ class MountFileBackend(Protocol):
     capability (for example deleted-file recovery) is not available.
     """
 
-    def list_partitions(self, image: Path) -> Any:
-        ...
+    def list_partitions(self, image: Path) -> Any: ...
 
-    def list_directory(self, image: Path, offset: int, path: str) -> Any:
-        ...
+    def list_directory(self, image: Path, offset: int, path: str) -> Any: ...
 
     def search_files(
         self, image: Path, offset: int, pattern: str, start: str, include_deleted: bool
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
-    def extract_file(self, image: Path, offset: int, path: str, destination: Path) -> Any:
-        ...
+    def extract_file(
+        self, image: Path, offset: int, path: str, destination: Path
+    ) -> Any: ...
 
     def recover_deleted_file(
         self,
@@ -81,20 +79,15 @@ class MountFileBackend(Protocol):
         inode: int,
         original_size: Optional[int],
         destination: Path,
-    ) -> Any:
-        ...
+    ) -> Any: ...
 
-    def detect_signatures(self, image: Path, span: int) -> Any:
-        ...
+    def detect_signatures(self, image: Path, span: int) -> Any: ...
 
-    def try_xor_decrypt(self, image: Path, key_name: str, output: Path) -> Any:
-        ...
+    def try_xor_decrypt(self, image: Path, key_name: str, output: Path) -> Any: ...
 
-    def auto_decrypt(self, image: Path) -> Any:
-        ...
+    def auto_decrypt(self, image: Path) -> Any: ...
 
-    def hash_file(self, path: Path) -> Any:
-        ...
+    def hash_file(self, path: Path) -> Any: ...
 
 
 TOOL_NAMES = (
@@ -135,7 +128,9 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return value.hex()
     if dataclasses.is_dataclass(value):
-        return {key: _json_value(item) for key, item in dataclasses.asdict(value).items()}
+        return {
+            key: _json_value(item) for key, item in dataclasses.asdict(value).items()
+        }
     for method_name in ("model_dump", "to_dict"):
         method = getattr(value, method_name, None)
         if callable(method):
@@ -239,7 +234,9 @@ class DefaultBackend:
             for item in provider.list_dir(path):
                 row = dict(item)
                 row.setdefault("deleted", False)
-                row["path"] = (path.rstrip("/") + "/" + str(row["name"])).replace("//", "/")
+                row["path"] = (path.rstrip("/") + "/" + str(row["name"])).replace(
+                    "//", "/"
+                )
                 entries.append(row)
             return entries
         finally:
@@ -272,7 +269,9 @@ class DefaultBackend:
                     stack.append(str(item.get("path", "/")))
         return matches
 
-    def extract_file(self, image: Path, offset: int, path: str, destination: Path) -> Any:
+    def extract_file(
+        self, image: Path, offset: int, path: str, destination: Path
+    ) -> Any:
         from mountfile.extract import extract_file
 
         provider = self._provider(image, offset)
@@ -311,7 +310,9 @@ class DefaultBackend:
             destination.parent.mkdir(parents=True, exist_ok=True)
             with destination.open("wb") as output:
                 while recovered < size:
-                    chunk = file_obj.read_random(recovered, min(1 << 20, size - recovered))
+                    chunk = file_obj.read_random(
+                        recovered, min(1 << 20, size - recovered)
+                    )
                     if not chunk:
                         break
                     output.write(chunk)
@@ -384,10 +385,18 @@ class MountFileMcpServer:
         backend: Optional[MountFileBackend] = None,
     ) -> None:
         configured_image = Path(image_root).expanduser().resolve()
-        if configured_image.exists() and not configured_image.is_file() and not configured_image.is_dir():
-            raise PathValidationError("configured image root is not a file or directory")
+        if (
+            configured_image.exists()
+            and not configured_image.is_file()
+            and not configured_image.is_dir()
+        ):
+            raise PathValidationError(
+                "configured image root is not a file or directory"
+            )
         self._image_file = configured_image if configured_image.is_file() else None
-        self.image_root = (configured_image.parent if self._image_file else configured_image)
+        self.image_root = (
+            configured_image.parent if self._image_file else configured_image
+        )
         self.workspace = Path(workspace).expanduser().resolve()
         try:
             self.workspace.mkdir(parents=True, exist_ok=True)
@@ -395,12 +404,16 @@ class MountFileMcpServer:
             raise PathValidationError("configured workspace is not writable") from exc
         if not self.workspace.is_dir():
             raise PathValidationError("configured workspace is not a directory")
-        self.backend = backend if backend is not None else DefaultBackend(self.workspace)
+        self.backend = (
+            backend if backend is not None else DefaultBackend(self.workspace)
+        )
 
     def _image_path(self, value: Any) -> Path:
         if value is None or value == "":
             if self._image_file is None:
-                raise PathValidationError("image_path is required when image_root is a directory")
+                raise PathValidationError(
+                    "image_path is required when image_root is a directory"
+                )
             return self._image_file
         if not isinstance(value, (str, os.PathLike)):
             raise PathValidationError("image_path must be a path string")
@@ -410,7 +423,9 @@ class MountFileMcpServer:
         if "\x00" in raw:
             raise PathValidationError("image_path contains a NUL byte")
         candidate = Path(raw).expanduser()
-        candidate = candidate if candidate.is_absolute() else self.image_root / candidate
+        candidate = (
+            candidate if candidate.is_absolute() else self.image_root / candidate
+        )
         try:
             resolved = candidate.resolve()
         except OSError as exc:
@@ -446,7 +461,9 @@ class MountFileMcpServer:
         except OSError as exc:
             raise PathValidationError("cannot resolve workspace path") from exc
         if not _is_within(resolved, self.workspace):
-            raise PathValidationError("workspace path is outside the configured workspace")
+            raise PathValidationError(
+                "workspace path is outside the configured workspace"
+            )
         return resolved
 
     def _call(self, operation: str, *args: Any) -> Any:
@@ -490,7 +507,12 @@ class MountFileMcpServer:
     def list_directory(self, image_path: str, offset: int, path: str = "/") -> Any:
         offset = _require_integer(offset, "offset")
         return _json_value(
-            self._call("list_directory", self._image_path(image_path), offset, _virtual_path(path))
+            self._call(
+                "list_directory",
+                self._image_path(image_path),
+                offset,
+                _virtual_path(path),
+            )
         )
 
     def search_files(
@@ -566,7 +588,9 @@ class MountFileMcpServer:
     def detect_signatures(self, image_path: str, span: int = 1 << 20) -> Any:
         span = _require_integer(span, "span", positive=True)
         span = min(span, _MAX_SIGNATURE_SCAN)
-        return _json_value(self._call("detect_signatures", self._image_path(image_path), span))
+        return _json_value(
+            self._call("detect_signatures", self._image_path(image_path), span)
+        )
 
     def try_xor_decrypt(
         self,
@@ -595,7 +619,9 @@ class MountFileMcpServer:
     def hash_file(self, path: str) -> Any:
         target = self._workspace_path(path)
         if not target.is_file():
-            raise PathValidationError("hash_file accepts only an existing workspace file")
+            raise PathValidationError(
+                "hash_file accepts only an existing workspace file"
+            )
         result = self._call("hash_file", target)
         value = _json_value(result)
         digest = value.get("sha256") if isinstance(value, Mapping) else value
@@ -624,7 +650,9 @@ def register_tools(
 ) -> MountFileMcpServer:
     """Build a service, register its tools on ``app``, and return the service."""
 
-    service = MountFileMcpServer(image_root=image_root, workspace=workspace, backend=backend)
+    service = MountFileMcpServer(
+        image_root=image_root, workspace=workspace, backend=backend
+    )
     service.register_tools(app)
     return service
 
@@ -641,7 +669,9 @@ def create_server(
         raise McpUnavailableError(
             "MCP server is unavailable: install the optional 'mcp' package"
         )
-    service = MountFileMcpServer(image_root=image_root, workspace=workspace, backend=backend)
+    service = MountFileMcpServer(
+        image_root=image_root, workspace=workspace, backend=backend
+    )
     app = FastMCP(name)
     service.register_tools(app)
     return app

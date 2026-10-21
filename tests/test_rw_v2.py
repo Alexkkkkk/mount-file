@@ -49,7 +49,9 @@ def test_journal_v2_migrates_an_existing_journal_in_place(tmp_path):
     image = _image(tmp_path)
     journal = rw_v2.JournalV2(image)
     try:
-        columns = {row[1] for row in journal._conn.execute("PRAGMA table_info(journal)")}
+        columns = {
+            row[1] for row in journal._conn.execute("PRAGMA table_info(journal)")
+        }
         assert {"offset", "length", "committed"} <= columns
     finally:
         journal.close()

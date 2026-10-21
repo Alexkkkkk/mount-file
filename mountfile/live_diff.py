@@ -73,7 +73,9 @@ def _digest(entry: Any, size: int) -> Optional[str]:
     return hashlib.sha256(bytes(data)).hexdigest()
 
 
-def snapshot_from_fs(fs: Any, *, hash_files: bool = True) -> dict[str, tuple[Optional[str], int]]:
+def snapshot_from_fs(
+    fs: Any, *, hash_files: bool = True
+) -> dict[str, tuple[Optional[str], int]]:
     """Return ``{path: (sha256|None, size)}`` for every file in ``fs``."""
 
     snapshot: dict[str, tuple[Optional[str], int]] = {}
@@ -93,18 +95,24 @@ def diff_snapshots(
     for path in sorted(set(before) | set(after)):
         if path not in before:
             digest, size = after[path]
-            entries.append(DiffEntry(path=path, status=ADDED, after_sha=digest, after_size=size))
+            entries.append(
+                DiffEntry(path=path, status=ADDED, after_sha=digest, after_size=size)
+            )
             continue
         if path not in after:
             digest, size = before[path]
             entries.append(
-                DiffEntry(path=path, status=REMOVED, before_sha=digest, before_size=size)
+                DiffEntry(
+                    path=path, status=REMOVED, before_sha=digest, before_size=size
+                )
             )
             continue
         old_digest, old_size = before[path]
         new_digest, new_size = after[path]
         changed = old_size != new_size or (
-            old_digest is not None and new_digest is not None and old_digest != new_digest
+            old_digest is not None
+            and new_digest is not None
+            and old_digest != new_digest
         )
         if changed:
             entries.append(
@@ -131,7 +139,9 @@ class LiveDiff:
     def has_snapshot(self) -> bool:
         return self._snapshot is not None
 
-    def snapshot(self, image_path: os.PathLike | str) -> dict[str, tuple[Optional[str], int]]:
+    def snapshot(
+        self, image_path: os.PathLike | str
+    ) -> dict[str, tuple[Optional[str], int]]:
         """Take a snapshot without storing it."""
 
         from .timeline import open_tsk_fs
@@ -141,7 +151,9 @@ class LiveDiff:
             raise LiveDiffError("image not found: %s" % path)
         return snapshot_from_fs(open_tsk_fs(path), hash_files=self.hash_files)
 
-    def take(self, image_path: os.PathLike | str) -> dict[str, tuple[Optional[str], int]]:
+    def take(
+        self, image_path: os.PathLike | str
+    ) -> dict[str, tuple[Optional[str], int]]:
         """Take and store the baseline snapshot."""
 
         self._snapshot = self.snapshot(image_path)
@@ -189,7 +201,11 @@ def to_markdown(entries: Iterable[DiffEntry], *, title: str = "Live diff") -> st
         lines.append("| %s | %d |" % (status, len(grouped.get(status, []))))
     lines.append("")
 
-    for status, heading in ((ADDED, "Added"), (MODIFIED, "Modified"), (REMOVED, "Removed")):
+    for status, heading in (
+        (ADDED, "Added"),
+        (MODIFIED, "Modified"),
+        (REMOVED, "Removed"),
+    ):
         items = grouped.get(status) or []
         lines.append("## %s (%d)" % (heading, len(items)))
         lines.append("")
@@ -197,7 +213,9 @@ def to_markdown(entries: Iterable[DiffEntry], *, title: str = "Live diff") -> st
             lines.append("_none_")
             lines.append("")
             continue
-        lines.append("| path | size before | size after | sha256 before | sha256 after |")
+        lines.append(
+            "| path | size before | size after | sha256 before | sha256 after |"
+        )
         lines.append("|---|---|---|---|---|")
         for item in items:
             lines.append(
@@ -214,7 +232,9 @@ def to_markdown(entries: Iterable[DiffEntry], *, title: str = "Live diff") -> st
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_markdown(entries: Iterable[DiffEntry], out_path: os.PathLike | str, **kwargs: Any) -> int:
+def write_markdown(
+    entries: Iterable[DiffEntry], out_path: os.PathLike | str, **kwargs: Any
+) -> int:
     """Write the Markdown report; returns the number of entries."""
 
     items = list(entries)

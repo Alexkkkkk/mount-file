@@ -64,6 +64,7 @@ IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 IS_LINUX = sys.platform.startswith("linux")
 
+
 # ============================================================================
 # PATHS (cross-platform, survive updates — never inside the binary folder)
 # ============================================================================
@@ -102,6 +103,7 @@ class Paths:
     @classmethod
     def lock_file(cls) -> Path:
         return cls.tmp() / f"{APP_NAME}.lock"
+
 
 # ============================================================================
 # ATOMIC IO (crash-safe writes)
@@ -142,6 +144,7 @@ class AtomicIO:
         except (json.JSONDecodeError, OSError):
             return default
 
+
 # ============================================================================
 # LOGGING (rotating file + stderr, no telemetry)
 # ============================================================================
@@ -161,7 +164,10 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
     fh = logging.handlers.RotatingFileHandler(
-        Paths.logs() / "app.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8",
+        Paths.logs() / "app.log",
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
     )
     fh.setFormatter(fmt)
     root.addHandler(fh)
@@ -184,7 +190,9 @@ def install_excepthook() -> None:
                 f"{datetime.now(timezone.utc).isoformat()}\n"
                 + "".join(traceback.format_exception(t, e, tb)),
             )
+
     sys.excepthook = _hook
+
 
 # ============================================================================
 # SINGLE INSTANCE LOCK
@@ -216,6 +224,7 @@ class SingleInstance:
         try:
             self._fh = open(Paths.lock_file(), "a+")
             import fcntl
+
             fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._fh.seek(0)
             self._fh.truncate()
@@ -238,6 +247,7 @@ class SingleInstance:
             return True
         except Exception:
             return True  # fail-open
+
 
 # ============================================================================
 # STATE (atomic, versioned, survives updates)
@@ -293,8 +303,11 @@ class State:
         self.set("session/recent_mounts", mounts[: self.MAX_MOUNTS])
 
     def forget_mount(self, target: str) -> None:
-        mounts = [m for m in (self.get("session/recent_mounts") or [])
-                  if m.get("target") != target]
+        mounts = [
+            m
+            for m in (self.get("session/recent_mounts") or [])
+            if m.get("target") != target
+        ]
         self.set("session/recent_mounts", mounts)
 
     def flush(self) -> None:
@@ -309,11 +322,13 @@ class State:
         for k in ("session/recent_images", "session/favorite_dirs"):
             data[k] = [p for p in (data.get(k) or []) if isinstance(p, str)]
         data["session/recent_mounts"] = [
-            m for m in (data.get("session/recent_mounts") or [])
+            m
+            for m in (data.get("session/recent_mounts") or [])
             if isinstance(m, dict) and "target" in m
         ]
         data["schema"] = SCHEMA_VERSION
         return data
+
 
 # ============================================================================
 # MOUNT BACKENDS (one job, done well)
@@ -400,17 +415,30 @@ class MacBackend(MountBackend):
         image = image.resolve()
         target.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(
-            ["hdiutil", "attach", str(image), "-mountpoint", str(target),
-             "-nobrowse", "-readonly"],
-            capture_output=True, text=True, check=False,
+            [
+                "hdiutil",
+                "attach",
+                str(image),
+                "-mountpoint",
+                str(target),
+                "-nobrowse",
+                "-readonly",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if r.returncode != 0:
             raise MountError((r.stderr or r.stdout or "hdiutil attach failed").strip())
         return target
 
     def unmount(self, target: Path) -> None:
-        r = subprocess.run(["hdiutil", "detach", str(target), "-force"],
-                           capture_output=True, text=True, check=False)
+        r = subprocess.run(
+            ["hdiutil", "detach", str(target), "-force"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         if r.returncode != 0:
             raise MountError((r.stderr or r.stdout or "hdiutil detach failed").strip())
 
@@ -469,23 +497,40 @@ class WindowsBackend(MountBackend):
     def list_mounted(self) -> List[Dict[str, str]]:
         out: List[Dict[str, str]] = []
         with contextlib.suppress(Exception):
-            ps = ("Get-DiskImage | Where-Object {$_.Attached} | "
-                  "Select-Object -Property ImagePath,DevicePath | ConvertTo-Json")
+            ps = (
+                "Get-DiskImage | Where-Object {$_.Attached} | "
+                "Select-Object -Property ImagePath,DevicePath | ConvertTo-Json"
+            )
             r = self._ps(ps)
             if r.strip().startswith("["):
                 for item in json.loads(r):
-                    out.append({
-                        "device": item.get("DevicePath", ""),
-                        "target": item.get("ImagePath", ""),
-                    })
+                    out.append(
+                        {
+                            "device": item.get("DevicePath", ""),
+                            "target": item.get("ImagePath", ""),
+                        }
+                    )
         return out
 
     @staticmethod
     def _ps(script: str, *args: str) -> str:
-        cmd = ["powershell", "-NoProfile", "-NonInteractive",
-               "-ExecutionPolicy", "Bypass", "-Command", script, *args]
-        r = subprocess.run(cmd, capture_output=True, text=True, check=False,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+            *args,
+        ]
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         if r.returncode != 0:
             raise MountError((r.stderr or r.stdout or "PowerShell failed").strip())
         return r.stdout
@@ -511,6 +556,7 @@ def default_mount_point(image: Path) -> Path:
         return Path(f"/Volumes/{safe}")
     return Path(f"/tmp/{APP_NAME}/{safe}")
 
+
 # ============================================================================
 # CLI
 # ============================================================================
@@ -519,17 +565,26 @@ def cli_main(argv: Sequence[str]) -> int:
         prog="mountfile",
         description="Mount or unmount a disk image. Works offline.",
     )
-    parser.add_argument("image", nargs="?", help="Image to mount (.img/.iso/.vhd/.vhdx)")
+    parser.add_argument(
+        "image", nargs="?", help="Image to mount (.img/.iso/.vhd/.vhdx)"
+    )
     parser.add_argument("--to", "-t", help="Mount point / drive letter")
-    parser.add_argument("--unmount", "-u", metavar="TARGET",
-                        help="Unmount the given target")
-    parser.add_argument("--list", "-l", action="store_true",
-                        help="List currently mounted images")
-    parser.add_argument("--open", "-o", action="store_true",
-                        help="Open the mount point in the file manager")
+    parser.add_argument(
+        "--unmount", "-u", metavar="TARGET", help="Unmount the given target"
+    )
+    parser.add_argument(
+        "--list", "-l", action="store_true", help="List currently mounted images"
+    )
+    parser.add_argument(
+        "--open",
+        "-o",
+        action="store_true",
+        help="Open the mount point in the file manager",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
-    parser.add_argument("--version", action="version",
-                        version=f"{APP_DISPLAY} {APP_VERSION}")
+    parser.add_argument(
+        "--version", action="version", version=f"{APP_DISPLAY} {APP_VERSION}"
+    )
     args = parser.parse_args(argv)
 
     setup_logging(verbose=args.verbose)
@@ -578,22 +633,39 @@ def reveal_in_file_manager(path: Path) -> None:
         else:
             subprocess.Popen(["xdg-open", str(path)])
 
+
 # ============================================================================
 # GUI
 # ============================================================================
 try:
-    from PyQt6.QtCore import (
-        QObject, QSize, Qt, QThread, QTimer, pyqtSignal,
-    )
-    from PyQt6.QtGui import (
-        QAction, QCloseEvent, QFont, QKeySequence, QShortcut,
-    )
+    from PyQt6.QtCore import QObject, QSize, Qt, QThread, QTimer, pyqtSignal
+    from PyQt6.QtGui import QAction, QCloseEvent, QFont, QKeySequence, QShortcut
     from PyQt6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
-        QGroupBox, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-        QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QSplitter,
-        QStatusBar, QStyle, QSystemTrayIcon, QTextEdit, QVBoxLayout, QWidget,
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QFileDialog,
+        QFormLayout,
+        QGroupBox,
+        QLabel,
+        QLineEdit,
+        QListWidget,
+        QListWidgetItem,
+        QMainWindow,
+        QMenu,
+        QMessageBox,
+        QProgressBar,
+        QPushButton,
+        QSplitter,
+        QStatusBar,
+        QStyle,
+        QSystemTrayIcon,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
     )
+
     HAS_QT = True
 except ImportError:
     HAS_QT = False
@@ -699,12 +771,17 @@ if HAS_QT:
     class MountWorker(QThread):
         """Runs mount/unmount off the UI thread. Never blocks the interface."""
 
-        done = pyqtSignal(str, str)     # action, target_or_message
-        failed = pyqtSignal(str)        # human message
+        done = pyqtSignal(str, str)  # action, target_or_message
+        failed = pyqtSignal(str)  # human message
 
-        def __init__(self, backend: MountBackend, action: str,
-                     image: Optional[Path] = None, target: Optional[Path] = None,
-                     parent: Optional[QObject] = None) -> None:
+        def __init__(
+            self,
+            backend: MountBackend,
+            action: str,
+            image: Optional[Path] = None,
+            target: Optional[Path] = None,
+            parent: Optional[QObject] = None,
+        ) -> None:
             super().__init__(parent)
             self._b = backend
             self._action = action
@@ -825,8 +902,9 @@ if HAS_QT:
             rl.addWidget(self._section("Log"))
             self.log_view = QTextEdit()
             self.log_view.setReadOnly(True)
-            self.log_view.setFont(QFont(
-                "Menlo" if IS_MAC else "Consolas" if IS_WIN else "monospace", 9))
+            self.log_view.setFont(
+                QFont("Menlo" if IS_MAC else "Consolas" if IS_WIN else "monospace", 9)
+            )
             rl.addWidget(self.log_view, 1)
 
             split.addWidget(right)
@@ -848,8 +926,9 @@ if HAS_QT:
             mb = self.menuBar()
 
             m_file = mb.addMenu("&File")
-            self._act(m_file, "Open image…", QKeySequence.StandardKey.Open,
-                      self.open_image)
+            self._act(
+                m_file, "Open image…", QKeySequence.StandardKey.Open, self.open_image
+            )
             self._act(m_file, "Mount", "Ctrl+Return", self.mount_current)
             self._act(m_file, "Unmount selected", "Ctrl+U", self._unmount_selected)
             m_file.addSeparator()
@@ -860,11 +939,17 @@ if HAS_QT:
             self._act(m_view, "Refresh mounts", "F5", self._refresh_mounts)
 
             m_help = mb.addMenu("&Help")
-            self._act(m_help, "Open logs folder", None, lambda: reveal_in_file_manager(Paths.logs()))
+            self._act(
+                m_help,
+                "Open logs folder",
+                None,
+                lambda: reveal_in_file_manager(Paths.logs()),
+            )
             self._act(m_help, "About", None, self._show_about)
 
-        def _act(self, menu: QMenu, text: str,
-                 shortcut: Any, cb: Callable[[], None]) -> None:
+        def _act(
+            self, menu: QMenu, text: str, shortcut: Any, cb: Callable[[], None]
+        ) -> None:
             a = QAction(text, self)
             if shortcut:
                 a.setShortcut(shortcut)
@@ -889,8 +974,11 @@ if HAS_QT:
             menu.addAction("Quit", self.close)
             self._tray.setContextMenu(menu)
             self._tray.activated.connect(
-                lambda r: self._toggle_visible()
-                if r == QSystemTrayIcon.ActivationReason.Trigger else None
+                lambda r: (
+                    self._toggle_visible()
+                    if r == QSystemTrayIcon.ActivationReason.Trigger
+                    else None
+                )
             )
             self._tray.show()
 
@@ -936,7 +1024,10 @@ if HAS_QT:
                 ("Refresh mounts", self._refresh_mounts),
                 ("Open logs folder", lambda: reveal_in_file_manager(Paths.logs())),
                 ("Open state folder", lambda: reveal_in_file_manager(Paths.data())),
-                ("Switch theme: system", lambda: self.cmb_theme.setCurrentText("system")),
+                (
+                    "Switch theme: system",
+                    lambda: self.cmb_theme.setCurrentText("system"),
+                ),
                 ("Switch theme: light", lambda: self.cmb_theme.setCurrentText("light")),
                 ("Switch theme: dark", lambda: self.cmb_theme.setCurrentText("dark")),
                 ("About", self._show_about),
@@ -944,10 +1035,17 @@ if HAS_QT:
             ]
             for m in self._state.get("session/recent_mounts", []) or []:
                 tgt = m.get("target", "")
-                cmds.insert(2, (f"Unmount: {tgt}", lambda t=tgt: self._unmount_target(Path(t))))
+                cmds.insert(
+                    2, (f"Unmount: {tgt}", lambda t=tgt: self._unmount_target(Path(t)))
+                )
             for p in self._state.get("session/recent_images", [])[:5]:
-                cmds.insert(1, (f"Mount: {Path(p).name}",
-                                lambda pp=p: self._quick_mount(Path(pp))))
+                cmds.insert(
+                    1,
+                    (
+                        f"Mount: {Path(p).name}",
+                        lambda pp=p: self._quick_mount(Path(pp)),
+                    ),
+                )
             CommandPalette(self, cmds).exec()
 
         def open_image(self) -> None:
@@ -956,15 +1054,18 @@ if HAS_QT:
             if favs and Path(favs[0]).is_dir():
                 start = favs[0]
             p, _ = QFileDialog.getOpenFileName(
-                self, "Open disk image", start,
+                self,
+                "Open disk image",
+                start,
                 "Disk images (*.img *.iso *.bin *.raw *.vhd *.vhdx);;All files (*)",
             )
             if p:
                 self._set_image(Path(p))
 
         def pick_target(self) -> None:
-            p = QFileDialog.getExistingDirectory(self, "Pick mount point",
-                                                 self.edit_target.text() or str(Path.home()))
+            p = QFileDialog.getExistingDirectory(
+                self, "Pick mount point", self.edit_target.text() or str(Path.home())
+            )
             if p:
                 self.edit_target.setText(p)
 
@@ -985,8 +1086,10 @@ if HAS_QT:
                 else:
                     target = Path("")  # backend returns the drive letter
             else:
-                target = Path(self.edit_target.text().strip()
-                              or default_mount_point(self._current_image))
+                target = Path(
+                    self.edit_target.text().strip()
+                    or default_mount_point(self._current_image)
+                )
 
             self._state.remember_open(self._current_image)
             if not IS_WIN and str(target):
@@ -995,8 +1098,13 @@ if HAS_QT:
             self._refresh_lists()
 
             self._set_busy(True, f"Mounting {self._current_image.name}…")
-            w = MountWorker(self._backend, "mount",
-                            image=self._current_image, target=target, parent=self)
+            w = MountWorker(
+                self._backend,
+                "mount",
+                image=self._current_image,
+                target=target,
+                parent=self,
+            )
             w.done.connect(self._on_mount_done)
             w.failed.connect(self._on_mount_failed)
             self._track(w)
@@ -1059,8 +1167,12 @@ if HAS_QT:
                 self._state.flush()
             self._refresh_mounts()
             if self._tray:
-                self._tray.showMessage(APP_DISPLAY, f"Mounted at {target}",
-                                       QSystemTrayIcon.MessageIcon.Information, 3000)
+                self._tray.showMessage(
+                    APP_DISPLAY,
+                    f"Mounted at {target}",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000,
+                )
 
         def _on_unmount_done(self, target: str) -> None:
             self._set_busy(False, f"Unmounted {target}")
@@ -1090,7 +1202,8 @@ if HAS_QT:
 
         def _show_about(self) -> None:
             QMessageBox.information(
-                self, f"About {APP_DISPLAY}",
+                self,
+                f"About {APP_DISPLAY}",
                 f"{APP_DISPLAY} {APP_VERSION}\n\n"
                 f"Data: {Paths.data()}\nLogs: {Paths.logs()}\n{APP_REPO}",
             )
@@ -1145,20 +1258,24 @@ if HAS_QT:
         QApplication.setOrganizationName(APP_ORG)
         QApplication.setApplicationVersion(APP_VERSION)
         QApplication.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
 
         app = QApplication(list(argv))
         install_excepthook()
 
         # Ctrl-C works in terminal
         signal.signal(signal.SIGINT, lambda *_: app.quit())
-        t = QTimer(); t.start(200); t.timeout.connect(lambda: None)
+        t = QTimer()
+        t.start(200)
+        t.timeout.connect(lambda: None)
         app._sigint = t  # type: ignore[attr-defined]
 
         lock = SingleInstance()
         if not lock.acquire():
-            QMessageBox.information(None, APP_DISPLAY,
-                                    f"{APP_DISPLAY} is already running.")
+            QMessageBox.information(
+                None, APP_DISPLAY, f"{APP_DISPLAY} is already running."
+            )
             return 0
         atexit.register(lock.release)
 
@@ -1171,12 +1288,14 @@ if HAS_QT:
 
         # Deferred update check — never blocks startup.
         if state.get("ui/autoupdate", True):
-            QTimer.singleShot(3000, lambda: w._log(
-                "Tip: run `mountfile --version` for CLI info."))
+            QTimer.singleShot(
+                3000, lambda: w._log("Tip: run `mountfile --version` for CLI info.")
+            )
 
         rc = app.exec()
         state.flush()
         return rc
+
 
 # ============================================================================
 # ENTRY
@@ -1202,8 +1321,13 @@ def main() -> int:
         return 2
 
     setup_logging()
-    log.info("Starting %s %s on %s %s",
-             APP_DISPLAY, APP_VERSION, platform.system(), platform.release())
+    log.info(
+        "Starting %s %s on %s %s",
+        APP_DISPLAY,
+        APP_VERSION,
+        platform.system(),
+        platform.release(),
+    )
     return gui_main(argv)
 
 

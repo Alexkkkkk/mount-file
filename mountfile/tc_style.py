@@ -20,10 +20,24 @@ import json
 import os
 import time
 
-from .qt_compat import (P_ALTERNATEBASE, P_BASE, P_BUTTON, P_BUTTONTEXT,
-                        P_HIGHLIGHT, P_HIGHLIGHTEDTEXT, P_TEXT, P_TOOLTIPBASE,
-                        P_TOOLTIPTEXT, P_WINDOW, P_WINDOWTEXT, CG_Disabled,
-                        QColor, QFont, QFontDatabase, QPalette)
+from .qt_compat import (
+    P_ALTERNATEBASE,
+    P_BASE,
+    P_BUTTON,
+    P_BUTTONTEXT,
+    P_HIGHLIGHT,
+    P_HIGHLIGHTEDTEXT,
+    P_TEXT,
+    P_TOOLTIPBASE,
+    P_TOOLTIPTEXT,
+    P_WINDOW,
+    P_WINDOWTEXT,
+    CG_Disabled,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QPalette,
+)
 
 # Two skins: the dark one the interface is modelled on and the classic
 # light grey one people know from Total Commander on Windows.
@@ -154,7 +168,8 @@ def color(key):
 
 def stylesheet(name=None):
     t = THEMES.get(name or SETTINGS["theme"], THEMES["dark"])
-    return """
+    return (
+        """
 QWidget { background: %(chrome)s; color: %(text)s; }
 QMainWindow, QDialog { background: %(chrome)s; }
 QMenuBar { background: %(chrome)s; color: %(text)s; border-bottom: 1px solid %(border)s; }
@@ -212,7 +227,9 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QCheckBox, QRadioButton { background: transparent; }
 QToolTip { background: %(header)s; color: %(text)s; border: 1px solid %(border)s; }
-""" % t
+"""
+        % t
+    )
 
 
 def apply_theme(app, name=None):

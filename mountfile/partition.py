@@ -11,8 +11,12 @@ import uuid
 
 # --- MOUNTFILE_FIX: OLMA partition helpers ---------------------------------
 try:
-    from mountfile.olma.core import (OlmaBuffer, OlmaError, OlmaPartition,
-                                     OlmaPartitionTable)
+    from mountfile.olma.core import (
+        OlmaBuffer,
+        OlmaError,
+        OlmaPartition,
+        OlmaPartitionTable,
+    )
 except Exception:
     OlmaPartitionTable = None
 

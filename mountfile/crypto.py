@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, BinaryIO, Callable, Dict, Mapping, Optional, Sequence, Union
 
-
 # Public markers are useful to callers building synthetic, read-only fixtures.
 LUKS_MAGIC = b"LUKS\xba\xbe"
 BITLOCKER_MAGIC = b"\xeb\x52\x90-FVE-FS-"
@@ -197,9 +196,11 @@ def _find_bitlocker(header: bytes) -> bool:
     # The canonical marker is at byte 3 after the x86 jump/NOP prologue.  The
     # bounded fallback accepts known forensic fixtures that contain the full
     # marker but omit the prologue, while remaining limited to the boot block.
-    return header[3:11] == b"-FVE-FS-" or (
-        len(header) <= 512 and BITLOCKER_MAGIC in header[:64]
-    ) or b"-FVE-FS-" in header[:64]
+    return (
+        header[3:11] == b"-FVE-FS-"
+        or (len(header) <= 512 and BITLOCKER_MAGIC in header[:64])
+        or b"-FVE-FS-" in header[:64]
+    )
 
 
 def inspect_container(source: Source, *, offset: int = 0) -> ContainerInfo:
@@ -257,7 +258,10 @@ def inspect_container(source: Source, *, offset: int = 0) -> ContainerInfo:
     # Legacy FileVault 2 used an Apple CoreStorage physical-volume header.
     # The CS marker is a format marker, not a password or key.  Value 2 at the
     # documented method offset indicates AES-XTS; anything else stays unknown.
-    if header[_CORESTORAGE_MAGIC_OFFSET : _CORESTORAGE_MAGIC_OFFSET + 2] == CORESTORAGE_MAGIC:
+    if (
+        header[_CORESTORAGE_MAGIC_OFFSET : _CORESTORAGE_MAGIC_OFFSET + 2]
+        == CORESTORAGE_MAGIC
+    ):
         encrypted = None
         method_at = _CORESTORAGE_ENCRYPTION_OFFSET
         if len(header) >= method_at + 4:
@@ -329,8 +333,13 @@ class CryptoContainer:
         status = self.adapter_status()
         return bool(status and status.available)
 
-    def open_luks(self, name: str, *, password: Optional[Union[str, bytes]] = None,
-                  key_file: Optional[Union[str, os.PathLike]] = None) -> str:
+    def open_luks(
+        self,
+        name: str,
+        *,
+        password: Optional[Union[str, bytes]] = None,
+        key_file: Optional[Union[str, os.PathLike]] = None,
+    ) -> str:
         """Explicitly ask ``cryptsetup`` to create a mapping; never mounts it."""
 
         return unlock_luks(
@@ -379,7 +388,9 @@ def _canonical_adapter(name: str) -> str:
     return canonical
 
 
-def check_adapter(name: str, *, which: Optional[Callable[[str], Optional[str]]] = None) -> AdapterStatus:
+def check_adapter(
+    name: str, *, which: Optional[Callable[[str], Optional[str]]] = None
+) -> AdapterStatus:
     """Check one adapter by name or container kind without executing it."""
 
     canonical = _canonical_adapter(name)
@@ -397,19 +408,27 @@ def check_adapter(name: str, *, which: Optional[Callable[[str], Optional[str]]] 
     )
 
 
-def check_adapters(*, which: Optional[Callable[[str], Optional[str]]] = None) -> Dict[str, AdapterStatus]:
+def check_adapters(
+    *, which: Optional[Callable[[str], Optional[str]]] = None
+) -> Dict[str, AdapterStatus]:
     """Return explicit availability records for all supported adapters."""
 
     return {name: check_adapter(name, which=which) for name in ADAPTER_EXECUTABLES}
 
 
-def available_adapters(*, which: Optional[Callable[[str], Optional[str]]] = None) -> Dict[str, bool]:
+def available_adapters(
+    *, which: Optional[Callable[[str], Optional[str]]] = None
+) -> Dict[str, bool]:
     """Return a compact ``executable -> available`` mapping."""
 
-    return {name: status.available for name, status in check_adapters(which=which).items()}
+    return {
+        name: status.available for name, status in check_adapters(which=which).items()
+    }
 
 
-def adapter_available(name: str, *, which: Optional[Callable[[str], Optional[str]]] = None) -> bool:
+def adapter_available(
+    name: str, *, which: Optional[Callable[[str], Optional[str]]] = None
+) -> bool:
     """Return only the availability boolean for one explicit adapter."""
 
     return check_adapter(name, which=which).available
@@ -452,7 +471,9 @@ def _validate_mapper_name(name: str) -> str:
     return value
 
 
-def _run_private(command: Sequence[str], *, secret: Optional[bytes], runner: Runner) -> Any:
+def _run_private(
+    command: Sequence[str], *, secret: Optional[bytes], runner: Runner
+) -> Any:
     """Run an adapter with captured output and no secret in argv or errors."""
 
     kwargs: Dict[str, Any] = {

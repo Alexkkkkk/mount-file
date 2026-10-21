@@ -230,7 +230,9 @@ def _open_source(source: Source) -> Iterator[Union[memoryview, BinaryIO]]:
     if not callable(getattr(source, "read", None)) or not callable(
         getattr(source, "seek", None)
     ):
-        raise TypeError("source must be bytes-like, a seekable binary stream, or a path")
+        raise TypeError(
+            "source must be bytes-like, a seekable binary stream, or a path"
+        )
     yield source  # type: ignore[misc]
 
 
@@ -282,7 +284,8 @@ def _read_at(source: Union[memoryview, BinaryIO], offset: int, size: int) -> byt
     result = _bytes(value, "source read")
     if len(result) != size:
         raise NandBoundsError(
-            "short read at offset %d: got %d bytes, expected %d" % (offset, len(result), size)
+            "short read at offset %d: got %d bytes, expected %d"
+            % (offset, len(result), size)
         )
     return result
 

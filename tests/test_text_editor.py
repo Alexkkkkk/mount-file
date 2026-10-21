@@ -255,8 +255,7 @@ def test_external_editor_copy_is_imported_only_after_confirmation(
 
     def fake_open(path):
         Path(path).write_bytes(
-            b"\xef\xbb\xbf"
-            + "[main]\r\nname=новый Ш\r\n".encode("utf-8")
+            b"\xef\xbb\xbf" + "[main]\r\nname=новый Ш\r\n".encode("utf-8")
         )
         return ["fake-editor", str(path)]
 

@@ -63,10 +63,10 @@ from .qt_compat import (  # noqa: F401 - QColor/QBrush нужны для отр�
     QLabel,
     QPainter,
     QPushButton,
+    Qt,
     QThread,
     QTimer,
     QVBoxLayout,
-    Qt,
     pyqtSignal,
 )
 
@@ -312,9 +312,7 @@ class GradientBar(QtGui.QWidget if hasattr(QtGui, "QWidget") else qt_compat.QWid
             if self._busy:
                 gradient.setColorAt(0.25, QColor(self._dim(GRADIENT_START)))
             painter.save()
-            painter.setClipRect(
-                QtCore.QRectF(0, 0, fill_w, float(self.height()))
-            )
+            painter.setClipRect(QtCore.QRectF(0, 0, fill_w, float(self.height())))
             painter.setBrush(QBrush(gradient))
             painter.drawRoundedRect(rect, radius, radius)
             painter.restore()
@@ -337,9 +335,11 @@ class GradientBar(QtGui.QWidget if hasattr(QtGui, "QWidget") else qt_compat.QWid
     def _dim(hex_color):
         color = QColor(hex_color)
         color.setAlpha(90)
-        return color.name(QColor.NameFormat.HexArgb) if hasattr(
-            QColor, "NameFormat"
-        ) else color.name()
+        return (
+            color.name(QColor.NameFormat.HexArgb)
+            if hasattr(QColor, "NameFormat")
+            else color.name()
+        )
 
 
 # --------------------------------------------------------------------- шаги
@@ -364,7 +364,9 @@ class StepIndicator(qt_compat.QWidget):
                 arrow.setStyleSheet("color: %s;" % BORDER_COLOR)
                 layout.addWidget(arrow)
             label = QLabel()
-            label.setTextFormat(Qt.TextFormat.PlainText if hasattr(Qt, "TextFormat") else 0)
+            label.setTextFormat(
+                Qt.TextFormat.PlainText if hasattr(Qt, "TextFormat") else 0
+            )
             self._labels.append(label)
             layout.addWidget(label)
         layout.addStretch(1)
@@ -439,9 +441,18 @@ class DownloadWorker(QThread):
     failed = pyqtSignal(str)
     cancelled = pyqtSignal()
 
-    def __init__(self, url, sha256=None, size=0, asset_name=None, dest_dir=None,
-                 parent=None, timeout=CONNECT_TIMEOUT, chunk=CHUNK,
-                 tick_seconds=SPEED_TICK_SECONDS):
+    def __init__(
+        self,
+        url,
+        sha256=None,
+        size=0,
+        asset_name=None,
+        dest_dir=None,
+        parent=None,
+        timeout=CONNECT_TIMEOUT,
+        chunk=CHUNK,
+        tick_seconds=SPEED_TICK_SECONDS,
+    ):
         super().__init__(parent)
         self.url = url or ""
         self.sha256 = (sha256 or "").strip().lower() or None
@@ -473,15 +484,21 @@ class DownloadWorker(QThread):
                 return
             dest_dir = self.dest_dir or tempfile.mkdtemp(prefix="mountfile-update-")
             os.makedirs(dest_dir, exist_ok=True)
-            name = os.path.basename(
-                self.asset_name or self.url.split("?")[0].rstrip("/").split("/")[-1]
-            ) or "MountFile-update"
+            name = (
+                os.path.basename(
+                    self.asset_name or self.url.split("?")[0].rstrip("/").split("/")[-1]
+                )
+                or "MountFile-update"
+            )
             dest = os.path.join(dest_dir, name)
 
             self.stage.emit("Скачивание обновления…")
             request = urllib.request.Request(
                 self.url,
-                headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"},
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/octet-stream",
+                },
             )
 
             digest = hashlib.sha256()
@@ -492,8 +509,10 @@ class DownloadWorker(QThread):
             speed = 0.0
             eta = -1.0
 
-            with urllib.request.urlopen(request, timeout=self.timeout) as response, \
-                    open(dest, "wb") as handle:
+            with (
+                urllib.request.urlopen(request, timeout=self.timeout) as response,
+                open(dest, "wb") as handle,
+            ):
                 header_size = response.headers.get("Content-Length")
                 if header_size and str(header_size).isdigit():
                     total = int(header_size)
@@ -682,9 +701,20 @@ class UpdateDialog(QDialog):
     installed = pyqtSignal()
     snoozed = pyqtSignal()
 
-    def __init__(self, current_ver, new_ver, changelog, download_url,
-                 sha256_hash=None, parent=None, *, asset_name=None,
-                 release_url=None, size=0, installer=None):
+    def __init__(
+        self,
+        current_ver,
+        new_ver,
+        changelog,
+        download_url,
+        sha256_hash=None,
+        parent=None,
+        *,
+        asset_name=None,
+        release_url=None,
+        size=0,
+        installer=None,
+    ):
         super().__init__(parent)
         self.current_ver = str(current_ver or "?")
         self.new_ver = str(new_ver or "?")
@@ -711,9 +741,7 @@ class UpdateDialog(QDialog):
         self.setWindowTitle("Mount File — Центр обновлений")
         self.setMinimumSize(620, 470)
         try:
-            self.setWindowFlags(
-                self.windowFlags() & ~_window_context_help_hint()
-            )
+            self.setWindowFlags(self.windowFlags() & ~_window_context_help_hint())
         except Exception:  # pragma: no cover - экзотический биндинг
             pass
         self._setup_ui()
@@ -774,8 +802,9 @@ class UpdateDialog(QDialog):
         root.addLayout(header)
 
         divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.HLine if hasattr(QFrame, "Shape")
-                              else QFrame.HLine)
+        divider.setFrameShape(
+            QFrame.Shape.HLine if hasattr(QFrame, "Shape") else QFrame.HLine
+        )
         divider.setFixedHeight(1)
         divider.setStyleSheet("background: %s; border: none;" % BORDER_COLOR)
         root.addWidget(divider)

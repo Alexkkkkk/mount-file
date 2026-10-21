@@ -202,8 +202,12 @@ class Plan(BaseModel):
 
 class Claim(BaseModel):
     type: Literal[
-        "deleted_claim", "recovered_complete", "xor_signature_valid",
-        "fs_present", "anomaly", "summary",
+        "deleted_claim",
+        "recovered_complete",
+        "xor_signature_valid",
+        "fs_present",
+        "anomaly",
+        "summary",
     ]
     statement: str
     execution_id: str
@@ -255,7 +259,7 @@ def detect_signatures(image: Path, span: int = 1 << 20) -> list[SignatureHit]:
         head = f.read(span)
     hits: list[SignatureHit] = []
     for magic, off, kind, hint in SIGNATURES:
-        if off + len(magic) <= len(head) and head[off:off + len(magic)] == magic:
+        if off + len(magic) <= len(head) and head[off : off + len(magic)] == magic:
             hits.append(SignatureHit(offset=off, kind=kind, hint=hint))
     return hits
 
@@ -278,11 +282,15 @@ def list_partitions(image: Path) -> list[PartitionInfo]:
             fs_type = str(pytsk3.FS_Info(img, offset=off).info.ftype)
         except Exception:
             pass
-        parts.append(PartitionInfo(
-            addr=p.addr, offset=off, length=p.len * bs,
-            desc=(p.desc or b"").decode("utf-8", "replace").strip() or f"p{p.addr}",
-            fs_type=fs_type,
-        ))
+        parts.append(
+            PartitionInfo(
+                addr=p.addr,
+                offset=off,
+                length=p.len * bs,
+                desc=(p.desc or b"").decode("utf-8", "replace").strip() or f"p{p.addr}",
+                fs_type=fs_type,
+            )
+        )
     return parts
 
 
@@ -306,19 +314,27 @@ def list_directory(image: Path, offset: int, path: str = "/") -> list[FileEntry]
         if meta is None:
             continue
         decoded = name.decode("utf-8", "replace")
-        out.append(FileEntry(
-            name=decoded,
-            path=path.rstrip("/") + "/" + decoded,
-            inode=meta.addr, size=meta.size,
-            is_directory=(meta.type == pytsk3.TSK_FS_META_TYPE_DIR),
-            deleted=bool(meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC),
-            mtime=float(meta.mtime) if meta.mtime else None,
-        ))
+        out.append(
+            FileEntry(
+                name=decoded,
+                path=path.rstrip("/") + "/" + decoded,
+                inode=meta.addr,
+                size=meta.size,
+                is_directory=(meta.type == pytsk3.TSK_FS_META_TYPE_DIR),
+                deleted=bool(meta.flags & pytsk3.TSK_FS_META_FLAG_UNALLOC),
+                mtime=float(meta.mtime) if meta.mtime else None,
+            )
+        )
     return out
 
 
-def search_files(image: Path, offset: int, pattern: str,
-                 start: str = "/", include_deleted: bool = True) -> list[FileEntry]:
+def search_files(
+    image: Path,
+    offset: int,
+    pattern: str,
+    start: str = "/",
+    include_deleted: bool = True,
+) -> list[FileEntry]:
     rx = re.compile(pattern, re.IGNORECASE)
     matches: list[FileEntry] = []
     stack, seen = [start], set()
@@ -341,8 +357,7 @@ def search_files(image: Path, offset: int, pattern: str,
     return matches
 
 
-def get_file(image: Path, offset: int, path: str,
-             output: Path | None = None) -> Path:
+def get_file(image: Path, offset: int, path: str, output: Path | None = None) -> Path:
     if CONFIG.read_only:
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
     fs = _open_fs(image, offset)
@@ -351,14 +366,24 @@ def get_file(image: Path, offset: int, path: str,
     dest = output or (CONFIG.workspace / Path(path).name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
-    AUDIT.write("extract", image=str(image), offset=offset, path=path,
-                dest=str(dest), sha256=hashlib.sha256(data).hexdigest())
+    AUDIT.write(
+        "extract",
+        image=str(image),
+        offset=offset,
+        path=path,
+        dest=str(dest),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
     return dest
 
 
-def recover_deleted_file(image: Path, offset: int, inode: int,
-                         original_size: int | None = None,
-                         output: Path | None = None) -> RecoveryResult:
+def recover_deleted_file(
+    image: Path,
+    offset: int,
+    inode: int,
+    original_size: int | None = None,
+    output: Path | None = None,
+) -> RecoveryResult:
     if CONFIG.read_only:
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
     fs = _open_fs(image, offset)
@@ -372,13 +397,21 @@ def recover_deleted_file(image: Path, offset: int, inode: int,
     dest.write_bytes(data)
     sha = hashlib.sha256(data).hexdigest()
     complete = original_size is None or len(data) == original_size
-    AUDIT.write("recover", image=str(image), inode=inode,
-                recovered_size=len(data), complete=complete, sha256=sha)
+    AUDIT.write(
+        "recover",
+        image=str(image),
+        inode=inode,
+        recovered_size=len(data),
+        complete=complete,
+        sha256=sha,
+    )
     return RecoveryResult(
-        inode=inode, path=str(dest),
+        inode=inode,
+        path=str(dest),
         recovered_size=len(data),
         original_size=original_size or size,
-        complete=complete, sha256=sha,
+        complete=complete,
+        sha256=sha,
     )
 
 
@@ -389,15 +422,15 @@ def hash_file(path: Path) -> str:
 # !!! REPLACE with real keys from mount-file resources/XOR_MST_*.bin !!!
 XOR_KEYS: dict[str, bytes] = {
     "identity": b"\x00" * 16,
-    "mstar_a":  b"\xA5" * 16,
-    "mtk_a":    b"\x5A" * 16,
+    "mstar_a": b"\xA5" * 16,
+    "mtk_a": b"\x5A" * 16,
 }
 
 
 def _xor(data: bytes, key: bytes) -> bytes:
     if not key:
         return data
-    k = (key * (len(data) // len(key) + 1))[:len(data)]
+    k = (key * (len(data) // len(key) + 1))[: len(data)]
     return bytes(a ^ b for a, b in zip(data, k))
 
 
@@ -411,10 +444,18 @@ def try_xor_decrypt(image: Path, key_name: str, output: Path) -> dict:
         while chunk := src.read(1 << 20):
             dst.write(_xor(chunk, key))
     hits = detect_signatures(output)
-    AUDIT.write("xor", image=str(image), key=key_name,
-                output=str(output), hits=[h.model_dump() for h in hits])
-    return {"output": str(output), "key": key_name,
-            "signatures": [h.model_dump() for h in hits]}
+    AUDIT.write(
+        "xor",
+        image=str(image),
+        key=key_name,
+        output=str(output),
+        hits=[h.model_dump() for h in hits],
+    )
+    return {
+        "output": str(output),
+        "key": key_name,
+        "signatures": [h.model_dump() for h in hits],
+    }
 
 
 def auto_decrypt(image: Path) -> dict | None:
@@ -456,7 +497,10 @@ def gate_recovered_complete(rec: ExecutionRecord, _: Claim) -> tuple[bool, str]:
     res = rec.result or {}
     if res.get("complete") is True:
         return True, "recovered_size == original_size"
-    return False, f"partial recovery: {res.get('recovered_size')}/{res.get('original_size')}"
+    return (
+        False,
+        f"partial recovery: {res.get('recovered_size')}/{res.get('original_size')}",
+    )
 
 
 def gate_xor_valid(rec: ExecutionRecord, _: Claim) -> tuple[bool, str]:
@@ -474,7 +518,11 @@ def gate_fs_present(rec: ExecutionRecord, _: Claim) -> tuple[bool, str]:
         return False, "partition scan failed"
     parts = rec.result or []
     good = [p for p in parts if isinstance(p, dict) and p.get("fs_type")]
-    return (True, f"{len(good)} partition(s) with FS") if good else (False, "no FS partitions")
+    return (
+        (True, f"{len(good)} partition(s) with FS")
+        if good
+        else (False, "no FS partitions")
+    )
 
 
 def gate_anomaly(rec: ExecutionRecord, _: Claim) -> tuple[bool, str]:
@@ -495,8 +543,9 @@ GATE_REGISTRY: dict[str, Gate] = {
 }
 
 
-def validate_claim(claim: Claim,
-                   executions: dict[str, ExecutionRecord]) -> tuple[bool, str]:
+def validate_claim(
+    claim: Claim, executions: dict[str, ExecutionRecord]
+) -> tuple[bool, str]:
     rec = executions.get(claim.execution_id)
     if rec is None:
         return False, f"fabricated citation: {claim.execution_id}"
@@ -520,8 +569,7 @@ def _next_exec_id() -> str:
     return f"exec_{_EXEC_COUNTER['n']:04d}"
 
 
-def register_tool(name: str, description: str,
-                  schema: dict[str, Any]) -> Callable:
+def register_tool(name: str, description: str, schema: dict[str, Any]) -> Callable:
     def deco(fn: Callable) -> Callable:
         TOOLS[name] = {
             "fn": fn,
@@ -535,24 +583,32 @@ def register_tool(name: str, description: str,
             },
         }
         return fn
+
     return deco
 
 
 def dispatch(name: str, args: dict[str, Any]) -> ExecutionRecord:
     exec_id = _next_exec_id()
     if name not in TOOLS:
-        rec = ExecutionRecord(execution_id=exec_id, tool=name, args=args,
-                              ok=False, error=f"unknown tool {name}")
+        rec = ExecutionRecord(
+            execution_id=exec_id,
+            tool=name,
+            args=args,
+            ok=False,
+            error=f"unknown tool {name}",
+        )
         AUDIT.write("tool", **rec.model_dump())
         return rec
     try:
         result = TOOLS[name]["fn"](**args)
-        rec = ExecutionRecord(execution_id=exec_id, tool=name, args=args,
-                              ok=True, result=result)
+        rec = ExecutionRecord(
+            execution_id=exec_id, tool=name, args=args, ok=True, result=result
+        )
     except Exception as e:
         log.exception("tool %s failed", name)
-        rec = ExecutionRecord(execution_id=exec_id, tool=name, args=args,
-                              ok=False, error=str(e))
+        rec = ExecutionRecord(
+            execution_id=exec_id, tool=name, args=args, ok=False, error=str(e)
+        )
     AUDIT.write("tool", **rec.model_dump())
     return rec
 
@@ -565,8 +621,11 @@ def tool_schemas() -> list[dict]:
 @register_tool(
     "list_partitions",
     "Enumerate partitions. Returns byte offsets for list_directory/search/extract.",
-    {"type": "object", "properties": {"image_path": {"type": "string"}},
-     "required": ["image_path"]},
+    {
+        "type": "object",
+        "properties": {"image_path": {"type": "string"}},
+        "required": ["image_path"],
+    },
 )
 def _t_list_partitions(image_path: str) -> list[dict]:
     img = CONFIG.check(image_path)
@@ -576,42 +635,62 @@ def _t_list_partitions(image_path: str) -> list[dict]:
 @register_tool(
     "list_directory",
     "List directory entries. deleted=true for UNALLOC files.",
-    {"type": "object", "properties": {
-        "image_path": {"type": "string"},
-        "offset": {"type": "integer"},
-        "path": {"type": "string", "default": "/"}},
-     "required": ["image_path", "offset"]},
+    {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "path": {"type": "string", "default": "/"},
+        },
+        "required": ["image_path", "offset"],
+    },
 )
 def _t_list_directory(image_path: str, offset: int, path: str = "/") -> list[dict]:
-    return [f.model_dump()
-            for f in list_directory(CONFIG.check(image_path), offset, path)]
+    return [
+        f.model_dump() for f in list_directory(CONFIG.check(image_path), offset, path)
+    ]
 
 
 @register_tool(
     "search_files",
     "Recursively search filenames by Python regex (e.g. '\\\\.pdf$').",
-    {"type": "object", "properties": {
-        "image_path": {"type": "string"},
-        "offset": {"type": "integer"},
-        "pattern": {"type": "string"},
-        "start": {"type": "string", "default": "/"},
-        "include_deleted": {"type": "boolean", "default": True}},
-     "required": ["image_path", "offset", "pattern"]},
+    {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "pattern": {"type": "string"},
+            "start": {"type": "string", "default": "/"},
+            "include_deleted": {"type": "boolean", "default": True},
+        },
+        "required": ["image_path", "offset", "pattern"],
+    },
 )
-def _t_search_files(image_path: str, offset: int, pattern: str,
-                    start: str = "/", include_deleted: bool = True) -> list[dict]:
-    hits = search_files(CONFIG.check(image_path), offset, pattern, start, include_deleted)
+def _t_search_files(
+    image_path: str,
+    offset: int,
+    pattern: str,
+    start: str = "/",
+    include_deleted: bool = True,
+) -> list[dict]:
+    hits = search_files(
+        CONFIG.check(image_path), offset, pattern, start, include_deleted
+    )
     return [f.model_dump() for f in hits]
 
 
 @register_tool(
     "extract_file",
     "Extract a live file to workspace. Requires MOUNTFILE_READONLY=0.",
-    {"type": "object", "properties": {
-        "image_path": {"type": "string"},
-        "offset": {"type": "integer"},
-        "path": {"type": "string"}},
-     "required": ["image_path", "offset", "path"]},
+    {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "path": {"type": "string"},
+        },
+        "required": ["image_path", "offset", "path"],
+    },
 )
 def _t_extract_file(image_path: str, offset: int, path: str) -> dict:
     dest = get_file(CONFIG.check(image_path), offset, path)
@@ -621,15 +700,20 @@ def _t_extract_file(image_path: str, offset: int, path: str) -> dict:
 @register_tool(
     "recover_deleted_file",
     "Recover an unallocated file by inode. Requires MOUNTFILE_READONLY=0.",
-    {"type": "object", "properties": {
-        "image_path": {"type": "string"},
-        "offset": {"type": "integer"},
-        "inode": {"type": "integer"},
-        "original_size": {"type": "integer"}},
-     "required": ["image_path", "offset", "inode"]},
+    {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "inode": {"type": "integer"},
+            "original_size": {"type": "integer"},
+        },
+        "required": ["image_path", "offset", "inode"],
+    },
 )
-def _t_recover(image_path: str, offset: int, inode: int,
-               original_size: int | None = None) -> dict:
+def _t_recover(
+    image_path: str, offset: int, inode: int, original_size: int | None = None
+) -> dict:
     r = recover_deleted_file(CONFIG.check(image_path), offset, inode, original_size)
     return r.model_dump()
 
@@ -637,8 +721,11 @@ def _t_recover(image_path: str, offset: int, inode: int,
 @register_tool(
     "detect_signatures",
     "Detect FS boot-sector signatures at image start. Run this FIRST.",
-    {"type": "object", "properties": {"image_path": {"type": "string"}},
-     "required": ["image_path"]},
+    {
+        "type": "object",
+        "properties": {"image_path": {"type": "string"}},
+        "required": ["image_path"],
+    },
 )
 def _t_detect_signatures(image_path: str) -> list[dict]:
     return [h.model_dump() for h in detect_signatures(CONFIG.check(image_path))]
@@ -647,11 +734,15 @@ def _t_detect_signatures(image_path: str) -> list[dict]:
 @register_tool(
     "try_xor_decrypt",
     "Decrypt with a named XOR key; reports signatures on output.",
-    {"type": "object", "properties": {
-        "image_path": {"type": "string"},
-        "key_name": {"type": "string"},
-        "output": {"type": "string"}},
-     "required": ["image_path", "key_name", "output"]},
+    {
+        "type": "object",
+        "properties": {
+            "image_path": {"type": "string"},
+            "key_name": {"type": "string"},
+            "output": {"type": "string"},
+        },
+        "required": ["image_path", "key_name", "output"],
+    },
 )
 def _t_try_xor(image_path: str, key_name: str, output: str) -> dict:
     return try_xor_decrypt(CONFIG.check(image_path), key_name, Path(output))
@@ -660,8 +751,11 @@ def _t_try_xor(image_path: str, key_name: str, output: str) -> dict:
 @register_tool(
     "auto_decrypt",
     "Iterate XOR keys; return first producing a valid FS signature.",
-    {"type": "object", "properties": {"image_path": {"type": "string"}},
-     "required": ["image_path"]},
+    {
+        "type": "object",
+        "properties": {"image_path": {"type": "string"}},
+        "required": ["image_path"],
+    },
 )
 def _t_auto_decrypt(image_path: str) -> dict | None:
     return auto_decrypt(CONFIG.check(image_path))
@@ -670,8 +764,11 @@ def _t_auto_decrypt(image_path: str) -> dict | None:
 @register_tool(
     "hash_file",
     "SHA-256 of a workspace file (for chain-of-custody).",
-    {"type": "object", "properties": {"path": {"type": "string"}},
-     "required": ["path"]},
+    {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    },
 )
 def _t_hash_file(path: str) -> dict:
     p = Path(path).resolve()
@@ -692,8 +789,9 @@ def _client() -> Any:
     )
 
 
-def _chat(system: str, user: str, tools: list[dict] | None = None,
-          temperature: float = 0.2) -> dict:
+def _chat(
+    system: str, user: str, tools: list[dict] | None = None, temperature: float = 0.2
+) -> dict:
     resp = _client().chat.completions.create(
         model=CONFIG.model,
         temperature=temperature,
@@ -747,12 +845,13 @@ class Planner:
             return Plan(**raw)
         except Exception as e:
             log.error("planner invalid plan: %s / %s", e, raw)
-            return Plan(steps=[
-                ToolCall(tool="detect_signatures",
-                         args={"image_path": str(image)}),
-                ToolCall(tool="list_partitions",
-                         args={"image_path": str(image)}),
-            ], hypothesis="fallback baseline plan")
+            return Plan(
+                steps=[
+                    ToolCall(tool="detect_signatures", args={"image_path": str(image)}),
+                    ToolCall(tool="list_partitions", args={"image_path": str(image)}),
+                ],
+                hypothesis="fallback baseline plan",
+            )
 
 
 class Executor:
@@ -777,8 +876,9 @@ class Executor:
 class Analyst:
     def analyze(self, query: str, records: list[ExecutionRecord]) -> list[Claim]:
         payload = [r.model_dump() for r in records]
-        raw = _chat(ANALYST_PROMPT,
-                    f"QUERY: {query}\nEXECUTIONS: {json.dumps(payload)[:12000]}")
+        raw = _chat(
+            ANALYST_PROMPT, f"QUERY: {query}\nEXECUTIONS: {json.dumps(payload)[:12000]}"
+        )
         out: list[Claim] = []
         for c in raw.get("claims", []):
             try:
@@ -789,8 +889,9 @@ class Analyst:
 
 
 class Skeptic:
-    def challenge(self, claims: list[Claim],
-                  records: list[ExecutionRecord]) -> list[Claim]:
+    def challenge(
+        self, claims: list[Claim], records: list[ExecutionRecord]
+    ) -> list[Claim]:
         if not claims:
             return []
         raw = _chat(
@@ -819,8 +920,7 @@ class Orchestrator:
     def investigate(self, query: str, image: Path) -> InvestigationReport:
         image = CONFIG.allow(image)
         sha = Audit.sha256_file(image)
-        AUDIT.write("investigation_start",
-                    image=str(image), sha256=sha, query=query)
+        AUDIT.write("investigation_start", image=str(image), sha256=sha, query=query)
 
         plan = self.planner.plan(query, image)
         executions = self.executor.run(plan, image)
@@ -839,13 +939,22 @@ class Orchestrator:
         verdict = self._verdict(accepted, rejected)
         summary = self._summary(query, image, sha, accepted, rejected, executions)
         report = InvestigationReport(
-            query=query, image=str(image), sha256=sha,
-            plan=plan, executions=executions,
-            accepted_claims=accepted, rejected_claims=rejected,
-            verdict=verdict, summary_md=summary,
+            query=query,
+            image=str(image),
+            sha256=sha,
+            plan=plan,
+            executions=executions,
+            accepted_claims=accepted,
+            rejected_claims=rejected,
+            verdict=verdict,
+            summary_md=summary,
         )
-        AUDIT.write("investigation_end", verdict=verdict,
-                    accepted=len(accepted), rejected=len(rejected))
+        AUDIT.write(
+            "investigation_end",
+            verdict=verdict,
+            accepted=len(accepted),
+            rejected=len(rejected),
+        )
         return report
 
     @staticmethod
@@ -873,8 +982,10 @@ class Orchestrator:
         if not accepted:
             lines.append("_none_")
         for c in accepted:
-            lines.append(f"- **{c.type}** ({c.confidence:.2f}) — {c.statement} "
-                         f"_[`{c.execution_id}`]_")
+            lines.append(
+                f"- **{c.type}** ({c.confidence:.2f}) — {c.statement} "
+                f"_[`{c.execution_id}`]_"
+            )
         lines += ["", "## Rejected claims"]
         if not rejected:
             lines.append("_none_")
@@ -922,8 +1033,10 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     print(f"sha256: {Audit.sha256_file(img)}")
     print("\nsignatures:")
     hits = detect_signatures(img)
-    print("\n".join(f"  {h.kind:10s} @0x{h.offset:x}  {h.hint}" for h in hits)
-          or "  (none)")
+    print(
+        "\n".join(f"  {h.kind:10s} @0x{h.offset:x}  {h.hint}" for h in hits)
+        or "  (none)"
+    )
     print("\npartitions:")
     try:
         parts = list_partitions(img)
@@ -933,8 +1046,10 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             print(f"  #{p.addr} off=0x{p.offset:x} fs={p.fs_type or '?'} {p.desc}")
     except Exception as e:
         print(f"  (unreadable: {e})")
-        print("  → try: python mountfile_ai.py agent --image "
-              f"{img} --query 'decrypt and inspect'")
+        print(
+            "  → try: python mountfile_ai.py agent --image "
+            f"{img} --query 'decrypt and inspect'"
+        )
     return 0
 
 
