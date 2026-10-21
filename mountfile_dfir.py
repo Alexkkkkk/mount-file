@@ -27,10 +27,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-
 # ---------------------------------------------------------------------------
 # Timeline model
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class TimelineRecord:
@@ -73,6 +73,7 @@ def read_timeline_csv(path: str | Path) -> Iterator[TimelineRecord]:
 # ---------------------------------------------------------------------------
 # Grep по raw-образу
 # ---------------------------------------------------------------------------
+
 
 def _context(mm: mmap.mmap, start: int, end: int, context: int) -> str:
     left = max(0, start - context)
@@ -131,6 +132,7 @@ def grep_image(
 # SQLite timeline
 # ---------------------------------------------------------------------------
 
+
 class TimelineDB:
     def __init__(self, db_path: str | Path):
         self.conn = sqlite3.connect(str(db_path))
@@ -166,7 +168,9 @@ class TimelineDB:
         self.conn.commit()
         return len(rows)
 
-    def query(self, *, limit: int = 1000, path_like: str | None = None) -> list[dict[str, Any]]:
+    def query(
+        self, *, limit: int = 1000, path_like: str | None = None
+    ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM timeline"
         params: list[Any] = []
         if path_like:
@@ -180,6 +184,7 @@ class TimelineDB:
 # ---------------------------------------------------------------------------
 # Timestomp detection
 # ---------------------------------------------------------------------------
+
 
 def detect_timestomp(
     records: Iterable[TimelineRecord],
@@ -210,6 +215,7 @@ def detect_timestomp(
 # Plugin registry
 # ---------------------------------------------------------------------------
 
+
 class PluginRegistry:
     HOOKS = ("on_open", "on_file", "on_close")
 
@@ -232,6 +238,7 @@ class PluginRegistry:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -243,6 +250,7 @@ def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
+
 
 def cmd_grep(args: argparse.Namespace) -> None:
     for hit in grep_image(
@@ -290,8 +298,8 @@ def cmd_hash(args: argparse.Namespace) -> None:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     try:
-        from fastapi import FastAPI
         import uvicorn
+        from fastapi import FastAPI
     except ImportError:
         sys.exit("Установи зависимости: pip install fastapi uvicorn")
 
@@ -306,14 +314,18 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Single-file DFIR prototype for mount-file issue #87")
+    parser = argparse.ArgumentParser(
+        description="Single-file DFIR prototype for mount-file issue #87"
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_grep = sub.add_parser("grep", help="grep по raw-образу")
     p_grep.add_argument("image")
     p_grep.add_argument("pattern")
     p_grep.add_argument("--regex", action="store_true")
-    p_grep.add_argument("--encoding", default="utf-8", choices=["utf-8", "utf-16le", "latin-1", "raw"])
+    p_grep.add_argument(
+        "--encoding", default="utf-8", choices=["utf-8", "utf-16le", "latin-1", "raw"]
+    )
     p_grep.add_argument("--context", type=int, default=64)
     p_grep.add_argument("--max-hits", type=int, default=1000)
     p_grep.add_argument("--json", action="store_true")

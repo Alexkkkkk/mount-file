@@ -20,7 +20,17 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 
 @dataclass(frozen=True, init=False)
@@ -246,9 +256,7 @@ class InvestigationOrchestrator:
             claim for claim in candidates if _claim_key(claim) in accepted_keys
         ]
         rejected = [
-            claim
-            for claim in candidates
-            if _claim_key(claim) not in accepted_keys
+            claim for claim in candidates if _claim_key(claim) not in accepted_keys
         ]
 
         return InvestigationResult(
@@ -329,7 +337,9 @@ def _coerce_claim(raw: Any) -> Claim:
     raise TypeError("each analyst output must be a Claim or mapping")
 
 
-def _call_analyst(analyst: Analyst, query: str, executions: Sequence[ExecutionRecord]) -> Any:
+def _call_analyst(
+    analyst: Analyst, query: str, executions: Sequence[ExecutionRecord]
+) -> Any:
     """Call the canonical two-argument analyst, with a narrow one-arg form."""
 
     if _can_bind(analyst, query, executions):
@@ -365,7 +375,9 @@ def _skeptic_filter(
     return kept
 
 
-def _call_with_supported_arity(role: Callable[..., Any], first: Any, second: Any) -> Any:
+def _call_with_supported_arity(
+    role: Callable[..., Any], first: Any, second: Any
+) -> Any:
     if _can_bind(role, first, second):
         return role(first, second)
     if _can_bind(role, first):

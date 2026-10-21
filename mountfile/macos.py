@@ -201,7 +201,9 @@ class HFSPlusAdapter:
     def file_size(self, path: str) -> int:
         return self._provider.file_size(path)
 
-    def read_file_range(self, path: str, offset: int = 0, length: int = 1 << 20) -> bytes:
+    def read_file_range(
+        self, path: str, offset: int = 0, length: int = 1 << 20
+    ) -> bytes:
         return self._provider.read_file_range(path, offset=offset, length=length)
 
     def read_file(self, path: str) -> bytes:
@@ -261,14 +263,18 @@ class APFSFuseAdapter:
             raise UnsupportedFilesystemError(
                 "APFS-FUSE adapter accepts whole-image input only; slice the partition first"
             )
-        self.executable = os.fspath(executable) if executable is not None else apfs_fuse_path()
+        self.executable = (
+            os.fspath(executable) if executable is not None else apfs_fuse_path()
+        )
         if not self.executable:
             raise AdapterUnavailableError(
                 "APFS read-only access requires the external apfs-fuse executable on PATH"
             )
         detected = detect_macos_filesystem(self.image_path, offset=0)
         if detected != "APFS":
-            raise UnsupportedFilesystemError("image does not contain an APFS filesystem")
+            raise UnsupportedFilesystemError(
+                "image does not contain an APFS filesystem"
+            )
         self._process = None  # type: Any
         self._mountpoint: Optional[Path] = None
 
@@ -365,7 +371,9 @@ class APFSFuseAdapter:
 
     def __enter__(self):
         if not self.mounted:
-            raise MountError("call mount(existing_directory) before entering the adapter")
+            raise MountError(
+                "call mount(existing_directory) before entering the adapter"
+            )
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -373,7 +381,9 @@ class APFSFuseAdapter:
 
     def _root(self) -> Path:
         if not self.mounted:
-            raise MountError("APFS image is not mounted; call mount(existing_directory) first")
+            raise MountError(
+                "APFS image is not mounted; call mount(existing_directory) first"
+            )
         # The invariant is established by mount(); keep this guard for type
         # checkers and to fail closed if a caller mutates internal state.
         assert self._mountpoint is not None
@@ -423,7 +433,9 @@ class APFSFuseAdapter:
         except OSError as exc:
             raise MountError("cannot stat APFS file %r: %s" % (path, exc)) from exc
 
-    def read_file_range(self, path: str, offset: int = 0, length: int = 1 << 20) -> bytes:
+    def read_file_range(
+        self, path: str, offset: int = 0, length: int = 1 << 20
+    ) -> bytes:
         if offset < 0:
             raise ValueError("offset must be non-negative")
         if length <= 0:

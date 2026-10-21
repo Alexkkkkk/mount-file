@@ -40,8 +40,8 @@ lint:
 
 fmt:
 	$(PY) -m ruff check --fix mountfile tests main.py || true
-	$(PY) -m black --quiet mountfile tests main.py
 	$(PY) -m isort --quiet mountfile tests main.py
+	$(PY) -m black --quiet mountfile tests main.py
 
 exe:
 	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \

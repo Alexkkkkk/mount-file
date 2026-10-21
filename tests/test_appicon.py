@@ -71,6 +71,10 @@ def test_app_icon_is_none_without_a_running_application():
         "assert appicon.app_icon() is None"
     )
     done = subprocess.run(
-        [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert done.returncode == 0, done.stderr

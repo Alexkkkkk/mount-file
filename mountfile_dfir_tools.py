@@ -33,13 +33,17 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
-
 # ===========================================================================
 # 0. Общие типы и исключения
 # ===========================================================================
 
-class DFIRError(Exception): pass
-class DependencyMissing(DFIRError): pass
+
+class DFIRError(Exception):
+    pass
+
+
+class DependencyMissing(DFIRError):
+    pass
 
 
 @dataclass
@@ -64,6 +68,7 @@ class RegionInfo:
 # 1. Универсальный читатель образа (RO)
 # ===========================================================================
 
+
 class ImageReader:
     """
     Обёртка над образом: прямой доступ + опционально pytsk3
@@ -84,7 +89,9 @@ class ImageReader:
             f.seek(offset)
             return f.read(length)
 
-    def stream_chunks(self, chunk_size: int = 8 * 1024 * 1024) -> Iterator[tuple[int, bytes]]:
+    def stream_chunks(
+        self, chunk_size: int = 8 * 1024 * 1024
+    ) -> Iterator[tuple[int, bytes]]:
         with open(self.image_path, "rb") as f:
             offset = 0
             while True:
@@ -177,17 +184,20 @@ class ImageReader:
         mft_data = self.read(mft_offset, 1024 * 1024)
         # ищем сигнатуру "FILE" и берём размеры записей 1 KiB
         for i in range(0, len(mft_data) - 4, 1024):
-            if mft_data[i:i+4] == b"FILE":
+            if mft_data[i : i + 4] == b"FILE":
                 # очень упрощённо: помечаем кластер занятым
                 yield RegionInfo(
-                    offset=mft_offset + i, length=1024,
-                    kind="file", owner=f"mft_record_{i//1024}",
+                    offset=mft_offset + i,
+                    length=1024,
+                    kind="file",
+                    owner=f"mft_record_{i//1024}",
                 )
 
 
 # ===========================================================================
 # 2. Task 1.3 — YARA-сканер
 # ===========================================================================
+
 
 class YaraScanner:
     """
@@ -214,9 +224,14 @@ class YaraScanner:
             # вырезаем занятые регионы
             for start, end in alloc:
                 if off <= start < off + len(chunk):
-                    chunk = chunk[:start - off] + b"\0" * (min(end, off + len(chunk)) - start) + \
-                            chunk[min(end, off + len(chunk)) - off:]
-            matches.extend(self._scan_blob(chunk, rules, path="<unallocated>", base_offset=off))
+                    chunk = (
+                        chunk[: start - off]
+                        + b"\0" * (min(end, off + len(chunk)) - start)
+                        + chunk[min(end, off + len(chunk)) - off :]
+                    )
+            matches.extend(
+                self._scan_blob(chunk, rules, path="<unallocated>", base_offset=off)
+            )
         return matches
 
     def _allocated_ranges(self) -> list[tuple[int, int]]:
@@ -230,6 +245,7 @@ class YaraScanner:
         text = Path(rules_path).read_text(encoding="utf-8")
         try:
             import yara  # type: ignore
+
             return {"type": "yara", "compiled": yara.compile(source=text)}
         except ImportError:
             return {"type": "regex", "rules": self._parse_simple_rules(text)}
@@ -238,30 +254,40 @@ class YaraScanner:
         """Fallback-парсер для простых YARA-правил вида $a = "text"."""
         rules = []
         for m in re.finditer(
-            r'rule\s+(\w+)\s*\{(.*?)\n\}',
-            text, re.DOTALL,
+            r"rule\s+(\w+)\s*\{(.*?)\n\}",
+            text,
+            re.DOTALL,
         ):
             name, body = m.group(1), m.group(2)
             patterns = []
             for sm in re.finditer(r'\$[a-z0-9_]+\s*=\s*"((?:[^"\\]|\\.)*)"', body):
-                patterns.append(re.escape(sm.group(1).encode().decode("unicode_escape")))
+                patterns.append(
+                    re.escape(sm.group(1).encode().decode("unicode_escape"))
+                )
             if patterns:
-                rules.append((name, re.compile(b"|".join(p.encode() for p in patterns))))
+                rules.append(
+                    (name, re.compile(b"|".join(p.encode() for p in patterns)))
+                )
         return rules
 
-    def _scan_blob(self, data: bytes, rules, path: str,
-                   base_offset: int = 0) -> list[YaraMatch]:
+    def _scan_blob(
+        self, data: bytes, rules, path: str, base_offset: int = 0
+    ) -> list[YaraMatch]:
         if rules["type"] == "yara":
             try:
                 result = rules["compiled"].match(data=data)
                 out = []
                 for m in result:
-                    out.append(YaraMatch(
-                        rule=m.rule, namespace=m.namespace,
-                        tags=list(m.tags),
-                        data_sha256=hashlib.sha256(data).hexdigest(),
-                        path=path, offset=base_offset or None,
-                    ))
+                    out.append(
+                        YaraMatch(
+                            rule=m.rule,
+                            namespace=m.namespace,
+                            tags=list(m.tags),
+                            data_sha256=hashlib.sha256(data).hexdigest(),
+                            path=path,
+                            offset=base_offset or None,
+                        )
+                    )
                 return out
             except Exception:
                 return []
@@ -269,17 +295,23 @@ class YaraScanner:
         out = []
         for name, pat in rules["rules"]:
             if pat.search(data):
-                out.append(YaraMatch(
-                    rule=name, namespace="fallback", tags=[],
-                    data_sha256=hashlib.sha256(data).hexdigest(),
-                    path=path, offset=base_offset or None,
-                ))
+                out.append(
+                    YaraMatch(
+                        rule=name,
+                        namespace="fallback",
+                        tags=[],
+                        data_sha256=hashlib.sha256(data).hexdigest(),
+                        path=path,
+                        offset=base_offset or None,
+                    )
+                )
         return out
 
 
 # ===========================================================================
 # 3. Task 1.5 — Unallocated space
 # ===========================================================================
+
 
 class UnallocatedExtractor:
     """
@@ -319,8 +351,9 @@ class UnallocatedExtractor:
         return sorted(ranges)
 
     @staticmethod
-    def _subtract(start: int, end: int,
-                  occupied: list[tuple[int, int]]) -> list[RegionInfo]:
+    def _subtract(
+        start: int, end: int, occupied: list[tuple[int, int]]
+    ) -> list[RegionInfo]:
         """Вычисляет свободные интервалы как разность [start, end] и occupied."""
         free = []
         cursor = start
@@ -330,18 +363,23 @@ class UnallocatedExtractor:
             if o_start >= end:
                 break
             if o_start > cursor:
-                free.append(RegionInfo(offset=cursor, length=o_start - cursor,
-                                       kind="unallocated"))
+                free.append(
+                    RegionInfo(
+                        offset=cursor, length=o_start - cursor, kind="unallocated"
+                    )
+                )
             cursor = max(cursor, o_end)
         if cursor < end:
-            free.append(RegionInfo(offset=cursor, length=end - cursor,
-                                   kind="unallocated"))
+            free.append(
+                RegionInfo(offset=cursor, length=end - cursor, kind="unallocated")
+            )
         return free
 
 
 # ===========================================================================
 # 4. Task 1.6 — Slack space
 # ===========================================================================
+
 
 class SlackExtractor:
     """
@@ -386,13 +424,13 @@ class SlackExtractor:
         mft_data = self.reader.read(mft_offset, 4 * 1024 * 1024)
 
         for i in range(0, len(mft_data) - 4, 1024):
-            if mft_data[i:i+4] != b"FILE":
+            if mft_data[i : i + 4] != b"FILE":
                 continue
             # ищем $DATA (0x80) с non-resident flag = 1 (0x01)
             # очень упрощённо: ищем байты 0x80 0x00 0x00 0x00 в записи
-            record = mft_data[i:i+1024]
+            record = mft_data[i : i + 1024]
             for j in range(0x38, len(record) - 4):
-                if record[j] == 0x80 and record[j+1:j+4] == b"\x00\x00\x00":
+                if record[j] == 0x80 and record[j + 1 : j + 4] == b"\x00\x00\x00":
                     # real_size / alloc_size в non-resident $DATA
                     # смещение 0x30 (real) и 0x28 (alloc) от начала записи attr
                     # для простоты пропускаем — реальный парсер в отдельной задаче
@@ -415,14 +453,15 @@ class SlackExtractor:
             return
         data = self.reader.read(root_off, root_entries * 32)
         for k in range(0, len(data), 32):
-            entry = data[k:k+32]
+            entry = data[k : k + 32]
             if entry[0] == 0:
                 break
             if entry[0] == 0xE5:
                 continue
             size = struct.unpack("<I", entry[28:32])[0]
-            cluster = (struct.unpack("<H", entry[20:22])[0] << 16) | \
-                      struct.unpack("<H", entry[26:28])[0]
+            cluster = (struct.unpack("<H", entry[20:22])[0] << 16) | struct.unpack(
+                "<H", entry[26:28]
+            )[0]
             if size == 0 or cluster == 0:
                 continue
             alloc = ((size + cluster_size - 1) // cluster_size) * cluster_size
@@ -431,14 +470,17 @@ class SlackExtractor:
                 data_off = (reserved + num_fats * fat_size) * bytes_per_sector
                 file_off = data_off + (cluster - 2) * cluster_size
                 yield RegionInfo(
-                    offset=file_off + size, length=alloc - size,
-                    kind="slack", owner=entry[:11].decode("ascii", "replace").strip(),
+                    offset=file_off + size,
+                    length=alloc - size,
+                    kind="slack",
+                    owner=entry[:11].decode("ascii", "replace").strip(),
                 )
 
 
 # ===========================================================================
 # 5. Task 2.2 — Live diff
 # ===========================================================================
+
 
 @dataclass
 class DiffEntry:
@@ -463,10 +505,8 @@ class ImageDiffer:
     def diff_files(self) -> list[DiffEntry]:
         if not (self.before.has_pytsk3() and self.after.has_pytsk3()):
             return self.diff_regions()
-        b = {p: hashlib.sha256(d).hexdigest()
-             for p, d in self.before.iter_files()}
-        a = {p: hashlib.sha256(d).hexdigest()
-             for p, d in self.after.iter_files()}
+        b = {p: hashlib.sha256(d).hexdigest() for p, d in self.before.iter_files()}
+        a = {p: hashlib.sha256(d).hexdigest() for p, d in self.after.iter_files()}
         out: list[DiffEntry] = []
         for p in sorted(set(b) | set(a)):
             if p not in b:
@@ -474,8 +514,11 @@ class ImageDiffer:
             elif p not in a:
                 out.append(DiffEntry(path=p, status="removed", before_sha=b[p]))
             elif b[p] != a[p]:
-                out.append(DiffEntry(path=p, status="modified",
-                                     before_sha=b[p], after_sha=a[p]))
+                out.append(
+                    DiffEntry(
+                        path=p, status="modified", before_sha=b[p], after_sha=a[p]
+                    )
+                )
         return out
 
     def diff_regions(self, chunk: int = 8 * 1024 * 1024) -> list[DiffEntry]:
@@ -489,12 +532,16 @@ class ImageDiffer:
                 continue
             bs = hashlib.sha256(b).hexdigest() if b else None
             as_ = hashlib.sha256(a).hexdigest() if a else None
-            out.append(DiffEntry(
-                path=f"<region:{off:08x}>",
-                status="modified",
-                before_sha=bs, after_sha=as_,
-                before_size=len(b), after_size=len(a),
-            ))
+            out.append(
+                DiffEntry(
+                    path=f"<region:{off:08x}>",
+                    status="modified",
+                    before_sha=bs,
+                    after_sha=as_,
+                    before_size=len(b),
+                    after_size=len(a),
+                )
+            )
         return out
 
     def to_json(self, out: Path) -> int:
@@ -507,6 +554,7 @@ class ImageDiffer:
 # ===========================================================================
 # 6. CLI
 # ===========================================================================
+
 
 def cmd_yara(args):
     scanner = YaraScanner(Path(args.image))
@@ -563,14 +611,19 @@ def cmd_selftest(args):
     free = UnallocatedExtractor._subtract(
         0, 1000, [(100, 200), (500, 600), (1500, 1600)]
     )
-    assert [(r.offset, r.length) for r in free] == [(0, 100), (200, 300), (600, 400)], \
-        f"bad subtract: {[(r.offset, r.length) for r in free]}"
+    assert [(r.offset, r.length) for r in free] == [
+        (0, 100),
+        (200, 300),
+        (600, 400),
+    ], f"bad subtract: {[(r.offset, r.length) for r in free]}"
     print("ok: UnallocatedExtractor._subtract")
 
     # 3. Yara regex fallback
     with tempfile.TemporaryDirectory() as td:
         rules = Path(td) / "r.yar"
-        rules.write_text('rule test_rule {\n  strings: $a = "hello"\n  condition: $a\n}\n')
+        rules.write_text(
+            'rule test_rule {\n  strings: $a = "hello"\n  condition: $a\n}\n'
+        )
         img = Path(td) / "img.bin"
         img.write_bytes(b"\0" * 1024 + b"hello" + b"\0" * 1024)
         scanner = YaraScanner(img)
@@ -583,8 +636,10 @@ def cmd_selftest(args):
 
     # 4. ImageDiffer.diff_regions
     with tempfile.TemporaryDirectory() as td:
-        a = Path(td) / "a.bin"; a.write_bytes(b"\0" * 4096)
-        b = Path(td) / "b.bin"; b.write_bytes(b"\0" * 2048 + b"\xFF" * 2048)
+        a = Path(td) / "a.bin"
+        a.write_bytes(b"\0" * 4096)
+        b = Path(td) / "b.bin"
+        b.write_bytes(b"\0" * 2048 + b"\xFF" * 2048)
         differ = ImageDiffer(a, b)
         entries = differ.diff_regions(chunk=4096)
         assert len(entries) == 1, f"ожидали 1 diff, получили {len(entries)}"
@@ -596,11 +651,11 @@ def cmd_selftest(args):
         img = Path(td) / "fat32.img"
         boot = bytearray(512)
         boot[0x0B:0x0D] = (512).to_bytes(2, "little")  # bps
-        boot[0x0D] = 1                                  # spc
-        boot[0x0E:0x10] = (32).to_bytes(2, "little")   # reserved
-        boot[0x10] = 2                                  # num FATs
-        boot[0x11:0x13] = (16).to_bytes(2, "little")   # root entries
-        boot[0x24:0x28] = (4).to_bytes(4, "little")    # fat_size (sectors)
+        boot[0x0D] = 1  # spc
+        boot[0x0E:0x10] = (32).to_bytes(2, "little")  # reserved
+        boot[0x10] = 2  # num FATs
+        boot[0x11:0x13] = (16).to_bytes(2, "little")  # root entries
+        boot[0x24:0x28] = (4).to_bytes(4, "little")  # fat_size (sectors)
         boot[82:90] = b"FAT32   "
         boot[510:512] = b"\x55\xaa"
         img.write_bytes(bytes(boot) + b"\0" * 64 * 1024)
@@ -619,27 +674,35 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("yara", help="YARA-скан образа")
-    sp.add_argument("image"); sp.add_argument("rules")
-    sp.add_argument("--unallocated", action="store_true",
-                    help="также сканировать нераспределённое пространство")
+    sp.add_argument("image")
+    sp.add_argument("rules")
+    sp.add_argument(
+        "--unallocated",
+        action="store_true",
+        help="также сканировать нераспределённое пространство",
+    )
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_yara)
 
     sp = sub.add_parser("unallocated", help="Извлечь unallocated space")
-    sp.add_argument("image"); sp.add_argument("-o", "--out", required=True)
+    sp.add_argument("image")
+    sp.add_argument("-o", "--out", required=True)
     sp.add_argument("--min-region", type=int, default=4096)
     sp.set_defaults(func=cmd_unallocated)
 
     sp = sub.add_parser("slack", help="Извлечь slack space")
-    sp.add_argument("image"); sp.add_argument("-o", "--out", required=True)
+    sp.add_argument("image")
+    sp.add_argument("-o", "--out", required=True)
     sp.set_defaults(func=cmd_slack)
 
     sp = sub.add_parser("diff", help="Live diff между образами")
-    sp.add_argument("before"); sp.add_argument("after")
+    sp.add_argument("before")
+    sp.add_argument("after")
     sp.add_argument("-o", "--out", required=True)
     sp.set_defaults(func=cmd_diff)
 
-    sp = sub.add_parser("selftest"); sp.set_defaults(func=cmd_selftest)
+    sp = sub.add_parser("selftest")
+    sp.set_defaults(func=cmd_selftest)
     return p
 
 
@@ -648,9 +711,11 @@ def main(argv):
     try:
         return args.func(args)
     except DependencyMissing as e:
-        print(f"dependency: {e}", file=sys.stderr); return 2
+        print(f"dependency: {e}", file=sys.stderr)
+        return 2
     except DFIRError as e:
-        print(f"error: {e}", file=sys.stderr); return 2
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         return 130
 

@@ -63,9 +63,11 @@ class YaraHit:
             "offset": self.offset,
             "target": self.target,
             "strings": [
-                item
-                if isinstance(item, (list, tuple))
-                else getattr(item, "identifier", str(item))
+                (
+                    item
+                    if isinstance(item, (list, tuple))
+                    else getattr(item, "identifier", str(item))
+                )
                 for item in self.strings
             ],
         }
@@ -133,7 +135,10 @@ def match_blob(
         matches = rules.match(data=data)
     except Exception:  # pragma: no cover - malformed rule/scan failure
         return []
-    return [_normalise_match(item, path=path, offset=None, target=target) for item in matches]
+    return [
+        _normalise_match(item, path=path, offset=None, target=target)
+        for item in matches
+    ]
 
 
 # ----------------------------------------------------------------------- scans
@@ -157,7 +162,9 @@ def scan_files_from_fs(
     return hits
 
 
-def scan_files(image_path: os.PathLike | str, rules: Any, **kwargs: Any) -> list[YaraHit]:
+def scan_files(
+    image_path: os.PathLike | str, rules: Any, **kwargs: Any
+) -> list[YaraHit]:
     """Filesystem-aware scan of ``image_path`` (needs pytsk3)."""
 
     from .timeline import open_tsk_fs
@@ -229,7 +236,9 @@ def scan_unallocated_from_fs(
             data = _read_region(fs, source, offset, length)
             if not data:
                 continue
-            for hit in match_blob(rules, data, path="<unallocated>", target=TARGET_UNALLOCATED):
+            for hit in match_blob(
+                rules, data, path="<unallocated>", target=TARGET_UNALLOCATED
+            ):
                 hit.offset = offset
                 hits.append(hit)
     return hits
@@ -301,7 +310,9 @@ def scan_image(
     if TARGET_FILES in targets:
         hits.extend(scan_files_from_fs(fs, rules, max_file_size=max_file_size))
     if TARGET_UNALLOCATED in targets:
-        hits.extend(scan_unallocated_from_fs(fs, rules, path.stat().st_size, chunk=chunk))
+        hits.extend(
+            scan_unallocated_from_fs(fs, rules, path.stat().st_size, chunk=chunk)
+        )
     return hits
 
 

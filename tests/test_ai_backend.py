@@ -12,10 +12,20 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from mountfile.ai import (BACKENDS, AiResult, NullBackend, OllamaBackend,
-                          OpenAiCompatBackend, build_backend, build_prompt,
-                          collect, local_reader, looks_textual, max_bytes,
-                          summarize_bytes)
+from mountfile.ai import (
+    BACKENDS,
+    AiResult,
+    NullBackend,
+    OllamaBackend,
+    OpenAiCompatBackend,
+    build_backend,
+    build_prompt,
+    collect,
+    local_reader,
+    looks_textual,
+    max_bytes,
+    summarize_bytes,
+)
 
 
 class FakeResponse:

@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-
 _DEFAULT_WORKSPACE = str(
     Path(os.environ.get("MOUNTFILE_WORKDIR", "~/.mountfile/workspace")).expanduser()
 )

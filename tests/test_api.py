@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from mountfile.api import APIConfigurationError, FASTAPI_AVAILABLE, create_app
+from mountfile.api import FASTAPI_AVAILABLE, APIConfigurationError, create_app
 
 if FASTAPI_AVAILABLE:
     try:
@@ -78,7 +78,9 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     assert listed.status_code == 200
     assert listed.json() == [{"name": "note.txt", "is_dir": False}]
 
-    read = client.get("/filesystem/read", params={"image": "disk.img", "path": "/note.txt"})
+    read = client.get(
+        "/filesystem/read", params={"image": "disk.img", "path": "/note.txt"}
+    )
     assert read.status_code == 200
     assert read.content == b"evidence"
     assert read.headers["content-type"].startswith("application/octet-stream")
@@ -114,10 +116,16 @@ def test_bearer_auth_protects_non_loopback_endpoints(tmp_path):
     missing = client.get("/health")
     assert missing.status_code == 401
     assert missing.headers["www-authenticate"] == "Bearer"
-    assert client.get("/images", headers={"Authorization": "Bearer wrong"}).status_code == 401
-    assert client.get(
-        "/health", headers={"Authorization": "Bearer test-token"}
-    ).status_code == 200
+    assert (
+        client.get("/images", headers={"Authorization": "Bearer wrong"}).status_code
+        == 401
+    )
+    assert (
+        client.get(
+            "/health", headers={"Authorization": "Bearer test-token"}
+        ).status_code
+        == 200
+    )
 
 
 @needs_fastapi
@@ -163,9 +171,7 @@ def test_symlink_image_cannot_escape_configured_root(tmp_path):
     registry = FakeRegistry()
     app = create_app(registry, image_roots=image_root)
     client = _client_or_skip(app)
-    response = client.get(
-        "/filesystem/ls", params={"image": "linked.img", "path": "/"}
-    )
+    response = client.get("/filesystem/ls", params={"image": "linked.img", "path": "/"})
 
     assert response.status_code == 400
     assert all(call[0] != "ls" for call in registry.calls)

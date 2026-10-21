@@ -110,6 +110,7 @@ def show_environment() -> None:
 
     try:
         from mountfile import __version__  # noqa: WPS433
+
         ok(f"Mount File версия: {__version__}")
     except Exception as exc:  # noqa: BLE001
         warn(f"Не удалось определить версию mountfile: {exc}")
@@ -193,7 +194,9 @@ def run_all_cli(img: str, dump: str, udev: str) -> None:
         run_cli(main + ["mv", img, "/hello.txt", "renamed.txt", "--yes"])
         run_cli(main + ["rm", img, "/new", "--recursive", "--yes"])
     else:
-        warn(f"Образ {img} не найден — команды volumes/ls/get/put/mkdir/mv/rm пропущены.")
+        warn(
+            f"Образ {img} не найден — команды volumes/ls/get/put/mkdir/mv/rm пропущены."
+        )
 
     if Path(dump).exists():
         run_cli(main + ["decode", dump])
@@ -281,10 +284,12 @@ def demo_api(img: str, dump: str, udev: str) -> None:
             backend = None
             try:
                 from mountfile.vfs import TskImage  # noqa: WPS433
+
                 provider, backend = TskImage(img, offset=0), "tsk"
             except Exception as exc:  # noqa: BLE001
                 info(f"pytsk3/TskImage недоступен ({exc}); беру FAT32Provider.")
                 from mountfile.fat32 import Fat32Provider  # noqa: WPS433
+
                 provider, backend = Fat32Provider(img, offset=0), "fat32"
 
             try:
@@ -303,12 +308,8 @@ def demo_api(img: str, dump: str, udev: str) -> None:
 
     # --- 4.4. RT809H: decode_dump() + split_by_udev() ---
     try:
-        from mountfile.rt809 import (  # noqa: WPS433
-            Rt809Error,
-            decode_dump,
-            detect,
-            split_by_udev,
-        )
+        from mountfile.rt809 import decode_dump  # noqa: WPS433
+        from mountfile.rt809 import Rt809Error, detect, split_by_udev
 
         if Path(dump).exists():
             try:
@@ -331,7 +332,9 @@ def demo_api(img: str, dump: str, udev: str) -> None:
                 try:
                     # split_by_udev возвращает кортеж (parts, written)
                     result = split_by_udev(dump, udev, PARTS_DIR)
-                    parts, written = (result if isinstance(result, tuple) else (result, []))
+                    parts, written = (
+                        result if isinstance(result, tuple) else (result, [])
+                    )
                     for p in parts:
                         print(f"    {p}")
                     ok(f"rt809.split_by_udev: записано файлов — {len(written)}")
@@ -355,7 +358,10 @@ def demo_api(img: str, dump: str, udev: str) -> None:
         else:
             res = updater.check(__version__)
             if res:
-                ok("Доступно обновление: v%s (у вас v%s)" % (res.get("version"), __version__))
+                ok(
+                    "Доступно обновление: v%s (у вас v%s)"
+                    % (res.get("version"), __version__)
+                )
                 if res.get("asset"):
                     ok("  asset: %s" % res["asset"].get("name"))
                 ok("  страница: %s" % res.get("url"))
@@ -441,7 +447,8 @@ def check_updates() -> int:
 # ============================================================
 def print_cheatsheet() -> None:
     hr("Карта команд Mount File")
-    print("""
+    print(
+        """
   GUI:
     python main.py                       # открыть интерфейс
     python main.py dump.img              # открыть образ сразу
@@ -520,7 +527,8 @@ def print_cheatsheet() -> None:
     Linux:     ./build_exe.sh   → dist/MountFile-linux-x86-64
     Win10/11:  build_exe.bat    → dist\\MountFile.exe
     Win7:      py -3.8 … build_exe.bat (requirements-win7.txt)
-""")
+"""
+    )
 
 
 # ============================================================
@@ -549,19 +557,35 @@ def parse_args() -> argparse.Namespace:
         description="Единый скрипт запуска всего функционала Mount File.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--img", default=DEFAULT_IMG, help="Путь к raw-образу (по умолчанию dump.img)")
-    p.add_argument("--dump", default=DEFAULT_DUMP, help="Путь к дампу RT809H (по умолчанию dump.bin)")
-    p.add_argument("--udev", default=DEFAULT_UDEV, help="Файл разметки udev (по умолчанию udev.txt)")
+    p.add_argument(
+        "--img", default=DEFAULT_IMG, help="Путь к raw-образу (по умолчанию dump.img)"
+    )
+    p.add_argument(
+        "--dump",
+        default=DEFAULT_DUMP,
+        help="Путь к дампу RT809H (по умолчанию dump.bin)",
+    )
+    p.add_argument(
+        "--udev",
+        default=DEFAULT_UDEV,
+        help="Файл разметки udev (по умолчанию udev.txt)",
+    )
 
     p.add_argument("--no-gui", action="store_true", help="Не открывать GUI")
     p.add_argument("--no-cli", action="store_true", help="Не выполнять CLI-команды")
-    p.add_argument("--no-api", action="store_true", help="Не демонстрировать Python API")
+    p.add_argument(
+        "--no-api", action="store_true", help="Не демонстрировать Python API"
+    )
     p.add_argument("--no-tests", action="store_true", help="Не запускать тесты")
     p.add_argument("--build", action="store_true", help="Собрать бинарник")
-    p.add_argument("--cheatsheet", action="store_true", help="Показать карту команд и выйти")
+    p.add_argument(
+        "--cheatsheet", action="store_true", help="Показать карту команд и выйти"
+    )
     p.add_argument("--diag", action="store_true", help="Диагностика mountfile и выход")
 
-    p.add_argument("--check-updates", action="store_true", help="Только проверка обновлений")
+    p.add_argument(
+        "--check-updates", action="store_true", help="Только проверка обновлений"
+    )
     p.add_argument("--cli-only", action="store_true", help="Только CLI-команды")
     p.add_argument("--api-only", action="store_true", help="Только Python API")
     p.add_argument("--tests-only", action="store_true", help="Только тесты")

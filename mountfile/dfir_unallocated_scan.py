@@ -19,7 +19,6 @@ import os
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
-
 _DEFAULT_CHUNK_SIZE = 1 << 20
 _MAX_CHUNK_SIZE = 16 << 20
 _MAX_SIGNATURES = 256
@@ -272,7 +271,9 @@ def _normalise_ranges(ranges: Any, image_size: int) -> tuple[ByteRange, ...]:
             merged.append(current)
             continue
         previous = merged[-1]
-        merged[-1] = ByteRange(previous.offset, max(previous.end, current.end) - previous.offset)
+        merged[-1] = ByteRange(
+            previous.offset, max(previous.end, current.end) - previous.offset
+        )
     return tuple(merged)
 
 
@@ -289,7 +290,9 @@ def _coerce_signature(item: Any) -> FileSignature:
     try:
         values = tuple(item)
     except TypeError as exc:
-        raise TypeError("each signature must be FileSignature or (name, magic)") from exc
+        raise TypeError(
+            "each signature must be FileSignature or (name, magic)"
+        ) from exc
     if len(values) == 2:
         return FileSignature(values[0], values[1])
     if len(values) == 3:
@@ -297,7 +300,9 @@ def _coerce_signature(item: Any) -> FileSignature:
     raise TypeError("each signature must be FileSignature or (name, magic)")
 
 
-def _normalise_signatures(signatures: Optional[Iterable[Any]]) -> tuple[FileSignature, ...]:
+def _normalise_signatures(
+    signatures: Optional[Iterable[Any]],
+) -> tuple[FileSignature, ...]:
     if signatures is None:
         signatures = COMMON_SIGNATURES
     elif isinstance(signatures, (FileSignature, Mapping)):
@@ -328,13 +333,17 @@ class _ByteSource:
         self.path: Optional[os.PathLike[str] | str] = None
         discovered: Optional[int]
 
-        if isinstance(source, (str, bytes, os.PathLike)) and not isinstance(source, (bytearray, memoryview)):
+        if isinstance(source, (str, bytes, os.PathLike)) and not isinstance(
+            source, (bytearray, memoryview)
+        ):
             # A bytes object is an image, while str/path-like values identify a
             # file.  os.fspath keeps pathlib support without opening for write.
             if isinstance(source, (str, os.PathLike)):
                 self.path = source
                 try:
-                    discovered = _as_nonnegative_int(os.stat(source).st_size, "image size")
+                    discovered = _as_nonnegative_int(
+                        os.stat(source).st_size, "image size"
+                    )
                 except OSError as exc:
                     raise OSError("unable to stat image source") from exc
             else:
@@ -348,7 +357,11 @@ class _ByteSource:
                 discovered = _as_nonnegative_int(len(source), "image size")
             except (TypeError, AttributeError):
                 discovered = None
-            if discovered is None and hasattr(source, "seek") and hasattr(source, "tell"):
+            if (
+                discovered is None
+                and hasattr(source, "seek")
+                and hasattr(source, "tell")
+            ):
                 try:
                     position = source.tell()
                     source.seek(0, 2)
@@ -363,7 +376,9 @@ class _ByteSource:
 
         if image_size is None:
             if discovered is None:
-                raise ValueError("image_size is required for a callable or unknown source")
+                raise ValueError(
+                    "image_size is required for a callable or unknown source"
+                )
             image_size = discovered
         else:
             image_size = _as_nonnegative_int(image_size, "image_size")
@@ -377,7 +392,11 @@ class _ByteSource:
         source = self.source
         if self.path is not None:
             with open(self.path, "rb") as stream:
-                value = stream.read(length) if offset == 0 else self._read_stream(stream, offset, length)
+                value = (
+                    stream.read(length)
+                    if offset == 0
+                    else self._read_stream(stream, offset, length)
+                )
         elif isinstance(source, (bytes, bytearray, memoryview)):
             value = memoryview(source).cast("B")[offset : offset + length].tobytes()
         elif hasattr(source, "read_at"):
@@ -390,7 +409,9 @@ class _ByteSource:
             try:
                 value = source[offset : offset + length]
             except (TypeError, KeyError, IndexError) as exc:
-                raise TypeError("source must be bytes-like, seekable, sliceable, or callable") from exc
+                raise TypeError(
+                    "source must be bytes-like, seekable, sliceable, or callable"
+                ) from exc
         try:
             value = memoryview(value).cast("B").tobytes()
         except (TypeError, ValueError) as exc:
@@ -499,9 +520,9 @@ def scan_unallocated(
     if image_size is None:
         image_size = source_size
     if read_size is not None:
-        if chunk_size != _DEFAULT_CHUNK_SIZE and _as_positive_int(chunk_size, "chunk_size") != _as_positive_int(
-            read_size, "read_size"
-        ):
+        if chunk_size != _DEFAULT_CHUNK_SIZE and _as_positive_int(
+            chunk_size, "chunk_size"
+        ) != _as_positive_int(read_size, "read_size"):
             raise ValueError("chunk_size and read_size do not match")
         chunk_size = read_size
     chunk_size = _as_positive_int(chunk_size, "chunk_size")
@@ -513,7 +534,9 @@ def scan_unallocated(
     source = _ByteSource(image, image_size)
     normalised_ranges = _normalise_ranges(ranges, source.size)
     normalised_signatures = _normalise_signatures(signatures)
-    return _iter_hits(source, normalised_ranges, normalised_signatures, chunk_size, max_hits)
+    return _iter_hits(
+        source, normalised_ranges, normalised_signatures, chunk_size, max_hits
+    )
 
 
 def iter_unallocated_signatures(*args: Any, **kwargs: Any) -> Iterator[SignatureHit]:
@@ -540,9 +563,13 @@ class UnallocatedScanner:
         self.source_size = source_size
         self.chunk_size = chunk_size
         self.read_size = read_size
-        self.signatures = None if signatures is None else _normalise_signatures(signatures)
+        self.signatures = (
+            None if signatures is None else _normalise_signatures(signatures)
+        )
 
-    def scan(self, ranges: Any, *, max_hits: Optional[int] = None) -> Iterator[SignatureHit]:
+    def scan(
+        self, ranges: Any, *, max_hits: Optional[int] = None
+    ) -> Iterator[SignatureHit]:
         """Scan one caller-supplied range collection."""
 
         return scan_unallocated(

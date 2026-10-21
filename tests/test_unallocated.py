@@ -19,8 +19,15 @@ def test_duplicate_chunks_share_storage_but_keep_occurrences(tmp_path):
         assert len(indexer.occurrences()) == 3
         assert indexer.occurrences()[0].sha256 == hashlib.sha256(b"ABCD").hexdigest()
         assert indexer.is_indexed(4, 4)
-        assert indexer.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 2
-        assert indexer.connection.execute("SELECT COUNT(*) FROM bitmap_pages").fetchone()[0] == 1
+        assert (
+            indexer.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 2
+        )
+        assert (
+            indexer.connection.execute("SELECT COUNT(*) FROM bitmap_pages").fetchone()[
+                0
+            ]
+            == 1
+        )
 
 
 def test_index_survives_reopening_and_does_not_duplicate_rows(tmp_path):
@@ -40,7 +47,12 @@ def test_index_survives_reopening_and_does_not_duplicate_rows(tmp_path):
     second.close()
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT value FROM metadata WHERE key = 'source_size'").fetchone()[0] == "16"
+        assert (
+            connection.execute(
+                "SELECT value FROM metadata WHERE key = 'source_size'"
+            ).fetchone()[0]
+            == "16"
+        )
 
 
 @pytest.mark.parametrize(

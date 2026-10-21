@@ -3,12 +3,8 @@ from io import StringIO
 from types import SimpleNamespace
 
 from mountfile.dfir import TimelineRecord
+from mountfile.dfir_timeline import CSV_FIELDS, export_timeline_csv, normalize_timeline
 from mountfile.dfir_timestomp import TimestampRecord
-from mountfile.dfir_timeline import (
-    CSV_FIELDS,
-    export_timeline_csv,
-    normalize_timeline,
-)
 
 
 def test_normalizes_existing_metadata_and_event_records_without_opening_paths():
@@ -43,7 +39,9 @@ def test_normalizes_existing_metadata_and_event_records_without_opening_paths():
         "atime",
         "read",
     ]
-    assert normalized[-1].timestamp == datetime(2024, 1, 1, 0, 59, 58, tzinfo=timezone.utc)
+    assert normalized[-1].timestamp == datetime(
+        2024, 1, 1, 0, 59, 58, tzinfo=timezone.utc
+    )
     assert all(event.timestamp.tzinfo == timezone.utc for event in normalized)
     assert normalized[-1].source == "olma"
     assert normalized[-1].evidence_path == "/evidence/image.raw/report.txt"
@@ -57,11 +55,13 @@ def test_normalization_is_deterministic_and_preserves_metadata_fields():
             "timestamp": "2024-01-01T00:00:00Z",
             "event_type": "open",
             "source": "collector,one",
-            "evidence_path": "/tmp/a\nquoted\".txt",
+            "evidence_path": '/tmp/a\nquoted".txt',
             "id": 2,
         },
         {
-            "timestamp": datetime(2023, 12, 31, 19, 0, tzinfo=timezone(timedelta(hours=-5))),
+            "timestamp": datetime(
+                2023, 12, 31, 19, 0, tzinfo=timezone(timedelta(hours=-5))
+            ),
             "event": "close",
             "source": "collector,two",
             "path": "/tmp/z.txt",
@@ -76,7 +76,7 @@ def test_normalization_is_deterministic_and_preserves_metadata_fields():
     assert first[0].event == "close"
     assert first[1].event_type == "open"
     assert first[1].source == "collector,one"
-    assert first[1].evidence_path == "/tmp/a\nquoted\".txt"
+    assert first[1].evidence_path == '/tmp/a\nquoted".txt'
     assert first[1].record_id == "2"
 
 
@@ -86,7 +86,7 @@ def test_csv_export_quotes_data_and_does_not_read_evidence_paths():
         [
             {
                 "timestamp": "2024-01-01T00:00:00.123456+02:00",
-                "event": "open,\"safe\"",
+                "event": 'open,"safe"',
                 "source": "=not-a-formula",
                 "evidence_path": "/does/not/exist,\nfile.raw",
             }

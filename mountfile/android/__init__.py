@@ -338,7 +338,9 @@ def iter_sparse_chunks(
     block_start = 0
     for index in range(parsed.total_chunks):
         _require(blob, offset, parsed.chunk_hdr_sz, "Android sparse chunk header")
-        chunk_type, reserved, chunk_sz, total_sz = struct.unpack_from("<HHII", blob, offset)
+        chunk_type, reserved, chunk_sz, total_sz = struct.unpack_from(
+            "<HHII", blob, offset
+        )
         if reserved != 0:
             raise AndroidFormatError(
                 "invalid Android sparse chunk %d: reserved field is non-zero" % index
@@ -522,7 +524,9 @@ def parse_boot_image_header(
                     "invalid Android boot image v%d header size %d (minimum %d)"
                     % (version, declared_header_size, minimum_size)
                 )
-            _require(blob, base, declared_header_size, "declared Android boot image header")
+            _require(
+                blob, base, declared_header_size, "declared Android boot image header"
+            )
         if version == 2:
             dtb_size = struct.unpack_from("<I", blob, base + 1648)[0]
             dtb_addr = struct.unpack_from("<Q", blob, base + 1652)[0]
@@ -552,14 +556,18 @@ def parse_boot_image_header(
             _cmdline_bytes=cmdline_bytes,
         )
 
-    minimum_size = BOOT_IMAGE_HEADER_V4_SIZE if version == 4 else BOOT_IMAGE_HEADER_V3_SIZE
+    minimum_size = (
+        BOOT_IMAGE_HEADER_V4_SIZE if version == 4 else BOOT_IMAGE_HEADER_V3_SIZE
+    )
     _require(blob, base, minimum_size, "Android boot image v%d header" % version)
     kernel_size, ramdisk_size, os_version, declared_header_size = struct.unpack_from(
         "<4I", blob, base + 8
     )
     reserved = struct.unpack_from("<4I", blob, base + 24)
     cmdline_bytes = blob[base + 44 : base + 1580]
-    signature_size = struct.unpack_from("<I", blob, base + 1580)[0] if version == 4 else None
+    signature_size = (
+        struct.unpack_from("<I", blob, base + 1580)[0] if version == 4 else None
+    )
     if declared_header_size < minimum_size:
         raise AndroidFormatError(
             "invalid Android boot image v%d header size %d (minimum %d)"
@@ -592,7 +600,9 @@ def parse_boot_image_header(
     )
 
 
-def detect_boot_image(data: Union[bytes, bytearray, memoryview], offset: int = 0) -> bool:
+def detect_boot_image(
+    data: Union[bytes, bytearray, memoryview], offset: int = 0
+) -> bool:
     """Return whether ``data`` contains a supported, structurally valid boot header."""
 
     try:
@@ -625,7 +635,11 @@ def discover_external_tools(
                 % (name, ", ".join(_EXTERNAL_TOOL_CANDIDATES))
             )
         result[name] = next(
-            (path for candidate in _EXTERNAL_TOOL_CANDIDATES[name] if (path := shutil.which(candidate))),
+            (
+                path
+                for candidate in _EXTERNAL_TOOL_CANDIDATES[name]
+                if (path := shutil.which(candidate))
+            ),
             None,
         )
     return result

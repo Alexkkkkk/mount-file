@@ -17,7 +17,15 @@
 """
 
 from __future__ import annotations
-import argparse, ast, os, py_compile, shutil, subprocess, sys, tempfile
+
+import argparse
+import ast
+import os
+import py_compile
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 MARKER = "# OLMA_UPGRADE"
@@ -27,6 +35,7 @@ BAK = ".olma_upgrade.bak"
 # --------------------------------------------------------------------------- #
 # Утилиты
 # --------------------------------------------------------------------------- #
+
 
 def find_root(start: Path) -> Path:
     cur = start.resolve()
@@ -39,26 +48,37 @@ def find_root(start: Path) -> Path:
     return start.resolve()
 
 
-def read(p): return p.read_text(encoding="utf-8", errors="replace")
+def read(p):
+    return p.read_text(encoding="utf-8", errors="replace")
 
 
 def write(p, t, *, dry):
-    if dry: print(f"  [dry] {p}"); return
+    if dry:
+        print(f"  [dry] {p}")
+        return
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(t, encoding="utf-8")
 
 
 def backup(p, *, dry):
-    if not p.exists(): return
+    if not p.exists():
+        return
     b = Path(str(p) + BAK)
-    if b.exists(): return
-    if dry: print(f"  [dry] backup {b.name}"); return
+    if b.exists():
+        return
+    if dry:
+        print(f"  [dry] backup {b.name}")
+        return
     shutil.copy2(p, b)
 
 
 def syntax_ok(p):
-    try: ast.parse(read(p), filename=str(p)); return True
-    except SyntaxError as e: print(f"  [syntax] {p.name}: {e}"); return False
+    try:
+        ast.parse(read(p), filename=str(p))
+        return True
+    except SyntaxError as e:
+        print(f"  [syntax] {p.name}: {e}")
+        return False
 
 
 def compile_ok(p):
@@ -67,7 +87,8 @@ def compile_ok(p):
             py_compile.compile(str(p), cfile=os.path.join(td, "o.pyc"), doraise=True)
         return True
     except py_compile.PyCompileError as e:
-        print(f"  [compile] {p.name}: {e}"); return False
+        print(f"  [compile] {p.name}: {e}")
+        return False
 
 
 # =========================================================================== #
@@ -1023,8 +1044,10 @@ def install(root: Path, *, dry: bool) -> int:
 def check_all(root: Path) -> int:
     print("Проверка синтаксиса...")
     bad = 0
-    for p in [root / "mountfile" / "olma" / n
-              for n in ("learn.py", "github.py", "cli.py", "__init__.py")]:
+    for p in [
+        root / "mountfile" / "olma" / n
+        for n in ("learn.py", "github.py", "cli.py", "__init__.py")
+    ]:
         if not p.exists():
             continue
         if not syntax_ok(p) or not compile_ok(p):
@@ -1036,7 +1059,7 @@ def check_all(root: Path) -> int:
 def revert(root: Path) -> int:
     n = 0
     for bak in root.rglob("*" + BAK):
-        orig = Path(str(bak)[:-len(BAK)])
+        orig = Path(str(bak)[: -len(BAK)])
         if orig.exists():
             shutil.copy2(bak, orig)
             print(f"  [reverted] {orig.relative_to(root)}")
@@ -1047,19 +1070,30 @@ def revert(root: Path) -> int:
 def smoke(root: Path) -> int:
     print("Smoke-тест OLMA upgrade...")
     tests = [
-        ["python", "-c", "from mountfile.olma.learn import OlmaLearner; "
-                         "print('learn OK')"],
-        ["python", "-c", "from mountfile.olma.github import OlmaGitHub; "
-                         "print('github OK')"],
-        ["python", "-c", "from mountfile.olma import OlmaLearner, OlmaGitHub; "
-                         "print('exports OK')"],
+        [
+            "python",
+            "-c",
+            "from mountfile.olma.learn import OlmaLearner; " "print('learn OK')",
+        ],
+        [
+            "python",
+            "-c",
+            "from mountfile.olma.github import OlmaGitHub; " "print('github OK')",
+        ],
+        [
+            "python",
+            "-c",
+            "from mountfile.olma import OlmaLearner, OlmaGitHub; "
+            "print('exports OK')",
+        ],
         ["python", "main.py", "--olma", "rules"],
     ]
     rc = 0
     for cmd in tests:
         try:
-            r = subprocess.run(cmd, cwd=str(root), capture_output=True,
-                               text=True, timeout=60)
+            r = subprocess.run(
+                cmd, cwd=str(root), capture_output=True, text=True, timeout=60
+            )
             ok = r.returncode == 0
             print(f"  [{'ok' if ok else 'fail'}] {' '.join(cmd[:3])}")
             if not ok:
@@ -1085,7 +1119,8 @@ def main(argv=None) -> int:
     root = Path(args.root).resolve() if args.root else find_root(Path.cwd())
 
     if args.revert:
-        revert(root); return 0
+        revert(root)
+        return 0
     if args.check:
         return 1 if check_all(root) > 0 else 0
 

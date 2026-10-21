@@ -86,4 +86,6 @@ def test_closing_the_window_while_the_update_check_hangs_does_not_abort():
         % (proc.returncode, proc.stdout, proc.stderr[-3000:])
     )
     assert "OK" in proc.stdout, proc.stdout
-    assert "Destroyed while thread is still running" not in proc.stderr, proc.stderr[-2000:]
+    assert "Destroyed while thread is still running" not in proc.stderr, proc.stderr[
+        -2000:
+    ]

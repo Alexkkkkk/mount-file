@@ -76,7 +76,10 @@ def test_source_rules_compile_lazily_and_normalise_current_string_instances(tmp_
                 strings=[
                     SimpleNamespace(
                         identifier="$a",
-                        instances=[SimpleNamespace(offset=18), SimpleNamespace(offset=3)],
+                        instances=[
+                            SimpleNamespace(offset=18),
+                            SimpleNamespace(offset=3),
+                        ],
                     )
                 ],
             )
@@ -96,7 +99,9 @@ def test_source_rules_compile_lazily_and_normalise_current_string_instances(tmp_
 def test_mapping_matches_and_missing_offsets_use_stable_empty_schema(tmp_path):
     image = tmp_path / "evidence.bin"
     image.write_bytes(b"x")
-    rules = FakeRules([{"rule": "metadata_only", "tags": [], "meta": {"enabled": True}}])
+    rules = FakeRules(
+        [{"rule": "metadata_only", "tags": [], "meta": {"enabled": True}}]
+    )
 
     assert scan_file(image, rules) == [
         {"rule": "metadata_only", "tags": (), "meta": {"enabled": True}, "offsets": ()}

@@ -33,6 +33,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
 
       # system tools used by tests/test_build_ci.py to build a FAT32
       # fixture on the fly (skipped automatically when not installed)
@@ -76,6 +77,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
 
       # pytsk3 builds bundled libtsk from source; the build tools ship
       # with ubuntu-latest but must be present for pip to compile it.
@@ -122,6 +124,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -160,6 +163,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install PyQt6
         run: |
           pip install PyQt6
@@ -179,6 +183,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
       - name: Qt runtime libraries
         run: |
           sudo apt-get update

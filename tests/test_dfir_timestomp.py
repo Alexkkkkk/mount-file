@@ -16,9 +16,7 @@ def test_ordering_finding_is_structured_and_read_only():
         accessed=200.0,
     )
 
-    findings = analyze_timestomp(
-        [record], TimestompThresholds(ordering_tolerance=0.0)
-    )
+    findings = analyze_timestomp([record], TimestompThresholds(ordering_tolerance=0.0))
 
     assert len(findings) == 1
     finding = findings[0]
@@ -41,9 +39,9 @@ def test_ordering_tolerance_suppresses_small_synthetic_skew():
         accessed=100.0,
     )
 
-    assert analyze_timestomp(
-        [record], TimestompThresholds(ordering_tolerance=1.0)
-    ) == []
+    assert (
+        analyze_timestomp([record], TimestompThresholds(ordering_tolerance=1.0)) == []
+    )
     assert len(analyze_timestomp([record], skew=0.25)) == 1
 
 

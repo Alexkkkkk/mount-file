@@ -644,6 +644,29 @@ make sync-status   # статус
 make sync-check    # проверка версий для CI
 ```
 
+## Стиль кода и автоматическое форматирование
+
+Единый стиль поддерживается тремя слоями: локально через `pre-commit`,
+автоматически через workflow [autofix](.github/workflows/autofix.yml) и как
+гейт в CI. Конфигурация живёт в `pyproject.toml` (`[tool.black]`,
+`[tool.isort]` с `profile = "black"`), версии совпадают с rev в
+`.pre-commit-config.yaml`.
+
+```bash
+make fmt          # ruff --fix, затем isort, затем black (именно такой порядок)
+pre-commit run -a # то же локально, перед коммитом
+```
+
+| Слой | Что делает | Когда |
+|---|---|---|
+| `pre-commit` | ruff + isort + black + чистка пробелов/концов строк | при каждом `git commit` |
+| `make fmt` | тот же набор одной командой | вручную |
+| [autofix.yml](.github/workflows/autofix.yml) | форматирует push в `main` и открывает PR с меткой `auto-merge`, [auto-merge](.github/workflows/auto-merge.yml) сам мержит его после зелёных проверок | включается переменной репозитория `ENABLE_AUTOFIX=true` |
+| [Quality](.github/workflows/quality.yml) | `black --check`, `isort --check-only`, ruff, compileall | на каждый push/PR в `main` |
+
+> Порядок `isort → black` важен: с `profile = "black"` оба форматтера
+> сходятся, а black всегда оставляет финальный вид файла.
+
 ## Тесты и разработка
 
 ```bash

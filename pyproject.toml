@@ -146,3 +146,13 @@ mode = "update"
 # ruff --fix (autofix workflow) must never strip them again - the
 # OLMA rewrite did exactly that and broke every GUI import in CI.
 "mountfile/qt_compat.py" = ["F401"]
+
+[tool.black]
+# Совпадает с rev в .pre-commit-config.yaml и с версией в CI.
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+# black-профиль исключает конфликт двух форматтеров (isort vs black):
+# без него isort перезаписывает то, что отформатировал black.
+profile = "black"
+line_length = 88

@@ -22,7 +22,6 @@ from mountfile.nand import (
     scan_bad_block_markers,
 )
 
-
 GEOMETRY = NandGeometry(page_size=4, oob_size=2, block_size=8)
 
 

@@ -27,10 +27,10 @@ from enum import Enum
 from pathlib import Path
 from typing import BinaryIO, Optional
 
-
 # ---------------------------------------------------------------------------
 # 0. Типы и исключения
 # ---------------------------------------------------------------------------
+
 
 class FsType(str, Enum):
     NTFS = "ntfs"
@@ -72,6 +72,7 @@ class VerifyReport:
 # 1. Транзакционный слой (SQLite-журнал + backup затронутых блоков)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class JournalEntry:
     tx_id: str
@@ -92,7 +93,9 @@ class TransactionManager:
 
     def __init__(self, image_path: Path):
         self.image_path = image_path
-        self.journal_path = image_path.with_suffix(image_path.suffix + ".mfwe-journal.sqlite")
+        self.journal_path = image_path.with_suffix(
+            image_path.suffix + ".mfwe-journal.sqlite"
+        )
         self.backup_dir = image_path.with_suffix(image_path.suffix + ".mfwe-backups")
         self.backup_dir.mkdir(exist_ok=True)
         self._conn = sqlite3.connect(self.journal_path)
@@ -165,6 +168,7 @@ class TransactionManager:
 # 2. Абстрактный фасад
 # ---------------------------------------------------------------------------
 
+
 class WriteEngine(ABC):
     """Единый API, не зависящий от ФС."""
 
@@ -180,7 +184,9 @@ class WriteEngine(ABC):
     def close(self) -> None: ...
 
     @abstractmethod
-    def create_file(self, path: str, data: BinaryIO, *, overwrite: bool = False) -> None: ...
+    def create_file(
+        self, path: str, data: BinaryIO, *, overwrite: bool = False
+    ) -> None: ...
 
     @abstractmethod
     def create_dir(self, path: str) -> None: ...
@@ -204,6 +210,7 @@ class WriteEngine(ABC):
 # ---------------------------------------------------------------------------
 # 3. Бэкенд NTFS (rust-fs-ntfs через ctypes)
 # ---------------------------------------------------------------------------
+
 
 class NtfsBackend(WriteEngine):
     """
@@ -235,9 +242,17 @@ class NtfsBackend(WriteEngine):
         self._lib.fs_ntfs_create_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
         self._lib.fs_ntfs_mkdir.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
         self._lib.fs_ntfs_unlink.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-        self._lib.fs_ntfs_rename.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
-        self._lib.fs_ntfs_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
-                                            ctypes.c_void_p, ctypes.c_size_t]
+        self._lib.fs_ntfs_rename.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+        self._lib.fs_ntfs_write.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+        ]
 
         flags = 1 if self.mode == Mode.RW else 0  # RW=1, RO=0
         handle = self._lib.fs_ntfs_open(str(self.image_path).encode(), flags)
@@ -255,7 +270,9 @@ class NtfsBackend(WriteEngine):
         if self.mode != Mode.RW:
             raise TransactionError("Движок в режиме RO. Включите Mode.RW явно.")
 
-    def create_file(self, path: str, data: BinaryIO, *, overwrite: bool = False) -> None:
+    def create_file(
+        self, path: str, data: BinaryIO, *, overwrite: bool = False
+    ) -> None:
         self._require_rw()
         tx_id = self.tx.begin("create_file", path)
         try:
@@ -339,6 +356,7 @@ class NtfsBackend(WriteEngine):
 # 4. Бэкенд ext4 (ext4_rs через ctypes)
 # ---------------------------------------------------------------------------
 
+
 class Ext4Backend(WriteEngine):
     """
     Обёртка над ext4_rs (Rust). Точный C ABI зависит от форка;
@@ -366,9 +384,17 @@ class Ext4Backend(WriteEngine):
         self._lib.ext4_create.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
         self._lib.ext4_mkdir.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
         self._lib.ext4_unlink.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-        self._lib.ext4_rename.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
-        self._lib.ext4_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
-                                         ctypes.c_void_p, ctypes.c_size_t]
+        self._lib.ext4_rename.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+        ]
+        self._lib.ext4_write.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+        ]
         flags = 1 if self.mode == Mode.RW else 0
         handle = self._lib.ext4_open(str(self.image_path).encode(), flags)
         if not handle:
@@ -385,7 +411,9 @@ class Ext4Backend(WriteEngine):
         if self.mode != Mode.RW:
             raise TransactionError("Движок в режиме RO.")
 
-    def create_file(self, path: str, data: BinaryIO, *, overwrite: bool = False) -> None:
+    def create_file(
+        self, path: str, data: BinaryIO, *, overwrite: bool = False
+    ) -> None:
         self._require_rw()
         tx_id = self.tx.begin("create_file", path)
         try:
@@ -463,7 +491,10 @@ class Ext4Backend(WriteEngine):
 # 5. Фабрика
 # ---------------------------------------------------------------------------
 
-def create_engine(image_path: Path, fs_type: FsType, mode: Mode = Mode.RO) -> WriteEngine:
+
+def create_engine(
+    image_path: Path, fs_type: FsType, mode: Mode = Mode.RO
+) -> WriteEngine:
     backend = NtfsBackend if fs_type == FsType.NTFS else Ext4Backend
     return backend(image_path, mode)
 

@@ -17,8 +17,7 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from numbers import Real
-from typing import Any, IO, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
-
+from typing import IO, Any, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 UTC = timezone.utc
 CSV_FIELDS = ("timestamp", "event", "source", "evidence_path", "record_id")
@@ -102,7 +101,9 @@ TimelineRecord = TimelineEvent
 TimelineRow = TimelineEvent
 
 
-def _value(record: Any, names: Sequence[str], metadata: Optional[Mapping[str, Any]] = None) -> Any:
+def _value(
+    record: Any, names: Sequence[str], metadata: Optional[Mapping[str, Any]] = None
+) -> Any:
     """Read the first present field without mutating or opening the record."""
 
     mappings: List[Mapping[str, Any]] = []
@@ -120,7 +121,11 @@ def _value(record: Any, names: Sequence[str], metadata: Optional[Mapping[str, An
             # CSV and hand-written metadata often differ only in case.
             folded = name.casefold()
             for key, value in mapping.items():
-                if isinstance(key, str) and key.casefold() == folded and value is not None:
+                if (
+                    isinstance(key, str)
+                    and key.casefold() == folded
+                    and value is not None
+                ):
                     return value
         if not isinstance(record, Mapping) and hasattr(record, name):
             value = getattr(record, name)
@@ -186,7 +191,9 @@ def _timestamp(value: Any, *, field: str) -> datetime:
                 candidate = candidate.replace(tzinfo=UTC)
             return candidate.astimezone(UTC)
     else:
-        raise TypeError("%s must be a numeric, ISO, date, or datetime timestamp" % field)
+        raise TypeError(
+            "%s must be a numeric, ISO, date, or datetime timestamp" % field
+        )
 
     if not math.isfinite(seconds):
         raise ValueError("%s must be finite" % field)
@@ -202,7 +209,9 @@ def normalize_timestamp(value: Any) -> datetime:
     return _timestamp(value, field="timestamp")
 
 
-def _timestamp_values(record: Any, metadata: Optional[Mapping[str, Any]]) -> List[Tuple[str, Any]]:
+def _timestamp_values(
+    record: Any, metadata: Optional[Mapping[str, Any]]
+) -> List[Tuple[str, Any]]:
     """Extract one or more timestamp fields from metadata/event records."""
 
     values: List[Tuple[str, Any]] = []
@@ -255,7 +264,9 @@ def _coerce_events(record: Any) -> List[TimelineEvent]:
         return [record]
 
     metadata = _metadata(record)
-    source_value = _value(record, ("source", "origin", "provider", "collector", "module"), metadata)
+    source_value = _value(
+        record, ("source", "origin", "provider", "collector", "module"), metadata
+    )
     path_value = _value(
         record,
         ("evidence_path", "evidence", "path", "file_path", "filename", "name"),
@@ -349,7 +360,9 @@ def _write_csv(events: Sequence[TimelineEvent], stream: IO[str]) -> None:
     writer.writerows(_csv_row(event) for event in events)
 
 
-def export_timeline_csv(records: Iterable[Any], destination: Union[str, os.PathLike, IO[str]]) -> int:
+def export_timeline_csv(
+    records: Iterable[Any], destination: Union[str, os.PathLike, IO[str]]
+) -> int:
     """Write normalized events as safely quoted UTF-8 CSV and return row count.
 
     ``destination`` may be a path or a text stream.  The exporter uses the

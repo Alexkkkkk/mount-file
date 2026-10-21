@@ -22,7 +22,6 @@ import pytest
 
 from mountfile import turbo as T
 
-
 # --------------------------------------------------------------- fixtures
 
 
@@ -147,7 +146,6 @@ def test_buzhash_is_deterministic_and_reset_restarts():
     h.feed(payload)
     h.reset()
     assert h.feed(payload) == first, "reset() must restart the stream"
-
 
 
 def test_buzhash_finish_empty_returns_none():
@@ -520,8 +518,14 @@ def test_dir_table_model_roles_sorting_and_headers(qapp):
         model.index(0, 3)
     )
 
-    assert model.headerData(1, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole) == "Размер"
-    assert model.headerData(1, Qt.Orientation.Vertical, Qt.ItemDataRole.DisplayRole) is None
+    assert (
+        model.headerData(1, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+        == "Размер"
+    )
+    assert (
+        model.headerData(1, Qt.Orientation.Vertical, Qt.ItemDataRole.DisplayRole)
+        is None
+    )
     assert model.data(QModelIndex()) is None
     assert model.data(first, Qt.ItemDataRole.ToolTipRole) is None
 

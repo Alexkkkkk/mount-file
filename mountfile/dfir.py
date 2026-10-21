@@ -95,6 +95,7 @@ def grep_image(
                 expression = re.compile(needle)
                 iterator = expression.finditer(mm)
             else:
+
                 def literal_matches():
                     position = 0
                     while True:
@@ -103,6 +104,7 @@ def grep_image(
                             return
                         yield position, position + len(needle)
                         position += 1
+
                 iterator = ((start, end) for start, end in literal_matches())
             for number, match in enumerate(iterator):
                 if number >= max_hits:

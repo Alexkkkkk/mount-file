@@ -43,10 +43,10 @@ from mountfile.rw.universal import (
     detect_fs,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. Нативный FAT32-адаптер (интеграция с mountfile/fat32.py)
 # ---------------------------------------------------------------------------
+
 
 class Fat32Adapter(UniversalRW):
     """
@@ -197,8 +197,12 @@ class Fat32Adapter(UniversalRW):
         )
 
 
-def create_rw_full(image_path: Path, fs: Optional[FsType] = None,
-                   mode: Mode = Mode.RO, dry_run: bool = False) -> UniversalRW:
+def create_rw_full(
+    image_path: Path,
+    fs: Optional[FsType] = None,
+    mode: Mode = Mode.RO,
+    dry_run: bool = False,
+) -> UniversalRW:
     """Фабрика RW-слоя.
 
     Для FAT32 используется нативный адаптер (``Fat32Adapter``), для остальных ФС —
@@ -208,7 +212,9 @@ def create_rw_full(image_path: Path, fs: Optional[FsType] = None,
     """
     fs = fs or detect_fs(image_path)
     if fs == FsType.FAT32:
-        engine: UniversalRW = DryRunFat32(image_path, mode) if dry_run else Fat32Adapter(image_path, mode)
+        engine: UniversalRW = (
+            DryRunFat32(image_path, mode) if dry_run else Fat32Adapter(image_path, mode)
+        )
         engine.dry_run = dry_run
         return engine
     return create_rw(image_path, fs, mode)
@@ -216,6 +222,7 @@ def create_rw_full(image_path: Path, fs: Optional[FsType] = None,
 
 # 2. Верификатор целостности
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class VerifyResult:
@@ -249,7 +256,9 @@ class VerificationEngine:
             ok=all(checks.values()),
             fs=fs.value,
             checks=checks,
-            details="; ".join(f"{k}={'ok' if v else 'FAIL'}" for k, v in checks.items()),
+            details="; ".join(
+                f"{k}={'ok' if v else 'FAIL'}" for k, v in checks.items()
+            ),
         )
 
     # --- общие --------------------------------------------------------------
@@ -301,7 +310,9 @@ class VerificationEngine:
             try:
                 res = subprocess.run(
                     ["e2fsck", "-fn", str(image_path)],
-                    capture_output=True, text=True, timeout=30,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
                 # 0 = чист, 4 = исправления не нужны
                 checks["ext4_fsck"] = res.returncode in (0, 4)
@@ -327,6 +338,7 @@ class VerificationEngine:
 # ---------------------------------------------------------------------------
 # 3. Восстановление после сбоя
 # ---------------------------------------------------------------------------
+
 
 class CrashRecovery:
     """
@@ -374,6 +386,7 @@ class CrashRecovery:
 # ---------------------------------------------------------------------------
 # 4. Dry-run
 # ---------------------------------------------------------------------------
+
 
 class DryRunMixin:
     """
@@ -442,6 +455,7 @@ class DryRunFat32(DryRunMixin, Fat32Adapter):
 # 5. Экспорт аудита
 # ---------------------------------------------------------------------------
 
+
 class AuditExporter:
     def __init__(self, journal: Journal):
         self.journal = journal
@@ -454,17 +468,27 @@ class AuditExporter:
         ).fetchall()
         with open(out, "w", encoding="utf-8") as f:
             for r in rows:
-                f.write(json.dumps({
-                    "tx_id": r[0], "op": r[1], "path": r[2],
-                    "sha256": r[3], "prev_hash": r[4],
-                    "created_at": r[5],
-                }, ensure_ascii=False) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "tx_id": r[0],
+                            "op": r[1],
+                            "path": r[2],
+                            "sha256": r[3],
+                            "prev_hash": r[4],
+                            "created_at": r[5],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
         return len(rows)
 
 
 # ---------------------------------------------------------------------------
 # 6. CLI
 # ---------------------------------------------------------------------------
+
 
 def _open(image: Path, mode: Mode, dry_run: bool) -> UniversalRW:
     fs = detect_fs(image)
@@ -517,10 +541,13 @@ def cmd_get(args) -> int:
         # Для остальных ФС чтение остаётся за существующим Mount File CLI.
         proc = subprocess.run(
             [sys.executable, "-m", "mountfile", "get", str(image), args.src, args.dst],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if proc.returncode != 0:
-            raise RWError((proc.stderr or proc.stdout).strip() or "mountfile get failed")
+            raise RWError(
+                (proc.stderr or proc.stdout).strip() or "mountfile get failed"
+            )
     print(f"ok: {args.src} -> {args.dst}")
     return 0
 
@@ -581,7 +608,8 @@ def cmd_journal(args) -> int:
     j = Journal(image)
     rows = j._conn.execute(
         "SELECT tx_id, op, path, sha256, created_at FROM journal "
-        "ORDER BY created_at DESC LIMIT ?", (args.limit,),
+        "ORDER BY created_at DESC LIMIT ?",
+        (args.limit,),
     ).fetchall()
     for r in rows:
         print(f"{r[4]:.0f} {r[0][:8]} {r[1]:<12} {r[2]} {r[3] or '-'}")
@@ -634,13 +662,15 @@ def mcp_handle(tool: str, params: dict) -> dict:
             j = Journal(Path(params["image"]))
             rows = j._conn.execute(
                 "SELECT tx_id, op, path, created_at FROM journal "
-                "ORDER BY created_at DESC LIMIT ?", (params.get("limit", 20),),
+                "ORDER BY created_at DESC LIMIT ?",
+                (params.get("limit", 20),),
             ).fetchall()
             j.close()
-            return {"entries": [
-                {"tx_id": r[0], "op": r[1], "path": r[2], "ts": r[3]}
-                for r in rows
-            ]}
+            return {
+                "entries": [
+                    {"tx_id": r[0], "op": r[1], "path": r[2], "ts": r[3]} for r in rows
+                ]
+            }
 
         if tool in ("list_files", "read_file"):
             # RO-чтение: нативный движок FAT32 (без записи и без pytsk3).
@@ -657,13 +687,18 @@ def mcp_handle(tool: str, params: dict) -> dict:
                 fs = Fat32(handle)
                 if tool == "list_files":
                     entries = fs.list_dir(fs.find_dir(path))
-                    return {"files": [
-                        {"name": e.name, "size": e.size, "is_dir": e.is_dir}
-                        for e in entries
-                    ]}
+                    return {
+                        "files": [
+                            {"name": e.name, "size": e.size, "is_dir": e.is_dir}
+                            for e in entries
+                        ]
+                    }
                 data = fs.read_file(path)
-            return {"path": path, "size": len(data),
-                    "sha256": hashlib.sha256(data).hexdigest()}
+            return {
+                "path": path,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
 
         return {"error": f"unknown tool: {tool}"}
     except Exception as e:
@@ -690,6 +725,7 @@ def cmd_mcp(args) -> int:
 # ---------------------------------------------------------------------------
 # 8. Self-tests
 # ---------------------------------------------------------------------------
+
 
 def self_test() -> int:
     """Быстрые sanity-проверки без внешних образов."""
@@ -753,6 +789,7 @@ def self_test() -> int:
 # ---------------------------------------------------------------------------
 # 9. main
 # ---------------------------------------------------------------------------
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -844,6 +881,7 @@ def main(argv: list[str]) -> int:
     # SIGINT -> корректное закрытие через finally в обработчиках
     def _sigint(signum, frame):
         raise KeyboardInterrupt
+
     signal.signal(signal.SIGINT, _sigint)
 
     try:

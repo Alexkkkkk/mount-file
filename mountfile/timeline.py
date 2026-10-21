@@ -89,7 +89,10 @@ class TimelineEvent:
         }
 
     def to_csv_row(self) -> dict[str, str]:
-        return {key: ("" if value is None else str(value)) for key, value in self.as_row().items()}
+        return {
+            key: ("" if value is None else str(value))
+            for key, value in self.as_row().items()
+        }
 
 
 # --------------------------------------------------------------------- helpers
@@ -191,10 +194,26 @@ def collect_events_from_fs(
         meta = entry.info.meta
         digest = _hash_entry(entry, hash_limit) if hash_limit != 0 else None
         candidates = (
-            (EVENT_CREATED, getattr(meta, "crtime", None), getattr(meta, "crtime_nano", 0)),
-            (EVENT_MODIFIED, getattr(meta, "mtime", None), getattr(meta, "mtime_nano", 0)),
-            (EVENT_ACCESSED, getattr(meta, "atime", None), getattr(meta, "atime_nano", 0)),
-            (EVENT_CHANGED, getattr(meta, "ctime", None), getattr(meta, "ctime_nano", 0)),
+            (
+                EVENT_CREATED,
+                getattr(meta, "crtime", None),
+                getattr(meta, "crtime_nano", 0),
+            ),
+            (
+                EVENT_MODIFIED,
+                getattr(meta, "mtime", None),
+                getattr(meta, "mtime_nano", 0),
+            ),
+            (
+                EVENT_ACCESSED,
+                getattr(meta, "atime", None),
+                getattr(meta, "atime_nano", 0),
+            ),
+            (
+                EVENT_CHANGED,
+                getattr(meta, "ctime", None),
+                getattr(meta, "ctime_nano", 0),
+            ),
         )
         for event, seconds, nano in candidates:
             if event not in wanted:
@@ -226,7 +245,9 @@ def open_tsk_fs(image_path: os.PathLike | str) -> Any:
         raise TimelineError("cannot open %s: %s" % (path, exc)) from exc
 
 
-def collect_timeline(image_path: os.PathLike | str, **kwargs: Any) -> list[TimelineEvent]:
+def collect_timeline(
+    image_path: os.PathLike | str, **kwargs: Any
+) -> list[TimelineEvent]:
     """Collect the full timeline of ``image_path`` into a list of events."""
 
     fs = open_tsk_fs(image_path)

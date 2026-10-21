@@ -19,7 +19,6 @@ import operator
 import os
 from typing import Any, NamedTuple, Optional, Union
 
-
 ImageSource = Union[str, os.PathLike, bytes, bytearray, memoryview, Any]
 
 
@@ -106,7 +105,9 @@ def _stream_size(stream: Any) -> int:
         stream.seek(0, os.SEEK_END)
         size = stream.tell()
     except (AttributeError, OSError, TypeError) as exc:
-        raise TypeError("image_file must be a path, bytes-like value, or seekable binary file") from exc
+        raise TypeError(
+            "image_file must be a path, bytes-like value, or seekable binary file"
+        ) from exc
     finally:
         try:
             stream.seek(original)
@@ -211,7 +212,10 @@ def read_file_slack(
     # Validate the complete caller-supplied final cluster before deciding
     # whether its slack is empty.  This prevents malformed extents from being
     # silently accepted merely because the file happens to be aligned.
-    if last_cluster_offset > image_size or cluster_size > image_size - last_cluster_offset:
+    if (
+        last_cluster_offset > image_size
+        or cluster_size > image_size - last_cluster_offset
+    ):
         raise InvalidSlackBounds("last cluster is outside the image")
 
     remainder = file_size % cluster_size

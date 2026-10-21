@@ -49,26 +49,81 @@ from . import ai, autopick, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .hexview import HexView
 from .partition import list_partitions
-from .qt_compat import (AlignRight, AlignVCenter, AscendingOrder, BottomDock,
-                        ComboAdjustToContents, CtrlModifier, DescendingOrder,
-                        DialogAccepted, DlgActionRole, DlgCancel, DlgClose,
-                        DlgOk, EchoPassword, ElideMiddle, HVC_Interactive,
-                        ItemIsEnabled, ItemIsSelectable, Key_A, Key_Backspace,
-                        Key_Delete, Key_Enter, Key_Insert, Key_Return,
-                        Key_Space, Key_Tab, MB_No, MB_Yes, NoEditTriggers,
-                        QAction, QApplication, QBrush, QCheckBox, QComboBox,
-                        QDialog, QDialogButtonBox, QDockWidget,
-                        QEvent_KeyPress, QEventLoop, QFileDialog, QFormLayout,
-                        QHBoxLayout, QInputDialog, QKeySequence, QLabel,
-                        QLineEdit, QMainWindow, QMenu, QMessageBox,
-                        QPlainTextEdit, QProgressBar, QPushButton, QSize,
-                        QSpinBox, QSplitter, QTabBar, QTableWidget,
-                        QTableWidgetItem, QTextEdit, QTimer, QToolBar,
-                        QToolButton, QVBoxLayout, QWidget, SelectRows,
-                        SizePolicyExpanding, SizePolicyFixed, Stretch,
-                        TableExtendedSelection, TB_IconOnly, TB_InstantPopup,
-                        CustomContextMenu,
-                        exec_dialog, standard_icon)
+from .qt_compat import (
+    AlignRight,
+    AlignVCenter,
+    AscendingOrder,
+    BottomDock,
+    ComboAdjustToContents,
+    CtrlModifier,
+    CustomContextMenu,
+    DescendingOrder,
+    DialogAccepted,
+    DlgActionRole,
+    DlgCancel,
+    DlgClose,
+    DlgOk,
+    EchoPassword,
+    ElideMiddle,
+    HVC_Interactive,
+    ItemIsEnabled,
+    ItemIsSelectable,
+    Key_A,
+    Key_Backspace,
+    Key_Delete,
+    Key_Enter,
+    Key_Insert,
+    Key_Return,
+    Key_Space,
+    Key_Tab,
+    MB_No,
+    MB_Yes,
+    NoEditTriggers,
+    QAction,
+    QApplication,
+    QBrush,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDockWidget,
+    QEvent_KeyPress,
+    QEventLoop,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QKeySequence,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSize,
+    QSpinBox,
+    QSplitter,
+    QTabBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QTimer,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+    SelectRows,
+    SizePolicyExpanding,
+    SizePolicyFixed,
+    Stretch,
+    TableExtendedSelection,
+    TB_IconOnly,
+    TB_InstantPopup,
+    exec_dialog,
+    standard_icon,
+)
 from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
 from .updater import is_frozen
@@ -129,6 +184,7 @@ class _UniversalImageWriter:
         # filesystem.  Returning None keeps the GUI status truthful.
         return None
 
+
 #: What the Имя / Тип / Размер / Дата / Атрибуты header row reads.
 #: The flexible Имя column is `COLUMN_NAME`; the other four keep a width
 #: derived from their own header and reference content (see
@@ -145,8 +201,17 @@ PREVIEW_LIMIT = 1 << 20
 
 #: Extensions the built-in F4 editor accepts (bounded text files only).
 EDITABLE_TEXT_EXTENSIONS = (
-    ".ini", ".cfg", ".conf", ".txt", ".log", ".json", ".xml",
-    ".csv", ".yaml", ".yml", ".md",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".txt",
+    ".log",
+    ".json",
+    ".xml",
+    ".csv",
+    ".yaml",
+    ".yml",
+    ".md",
 )
 
 #: Hard size limit of one F4 edit; the reader also refuses larger files.
@@ -264,7 +329,9 @@ class TextEditorDialog(QDialog):
         self.resize(760, 560)
         self._ends_with_newline = text.endswith("\n")
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Изменения попадут в файл только после нажатия «Сохранить»."))
+        layout.addWidget(
+            QLabel("Изменения попадут в файл только после нажатия «Сохранить».")
+        )
         self.editor = QPlainTextEdit()
         self.editor.setPlainText(text)
         layout.addWidget(self.editor, 1)
@@ -381,9 +448,16 @@ class ForensicTriageDialog(QDialog):
 
         search_row = QHBoxLayout()
         self.ed_pattern = QLineEdit()
-        self.ed_pattern.setPlaceholderText("Строка или regex для поиска в байтах образа")
+        self.ed_pattern.setPlaceholderText(
+            "Строка или regex для поиска в байтах образа"
+        )
         self.cmb_encoding = QComboBox()
-        for label, value in (("UTF-8", "utf-8"), ("UTF-16LE", "utf-16le"), ("Latin-1", "latin-1"), ("Raw", "raw")):
+        for label, value in (
+            ("UTF-8", "utf-8"),
+            ("UTF-16LE", "utf-16le"),
+            ("Latin-1", "latin-1"),
+            ("Raw", "raw"),
+        ):
             self.cmb_encoding.addItem(label, value)
         self.chk_regex = QCheckBox("regex")
         btn_search = QPushButton("Искать")
@@ -395,7 +469,11 @@ class ForensicTriageDialog(QDialog):
         layout.addLayout(search_row)
 
         action_row = QHBoxLayout()
-        for label, slot in (("SHA-256", self.show_hash), ("Timeline CSV", self.show_timeline), ("Timestomp CSV", self.show_timestomp)):
+        for label, slot in (
+            ("SHA-256", self.show_hash),
+            ("Timeline CSV", self.show_timeline),
+            ("Timestomp CSV", self.show_timestomp),
+        ):
             button = QPushButton(label)
             button.clicked.connect(slot)
             action_row.addWidget(button)
@@ -424,14 +502,29 @@ class ForensicTriageDialog(QDialog):
         if not pattern:
             self.output.setPlainText("Введите строку или regex для поиска.")
             return
-        hits = list(grep_image(self.image_path, pattern, regex=self.chk_regex.isChecked(), encoding=self.cmb_encoding.currentData(), max_hits=200))
+        hits = list(
+            grep_image(
+                self.image_path,
+                pattern,
+                regex=self.chk_regex.isChecked(),
+                encoding=self.cmb_encoding.currentData(),
+                max_hits=200,
+            )
+        )
         if not hits:
             self.output.setPlainText("Совпадений не найдено.")
             return
-        self.output.setPlainText("\n".join("0x%X (+%d): %s" % (h["offset"], h["length"], h["context"]) for h in hits))
+        self.output.setPlainText(
+            "\n".join(
+                "0x%X (+%d): %s" % (h["offset"], h["length"], h["context"])
+                for h in hits
+            )
+        )
 
     def _pick_csv(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Открыть timeline CSV", "", "CSV (*.csv);;Все файлы (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Открыть timeline CSV", "", "CSV (*.csv);;Все файлы (*)"
+        )
         return path
 
     def show_timeline(self):
@@ -439,14 +532,26 @@ class ForensicTriageDialog(QDialog):
         if not path:
             return
         records = list(read_timeline_csv(path))
-        self.output.setPlainText("\n".join("%s\t%s\t%s\t%s" % (r.path, r.mtime or "", r.atime or "", r.ctime or "") for r in records[:1000]) + "\n\nRecords: %d" % len(records))
+        self.output.setPlainText(
+            "\n".join(
+                "%s\t%s\t%s\t%s" % (r.path, r.mtime or "", r.atime or "", r.ctime or "")
+                for r in records[:1000]
+            )
+            + "\n\nRecords: %d" % len(records)
+        )
 
     def show_timestomp(self):
         path = self._pick_csv()
         if not path:
             return
         findings = list(detect_timestomp(read_timeline_csv(path)))
-        self.output.setPlainText("\n".join("%s\t%s" % (r.path, ", ".join(reasons)) for r, reasons in findings[:1000]) + "\n\nFindings: %d" % len(findings))
+        self.output.setPlainText(
+            "\n".join(
+                "%s\t%s" % (r.path, ", ".join(reasons))
+                for r, reasons in findings[:1000]
+            )
+            + "\n\nFindings: %d" % len(findings)
+        )
 
 
 class ImageFileSearchDialog(QDialog):
@@ -798,7 +903,9 @@ class TcPanel(QWidget):
         menu.addSeparator()
         add("Копировать в другую панель (F5)", self.win.f5_copy, is_real_entry)
         add("Переместить в другую панель (F6)", self.win.f6_move, is_real_entry)
-        add("Переименовать", self.win.rename_selected, is_real_entry and can_write_image)
+        add(
+            "Переименовать", self.win.rename_selected, is_real_entry and can_write_image
+        )
         add("Удалить (F8)", self.win.f8_delete, is_real_entry and self.mode != "img")
         add("Копировать путь", self.copy_selected_path, is_real_entry)
         menu.addSeparator()
@@ -1848,7 +1955,9 @@ class MainWindow(QMainWindow):
         try:
             from .update_dialog import UpdateDialog
         except Exception as exc:  # pragma: no cover - только без Qt/файла
-            self.log_msg("Окно обновления недоступно (%s) — простое подтверждение." % exc)
+            self.log_msg(
+                "Окно обновления недоступно (%s) — простое подтверждение." % exc
+            )
             return False
         dialog = UpdateDialog.from_release(info, app_version(), self)
         self._update_hide()
@@ -2195,14 +2304,12 @@ class MainWindow(QMainWindow):
                 lambda: self._auto_pick(quiet=False),
             )
         )
+        m_tool.addAction(self._action("Сводка образа и тома…", self.show_image_info))
+        m_tool.addAction(self._action("Обзор всего образа…", self.show_whole_image))
         m_tool.addAction(
-            self._action("Сводка образа и тома…", self.show_image_info)
-        )
-        m_tool.addAction(
-            self._action("Обзор всего образа…", self.show_whole_image)
-        )
-        m_tool.addAction(
-            self._action("Поиск файла в образе…", self.search_image_files, "Ctrl+Shift+F")
+            self._action(
+                "Поиск файла в образе…", self.search_image_files, "Ctrl+Shift+F"
+            )
         )
         m_tool.addAction(
             self._action("DFIR triage (только чтение)…", self.open_forensic_triage)
@@ -2384,22 +2491,31 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Format Advisor (offline, metadata-only)",
-            text + "\n\nСохранить верхнюю рекомендацию локально в ~/.mountfile/ai_kb.json?",
+            text
+            + "\n\nСохранить верхнюю рекомендацию локально в ~/.mountfile/ai_kb.json?",
             MB_Yes | MB_No,
             MB_No,
         )
         if answer == MB_Yes:
             try:
                 remember.remember(fingerprint, recipes[0])
-                self.log_msg("Format Advisor: сохранена локальная рекомендация для %s" % fingerprint.filename)
+                self.log_msg(
+                    "Format Advisor: сохранена локальная рекомендация для %s"
+                    % fingerprint.filename
+                )
             except OSError as exc:
-                QMessageBox.information(self, "Format Advisor", "Не удалось сохранить рекомендацию: %s" % exc)
+                QMessageBox.information(
+                    self,
+                    "Format Advisor",
+                    "Не удалось сохранить рекомендацию: %s" % exc,
+                )
 
     @staticmethod
     def _format_metadata_advice(fingerprint, recipes):
         lines = [
             "Использованы только имя, расширение и размер. Файл не открывался; сеть и модель не вызывались.",
-            "Файл: %s | расширение: %s | размер: %s" % (
+            "Файл: %s | расширение: %s | размер: %s"
+            % (
                 fingerprint.filename,
                 fingerprint.extension or "неизвестно",
                 fingerprint.size if fingerprint.size is not None else "неизвестен",
@@ -2407,10 +2523,19 @@ class MainWindow(QMainWindow):
             "",
         ]
         for recipe in recipes:
-            lines.append("%d. %s (уверенность %.0f%%) — %s" % (
-                recipe["rank"], recipe["format"], 100.0 * recipe["confidence"], recipe["evidence"]
-            ))
-            lines.append("   Инструменты (не запускаются автоматически): %s" % ", ".join(recipe.get("tools", [])))
+            lines.append(
+                "%d. %s (уверенность %.0f%%) — %s"
+                % (
+                    recipe["rank"],
+                    recipe["format"],
+                    100.0 * recipe["confidence"],
+                    recipe["evidence"],
+                )
+            )
+            lines.append(
+                "   Инструменты (не запускаются автоматически): %s"
+                % ", ".join(recipe.get("tools", []))
+            )
             lines.extend("   • %s" % step for step in recipe["steps"])
         return "\n".join(lines)
 
@@ -2443,13 +2568,17 @@ class MainWindow(QMainWindow):
     def show_image_info(self):
         """Display the GUI equivalent of the CLI ``info``/``volumes`` commands."""
         if not self.image_path:
-            QMessageBox.information(self, "Сводка образа", "Сначала откройте образ (Ctrl+O).")
+            QMessageBox.information(
+                self, "Сводка образа", "Сначала откройте образ (Ctrl+O)."
+            )
             return
         try:
             size = os.path.getsize(self.image_path)
             parts = list_partitions(self.image_path)
         except Exception as exc:
-            QMessageBox.warning(self, "Сводка образа", "Не удалось прочитать образ:\n%s" % exc)
+            QMessageBox.warning(
+                self, "Сводка образа", "Не удалось прочитать образ:\n%s" % exc
+            )
             return
         lines = [
             "Файл: %s" % self.image_path,
@@ -2464,7 +2593,9 @@ class MainWindow(QMainWindow):
                     % (part.index, part.name, part.offset, part.size_mb, part.start_lba)
                 )
         else:
-            lines.append("Таблица разделов не найдена — доступен целый образ (offset 0).")
+            lines.append(
+                "Таблица разделов не найдена — доступен целый образ (offset 0)."
+            )
         lines.extend(["", "Открытые панели:"])
         for panel in self.panels.values():
             if panel.mode == "img":
@@ -2564,11 +2695,21 @@ class MainWindow(QMainWindow):
         from .fat32 import Fat32Error, Fat32Provider
         from .vfs import TskError, TskImage
 
-        volumes = self.volumes or [_PartitionVolume(type("Whole", (), {
-            "offset": 0, "name": "whole image", "type_name": "raw",
-            "size_mb": os.path.getsize(self.image_path) / 1048576.0,
-            "start_lba": 0,
-        })())]
+        volumes = self.volumes or [
+            _PartitionVolume(
+                type(
+                    "Whole",
+                    (),
+                    {
+                        "offset": 0,
+                        "name": "whole image",
+                        "type_name": "raw",
+                        "size_mb": os.path.getsize(self.image_path) / 1048576.0,
+                        "start_lba": 0,
+                    },
+                )()
+            )
+        ]
         wanted = pattern.lower()
         results = []
         for volume in volumes:
@@ -2577,7 +2718,11 @@ class MainWindow(QMainWindow):
             owned = False
             try:
                 current = self.active_panel()
-                if current.mode == "img" and current.volume_offset == offset and current.provider:
+                if (
+                    current.mode == "img"
+                    and current.volume_offset == offset
+                    and current.provider
+                ):
                     provider = current.provider
                 else:
                     try:
@@ -2594,16 +2739,22 @@ class MainWindow(QMainWindow):
                         name = str(entry.get("name", ""))
                         child = (
                             directory.rstrip("/") + "/" + name
-                            if directory != "/" else "/" + name
+                            if directory != "/"
+                            else "/" + name
                         )
-                        if fnmatch.fnmatch(name.lower(), wanted) or wanted in name.lower():
-                            results.append({
-                                "volume": str(getattr(volume, "desc", "offset 0")),
-                                "fstype": str(getattr(volume, "fstype", "unknown")),
-                                "path": child,
-                                "size": int(entry.get("size") or 0),
-                                "offset": offset,
-                            })
+                        if (
+                            fnmatch.fnmatch(name.lower(), wanted)
+                            or wanted in name.lower()
+                        ):
+                            results.append(
+                                {
+                                    "volume": str(getattr(volume, "desc", "offset 0")),
+                                    "fstype": str(getattr(volume, "fstype", "unknown")),
+                                    "path": child,
+                                    "size": int(entry.get("size") or 0),
+                                    "offset": offset,
+                                }
+                            )
                             if len(results) >= max_results:
                                 break
                         if entry.get("is_dir") and name not in (".", ".."):
@@ -3214,9 +3365,10 @@ class MainWindow(QMainWindow):
                     raise ValueError("файл превышает лимит редактора 2 MiB")
                 original = panel.provider.read_file(full)
                 _, encoding = text_editor.decode_for_editor(original)
-                if encoding == "binary" or _decode_editable_text(
-                    original, encoding
-                ) is None:
+                if (
+                    encoding == "binary"
+                    or _decode_editable_text(original, encoding) is None
+                ):
                     raise ValueError(
                         "файл бинарный или превышает лимит редактора 2 MiB"
                     )
@@ -3227,7 +3379,9 @@ class MainWindow(QMainWindow):
                     data=original,
                 )
                 if prepared_encoding != encoding:
-                    raise RuntimeError("не удалось согласовать кодировку временной копии")
+                    raise RuntimeError(
+                        "не удалось согласовать кодировку временной копии"
+                    )
                 note = "временная копия из образа: %s" % target
                 argv = text_editor.open_in_editor(target)
             else:
@@ -3249,8 +3403,7 @@ class MainWindow(QMainWindow):
                 "Сохранить изменения в образ",
                 "Сохраните файл в редакторе и закройте его. Затем вернитесь сюда "
                 "и нажмите «Да», чтобы проверить копию и записать изменения "
-                "в образ. Перед записью будет создана резервная копия.\n\n%s"
-                % target,
+                "в образ. Перед записью будет создана резервная копия.\n\n%s" % target,
                 MB_Yes | MB_No,
                 MB_No,
             )
@@ -3323,7 +3476,11 @@ class MainWindow(QMainWindow):
         """F3 / Enter: текстовый файл идёт в редактор, остальное в HEX."""
         p = self.active_panel()
         entry = p.selected_entry()
-        if entry and not entry.get("is_dir") and text_editor.is_text_file(entry["name"]):
+        if (
+            entry
+            and not entry.get("is_dir")
+            and text_editor.is_text_file(entry["name"])
+        ):
             self.open_text_file(p)
             return
         self.f3_hex_view()
@@ -3391,7 +3548,9 @@ class MainWindow(QMainWindow):
         decoded = _decode_editable_text(data)
         if decoded is None:
             QMessageBox.information(
-                self, "Правка", "Файл бинарный или больше 2 MiB; редактирование отменено."
+                self,
+                "Правка",
+                "Файл бинарный или больше 2 MiB; редактирование отменено.",
             )
             return
         text, encoding, bom, newline = decoded
@@ -3426,7 +3585,9 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, "Сохранение не удалось", str(exc))
                 return
-            self.log_msg("Изменения записаны в образ: %s (%d байт)" % (full, len(updated)))
+            self.log_msg(
+                "Изменения записаны в образ: %s (%d байт)" % (full, len(updated))
+            )
             return
         try:
             _atomic_write_local(full, updated)
@@ -3692,7 +3853,9 @@ class MainWindow(QMainWindow):
         if not ok or not new_name or new_name == entry["name"]:
             return
         if new_name in (".", "..") or any(sep in new_name for sep in ("/", "\\")):
-            QMessageBox.warning(self, "Переименование", "Имя не должно содержать / или \\")
+            QMessageBox.warning(
+                self, "Переименование", "Имя не должно содержать / или \\"
+            )
             return
         try:
             if p.mode == "img":

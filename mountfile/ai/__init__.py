@@ -13,10 +13,22 @@ Nothing here imports Qt and nothing talks to the network on import.
 
 from __future__ import annotations
 
-from .backend import (BACKENDS, DEFAULT_MAX_BYTES, AiBackend, AiResult,
-                      NullBackend, OllamaBackend, OpenAiCompatBackend,
-                      build_backend, build_prompt, collect, local_reader,
-                      looks_textual, max_bytes, summarize_bytes)
+from .backend import (
+    BACKENDS,
+    DEFAULT_MAX_BYTES,
+    AiBackend,
+    AiResult,
+    NullBackend,
+    OllamaBackend,
+    OpenAiCompatBackend,
+    build_backend,
+    build_prompt,
+    collect,
+    local_reader,
+    looks_textual,
+    max_bytes,
+    summarize_bytes,
+)
 
 __all__ = [
     "BACKENDS",
