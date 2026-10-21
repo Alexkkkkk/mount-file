@@ -14,6 +14,11 @@ name = "mountfile"
 version = "1.26.0"
 description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
 readme = "README.md"
+dependencies = [
+    "PyQt6>=6.5",
+    "pytsk3>=20260715",
+]
+
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Alexkkkkk" }]
@@ -37,10 +42,6 @@ Documentation = "https://alexkkkkk.github.io/mount-file/"
 Changelog = "https://github.com/Alexkkkkk/mount-file/blob/main/CHANGELOG.md"
 Issues = "https://github.com/Alexkkkkk/mount-file/issues"
 
-dependencies = [
-    "PyQt6>=6.5",
-    "pytsk3>=20260715",
-]
 
 [project.optional-dependencies]
 dev = [
