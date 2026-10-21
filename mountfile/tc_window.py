@@ -2326,23 +2326,14 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_reload)
         tb.addAction(self.act_up)
         tb.addSeparator()
-
-        self.act_pack = self._action(
-            "Упаковать",
-            lambda: self._unsupported("Упаковка"),
-            None,
-            "SP_DriveFDIcon",
-            "Упаковка файлов (не поддерживается)",
+        self.act_cli = self._action(
+            "Командный центр",
+            self.open_command_center,
+            "Ctrl+Shift+X",
+            "SP_ComputerIcon",
+            "Все команды Mount File CLI (Ctrl+Shift+X)",
         )
-        self.act_unpack = self._action(
-            "Распаковать",
-            lambda: self._unsupported("Распаковка"),
-            None,
-            "SP_DriveHDIcon",
-            "Распаковка архивов (не поддерживается)",
-        )
-        self.act_pack.setEnabled(False)
-        self.act_unpack.setEnabled(False)
+        tb.addAction(self.act_cli)
         tb.addAction(
             self._action(
                 "Настройки",
@@ -2525,6 +2516,8 @@ class MainWindow(QMainWindow):
         m_cmd.addAction(self._action("Выход", self.close, "Alt+F4"))
 
         m_tool = mb.addMenu("Инструменты")
+        m_tool.addAction(self.act_cli)
+        m_tool.addSeparator()
         m_tool.addAction(
             self._action(
                 "Подобрать том автоматически…",
@@ -2557,14 +2550,6 @@ class MainWindow(QMainWindow):
             "Локальные рекомендации по имени, расширению и размеру; файл не читается (Ctrl+Shift+I)",
         )
         m_tool.addAction(self.act_advise)
-
-        m_net = mb.addMenu("Сеть")
-        m_net.addAction(
-            self._action("FTP-соединение…", lambda: self._unsupported("FTP-соединение"))
-        )
-        m_net.addAction(
-            self._action("Сетевые диски…", lambda: self._unsupported("Сетевые диски"))
-        )
 
         m_view = mb.addMenu("Вид")
         m_view.addAction(self.act_reload)
@@ -3161,8 +3146,11 @@ class MainWindow(QMainWindow):
             "Извлечено %d партиций из %s" % (len(written), os.path.basename(path))
         )
 
-    def _unsupported(self, what):
-        self.log_msg("%s: не поддерживается в этой сборке" % what)
+    def open_command_center(self):
+        """Launch the complete packaged CLI through its safe Qt front end."""
+        from .gui_cli import open_command_center
+
+        open_command_center(self)
 
     def _backup_before_write(self, panel):
         """Offer the CLI-equivalent ``--backup`` safeguard for GUI writes."""
