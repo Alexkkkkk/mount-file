@@ -20,6 +20,8 @@ file only tracks the releases themselves.
 - Добавлена read-only команда `python -m mountfile slack --slack-only`: она
   принимает подтверждённые вызывающим offset/размер последнего кластера,
   извлекает только slack и создаёт выходной файл без перезаписи существующего.
+  Если slack нет, файл не создаётся, а JSON-сводка содержит флаг `created`;
+  `docs/cli.md` и подсказка лаунчера приведены в соответствие.
 
 - **RW capability matrix**: display filesystem names are normalized for loop
   mounts (`HFS+`/FAT variants), writable formats use the existing OS backend,

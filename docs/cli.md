@@ -17,6 +17,10 @@ python -m mountfile grep dump.img "password=" --encoding utf-8
 python -m mountfile hash dump.img
 python -m mountfile timeline dump.img --csv timeline.csv
 python -m mountfile timestomp dump.img --csv timeline.csv
+python -m mountfile unallocated-scan dump.img --ranges ranges.json
+python -m mountfile slack dump.img --slack-only \
+    --last-cluster-offset 0x400000 --file-size 5000 --cluster-size 4096 \
+    -o slack.bin
 ```
 
 `grep` возвращает ограниченные byte offsets и контекст, `hash` вычисляет
@@ -24,6 +28,11 @@ SHA-256, а `timeline` и `timestomp` работают с CSV, полученн�
 коллектором. Эти команды не изменяют исходный образ. Полноценный
 filesystem-aware collector, YARA pipeline, carving и slack discovery пока не
 являются частью package CLI.
+
+`unallocated-scan` читает только явно переданные ranges. `slack --slack-only`
+принимает уже подтверждённые offset последнего кластера, логический
+размер файла и размер кластера и не разрешает путь файла и cluster
+chain: это должен сделать вызывающий код.
 
 Отдельные `mountfile_dfir.py` и `mountfile_grep.py` сохраняются как
 экспериментальные standalone-инструменты с расширенными сценариями. Их наличие
@@ -42,6 +51,7 @@ filesystem-aware collector, YARA pipeline, carving и slack discovery пока �
 | `autopick` | выбрать рабочий том по проверяемым кандидатам | нет |
 | `decode` | расшифровать RT809H MST/MTK-дамп встроенной таблицей | создаёт новый файл |
 | `split` | разбить дамп по секции `[PARTITIONS]` файла `udev` | создаёт файлы в каталоге вывода |
+| `slack` | slack последнего кластера по явно заданному extent | нет; файл только через `--output`, без перезаписи |
 
 Общие аргументы целевых команд (`volumes`, `info`, `ls`, `get`, `put`, `mkdir`,
 `mv`, `rm`, `autopick`):
