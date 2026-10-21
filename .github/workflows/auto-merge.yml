@@ -36,7 +36,7 @@ jobs:
           github-token: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const required = ['CI-Gate', 'quality-gate', 'dependency-review',
-              'Version parity + secret scan', 'Verify (status, secrets, versions, tests)'];
+              'Verify (status, secrets, versions, tests)'];
             const deadline = Date.now() + 15 * 60 * 1000;
             while (Date.now() < deadline) {
               const pr = (await github.rest.pulls.get({...context.repo,

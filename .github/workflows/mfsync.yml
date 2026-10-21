@@ -3,7 +3,7 @@ name: mfsync
 # computer's uncommitted files; local sync/watch must run on that computer.
 on:
   push:
-    branches: [main, 'feat/**', 'sync/**']
+    branches: [main]
   pull_request:
     branches: [main]
   schedule:

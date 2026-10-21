@@ -37,27 +37,24 @@
 
 ## GitHub Actions
 
-19 workflow — у каждого своя зона ответственности; `dfir-quality.yml`
-удалён, потому что полностью дублировал `ci.yml` (там уже есть и матрица ОС,
-и coverage).
+16 workflow — у каждого своя зона ответственности. Проверки паритета версий,
+секретов и automation-контрактов выполняет только `mfsync.yml`; отдельный
+`sync-guard.yml` удалён как полный дубль.
 
 | Workflow | Триггер | Роль |
 | --- | --- | --- |
-| `ci.yml` | push/PR в `main` | основной прогон тестов: 3 ОС × Python 3.10/3.11/3.12, coverage |
-| `quality.yml` | push/PR | ruff / формат / метрики качества |
-| `security.yml` | push/PR + cron | сканеры безопасности |
-| `codeql.yml` | push/PR + cron | CodeQL-анализ |
+| `ci.yml` | push/PR в `main`, nightly cron | тесты: 3 ОС × Python 3.10/3.11/3.12, Linux integration, сборка/GUI-import; по расписанию — Windows nightly exe |
+| `quality.yml` | push/PR | единственный обязательный lint/actionlint gate |
+| `security.yml` | push/PR + cron | dependency review, pip-audit и CodeQL в одном workflow |
 | `docs.yml` | push/PR + ручной | сборка mkdocs |
 | `docker.yml` | push/PR + ручной | сборка образа |
-| `deploy.yml` | push в `main`, теги | публикация |
+| `deploy.yml` | push в `main`, явный dispatch из release | staging и production hooks без управления Release assets |
 | `release.yml` | `release: published` | сборка и загрузка артефактов |
 | `create-release.yml` | теги `v*` | создание релиза из CHANGELOG |
 | `version-bump.yml` | push в `main` | semantic-release |
-| `mfsync.yml` | push в `main`/`feat/**`/`sync/**` | синхронизация и secret-scan |
-| `sync-guard.yml` | PR | защита от рассинхрона версий |
+| `mfsync.yml` | push/PR в `main`, cron, ручной | синхронизация, version parity, secret-scan и automation tests |
 | `autofix.yml` | push в `main`, `workflow_call` | ruff/black/isort автофиксы |
 | `self-heal.yml` | `workflow_run: CI` | перезапуск/починка после падения CI |
-| `nightly.yml` | cron 03:00 | ночной прогон |
 | `auto-merge.yml` | `pull_request` | авто-мерж размеченных PR |
 | `labeler.yml` | `pull_request_target` | лейблы по путям |
 | `chatops.yml` | `issue_comment` | команды из комментариев |
@@ -86,14 +83,8 @@ python -m pytest tests/ -q      # полный набор
 python -m compileall -q mountfile main.py mountfile.py
 ```
 
-## Известная проблема ветки `main`
+## Ruleset ветки `main`
 
-В *branch protection* для `main` среди обязательных статусов остался
-`Tests (ubuntu-latest, py3.8)` — чек, который больше не существует: матрица
-py3.8 удалена из `ci.yml`. Такой статус никогда не отчитается, поэтому гейт
-формально закрыт для всех, у кого нет прав администратора
-(`enforce_admins: false` сейчас позволяет обойти его только владельцу).
-
-Лечение: Settings → Branches → правило для `main` → Required status checks →
-удалить `Tests (ubuntu-latest, py3.8)`. Список обязательных чеков должен
-содержать только те имена, которые реально печатает `ci.yml` и `quality.yml`.
+Активный ruleset требует только реально существующие статусы `quality-gate` и
+`dependency-review`. Имена не меняются без одновременного изменения ruleset:
+иначе GitHub начнёт ждать отсутствующий status check.
