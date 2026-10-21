@@ -54,7 +54,7 @@ from .qt_compat import (
     AlignVCenter,
     AscendingOrder,
     BottomDock,
-    ComboAdjustToContents,
+    ComboAdjustToMinimumContentsLengthWithIcon,
     CtrlModifier,
     CustomContextMenu,
     DescendingOrder,
@@ -87,6 +87,7 @@ from .qt_compat import (
     QDialog,
     QDialogButtonBox,
     QDockWidget,
+    QEvent,
     QEvent_KeyPress,
     QEventLoop,
     QFileDialog,
@@ -105,6 +106,7 @@ from .qt_compat import (
     QSize,
     QSpinBox,
     QSplitter,
+    Qt,
     QTabBar,
     QTableWidget,
     QTableWidgetItem,
@@ -119,8 +121,8 @@ from .qt_compat import (
     SizePolicyFixed,
     Stretch,
     TableExtendedSelection,
-    TB_IconOnly,
     TB_InstantPopup,
+    TB_TextBesideIcon,
     exec_dialog,
     standard_icon,
 )
@@ -644,6 +646,8 @@ class PanelTable(QTableWidget):
         hdr.sectionClicked.connect(self.panel.on_header_clicked)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
+        self.setAlternatingRowColors(True)
+        self.setAccessibleName("Список файлов панели %s" % panel.side)
         self.setWordWrap(False)
         # Total Commander elides in the middle: the tail of 'BACKUP_….bin'
         # stays visible, which is what tells two dumps apart.
@@ -657,7 +661,9 @@ class PanelTable(QTableWidget):
         # A short hint only: the long legend used to pop up as a wide tooltip
         # that covered both panels. It now lives under an empty panel.
         self.setToolTip("Enter — открыть, Space — отметить, Tab — другая панель")
-        self._relayout_columns()
+        self.apply_font()
+        self.currentCellChanged.connect(lambda *_: panel.selection_changed())
+        self.itemSelectionChanged.connect(panel.selection_changed)
 
     # ------------------------------------------------------- column widths
     def _text_width(self, text):
@@ -672,7 +678,7 @@ class PanelTable(QTableWidget):
         size switch (Вид → Шрифт крупнее) and the Атрибуты header can never
         come out clipped at the right edge.
         """
-        pad = 18
+        pad = 34
         return (
             max(52, self._text_width("Папка") + pad),
             max(76, self._text_width("7 818 182 656") + pad),
@@ -691,20 +697,27 @@ class PanelTable(QTableWidget):
         if viewport <= 0:
             return
         widths = list(self._column_widths())
-        fixed = sum(widths)
+        # Secondary metadata yields to the file name on small screens.
+        self.setColumnHidden(4, viewport < 560)
+        self.setColumnHidden(3, viewport < 440)
+        self.setColumnHidden(1, viewport < 320)
+        fixed = sum(w for c, w in enumerate(widths, 1) if not self.isColumnHidden(c))
+        self.horizontalHeader().setMinimumSectionSize(MIN_SECTION_WIDTH)
         if viewport - fixed < NAME_MIN_WIDTH:
             deficit = NAME_MIN_WIDTH - (viewport - fixed)
-            room = sum(w - MIN_SECTION_WIDTH for w in widths)
+            visible = [c for c in range(1, len(COLUMNS)) if not self.isColumnHidden(c)]
+            room = sum(max(0, widths[c - 1] - MIN_SECTION_WIDTH) for c in visible)
             if room > 0:
-                take = min(deficit, room)
-                widths = [
-                    max(
+                for c in visible:
+                    width = widths[c - 1]
+                    widths[c - 1] = max(
                         MIN_SECTION_WIDTH,
-                        w - int(round((w - MIN_SECTION_WIDTH) * take / room)),
+                        width
+                        - round(
+                            (width - MIN_SECTION_WIDTH) * min(deficit, room) / room
+                        ),
                     )
-                    for w in widths
-                ]
-        for c, width in enumerate(widths, start=1):
+        for c, width in enumerate(widths, 1):
             self.setColumnWidth(c, width)
 
     def resizeEvent(self, e):
@@ -713,6 +726,9 @@ class PanelTable(QTableWidget):
 
     def apply_font(self):
         """Re-fit the columns after the UI font size changed."""
+        self.verticalHeader().setDefaultSectionSize(
+            max(28, self.fontMetrics().height() + 12)
+        )
         self._relayout_columns()
 
     def keyPressEvent(self, e):
@@ -765,6 +781,9 @@ class TcPanel(QWidget):
         self.tab_index = 0
         self.sort_col = 0
         self.sort_rev = False
+        self._listing_hint = None
+        self.setObjectName("filePanel")
+        self.setAttribute(getattr(Qt, "WidgetAttribute", Qt).WA_StyledBackground, True)
         self._build()
         self.populate_drives()
         self.refresh()
@@ -772,53 +791,141 @@ class TcPanel(QWidget):
     # ----------------------------------------------------------------- UI
     def _build(self):
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(3, 3, 3, 3)
-        lay.setSpacing(3)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        title_row = QHBoxLayout()
+        self.lbl_title = QLabel()
+        self.lbl_title.setObjectName("panelTitle")
+        self.lbl_mode = QLabel()
+        self.lbl_mode.setObjectName("sourceBadge")
+        title_row.addWidget(self.lbl_title, 1)
+        title_row.addWidget(self.lbl_mode)
+        lay.addLayout(title_row)
 
         bar = QHBoxLayout()
-        bar.setSpacing(2)
+        bar.setSpacing(6)
         self.cmb_drive = QComboBox()
-        self.cmb_drive.setMinimumWidth(230)
-        self.cmb_drive.setSizeAdjustPolicy(ComboAdjustToContents)
-        # Qt по умолчанию показывает 10 строк в дропдауне: дампы с десятками
-        # разделов прячут остальные тома за встроенным scroll. 64 — потолок,
-        # при котором любой практический дамп помещается целиком.
+        self.cmb_drive.setMinimumWidth(110)
+        self.cmb_drive.setMinimumContentsLength(12)
+        self.cmb_drive.setSizeAdjustPolicy(ComboAdjustToMinimumContentsLengthWithIcon)
+        self.cmb_drive.setAccessibleName("Источник файлов панели %s" % self.side)
         self.cmb_drive.setMaxVisibleItems(64)
         self.cmb_drive.currentIndexChanged.connect(self.drive_changed)
-        bar.addWidget(self.cmb_drive)
-        self.lbl_space = QLabel("")
-        self.lbl_space.setToolTip("Свободное место на текущем диске / томе")
-        bar.addWidget(self.lbl_space, 1)
-        self.btn_root = QPushButton("\\")
-        self.btn_root.setFixedWidth(24)
+        bar.addWidget(self.cmb_drive, 1)
+        self.btn_root = QPushButton()
+        self.btn_root.setIcon(standard_icon(self, "SP_DirHomeIcon"))
+        self.btn_root.setFixedWidth(34)
         self.btn_root.setToolTip("Корень диска")
+        self.btn_root.setAccessibleName("Перейти в корень диска")
         self.btn_root.clicked.connect(self.go_root)
         bar.addWidget(self.btn_root)
-        self.btn_up = QPushButton("*")
-        self.btn_up.setFixedWidth(24)
+        self.btn_up = QPushButton()
+        self.btn_up.setIcon(standard_icon(self, "SP_ArrowUp"))
+        self.btn_up.setFixedWidth(34)
         self.btn_up.setToolTip("На уровень вверх (Backspace)")
+        self.btn_up.setAccessibleName("На уровень вверх")
         self.btn_up.clicked.connect(self.go_up)
         bar.addWidget(self.btn_up)
         lay.addLayout(bar)
 
+        self.lbl_space = QLabel()
+        self.lbl_space.setObjectName("panelSpace")
+        self.lbl_space.setWordWrap(True)
+        lay.addWidget(self.lbl_space)
         self.tabbar = QTabBar()
         self.tabbar.setExpanding(False)
         self.tabbar.setTabsClosable(True)
+        self.tabbar.setUsesScrollButtons(True)
         self.tabbar.currentChanged.connect(self.tab_changed)
         self.tabbar.tabCloseRequested.connect(self.tab_closed)
         lay.addWidget(self.tabbar)
-
         self.path_edit = QLineEdit()
+        self.path_edit.setObjectName("panelPath")
         self.path_edit.returnPressed.connect(self.path_entered)
-        self.path_edit.setToolTip("Текущий каталог — можно ввести путь и нажать Enter")
+        self.path_edit.setToolTip("Введите путь и нажмите Enter")
+        self.path_edit.setAccessibleName("Путь текущего каталога")
         lay.addWidget(self.path_edit)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("panelSearch")
+        self.search_edit.setPlaceholderText("Фильтр по имени в этом каталоге…")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setAccessibleName("Фильтр файлов текущего каталога")
+        self.search_edit.setToolTip(
+            "Фильтрует имена, не содержимое файлов. Ctrl+F — фокус"
+        )
+        self.search_edit.textChanged.connect(self.filter_changed)
+        lay.addWidget(self.search_edit)
 
         self.table = PanelTable(self)
         lay.addWidget(self.table, 1)
-
-        self.lbl_status = QLabel("")
+        self.empty_state = QWidget()
+        self.empty_state.setObjectName("emptyState")
+        empty = QVBoxLayout(self.empty_state)
+        empty.setContentsMargins(12, 12, 12, 12)
+        empty.setSpacing(6)
+        empty.addStretch()
+        self.empty_title = QLabel()
+        self.empty_title.setObjectName("emptyTitle")
+        self.empty_title.setWordWrap(True)
+        empty.addWidget(self.empty_title)
+        self.empty_hint = QLabel()
+        self.empty_hint.setObjectName("emptyHint")
+        self.empty_hint.setWordWrap(True)
+        empty.addWidget(self.empty_hint)
+        self.empty_open = QPushButton("Открыть образ…")
+        self.empty_open.setObjectName("primaryButton")
+        self.empty_open.setIcon(standard_icon(self, "SP_DialogOpenButton"))
+        self.empty_open.clicked.connect(lambda: self.win.open_image())
+        empty.addWidget(self.empty_open, 0, AlignRight)
+        empty.addStretch()
+        lay.addWidget(self.empty_state, 1)
+        self.lbl_status = QLabel()
+        self.lbl_status.setObjectName("panelStatus")
+        self.lbl_status.setWordWrap(True)
         lay.addWidget(self.lbl_status)
+        for widget in (
+            self.path_edit,
+            self.search_edit,
+            self.cmb_drive,
+            self.tabbar,
+            self.btn_root,
+            self.btn_up,
+            self.table.viewport(),
+        ):
+            widget.installEventFilter(self)
         self._rebuild_tabs()
+
+    def eventFilter(self, obj, event):
+        if event.type() in (
+            getattr(QEvent, "Type", QEvent).FocusIn,
+            getattr(QEvent, "Type", QEvent).MouseButtonPress,
+        ):
+            if hasattr(self.win, "panels"):
+                self.win.set_active(self.side)
+        return super().eventFilter(obj, event)
+
+    def selection_changed(self):
+        if hasattr(self.win, "panels"):
+            self.win._sync_actions()
+
+    def visible_entries(self):
+        query = self.search_edit.text().strip().casefold()
+        return [entry for entry in self.entries if query in entry["name"].casefold()]
+
+    def filter_changed(self, _text):
+        # Hidden marks must never be silently included in Copy/Delete.
+        visible = {entry["name"] for entry in self.visible_entries()}
+        self.marked.intersection_update(visible)
+        self._fill(self._listing_hint)
+        self.update_header()
+
+    def _clear_navigation_state(self):
+        self.marked.clear()
+        self.search_edit.blockSignals(True)
+        self.search_edit.clear()
+        self.search_edit.blockSignals(False)
 
     # --------------------------------------------------------------- paths
     def join(self, name):
@@ -843,6 +950,8 @@ class TcPanel(QWidget):
         return "/"
 
     def cd(self, path):
+        if path != self.path:
+            self._clear_navigation_state()
         self.path = path
         self.tabs[self.tab_index] = path
         self._rebuild_tabs()
@@ -874,9 +983,10 @@ class TcPanel(QWidget):
         a batch selected by the user.
         """
         row = self.table.rowAt(pos.y())
+        self.win.set_active(self.side)
+        self.table.setFocus()
         if row >= 0:
-            self.table.setCurrentCell(row, -1)
-            self.win.set_active(self.side)
+            self.table.setCurrentCell(row, 0)
 
         entry = self.selected_entry()
         menu = QMenu(self.table)
@@ -901,12 +1011,20 @@ class TcPanel(QWidget):
         add("HEX-просмотр", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
-        add("Копировать в другую панель (F5)", self.win.f5_copy, is_real_entry)
-        add("Переместить в другую панель (F6)", self.win.f6_move, is_real_entry)
+        add(
+            "Копировать в другую панель (F5)",
+            self.win.f5_copy,
+            self.win.facts["F5"].isEnabled(),
+        )
+        add(
+            "Переместить в другую панель (F6)",
+            self.win.f6_move,
+            self.win.facts["F6"].isEnabled(),
+        )
         add(
             "Переименовать", self.win.rename_selected, is_real_entry and can_write_image
         )
-        add("Удалить (F8)", self.win.f8_delete, is_real_entry and self.mode != "img")
+        add("Удалить (F8)", self.win.f8_delete, is_real_entry and can_write_image)
         add("Копировать путь", self.copy_selected_path, is_real_entry)
         menu.addSeparator()
         add("Новая папка (F7)", self.win.f7_mkdir, can_write_image)
@@ -948,6 +1066,7 @@ class TcPanel(QWidget):
 
     def tab_changed(self, idx):
         if 0 <= idx < len(self.tabs):
+            self._clear_navigation_state()
             self.tab_index = idx
             self.path = self.tabs[idx]
             self.refresh()
@@ -955,6 +1074,7 @@ class TcPanel(QWidget):
     def tab_closed(self, idx):
         if len(self.tabs) <= 1 or not (0 <= idx < len(self.tabs)):
             return
+        self._clear_navigation_state()
         self.tabs.pop(idx)
         self.tab_index = max(0, min(self.tab_index, len(self.tabs) - 1))
         self.path = self.tabs[self.tab_index]
@@ -1018,6 +1138,7 @@ class TcPanel(QWidget):
         if not data:
             return
         kind, value = data
+        self._clear_navigation_state()
         if kind == "local":
             self.win.release_volume(self)
             self.mode = "local"
@@ -1066,6 +1187,8 @@ class TcPanel(QWidget):
                         )
             except OSError as e:
                 hint = "ошибка чтения каталога: %s" % e
+        self.marked.intersection_update(e["name"] for e in self.entries)
+        self._listing_hint = hint
         self._sort_entries()
         self._fill(hint)
         self.update_header()
@@ -1108,12 +1231,15 @@ class TcPanel(QWidget):
         self.entries = dirs + files
 
     def on_header_clicked(self, col):
+        self.win.set_active(self.side)
         if col == self.sort_col:
             self.sort_rev = not self.sort_rev
         else:
             self.sort_col = col
             self.sort_rev = False
-        self.refresh()
+        self._sort_entries()
+        self._fill(self._listing_hint)
+        self.update_header()
 
     def _row_values(self, e):
         """The five cells of one row (name, type, size, date, attributes)."""
@@ -1146,13 +1272,35 @@ class TcPanel(QWidget):
     def _fill(self, hint=None):
         self.table.clearSpans()
         cursor_name = self.cursor_name()
+        visible = self.visible_entries()
+        empty = hint is not None or not visible
+        self.empty_state.setVisible(empty)
+        self.table.setVisible(not empty)
+        unopened = (
+            self.mode == "img" and self.provider is None and not self.win.image_path
+        )
+        self.empty_open.setVisible(unopened)
+        if empty:
+            if unopened:
+                title = "Откройте образ диска"
+                detail = "Raw-образы и дампы NAND/eMMC.\nCtrl+O — выбрать файл для просмотра."
+            elif hint:
+                title, detail = "Каталог недоступен", hint
+            elif self.search_edit.text().strip():
+                title, detail = (
+                    "Совпадений нет",
+                    "Измените фильтр или очистите его крестиком справа.",
+                )
+            else:
+                title, detail = (
+                    "Каталог пуст",
+                    "Здесь пока нет файлов. Backspace — на уровень вверх.",
+                )
+            self.empty_title.setText(title)
+            self.empty_hint.setText(detail)
         if hint is not None:
-            self.table.setRowCount(1)
-            it = QTableWidgetItem(hint)
-            it.setFlags(ItemIsEnabled)
-            it.setForeground(QBrush(tc_style.qcolor("text_dim")))
-            self.table.setItem(0, 0, it)
-            self.table.setSpan(0, 0, 1, len(COLUMNS))
+            self.table.setRowCount(0)
+            self.selection_changed()
             return
 
         rows = []
@@ -1161,7 +1309,7 @@ class TcPanel(QWidget):
             rows.append(
                 {"name": "..", "is_dir": True, "size": None, "date": "", "up": True}
             )
-        rows.extend(self.entries)
+        rows.extend(visible)
 
         marked_bg = QBrush(tc_style.qcolor("marked"))
         marked_fg = QBrush(tc_style.qcolor("marked_text"))
@@ -1178,6 +1326,13 @@ class TcPanel(QWidget):
                     # Keep the complete name available even when Qt elides
                     # it to fit a narrow panel or a high-DPI display.
                     it.setToolTip(text)
+                    it.setIcon(
+                        standard_icon(
+                            self, "SP_DirIcon" if e["is_dir"] else "SP_FileIcon"
+                        )
+                    )
+                else:
+                    it.setToolTip(text)
                 if c == 2 and not e.get("up"):
                     it.setTextAlignment(AlignRight | AlignVCenter)
                 if marked:
@@ -1189,7 +1344,11 @@ class TcPanel(QWidget):
                     it.setForeground(text_fg)
                 self.table.setItem(r, c, it)
 
-        self.table.setCurrentCell(self._row_of(cursor_name), -1)
+        row = self._row_of(cursor_name)
+        if row < 0 and rows:
+            row = 1 if rows[0].get("up") and len(rows) > 1 else 0
+        self.table.setCurrentCell(row, 0)
+        self.selection_changed()
 
     def cursor_name(self):
         row = self.table.currentRow()
@@ -1222,19 +1381,43 @@ class TcPanel(QWidget):
         self.tabbar.setTabText(self.tab_index, self.tab_text(self.path))
 
         active = self.win.active_side == self.side
-        self.path_edit.setStyleSheet(
-            "background:%s; color:%s; font-weight:bold; padding:1px 4px;"
-            % (
-                tc_style.color("accent") if active else tc_style.color("panel"),
-                "#ffffff" if active else tc_style.color("text"),
+        self.setProperty("active", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.lbl_title.setText(
+            "Образ диска" if self.mode == "img" else "Локальные файлы"
+        )
+        if self.mode == "img":
+            badge = (
+                "Не открыт"
+                if self.provider is None
+                else "Запись доступна" if self.writer is not None else "Только чтение"
             )
+            reason = (
+                self.write_reason
+                or "Изменения образа требуют подтверждения и резервной копии."
+            )
+        else:
+            badge, reason = (
+                "Локальный диск",
+                "Операции выполняются с файлами на этом компьютере.",
+            )
+        self.lbl_mode.setText(badge)
+        self.lbl_mode.setToolTip(reason)
+        self.path_edit.setStyleSheet(
+            "border:1px solid %s;" % tc_style.color("accent" if active else "border")
         )
-        self.lbl_space.setText(self._space_text())
+        space = self._space_text()
+        self.lbl_space.setText(space)
+        self.lbl_space.setToolTip(space)
         self.lbl_status.setText(self._status_text())
-        self.lbl_status.setStyleSheet(
-            "color:%s; padding:1px 4px;" % tc_style.color("text")
-        )
+        available = self.mode == "local" or self.provider is not None
+        self.btn_root.setEnabled(available)
+        self.btn_up.setEnabled(available and self.up_path() is not None)
+        self.search_edit.setEnabled(available)
+        self.path_edit.setEnabled(available)
         self.populate_drives()
+        self.selection_changed()
 
     def _update_sort_indicator(self):
         """Arrow in the header of the sorted column (Total Commander style)."""
@@ -1307,10 +1490,13 @@ class TcPanel(QWidget):
         marked = [e for e in self.entries if e["name"] in self.marked]
         if marked:
             return marked
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        selected = [self.entry_at(row) for row in rows]
+        selected = [entry for entry in selected if entry and not entry.get("up")]
+        if selected:
+            return selected
         e = self.selected_entry()
-        if e and not e.get("up"):
-            return [e]
-        return []
+        return [e] if e and not e.get("up") else []
 
     def toggle_mark(self, row):
         e = self.entry_at(row)
@@ -1324,7 +1510,7 @@ class TcPanel(QWidget):
         self.update_header()
 
     def mark_all(self):
-        self.marked = {e["name"] for e in self.entries}
+        self.marked = {e["name"] for e in self.visible_entries()}
         self._fill()
         self.update_header()
 
@@ -1334,12 +1520,14 @@ class TcPanel(QWidget):
         self.update_header()
 
     def invert_marks(self):
-        self.marked = {e["name"] for e in self.entries if e["name"] not in self.marked}
+        self.marked = {
+            e["name"] for e in self.visible_entries() if e["name"] not in self.marked
+        }
         self._fill()
         self.update_header()
 
     def mark_mask(self, mask, on=True):
-        for e in self.entries:
+        for e in self.visible_entries():
             hit = fnmatch.fnmatch(e["name"].lower(), mask.lower())
             if not hit:
                 continue
@@ -1834,7 +2022,20 @@ class MainWindow(QMainWindow):
         self.addAction(act_fs)
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
+        self._update_cmd_prompt()
         self._start_updater()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        compact = self.height() < 680
+        header = self.findChild(QWidget, "workspaceHeader")
+        if header is not None:
+            header.setVisible(not compact)
+        for panel in getattr(self, "panels", {}).values():
+            panel.layout().setSpacing(4 if compact else 8)
+            panel.lbl_space.setVisible(not compact)
+            panel.empty_hint.setVisible(not compact)
+            panel.table.apply_font()
 
     # ----------------------------------------------------------------- icon
     def _apply_app_icon(self):
@@ -2065,6 +2266,7 @@ class MainWindow(QMainWindow):
         if shortcut:
             act.setShortcut(QKeySequence(shortcut))
         act.setToolTip(tip or text)
+        act.setStatusTip(tip or text)
         act.triggered.connect(lambda *_: slot())
         self.addAction(act)
         return act
@@ -2072,8 +2274,19 @@ class MainWindow(QMainWindow):
     def _bind_fkeys(self):
         """F3..F8 as window-wide shortcuts (also the toolbar buttons)."""
         self.facts = {}
-        for key, _label in FKEYS:
-            act = QAction(self)
+        icons = (
+            "SP_FileDialogContentsView",
+            "SP_FileIcon",
+            "SP_DialogSaveButton",
+            "SP_ArrowRight",
+            "SP_FileDialogNewFolder",
+            "SP_TrashIcon",
+        )
+        for index, (key, label) in enumerate(FKEYS):
+            icon = icons[index]
+            act = QAction("%s %s" % (key, label), self)
+            act.setIcon(self._icon(icon))
+            act.setToolTip("%s (%s)" % (label, key))
             act.setShortcut(QKeySequence(key))
             act.triggered.connect(lambda *_a, k=key: self._press_fkey(k))
             self.addAction(act)
@@ -2082,7 +2295,8 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self):
         tb = QToolBar("Панель инструментов", self)
         tb.setMovable(False)
-        tb.setToolButtonStyle(TB_IconOnly)
+        tb.setObjectName("mainToolbar")
+        tb.setToolButtonStyle(TB_TextBesideIcon)
         tb.setIconSize(QSize(18, 18))
         self.addToolBar(tb)
         self._bind_fkeys()
@@ -2112,9 +2326,6 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_reload)
         tb.addAction(self.act_up)
         tb.addSeparator()
-        for key, _label in FKEYS:
-            tb.addAction(self.facts[key])
-        tb.addSeparator()
 
         self.act_pack = self._action(
             "Упаковать",
@@ -2130,19 +2341,8 @@ class MainWindow(QMainWindow):
             "SP_DriveHDIcon",
             "Распаковка архивов (не поддерживается)",
         )
-        tb.addAction(self.act_pack)
-        tb.addAction(self.act_unpack)
-        tb.addSeparator()
-
-        tb.addAction(
-            self._action(
-                "FTP",
-                lambda: self._unsupported("FTP-соединение"),
-                None,
-                "SP_DriveNetIcon",
-                "FTP-соединение (не поддерживается)",
-            )
-        )
+        self.act_pack.setEnabled(False)
+        self.act_unpack.setEnabled(False)
         tb.addAction(
             self._action(
                 "Настройки",
@@ -2173,7 +2373,7 @@ class MainWindow(QMainWindow):
 
         act_menu = QAction(self)
         act_menu.setShortcut(QKeySequence("F9"))
-        act_menu.triggered.connect(self.f9_menu)
+        act_menu.triggered.connect(lambda *_: self.f9_menu())
         self.addAction(act_menu)
 
         act_swap = QAction(self)
@@ -2190,6 +2390,11 @@ class MainWindow(QMainWindow):
         act_closetab.setShortcut(QKeySequence("Ctrl+W"))
         act_closetab.triggered.connect(lambda: self.active_panel().close_tab())
         self.addAction(act_closetab)
+        self._action(
+            "Фильтр каталога",
+            lambda: self.active_panel().search_edit.setFocus(),
+            "Ctrl+F",
+        )
 
     def _build_panels(self):
         self.panelL = TcPanel("L", self)
@@ -2199,6 +2404,8 @@ class MainWindow(QMainWindow):
             p.table.installEventFilter(self)
 
         self.splitter = QSplitter()
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(6)
         self.splitter.addWidget(self.panelL)
         self.splitter.addWidget(self.panelR)
         self.splitter.setStretchFactor(0, 1)
@@ -2206,8 +2413,11 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([500, 500])
 
     def _build_command_area(self):
-        self.cmd_prompt = QLabel("")
+        self.cmd_prompt = QLabel("Путь")
+        self.cmd_prompt.setObjectName("panelSpace")
         self.cmdline = QLineEdit()
+        self.cmdline.setObjectName("commandLine")
+        self.cmdline.setAccessibleName("Командная строка активной панели")
         self.cmdline.setPlaceholderText(
             "Командная строка: «cd <путь>» — перейти в каталог активной панели"
         )
@@ -2224,12 +2434,20 @@ class MainWindow(QMainWindow):
         fk_row.setContentsMargins(2, 0, 2, 2)
         fk_row.setSpacing(2)
         for key, label in FKEYS:
-            btn = QPushButton("%s %s" % (key, label))
+            short = {"F5": "Копировать", "F6": "Переместить", "F7": "Папка"}.get(
+                key, label
+            )
+            btn = QPushButton("%s  %s" % (key, short))
+            btn.setObjectName("dangerButton" if key == "F8" else "functionButton")
+            btn.setToolTip("%s (%s)" % (label, key))
+            btn.setAccessibleName("%s (%s)" % (label, key))
             btn.clicked.connect(lambda *_a, k=key: self._press_fkey(k))
             btn.setSizePolicy(SizePolicyExpanding, SizePolicyFixed)
             fk_row.addWidget(btn)
             self.fbtns.append(btn)
-        btn_exit = QPushButton("Alt+F4 Выход")
+        btn_exit = QPushButton("Выход")
+        btn_exit.setObjectName("functionButton")
+        btn_exit.setToolTip("Закрыть приложение (Alt+F4)")
         btn_exit.clicked.connect(self.close)
         btn_exit.setSizePolicy(SizePolicyExpanding, SizePolicyFixed)
         fk_row.addWidget(btn_exit)
@@ -2237,8 +2455,20 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         v = QVBoxLayout(central)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(2)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(8)
+        header = QWidget()
+        header.setObjectName("workspaceHeader")
+        header_row = QHBoxLayout(header)
+        header_row.setContentsMargins(6, 4, 6, 4)
+        brand = QLabel("MOUNT FILE")
+        brand.setObjectName("panelTitle")
+        header_row.addWidget(brand)
+        self.workspace_hint = QLabel("Образы дисков · просмотр и извлечение")
+        self.workspace_hint.setObjectName("panelSpace")
+        self.workspace_hint.setWordWrap(True)
+        header_row.addWidget(self.workspace_hint, 1)
+        v.addWidget(header)
         v.addWidget(self.splitter, 1)
         v.addLayout(cmd_row)
         v.addLayout(fk_row)
@@ -2289,11 +2519,8 @@ class MainWindow(QMainWindow):
         m_sel.addAction(self._action("Снять по маске -…", lambda: self._mask(False)))
 
         m_cmd = mb.addMenu("Команды")
-        for key, label in FKEYS:
-            act = QAction("%s %s" % (key, label), self)
-            act.setShortcut(QKeySequence(key))
-            act.triggered.connect(lambda *_a, k=key: self._press_fkey(k))
-            m_cmd.addAction(act)
+        for key, _label in FKEYS:
+            m_cmd.addAction(self.facts[key])
         m_cmd.addSeparator()
         m_cmd.addAction(self._action("Выход", self.close, "Alt+F4"))
 
@@ -2409,7 +2636,8 @@ class MainWindow(QMainWindow):
         for key, act in getattr(self, "theme_acts", {}).items():
             act.setChecked(key == name)
         for p in getattr(self, "panels", {}).values():
-            p.refresh()
+            p._fill(p._listing_hint)
+            p.update_header()
             p.table.apply_font()
         self.log_msg("Тема интерфейса: %s" % tc_style.THEME_LABEL.get(name, name))
 
@@ -2419,7 +2647,8 @@ class MainWindow(QMainWindow):
         tc_style.SETTINGS["font_size"] = size
         tc_style.apply_theme(QApplication.instance(), tc_style.theme())
         for p in self.panels.values():
-            p.refresh()
+            p._fill(p._listing_hint)
+            p.update_header()
             p.table.apply_font()
 
     def open_settings(self):
@@ -2988,6 +3217,11 @@ class MainWindow(QMainWindow):
         return self.panels["R" if self.active_side == "L" else "L"]
 
     def set_active(self, side):
+        if side not in self.panels:
+            return
+        if self.active_side == side:
+            self._sync_actions()
+            return
         self.active_side = side
         for p in self.panels.values():
             p.update_header()
@@ -3009,6 +3243,8 @@ class MainWindow(QMainWindow):
         left.tabs[left.tab_index] = r_path
         right.tabs[right.tab_index] = l_path
         left.path, right.path = r_path, l_path
+        left._clear_navigation_state()
+        right._clear_navigation_state()
         left._rebuild_tabs()
         right._rebuild_tabs()
         self.refresh_all()
@@ -3027,7 +3263,14 @@ class MainWindow(QMainWindow):
         p = self.active_panel()
         sep = os.sep if p.mode == "local" else "/"
         path = p.path if p.path.endswith(sep) else p.path + sep
-        self.cmd_prompt.setText("%s>" % path)
+        self.cmd_prompt.setText("Путь ›")
+        self.cmd_prompt.setToolTip(path)
+        self.cmdline.setToolTip("Активный каталог: %s" % path)
+        if self.image_path:
+            self.workspace_hint.setText(os.path.basename(self.image_path))
+            self.workspace_hint.setToolTip(self.image_path)
+        else:
+            self.workspace_hint.setText("Образы дисков · просмотр и извлечение")
         prefix = (
             "[%s] " % (self.image_path or "образ не открыт") if p.mode == "img" else ""
         )
@@ -3037,8 +3280,61 @@ class MainWindow(QMainWindow):
         self._loaded = loaded
         for p in self.panels.values():
             p.populate_drives()
-        for b in getattr(self, "fbtns", []):
-            b.setEnabled(True)
+        self._sync_actions()
+
+    def _sync_actions(self):
+        """Keep menus, shortcuts and buttons aligned with real capabilities."""
+        if not hasattr(self, "panels"):
+            return
+        panel, other = self.active_panel(), self.other_panel()
+        entry = panel.selected_entry()
+        available = panel.mode == "local" or panel.provider is not None
+        writable = available and (panel.mode == "local" or panel.writer is not None)
+        destination = other.mode == "local" or other.writer is not None
+        entries = panel.marked_entries() if available else []
+        can_copy = (
+            bool(entries) and destination and not (panel.mode == other.mode == "img")
+        )
+        is_file = bool(entry and not entry.get("is_dir") and not entry.get("up"))
+        editable = (
+            is_file
+            and writable
+            and (
+                (panel.mode == "local" and text_editor.is_text_file(entry["name"]))
+                or (
+                    os.path.splitext(entry["name"])[1].lower()
+                    in EDITABLE_TEXT_EXTENSIONS
+                    and int(entry.get("size") or 0) <= MAX_EDIT_BYTES
+                )
+            )
+        )
+        states = {
+            "F3": is_file and available,
+            "F4": editable,
+            "F5": can_copy,
+            "F6": can_copy and panel.mode == "local",
+            "F7": writable,
+            "F8": bool(entries) and writable,
+        }
+        reasons = {
+            "F3": "Выберите файл для просмотра",
+            "F4": "Выберите доступный для записи текстовый файл",
+            "F5": "Выберите файлы и доступную для записи другую панель",
+            "F6": "Перемещение поддерживается только из локальной панели",
+            "F7": "Источник недоступен или открыт только для чтения",
+            "F8": "Выберите файлы в доступной для записи панели",
+        }
+        for index, (key, label) in enumerate(FKEYS):
+            action = self.facts[key]
+            action.setEnabled(bool(states[key]))
+            tip = "%s (%s)" % (label, key) if states[key] else reasons[key]
+            action.setToolTip(tip)
+            action.setStatusTip(tip)
+            if index < len(getattr(self, "fbtns", [])):
+                self.fbtns[index].setEnabled(bool(states[key]))
+                self.fbtns[index].setToolTip(tip)
+        self.act_up.setEnabled(available and panel.up_path() is not None)
+        self.act_reload.setEnabled(available)
 
     def eventFilter(self, obj, e):
         if e.type() == QEvent_KeyPress and e.key() == Key_Tab:
@@ -3062,6 +3358,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Открыть образ", "Файл не найден:\n%s" % path)
             return False
         self.image_path = path
+        for panel in self.panels.values():
+            panel._clear_navigation_state()
         self.release_volume(self.panelL)
         self.release_volume(self.panelR)
         # The volume list is only a convenience: a broken partition table
@@ -3117,6 +3415,11 @@ class MainWindow(QMainWindow):
         """Mount one volume of the current image into `panel`."""
         if not self.image_path:
             return False
+        reset_navigation = getattr(panel, "_clear_navigation_state", None)
+        if reset_navigation is not None:
+            reset_navigation()
+        else:
+            panel.marked.clear()
         self.release_volume(panel)
         panel.write_reason = ""
         volume_size = next(
@@ -3778,6 +4081,48 @@ class MainWindow(QMainWindow):
 
     def _copy_local_to_local(self, panel, other, entries, delete_src):
         target_dir = other.path
+        collisions = []
+        for entry in entries:
+            src = panel.join(entry["name"])
+            dst = os.path.join(target_dir, entry["name"])
+            source, destination = os.path.realpath(src), os.path.realpath(dst)
+            same = source == destination
+            if os.path.exists(dst):
+                same = same or os.path.samefile(src, dst)
+            nested = False
+            if entry["is_dir"]:
+                try:
+                    nested = os.path.commonpath([source, destination]) in (
+                        source,
+                        destination,
+                    )
+                except ValueError:  # Different drives on Windows.
+                    pass
+            if same or nested:
+                QMessageBox.warning(
+                    self,
+                    "Копирование отменено",
+                    "Источник и назначение совпадают или вложены друг в друга.\n"
+                    "Выберите другой каталог назначения.\n\n%s" % dst,
+                )
+                return
+            if os.path.lexists(dst):
+                collisions.append(dst)
+        if collisions:
+            preview = "\n".join(collisions[:8])
+            if len(collisions) > 8:
+                preview += "\n… ещё %d" % (len(collisions) - 8)
+            answer = QMessageBox.warning(
+                self,
+                "Подтвердите замену",
+                "В назначении уже существуют объекты: %d.\n\n%s\n\n"
+                "Заменить их? Существующие папки будут заменены целиком."
+                % (len(collisions), preview),
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                return
         for e in entries:
             src = panel.join(e["name"])
             dst = os.path.join(target_dir, e["name"])
@@ -3913,8 +4258,10 @@ class MainWindow(QMainWindow):
         ret = QMessageBox.warning(
             self,
             "Удалить",
-            "Удалить %d объект(ов)?\n\n%s" % (len(entries), names),
+            "Удалить навсегда %d объект(ов), без корзины?\n\n%s"
+            % (len(entries), names),
             MB_Yes | MB_No,
+            MB_No,
         )
         if ret != MB_Yes:
             return
