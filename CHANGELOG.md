@@ -17,6 +17,11 @@ file only tracks the releases themselves.
   используется текущий writer, кодировка и переводы строк исходного файла
   сохраняются.
 
+- **RW capability matrix**: display filesystem names are normalized for loop
+  mounts (`HFS+`/FAT variants), writable formats use the existing OS backend,
+  and ISO9660/SquashFS/JFFS2/UBIFS now fail closed as explicit read-only
+  formats instead of attempting a misleading RW mount.
+
 - **Рефакторинг RW-слоя**: `mountfile_universal_rw.py`, `mountfile_rw_complete.py`
   и `mountfile_rw_v2.py` переехали в пакет `mountfile/rw/` (`universal.py`,
   `complete.py`, `v2.py`). В корне остались тонкие шимы с реэкспортом, поэтому

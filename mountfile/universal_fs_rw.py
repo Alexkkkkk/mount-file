@@ -52,6 +52,27 @@ except ImportError:
 
 log = logging.getLogger("mountfile.universal_fs_rw")
 
+# These formats can be inspected/carved, but they do not have a writable
+# filesystem semantics that a loop mount can safely provide.  Refusing a
+# mutation is preferable to mounting them with a misleading ``rw`` option and
+# reporting success after the kernel silently kept the image read-only.
+INHERENTLY_READ_ONLY_FS = frozenset(
+    {"iso9660", "iso", "squashfs", "jffs2", "ubifs"}
+)
+
+
+def _normalise_mount_fs(fs_type: str) -> str:
+    """Map detector display names to the names accepted by ``mount -t``."""
+    value = str(fs_type or "").strip().lower()
+    return {
+        "hfs+": "hfsplus",
+        "hfs": "hfsplus",
+        "fat12": "vfat",
+        "fat16": "vfat",
+        "fat32": "vfat",
+        "exfat": "exfat",
+    }.get(value, value)
+
 
 def _image_path_parent_name(path: str) -> tuple[str, str]:
     """Split a filesystem-in-image path using FAT/POSIX separators on every OS."""
@@ -1451,7 +1472,14 @@ class LoopMountRW(RWBackend):
 
     def __init__(self, image: Path, offset: int, fs_type: str):
         super().__init__(image, offset)
-        self.fs_type = fs_type
+        self.fs_type = _normalise_mount_fs(fs_type)
+
+    def _assert_writable(self) -> None:
+        if self.fs_type in INHERENTLY_READ_ONLY_FS:
+            raise RuntimeError(
+                "%s is an inherently read-only filesystem; mutation is disabled"
+                % self.fs_type
+            )
 
     def _mount_point(self) -> Path:
         if shutil.which("mount") is None:
@@ -1484,8 +1512,15 @@ class LoopMountRW(RWBackend):
             offset=self.offset,
             backend="loop-mount-rw",
             total_size=self.image.stat().st_size,
-            writable=sys.platform.startswith(("linux", "darwin")),
-            write_strategy="loop-mount",
+            writable=(
+                sys.platform.startswith(("linux", "darwin"))
+                and self.fs_type not in INHERENTLY_READ_ONLY_FS
+            ),
+            write_strategy=(
+                "read-only-format"
+                if self.fs_type in INHERENTLY_READ_ONLY_FS
+                else "loop-mount"
+            ),
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
@@ -1517,12 +1552,15 @@ class LoopMountRW(RWBackend):
         return result[0]
 
     def write_file(self, path: str, data: bytes) -> None:
+        self._assert_writable()
         self._do(lambda mp: (mp / path.lstrip("/")).write_bytes(data))
 
     def mkdir(self, path: str) -> None:
+        self._assert_writable()
         self._do(lambda mp: (mp / path.lstrip("/")).mkdir(parents=True))
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        self._assert_writable()
         def _do(mp: Path):
             p = mp / path.lstrip("/")
             if p.is_dir():
@@ -1533,6 +1571,7 @@ class LoopMountRW(RWBackend):
         self._do(_do)
 
     def rename(self, src: str, dst: str) -> None:
+        self._assert_writable()
         self._do(lambda mp: (mp / src.lstrip("/")).rename(mp / dst.lstrip("/")))
 
 
