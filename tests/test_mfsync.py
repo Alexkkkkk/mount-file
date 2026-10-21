@@ -522,6 +522,12 @@ def test_lock_rejects_concurrent_run(repo):
         pass
 
 
+def test_pid_is_running_current_process():
+    # In particular on Windows, probing pid 0 with os.kill may terminate the
+    # process. The lock check must use a non-destructive process query.
+    assert M._pid_is_running(os.getpid()) is True
+
+
 def test_lock_keeps_live_old_lock(repo):
     first = M._lock(str(repo))
     first.__enter__()
