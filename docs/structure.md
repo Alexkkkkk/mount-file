@@ -37,15 +37,16 @@
 
 ## GitHub Actions
 
-20 workflow — это осознанно много, но у каждого своя зона ответственности.
+19 workflow — у каждого своя зона ответственности; `dfir-quality.yml`
+удалён, потому что полностью дублировал `ci.yml` (там уже есть и матрица ОС,
+и coverage).
 
 | Workflow | Триггер | Роль |
 | --- | --- | --- |
-| `ci.yml` | push/PR в `main` | основной прогон тестов |
+| `ci.yml` | push/PR в `main` | основной прогон тестов: 3 ОС × Python 3.10/3.11/3.12, coverage |
 | `quality.yml` | push/PR | ruff / формат / метрики качества |
 | `security.yml` | push/PR + cron | сканеры безопасности |
 | `codeql.yml` | push/PR + cron | CodeQL-анализ |
-| `dfir-quality.yml` | push/PR + ручной | матрица DFIR-тестов |
 | `docs.yml` | push/PR + ручной | сборка mkdocs |
 | `docker.yml` | push/PR + ручной | сборка образа |
 | `deploy.yml` | push в `main`, теги | публикация |
@@ -84,3 +85,15 @@ make lint                       # ruff: E9,F63,F7,F82
 python -m pytest tests/ -q      # полный набор
 python -m compileall -q mountfile main.py mountfile.py
 ```
+
+## Известная проблема ветки `main`
+
+В *branch protection* для `main` среди обязательных статусов остался
+`Tests (ubuntu-latest, py3.8)` — чек, который больше не существует: матрица
+py3.8 удалена из `ci.yml`. Такой статус никогда не отчитается, поэтому гейт
+формально закрыт для всех, у кого нет прав администратора
+(`enforce_admins: false` сейчас позволяет обойти его только владельцу).
+
+Лечение: Settings → Branches → правило для `main` → Required status checks →
+удалить `Tests (ubuntu-latest, py3.8)`. Список обязательных чеков должен
+содержать только те имена, которые реально печатает `ci.yml` и `quality.yml`.

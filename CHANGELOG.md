@@ -6,6 +6,19 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Рефакторинг RW-слоя**: `mountfile_universal_rw.py`, `mountfile_rw_complete.py`
+  и `mountfile_rw_v2.py` переехали в пакет `mountfile/rw/` (`universal.py`,
+  `complete.py`, `v2.py`). В корне остались тонкие шимы с реэкспортом, поэтому
+  `[project.scripts]`, внешние скрипты и тесты работают без изменений.
+  Импортировать новый код следует из `mountfile.rw.*`.
+- **CI**: удалён `dfir-quality.yml` — он дублировал `ci.yml`; macos-latest и
+  Python 3.11 перенесены в матрицу `ci.yml`.
+- **Документация**: в `docs/ai.md` зафиксировано разделение
+  `ai_format_advisor` (только метаданные, используется GUI) и
+  `ai_format_advisor_v2` (мульти-гипотезы + LLM, пока только тесты);
+  в `docs/structure.md` добавлен раздел про устаревший обязательный чек
+  `Tests (ubuntu-latest, py3.8)`.
+
 - Total Commander mode: F4 now edits bounded text files and saves changes into
   writable FAT32 or ext2/3/4 volumes. ext writes use a temporary filesystem
   extent, read-back/SHA-256 verification, a rollback snapshot, and a persistent
