@@ -10,13 +10,18 @@ python main.py volumes dump.img
 
 ## Команды
 
-### Read-only DFIR-команды
+### DFIR-команды
 
 ```bash
 python -m mountfile grep dump.img "password=" --encoding utf-8
 python -m mountfile hash dump.img
 python -m mountfile timeline dump.img --csv timeline.csv
 python -m mountfile timestomp dump.img --csv timeline.csv
+python -m mountfile search dump.img "credential" --files --max-results 100
+python -m mountfile yara-scan dump.img --rules rules.yar --targets files unallocated
+python -m mountfile timestomp-scan dump.img
+python -m mountfile timeline-build dump.img --csv timeline.csv
+python -m mountfile slack-extract dump.img --output ./slack
 python -m mountfile unallocated-scan dump.img --ranges ranges.json
 python -m mountfile slack dump.img --slack-only \
     --last-cluster-offset 0x400000 --file-size 5000 --cluster-size 4096 \
@@ -24,19 +29,23 @@ python -m mountfile slack dump.img --slack-only \
 ```
 
 `grep` возвращает ограниченные byte offsets и контекст, `hash` вычисляет
-SHA-256, а `timeline` и `timestomp` работают с CSV, полученным внешним
-коллектором. Эти команды не изменяют исходный образ. Полноценный
-filesystem-aware collector, YARA pipeline, carving и slack discovery пока не
-являются частью package CLI.
+SHA-256, а `timeline`/`timestomp` принимают CSV внешнего коллектора. Отдельные
+`timeline-build`, `timeline-query`, `search`, `yara-scan`, `timestomp-scan` и
+`slack-extract` — filesystem-aware команды package CLI; они требуют доступного
+filesystem backend (обычно `pytsk3`/`libtsk`), а для YARA дополнительно нужен
+`yara-python`.
+`yara-scan` проверяет filesystem-файлы и/или нераспределённые области с учётом
+`--targets`; это не заменяет полноценное восстановление файлов и не обещает
+корректный allocation map для каждой ФС.
 
 `unallocated-scan` читает только явно переданные ranges. `slack --slack-only`
 принимает уже подтверждённые offset последнего кластера, логический
 размер файла и размер кластера и не разрешает путь файла и cluster
 chain: это должен сделать вызывающий код.
 
-Отдельные `mountfile_dfir.py` и `mountfile_grep.py` сохраняются как
-экспериментальные standalone-инструменты с расширенными сценариями. Их наличие
-не означает полноценного forensic recovery или гарантии chain of custody.
+GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`) использует реестр этих
+подкоманд напрямую. Все 26 команд имеют в интерфейсе контекстную справку из
+того же CLI parser; аргументы передаются по одному на строку, без shell.
 
 | Команда | Назначение | Запись в образ |
 |---|---|---:|
@@ -51,6 +60,18 @@ chain: это должен сделать вызывающий код.
 | `autopick` | выбрать рабочий том по проверяемым кандидатам | нет |
 | `decode` | расшифровать RT809H MST/MTK-дамп встроенной таблицей | создаёт новый файл |
 | `split` | разбить дамп по секции `[PARTITIONS]` файла `udev` | создаёт файлы в каталоге вывода |
+| `grep` | поиск строки/regex в байтах сырого образа | нет |
+| `hash` | SHA-256 образа | нет |
+| `timeline` / `timestomp` | просмотр timeline CSV / проверка аномалий | нет |
+| `timeline-export` | нормализация timestamp CSV в UTC | создаёт CSV |
+| `yara` | YARA-сканирование по исходникам правил | нет |
+| `search` | поиск в байтах образа или содержимом файлов | нет |
+| `yara-scan` | YARA по файлам и/или unallocated ranges | нет |
+| `unallocated-scan` | сигнатурный поиск только в заданных JSON ranges | нет |
+| `timestomp-scan` | сбор и анализ временных меток из образа | нет |
+| `timeline-build` / `timeline-query` | построить/запросить timeline | создаёт SQLite/CSV при передаче output path |
+| `slack-extract` | извлечь slack хвосты файлов по найденным extent | создаёт файлы в output-каталоге |
+| `live-diff` | сравнить два образа и сформировать Markdown-отчёт | создаёт отчёт при `-o` |
 | `slack` | slack последнего кластера по явно заданному extent | нет; файл только через `--output`, без перезаписи |
 
 Общие аргументы целевых команд (`volumes`, `info`, `ls`, `get`, `put`, `mkdir`,
