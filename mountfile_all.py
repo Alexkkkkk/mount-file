@@ -477,8 +477,8 @@ def print_cheatsheet() -> None:
     python -m mountfile timestomp-scan <img> [--skew 2.0] [--json]
     python -m mountfile slack-extract <img> -o slack/
     python -m mountfile live-diff before.img after.img -o diff.md
-    python main.py unallocated-scan <img> --ranges ranges.json
-    python main.py slack <img> --slack-only \\
+    python -m mountfile unallocated-scan <img> --ranges ranges.json
+    python -m mountfile slack <img> --slack-only \\
       --last-cluster-offset 0x1000 --file-size 123 \\
       --cluster-size 4096 -o slack.bin
     python main.py --check-updates       # 10=есть апдейт, 0=нет

@@ -113,6 +113,7 @@ def test_slack_cli_extracts_only_explicit_slack_and_never_overwrites(
         "offset": 3,
         "length": 5,
         "has_slack": True,
+        "created": True,
         "output": str(output),
     }
 
@@ -141,4 +142,15 @@ def test_slack_cli_reports_empty_slack_without_creating_output(tmp_path, capsys)
         "offset": None,
         "length": 0,
         "has_slack": False,
+        "created": False,
     }
+    # A requested output is not materialised when there is nothing to write.
+    output = tmp_path / "no-slack.bin"
+    assert main(args + ["--output", str(output)]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "offset": None,
+        "length": 0,
+        "has_slack": False,
+        "created": False,
+    }
+    assert not output.exists()

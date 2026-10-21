@@ -536,11 +536,13 @@ def cmd_slack(args):
         "offset": result.offset,
         "length": len(result.bytes),
         "has_slack": result.has_slack,
+        "created": False,
     }
-    if args.output is not None:
+    if args.output is not None and result.has_slack:
         # Exclusive creation prevents accidental replacement of existing data.
         with open(args.output, "xb") as stream:
             stream.write(result.bytes)
+        summary["created"] = True
         summary["output"] = args.output
     print(json.dumps(summary, ensure_ascii=False))
     return OK
