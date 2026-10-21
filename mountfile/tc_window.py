@@ -320,22 +320,30 @@ class _ExtPanelWriter:
         return self.backend.filesystem_size
 
 
-def _decode_editable_text(data):
+def _decode_editable_text(data, encoding=None):
     """Return normalized text and its encoding/newline metadata, or None."""
     if len(data) > 2 * 1024 * 1024 or b"\x00" in data:
         return None
     bom = data.startswith(b"\xef\xbb\xbf")
     content = data[3:] if bom else data
-    encoding = "utf-8"
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        encoding = "cp1251"
+    if encoding is None:
+        encoding = "utf-8"
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            encoding = "cp1251"
+            try:
+                text = content.decode(encoding)
+            except UnicodeDecodeError:
+                return None
+    else:
+        if encoding not in ("utf-8", "cp1251", "cp866"):
+            return None
         try:
             text = content.decode(encoding)
         except UnicodeDecodeError:
             return None
-    newline = "\r\n" if b"\r\n" in data else "\n"
+    newline = "\r\n" if b"\r\n" in data else "\r" if b"\r" in data else "\n"
     return text.replace("\r\n", "\n").replace("\r", "\n"), encoding, bom, newline
 
 
@@ -3181,7 +3189,8 @@ class MainWindow(QMainWindow):
         Windows - Блокнот (``notepad.exe``), macOS - ``open -t``, Linux -
         ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе первый
         найденный редактор, иначе ``xdg-open``. Файл внутри образа сначала
-        извлекается во временный каталог, поэтому сам образ не меняется.
+        извлекается во временный каталог; после закрытия редактора изменённая
+        копия предлагается к записи обратно в образ.
         """
         p = panel or self.active_panel()
         entry = p.selected_entry()
@@ -3195,19 +3204,37 @@ class MainWindow(QMainWindow):
     def _open_text_entry(self, panel, entry):
         """Открыть `entry` в редакторе и записать результат в журнал окна."""
         name = entry["name"]
+        original = None
         try:
             if panel.mode == "img":
                 if panel.provider is None:
                     raise RuntimeError("том не открыт")
-                target, encoding = text_editor.prepare_image_text(
-                    panel.provider, panel.join(name), self._text_temp_dir()
+                full = panel.join(name)
+                if int(entry.get("size") or 0) > MAX_EDIT_BYTES:
+                    raise ValueError("файл превышает лимит редактора 2 MiB")
+                original = panel.provider.read_file(full)
+                _, encoding = text_editor.decode_for_editor(original)
+                if encoding == "binary" or _decode_editable_text(
+                    original, encoding
+                ) is None:
+                    raise ValueError(
+                        "файл бинарный или превышает лимит редактора 2 MiB"
+                    )
+                target, prepared_encoding = text_editor.prepare_image_text(
+                    panel.provider,
+                    full,
+                    self._text_temp_dir(),
+                    data=original,
                 )
+                if prepared_encoding != encoding:
+                    raise RuntimeError("не удалось согласовать кодировку временной копии")
                 note = "временная копия из образа: %s" % target
+                argv = text_editor.open_in_editor(target)
             else:
                 target = panel.join(name)
                 encoding = "utf-8"
                 note = str(target)
-            argv = text_editor.open_in_editor(target)
+                argv = text_editor.open_in_editor(target)
         except Exception as e:
             QMessageBox.critical(self, "Блокнот", str(e))
             self.log_msg("Блокнот: не удалось открыть %s: %s" % (name, e))
@@ -3216,6 +3243,81 @@ class MainWindow(QMainWindow):
             "Блокнот: %s -> %s (%s; кодировка %s)"
             % (name, " ".join(argv), note, encoding)
         )
+        if panel.mode == "img":
+            answer = QMessageBox.question(
+                self,
+                "Сохранить изменения в образ",
+                "Сохраните файл в редакторе и закройте его. Затем вернитесь сюда "
+                "и нажмите «Да», чтобы проверить копию и записать изменения "
+                "в образ. Перед записью будет создана резервная копия.\n\n%s"
+                % target,
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer == MB_Yes:
+                self._import_image_text_copy(panel, entry, target, original, encoding)
+            else:
+                self.log_msg("Копия редактора не импортирована: %s" % name)
+
+    def _import_image_text_copy(self, panel, entry, target, original, encoding):
+        """Safely import the confirmed external-editor copy into its image."""
+        try:
+            before = os.stat(target)
+            if before.st_size > MAX_EDIT_BYTES:
+                raise ValueError("редактор сохранил файл больше лимита 2 MiB")
+            with open(target, "rb") as stream:
+                edited = stream.read()
+            after = os.stat(target)
+            if (before.st_size, before.st_mtime_ns) != (
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise RuntimeError("временная копия ещё изменяется; импорт отменён")
+            decoded = _decode_editable_text(edited)
+            if decoded is None:
+                decoded = _decode_editable_text(edited, encoding)
+            if decoded is None:
+                raise ValueError("редактор сохранил бинарные данные")
+            text = decoded[0]
+            full = panel.join(entry["name"])
+            metadata = _decode_editable_text(original, encoding)
+            if metadata is None:
+                raise ValueError("исходный файл больше не является текстовым")
+            _, _, bom, newline = metadata
+            updated = _encode_editable_text(text, encoding, bom, newline)
+            if updated == original:
+                self.log_msg("Копия редактора не содержит изменений: %s" % full)
+                return
+            current = panel.provider.read_file(full)
+            if current != original:
+                raise RuntimeError(
+                    "файл в образе изменился после открытия редактора; "
+                    "обновление отменено во избежание потери изменений"
+                )
+            if panel.writer is None:
+                raise RuntimeError("том открыт только для чтения: writer недоступен")
+            if not self._backup_before_write(panel):
+                return
+            if panel.provider.read_file(full) != original:
+                raise RuntimeError(
+                    "файл в образе изменился во время резервного копирования; "
+                    "запись отменена"
+                )
+            if panel.writer is None:
+                raise RuntimeError("том открыт только для чтения: writer недоступен")
+            panel.writer.write_file(panel.path, entry["name"], updated)
+            panel.refresh()
+            self.log_msg(
+                "Изменения из Блокнота записаны в образ: %s (%d байт)"
+                % (full, len(updated))
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Сохранение из Блокнота не удалось",
+                "Образ не изменён или операция остановлена:\n%s" % exc,
+            )
+            self.log_msg("Блокнот: сохранение в образ не удалось: %s" % exc)
 
     def f3_view(self):
         """F3 / Enter: текстовый файл идёт в редактор, остальное в HEX."""
@@ -3250,11 +3352,7 @@ class MainWindow(QMainWindow):
         self.log_msg("Просмотр: %s" % entry["name"])
 
     def f4_edit(self):
-        """F4: правка текстового файла в системном редакторе (Блокнот).
-
-        Локальный файл открывается как есть. Файл внутри образа открывается
-        временной копией, а сам образ меняется только импортом через F5.
-        """
+        """F4: edit image text in-app; open local text in the system editor."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir") or entry.get("up"):

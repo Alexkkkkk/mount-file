@@ -11,6 +11,12 @@ file only tracks the releases themselves.
   размера скачивания 1 GiB и атомарная загрузка через `.part` с удалением
   повреждённых остатков после ошибки.
 
+- **Сохранение из Блокнота**: текстовые файлы, открытые из образа через
+  `Enter`/`F3`, можно импортировать обратно после сохранения и закрытия редактора
+  с явным подтверждением в Mount File. Перед записью создаётся backup,
+  используется текущий writer, кодировка и переводы строк исходного файла
+  сохраняются.
+
 - **RW capability matrix**: display filesystem names are normalized for loop
   mounts (`HFS+`/FAT variants), writable formats use the existing OS backend,
   and ISO9660/SquashFS/JFFS2/UBIFS now fail closed as explicit read-only
