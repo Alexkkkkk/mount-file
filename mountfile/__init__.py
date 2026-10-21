@@ -9,4 +9,4 @@ facade: native FAT32, ext2/3/4 via e2fsprogs/debugfs, NTFS via ntfs-3g, and
 other detected filesystems through an explicitly mounted RW backend.
 """
 
-__version__ = "1.49.1"
+__version__ = "1.50.0"
