@@ -6,10 +6,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-# The portable CLI test matrix deliberately runs without Qt. Match the other
-# GUI test modules: import the compatibility layer first so a missing system
-# Qt runtime is reported as a skip, not as a collection-time failure.
-pytest.importorskip("mountfile.qt_compat", reason="Qt bindings are not installed")
+# The portable test matrix deliberately runs without Qt. Importing the
+# compatibility layer can fail with ImportError either because a binding is
+# absent or because its system libraries (for example libEGL) are absent.
+try:
+    from mountfile.qt_compat import QApplication, QMessageBox
+except ImportError as exc:
+    pytest.skip("Qt bindings are not usable: %s" % exc, allow_module_level=True)
 
 from mountfile import cli
 from mountfile.gui_cli import (
@@ -20,7 +23,6 @@ from mountfile.gui_cli import (
     CommandCenterDialog,
     _BoundedOutput,
 )
-from mountfile.qt_compat import QApplication, QMessageBox
 
 
 @pytest.fixture(scope="module")
