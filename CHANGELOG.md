@@ -6,6 +6,11 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Автообновление**: исправлен выбор Win7-сборки, когда generic `.exe` шёл
+  первым в GitHub Release; добавлена поддержка GitHub asset `digest`, лимит
+  размера скачивания 1 GiB и атомарная загрузка через `.part` с удалением
+  повреждённых остатков после ошибки.
+
 - **Рефакторинг RW-слоя**: `mountfile_universal_rw.py`, `mountfile_rw_complete.py`
   и `mountfile_rw_v2.py` переехали в пакет `mountfile/rw/` (`universal.py`,
   `complete.py`, `v2.py`). В корне остались тонкие шимы с реэкспортом, поэтому

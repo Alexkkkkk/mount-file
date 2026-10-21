@@ -118,6 +118,7 @@ USER_AGENT = "MountFile-Updater/1.0 (+https://github.com/Alexkkkkk/mount-file)"
 TIMEOUT = 8  # секунд: проверка не должна задерживать старт
 DOWNLOAD_TIMEOUT = 90
 CHUNK = 64 * 1024
+MAX_DOWNLOAD_SIZE = 1024 * 1024 * 1024
 
 _TRUE = ("1", "true", "yes", "on", "да")
 
@@ -194,7 +195,19 @@ def _asset_score(name):
             return -1
         score = 100 if low == "mountfile.exe" else 60
         win7_asset = "win7" in low or "win-7" in low or "windows7" in low
-        score += 40 if win7_asset == _on_windows7() else 0
+        # Releases contain generic, Win7 and Win10 executables.  The previous
+        # score gave generic.exe and win7.exe the same score on Windows 7, so
+        # the selected build depended on GitHub asset ordering.
+        if _on_windows7():
+            score += 100 if win7_asset else 0
+        elif win7_asset:
+            score -= 20
+        if not _on_windows7() and any(
+            marker in low for marker in ("win10", "win-10", "windows10")
+        ):
+            # Keep the generic binary preferred on modern Windows; it is the
+            # compatibility build used by the existing release contract.
+            score += 20
         return score
     if sys.platform == "darwin":
         return 80 if any(k in low for k in ("macos", "darwin", "osx", "mac")) else -1
@@ -241,6 +254,13 @@ def fetch_sha256(release, asset, timeout=TIMEOUT):
     """sha256 из соседнего asset-а ``<имя>.sha256`` (None, если его нет)."""
     if not asset:
         return None
+    # GitHub now exposes the digest directly on release assets.  Prefer it to
+    # an extra sidecar request, while retaining sidecar compatibility with old
+    # releases and private mirrors.
+    digest = str(asset.get("digest") or "")
+    direct = re.search(r"\b([0-9a-fA-F]{64})\b", digest)
+    if direct:
+        return direct.group(1).lower()
     wanted = ((asset.get("name") or "") + ".sha256").lower()
     for other in (release or {}).get("assets") or []:
         if (other.get("name") or "").lower() == wanted:
@@ -289,25 +309,38 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, name)
     total = int(asset.get("size") or 0)
+    if total > MAX_DOWNLOAD_SIZE:
+        raise OSError("обновление слишком большое: %d байт" % total)
+    partial = dest + ".part"
     got = 0
-    with _request(asset.get("browser_download_url"), timeout) as resp, open(
-        dest, "wb"
-    ) as fh:
-        while True:
-            chunk = resp.read(CHUNK)
-            if not chunk:
-                break
-            fh.write(chunk)
-            got += len(chunk)
-            if progress:
-                # -1 = размер неизвестен (нет Content-Length): индикатор
-                # переходит в режим «занят» вместо процентов
-                progress(min(99, int(got * 100 / total)) if total else -1)
-    if total and got != total:
-        raise OSError("скачано %d из %d байт" % (got, total))
-    if progress:
-        progress(100)
-    return dest, got
+    try:
+        with _request(asset.get("browser_download_url"), timeout) as resp, open(
+            partial, "wb"
+        ) as fh:
+            while True:
+                chunk = resp.read(CHUNK)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > MAX_DOWNLOAD_SIZE:
+                    raise OSError("обновление превышает лимит размера")
+                fh.write(chunk)
+                if progress:
+                    # -1 = размер неизвестен (нет Content-Length): индикатор
+                    # переходит в режим «занят» вместо процентов
+                    progress(min(99, int(got * 100 / total)) if total else -1)
+        if total and got != total:
+            raise OSError("скачано %d из %d байт" % (got, total))
+        os.replace(partial, dest)
+        if progress:
+            progress(100)
+        return dest, got
+    except Exception:
+        try:
+            os.unlink(partial)
+        except OSError:
+            pass
+        raise
 
 
 # --------------------------------------------------------------- установка

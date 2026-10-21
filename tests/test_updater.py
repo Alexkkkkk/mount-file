@@ -101,6 +101,27 @@ def test_asset_score_linux(monkeypatch):
     assert updater._asset_score("MountFile.exe") == -1
 
 
+def test_select_asset_prefers_win7_build_even_when_generic_is_first(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setattr(updater, "_on_windows7", lambda: True)
+    release = _release(
+        "v9.9.9",
+        [
+            ("MountFile.exe", b"generic"),
+            ("MountFile-win7-x64.exe", b"win7"),
+            ("MountFile-win7-x64.exe.sha256", b"checksum"),
+        ],
+    )
+    assert updater.select_asset(release)["name"] == "MountFile-win7-x64.exe"
+
+
+def test_fetch_sha256_prefers_github_asset_digest():
+    payload = b"binary"
+    digest = updater.hashlib.sha256(payload).hexdigest()
+    asset = {"name": "MountFile-linux-x86-64", "digest": "sha256:%s" % digest}
+    assert updater.fetch_sha256({"assets": [asset]}, asset) == digest
+
+
 def test_select_asset_returns_none_without_match(monkeypatch):
     monkeypatch.setattr(updater.sys, "platform", "linux")
     release = _release("v9.9.9", [("MountFile.exe", b"x")])
@@ -190,6 +211,8 @@ def test_download_detects_truncated_file(tmp_path, monkeypatch):
         pass
     else:  # pragma: no cover
         raise AssertionError("неполная загрузка должна считаться ошибкой")
+    assert not (tmp_path / "MountFile.exe").exists()
+    assert not (tmp_path / "MountFile.exe.part").exists()
 
 
 def test_sha256_file(tmp_path):
