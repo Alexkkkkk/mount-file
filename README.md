@@ -29,11 +29,16 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 | | |
 |---|---|
-| **Актуальный релиз** | [последняя версия на GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases/latest) (к каждому `.exe` приложен `.sha256`) |
+| **Актуальный релиз** | [v1.48.1](https://github.com/Alexkkkkk/mount-file/releases/latest) (к каждому `.exe` приложен `.sha256`) |
 | **Документация** | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
-| **Версия в репозитории** | `1.26.0` (`mountfile/__init__.py`, `pyproject.toml`) |
+| **Версия в файлах репозитория** | `1.26.0` (`mountfile/__init__.py`, `pyproject.toml`) — не совпадает с последним тегом |
 | **Лицензия** | [MIT](LICENSE) |
 | **Платформы** | Windows 10/11, Windows 7 (Python 3.8 + PyQt5), Linux, macOS |
+
+> **Про версию.** В файлах репозитория указано `1.26.0` (`mountfile/__init__.py`,
+> `pyproject.toml`), а последний релизный тег — `v1.48.1`; workflow
+> `version-bump.yml` при этом завершается успешно. Расхождение не скрывается:
+> ориентируйтесь на тег релиза, а не на строку версии в файле.
 
 > **Статус проекта.** Issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
 > это roadmap, а не заявление о готовой forensic-платформе. Штатно
