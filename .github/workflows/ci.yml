@@ -19,7 +19,7 @@ concurrency:
 jobs:
   tests:
     if: ${{ github.event_name != 'schedule' }}
-    name: Tests (${{ matrix.os }}, py${{ matrix.python }})
+    name: ${{ matrix.check_name }}
     timeout-minutes: 30
     runs-on: ${{ matrix.os }}
     strategy:
@@ -27,8 +27,34 @@ jobs:
       matrix:
         # macos-latest и 3.11 пришли из удалённого dfir-quality.yml:
         # это было единственное, что тот workflow добавлял к ci.yml.
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+            check_name: "test (3.10)"
+          - os: ubuntu-latest
+            python: "3.11"
+            check_name: "test (3.11)"
+          - os: ubuntu-latest
+            python: "3.12"
+            check_name: "test (3.12)"
+          - os: windows-latest
+            python: "3.10"
+            check_name: "Tests (windows-latest, py3.10)"
+          - os: windows-latest
+            python: "3.11"
+            check_name: "Tests (windows-latest, py3.11)"
+          - os: windows-latest
+            python: "3.12"
+            check_name: "Tests (windows-latest, py3.12)"
+          - os: macos-latest
+            python: "3.10"
+            check_name: "Tests (macos-latest, py3.10)"
+          - os: macos-latest
+            python: "3.11"
+            check_name: "Tests (macos-latest, py3.11)"
+          - os: macos-latest
+            python: "3.12"
+            check_name: "Tests (macos-latest, py3.12)"
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -63,6 +89,23 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  # Keep the legacy protected context while tests run only once in the matrix.
+  # It fails closed unless the complete matrix, including Ubuntu/Python 3.12, passes.
+  ubuntu-py312-compat:
+    name: Tests (ubuntu-latest, py3.12)
+    needs: [tests]
+    if: ${{ always() && github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    env:
+      TEST_MATRIX_RESULT: ${{ needs.tests.result }}
+    steps:
+      - name: Preserve the protected legacy status context
+        run: |
+          if [ "$TEST_MATRIX_RESULT" != 'success' ]; then
+            echo "::error::The consolidated test matrix ended with $TEST_MATRIX_RESULT"
+            exit 1
+          fi
 
   integration:
     if: ${{ github.event_name != 'schedule' }}
@@ -177,6 +220,31 @@ jobs:
           python -c "import mountfile.qt_compat as q; assert q.QT6, 'expected PyQt6'; print('qt_compat OK, QT6 =', q.QT6)"
           python -c "from mountfile.mainwindow import MainWindow; from mountfile.hexview import HexView; print('GUI import OK')"
 
+  gui:
+    if: ${{ github.event_name != 'schedule' }}
+    name: gui smoke test (offscreen)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+      - name: Install GUI smoke-test dependencies
+        run: |
+          python -m pip install --upgrade pip pytest PyQt6
+          python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0'
+      - name: Run focused headless GUI smoke tests
+        run: python -m pytest tests/test_gui_smoke.py -v
+
 
   nightly:
     name: Nightly Windows test and build
@@ -224,20 +292,22 @@ jobs:
 
   ci-gate:
     name: CI-Gate
-    needs: [tests, integration, build, gui-import]
+    needs: [tests, ubuntu-py312-compat, integration, build, gui-import, gui]
     if: ${{ always() && github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
       TESTS: ${{ needs.tests.result }}
+      UBUNTU_PY312: ${{ needs.ubuntu-py312-compat.result }}
       INTEGRATION: ${{ needs.integration.result }}
       BUILD: ${{ needs.build.result }}
       GUI_IMPORT: ${{ needs.gui-import.result }}
+      GUI: ${{ needs.gui.result }}
     steps:
       - name: Require every CI stage to succeed
         run: |
           set -euo pipefail
-          for result in "$TESTS" "$INTEGRATION" "$BUILD" "$GUI_IMPORT"; do
+          for result in "$TESTS" "$UBUNTU_PY312" "$INTEGRATION" "$BUILD" "$GUI_IMPORT" "$GUI"; do
             if [ "$result" != 'success' ]; then
               echo "::error::A required CI stage ended with $result"
               exit 1

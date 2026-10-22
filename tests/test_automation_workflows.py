@@ -51,7 +51,14 @@ def test_ci_gate_accounts_for_every_build_and_test_stage():
     assert "name: CI-Gate" in text
     assert "always()" in text
     assert "github.event_name != 'schedule'" in text
-    for job in ("tests", "integration", "build", "gui-import"):
+    for job in (
+        "tests",
+        "ubuntu-py312-compat",
+        "integration",
+        "build",
+        "gui-import",
+        "gui",
+    ):
         assert "needs.%s.result" % job in text
     assert "exit 1" in text
 
@@ -190,11 +197,24 @@ def test_nightly_build_is_a_dedicated_job_in_main_ci():
 def test_codeql_shares_the_security_workflow_with_narrow_permissions():
     assert not (ROOT / ".github" / "workflows" / "codeql.yml").exists()
     text = workflow("security.yml")
-    codeql = text.split("  codeql:", 1)[1].split("  dependency-review:", 1)[0]
-    assert "github/codeql-action/init@" in codeql
-    assert "github/codeql-action/analyze@" in codeql
-    assert "security-events: write" in codeql
+    analyze = text.split("  analyze:", 1)[1].split("  dependency-review:", 1)[0]
+    assert "name: analyze" in analyze
+    assert "github/codeql-action/init@" in analyze
+    assert "github/codeql-action/analyze@" in analyze
+    assert "security-events: write" in analyze
     assert "security-events: write" not in text.split("jobs:", 1)[0]
+
+
+def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs():
+    ci = workflow("ci.yml")
+    for context in ("test (3.10)", "test (3.11)", "test (3.12)"):
+        assert f'check_name: "{context}"' in ci
+    assert 'name: Tests (ubuntu-latest, py3.12)' in ci
+    assert 'name: gui smoke test (offscreen)' in ci
+    assert "TEST_MATRIX_RESULT: ${{ needs.tests.result }}" in ci
+    assert "if [ \"$TEST_MATRIX_RESULT\" != 'success' ]" in ci
+    security = workflow("security.yml")
+    assert "  analyze:\n    name: analyze" in security
 
 
 def test_workflow_quality_validation_is_integrity_checked():
