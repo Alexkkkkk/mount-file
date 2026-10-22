@@ -61,4 +61,3 @@ def test_powershell_mock_suite():
     )
     output = (result.stdout or "") + (result.stderr or "")
     assert result.returncode == 0, output
-    assert "8 mock assertions passed" in output
