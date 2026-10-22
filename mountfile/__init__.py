@@ -10,4 +10,4 @@ or ImDisk plus the Windows filesystem driver on Windows; and exFAT/FAT12/16 via
 ImDisk on Windows. Other detected filesystems need an available RW backend.
 """
 
-__version__ = "1.53.0"
+__version__ = "1.53.1"
