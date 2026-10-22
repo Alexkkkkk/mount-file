@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
 
+from mountfile import universal_fs_rw
 from mountfile.universal_fs_rw import (
     Fat32RW,
     LoopMountRW,
@@ -18,6 +19,20 @@ def test_image_paths_use_posix_semantics_independent_of_host_os():
     assert _image_path_parent_name("/ORIGINAL.BIN") == ("/", "ORIGINAL.BIN")
     assert _image_path_parent_name("/DIR/CHILD.BIN") == ("/DIR", "CHILD.BIN")
     assert _image_path_parent_name(r"\DIR\CHILD.BIN") == ("/DIR", "CHILD.BIN")
+
+
+def test_mounted_paths_reject_traversal_and_links(tmp_path):
+    mount = tmp_path / "mount"
+    outside = tmp_path / "outside"
+    mount.mkdir()
+    outside.mkdir()
+    (outside / "host.txt").write_text("must remain untouched")
+    (mount / "escape").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="unsafe path"):
+        universal_fs_rw._safe_mounted_path(mount, "/../outside/host.txt")
+    with pytest.raises(PermissionError, match="link/reparse point"):
+        universal_fs_rw._safe_mounted_path(mount, "/escape/host.txt")
 
 
 def test_fat_api_accepts_backslash_image_paths(tmp_path):
@@ -97,6 +112,126 @@ def test_loop_mount_normalizes_detector_display_names(tmp_path):
     image.write_bytes(b"placeholder")
     assert LoopMountRW(image, 0, "HFS+").fs_type == "hfsplus"
     assert LoopMountRW(image, 0, "FAT16").fs_type == "vfat"
+
+
+def test_windows_imdisk_write_requires_supported_fs_driver_and_admin(monkeypatch):
+    monkeypatch.setattr(universal_fs_rw.sys, "platform", "win32")
+    monkeypatch.setattr(universal_fs_rw, "_find_imdisk", lambda: "imdisk.exe")
+    monkeypatch.setattr(universal_fs_rw, "_windows_is_admin", lambda: True)
+
+    assert universal_fs_rw._imdisk_status("NTFS") == ("imdisk-rw", "")
+    assert universal_fs_rw._imdisk_status("exFAT") == ("imdisk-rw", "")
+    assert universal_fs_rw._imdisk_status("ext4")[0] == "read-only-platform"
+
+    monkeypatch.setattr(universal_fs_rw, "_windows_is_admin", lambda: False)
+    assert universal_fs_rw._imdisk_status("ntfs")[0] == "read-only-admin"
+    monkeypatch.setattr(universal_fs_rw, "_windows_is_admin", lambda: True)
+    monkeypatch.setattr(universal_fs_rw, "_find_imdisk", lambda: None)
+    assert universal_fs_rw._imdisk_status("ntfs")[0] == "read-only-imdisk-tools"
+
+
+def test_imdisk_mount_uses_detected_offset_without_resizing_image(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "disk.raw"
+    original = b"partition table" + b"x" * 2048
+    image.write_bytes(original)
+    calls = []
+
+    monkeypatch.setattr(universal_fs_rw.sys, "platform", "win32")
+    monkeypatch.setattr(universal_fs_rw, "_find_imdisk", lambda: "imdisk.exe")
+    monkeypatch.setattr(universal_fs_rw, "_windows_is_admin", lambda: True)
+    monkeypatch.setattr(
+        universal_fs_rw, "_available_windows_drive_letter", lambda: "R:"
+    )
+    monkeypatch.setattr(
+        universal_fs_rw.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command)
+        or type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+    )
+
+    drive, mount_point = universal_fs_rw._imdisk_mount(image, 512)
+
+    assert drive == "R:"
+    assert str(mount_point) == "R:\\"
+    command = calls[0]
+    assert command[command.index("-b") + 1] == "512"
+    assert command[command.index("-m") + 1] == "R:"
+    assert command[command.index("-o") + 1] == "rw,shared"
+    assert "-s" not in command
+    assert image.read_bytes() == original
+
+
+def test_ntfs_backend_writes_through_imdisk_and_detaches(tmp_path, monkeypatch):
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"raw image")
+    mount_root = tmp_path / "mounted-volume"
+    mount_root.mkdir()
+    detached = []
+    fake_tsk = type(
+        "FakeTsk",
+        (),
+        {
+            "Img_Info": staticmethod(lambda _path: object()),
+            "FS_Info": staticmethod(lambda _img, offset=0: object()),
+        },
+    )
+
+    monkeypatch.setattr(universal_fs_rw, "pytsk3", fake_tsk)
+    monkeypatch.setattr(universal_fs_rw.sys, "platform", "win32")
+    monkeypatch.setattr(
+        universal_fs_rw,
+        "_imdisk_status",
+        lambda _fs_type: ("imdisk-rw", ""),
+    )
+    monkeypatch.setattr(
+        universal_fs_rw,
+        "_imdisk_mount",
+        lambda _image, offset: ("R:", mount_root),
+    )
+    monkeypatch.setattr(
+        universal_fs_rw, "_imdisk_unmount", lambda drive: detached.append(drive)
+    )
+
+    backend = universal_fs_rw.NtfsRW(image, offset=4096)
+    assert backend.info().writable is True
+    backend.write_file("/notes.txt", b"saved from Windows")
+
+    assert (mount_root / "notes.txt").read_bytes() == b"saved from Windows"
+    assert detached == ["R:"]
+    assert backend._fs is not None
+
+
+def test_tsk_image_can_release_and_reopen_backing_handle(tmp_path, monkeypatch):
+    from mountfile import vfs
+
+    image = tmp_path / "image.raw"
+    image.write_bytes(b"image")
+    opened = []
+    fake_tsk = type(
+        "FakeTsk",
+        (),
+        {
+            "Img_Info": staticmethod(
+                lambda path: opened.append(("img", path)) or object()
+            ),
+            "FS_Info": staticmethod(
+                lambda img, offset=0: opened.append(("fs", offset)) or object()
+            ),
+        },
+    )
+    monkeypatch.setattr(vfs, "pytsk3", fake_tsk)
+
+    provider = vfs.TskImage(str(image), offset=512)
+    provider.close()
+    assert provider.fs is None
+    assert provider.img is None
+    provider.reopen()
+
+    assert provider.fs is not None
+    assert provider.img is not None
+    assert [item[0] for item in opened] == ["img", "fs", "img", "fs"]
 
 
 def test_failed_overwrite_allocation_preserves_original_file(tmp_path, monkeypatch):

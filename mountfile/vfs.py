@@ -74,12 +74,34 @@ class TskImage:
     def __init__(self, image_path, offset=0):
         if pytsk3 is None:
             raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
+        self.image_path = str(image_path)
+        self.offset = int(offset)
         try:
-            self.img = pytsk3.Img_Info(image_path)
-            self.fs = pytsk3.FS_Info(self.img, offset=offset)
+            self._open_image()
         except Exception as e:
             raise TskError(str(e)) from e
         self.root_name = image_path
+
+    def _open_image(self):
+        self.img = pytsk3.Img_Info(self.image_path)
+        self.fs = pytsk3.FS_Info(self.img, offset=self.offset)
+
+    def close(self):
+        """Release libtsk's image handle so a native OS writer can mount it."""
+        fs, self.fs = getattr(self, "fs", None), None
+        img, self.img = getattr(self, "img", None), None
+        for handle in (fs, img):
+            close = getattr(handle, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    def reopen(self):
+        """Reopen the image after a writer has detached its temporary mount."""
+        if getattr(self, "fs", None) is None:
+            self._open_image()
 
     def list_dir(self, path="/"):
         out = []

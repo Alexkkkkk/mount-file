@@ -43,17 +43,23 @@ engine.close()
 ## Границы
 
 * FAT12/16/32 — собственный движок (как и раньше).
-* ext2/3/4 — `debugfs -w`; `chmod`/`chown`/`symlink` доступны только на ext.
+* ext2/3/4 — `debugfs -w`; на Windows используется `debugfs.exe` из `PATH` или
+  `debugfs` из WSL, если установлен Linux-дистрибутив с пакетом `e2fsprogs`
+  (например, `sudo apt install e2fsprogs`). MountFile конвертирует host paths
+  для временных файлов, а исходный image extent проходит через существующую
+  проверяемую transactional commit/rollback процедуру. `chmod`/`chown`/`symlink`
+  доступны только на ext.
 
-* NTFS — через `ntfs-3g`/mount helper; собственного NTFS-писателя нет, поэтому
-  запись доступна только когда системный backend установлен и разрешает
-  монтирование образа в RW.
+* NTFS — через `ntfs-3g` на Linux или системный файловый драйвер Windows через
+  ImDisk. На Windows требуется отдельно установленный ImDisk Virtual Disk
+  Driver и запуск MountFile от имени администратора; если одно из условий не
+  выполнено, GUI показывает точную причину и не предлагает сохранение в образ.
 
-* exFAT, HFS+ и другие writable-ФС идут через `LoopMountRW` только на Linux,
-  если доступны `mount`/`umount`, соответствующий драйвер и разрешено
-  монтирование образа в RW. На Windows/macOS этот backend не объявляется
-  доступным, поэтому том остаётся read-only вместо ошибки при сохранении.
-  Имена детектора (`FAT16`, `FAT32`, `HFS+`) нормализуются в имена mount-helper.
+* exFAT и FAT12/16 — через ImDisk и системный Windows filesystem driver на
+  Windows (те же требования установки и прав); на Linux — через `LoopMountRW`,
+  если доступны `mount`/`umount` и соответствующий драйвер. HFS+ и другие
+  неподдерживаемые Windows filesystem drivers остаются read-only.
+  Имена детектора (`FAT16`, `FAT32`, `HFS+`) нормализуются для mount-helper.
 * ISO9660, SquashFS, JFFS2 и UBIFS объявлены `read-only-format`: чтение и
   извлечение доступны, но мутации отклоняются до монтирования. Эти форматы
   нельзя честно сделать обычными RW-ФС без пересборки образа по их спецификации.

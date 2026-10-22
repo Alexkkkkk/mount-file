@@ -153,7 +153,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 | REST API (необязательно) | `fastapi`, `uvicorn`, `httpx` |
 | AI-слой (необязательно) | `mcp[cli]`, `pydantic`, `openai` |
 | Системные пакеты (Linux) | `libgl1`, `libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0` |
-| Системные инструменты (по желанию) | `dosfstools`, `mtools` — только для сборки тестовых образов; `debugfs` (e2fsprogs) и `ntfs-3g` — для записи в ext/NTFS |
+| Системные инструменты (по желанию) | `debugfs` для ext (на Windows — `debugfs.exe` или WSL с `e2fsprogs`); `ntfs-3g` для NTFS на Linux; ImDisk Virtual Disk Driver для NTFS/exFAT/FAT12/16 на Windows (нужен запуск от администратора) |
 
 `requirements.txt` — полный набор зависимостей для Python 3.10+. Обычная
 установка через `pip install .` включает PyQt6 и `pytsk3`; последние версии
@@ -239,7 +239,7 @@ python install_mountfile.py --dry-run     # показать команды бе
 | `.[ai]` | MCP/AI helpers (`mcp[cli]`, `pydantic`, `openai`) |
 | `.[dfir]` | дополнительные DFIR-модули (`python-dateutil`, `yara-python`) |
 | `.[dev]` | `pytest`, `pytest-cov`, `hypothesis`, `ruff`, `black`, `isort`, `pyinstaller` |
-| `.[rw]`, `.[rw-ext]`, `.[rw-ntfs]` | универсальный RW-слой: чтение через `MountFileBridge`, запись через `debugfs` / `ntfs-3g` |
+| `.[rw]`, `.[rw-ext]`, `.[rw-ntfs]` | универсальный RW-слой; чтение через MountFileBridge, writers для записи устанавливаются отдельно (`debugfs`, WSL/e2fsprogs, `ntfs-3g` или Windows ImDisk) |
 | `.[fuzz]` | `atheris` (только Linux) |
 
 ```bash
@@ -447,10 +447,13 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 | `Ctrl+I` | AI: добавить файл для анализа |
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
-FAT32 встроен, ext2/3/4 поддерживается только при наличии `debugfs` в `PATH`,
-NTFS — при наличии `ntfs-3g`. Перед изменением образа создаётся отдельная
-резервная копия; если её нельзя создать, запись отменяется. Файловые системы
-без writer остаются доступны только для чтения.
+FAT32 имеет встроенный writer; ext2/3/4 требует `debugfs` (на Windows —
+`debugfs.exe` в `PATH` либо WSL с установленным `e2fsprogs`); NTFS использует
+`ntfs-3g` на Linux или ImDisk и системный драйвер Windows при запуске от
+администратора. На Windows ImDisk также даёт запись в exFAT и FAT12/16.
+Перед изменением образа создаётся отдельная резервная копия; если её нельзя
+создать, запись отменяется. Файловые системы без доступного writer остаются
+только для чтения.
 
 Тема, размер шрифта и показ журнала настраиваются в **Конфигурация → Настройки**.
 
@@ -755,14 +758,18 @@ mount-file/
 
 ## Ограничения
 
-- **Запись поддерживается только для FAT32.** Переименование и удаление также
-  работают только на FAT32. Остальные файловые системы доступны для просмотра и
-  извлечения, если их поддерживает установленная сборка `libtsk`.
+- **Запись зависит от файловой системы и системного backend.** FAT32 имеет
+  встроенный writer; ext2/3/4 требует `debugfs` (на Windows доступен через WSL
+  с `e2fsprogs`); NTFS — `ntfs-3g` на Linux или
+  ImDisk и права администратора на Windows. На Windows ImDisk поддерживает
+  NTFS, exFAT и FAT12/16 через системный драйвер. Остальные ФС доступны только
+  для просмотра/извлечения, если их поддерживает установленная `libtsk`.
 - **Без `pytsk3`** доступен только встроенный движок FAT32; чтение NTFS/EXT
   недоступно.
-- Универсальный RW-слой (`mountfile/rw/`) требует внешних утилит (`debugfs` для
-  ext2/3/4, `ntfs-3g` для NTFS) и остаётся экспериментальным: отсутствие
-  утилиты — это явный отказ записи, а не «тихая» деградация.
+- RW-слой требует внешних утилит (`debugfs`, `ntfs-3g`), WSL/e2fsprogs для ext
+  на Windows или ImDisk для NTFS/exFAT/FAT12/16.
+  Если требуемый backend отсутствует, приложение явно отказывает в записи, а
+  не сообщает об успехе после открытия тома только для чтения.
 - Данные OOB/ECC в сырых NAND-дампах не обрабатываются — нужен образ
   пользовательской области без этих данных.
 - `mountfile/turbo.py` (`CachedFS`, CDC-подписи, delta-sync, sqlite-журнал)

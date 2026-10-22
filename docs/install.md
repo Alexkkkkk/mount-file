@@ -40,7 +40,8 @@ python -m mountfile --help
 |---|---|---|
 | PyQt6 (в `requirements.txt` `>=6.11`) | основной для Win 10/11, Linux, macOS | GUI `main.py` |
 | `pytsk3` | обязательная Python-зависимость; нужен для NTFS/EXT и прочих ФС | сборка/колёса зависят от Python и платформы |
-| `debugfs` из e2fsprogs | необязателен; нужен для записи в ext2/3/4 через F4/F5 | исполняемый файл должен быть в `PATH`; не поставляется вместе с приложением |
+| `debugfs` из e2fsprogs | необязателен; нужен для записи в ext2/3/4 через F4/F5 | на Windows — `debugfs.exe` в `PATH` либо WSL с установленным `e2fsprogs`; пакет не поставляется вместе с приложением |
+| ImDisk Virtual Disk Driver | необязателен; нужен для записи в NTFS/exFAT/FAT12/16-образы на Windows | установить отдельно; запуск MountFile от имени администратора; [сайт автора](https://ltr-data.se/opencode.html/) |
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |
 | `dosfstools`, `mtools` | только разработка | создание синтетических образов через `make sample` |
 | `fastapi`, `uvicorn` | только DFIR REST-команда | нужны лишь для `mountfile_dfir.py serve` |
@@ -48,6 +49,12 @@ python -m mountfile --help
 `requirements.txt` — полный профиль и включает optional AI/API зависимости.
 Команда `python -m pip install .` устанавливает обязательные PyQt6 и `pytsk3`;
 дополнительные возможности устанавливаются через `.[api]`, `.[ai]` или `.[dfir]`.
+
+Для записи ext2/3/4 на Windows можно использовать WSL: установите дистрибутив
+Linux, откройте его терминал и выполните `sudo apt install e2fsprogs`. MountFile
+автоматически ищет `debugfs` в WSL и использует его для изменения временной копии
+раздела с последующей проверкой и записью в образ. Для NTFS/exFAT/FAT12/16
+используется ImDisk; это отдельный путь и он требует запуска от имени администратора.
 
 В репозитории сохранены `requirements-win7.txt` и отдельные legacy build
 сценарии, но текущие метаданные пакета требуют Python 3.10+, а Windows 7 не
