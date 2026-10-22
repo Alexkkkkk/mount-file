@@ -209,8 +209,8 @@ def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs
     ci = workflow("ci.yml")
     for context in ("test (3.10)", "test (3.11)", "test (3.12)"):
         assert f'check_name: "{context}"' in ci
-    assert 'name: Tests (ubuntu-latest, py3.12)' in ci
-    assert 'name: gui smoke test (offscreen)' in ci
+    assert "name: Tests (ubuntu-latest, py3.12)" in ci
+    assert "name: gui smoke test (offscreen)" in ci
     assert "TEST_MATRIX_RESULT: ${{ needs.tests.result }}" in ci
     assert "if [ \"$TEST_MATRIX_RESULT\" != 'success' ]" in ci
     security = workflow("security.yml")
