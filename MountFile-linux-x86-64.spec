@@ -9,6 +9,7 @@
 
 import os
 import sys
+from PyInstaller.utils.hooks import collect_data_files
 
 ICON_DIR = os.path.join('mountfile', 'data')
 ICON_FILE = os.path.join(ICON_DIR, 'icon.ico' if sys.platform.startswith('win') else 'icon.png')
@@ -17,7 +18,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[(os.path.join(ICON_DIR, 'icon.png'), ICON_DIR)],
+    datas=collect_data_files('mountfile'),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

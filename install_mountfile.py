@@ -6,7 +6,7 @@ Mount File — универсальная автоустановка завис�
 Запуск:
     python install_mountfile.py
     python install_mountfile.py --minimal     # без AI/API/DFIR
-    python install_mountfile.py --win7        # Windows 7 (Python 3.8 + PyQt5)
+    python install_mountfile.py --win7        # legacy profile; current releases require Python 3.10+
     python install_mountfile.py --no-sys      # не ставить системные пакеты
     python install_mountfile.py --dry-run     # показать команды без запуска
 """
@@ -32,33 +32,7 @@ IS_MAC = SYSTEM == "Darwin"
 PY_VER = f"{sys.version_info.major}.{sys.version_info.minor}"
 
 # Базовые зависимости
-BASE_DEPS = [
-    "PyQt6>=6.11.0; python_version>='3.10'",
-    "PyQt5==5.15.11; python_version<'3.10'",
-    "requests>=2.31.0",
-    "packaging>=23.0",
-    "tomli>=2.0.1; python_version<'3.11'",
-]
-
-# Опциональные: AI
-AI_DEPS = ["httpx>=0.27.0"]
-
-# Опциональные: REST API
-API_DEPS = ["fastapi>=0.110.0", "uvicorn>=0.29.0", "pydantic>=2.0"]
-
-# Опциональные: DFIR
-DFIR_DEPS = [
-    "python-dateutil>=2.8.2",
-    "yara-python>=4.5.0; platform_system!='Windows' or python_version>='3.10'",
-]
-
-# Windows 7 (Python 3.8 + PyQt5)
-WIN7_DEPS = [
-    "PyQt5==5.15.11",
-    "requests>=2.25.0",
-    "packaging>=20.0",
-    "tomli>=1.2.0",
-]
+BASE_DEPS = ["PyQt6>=6.11.0", "pytsk3>=20260715"]
 
 # Системные пакеты
 LINUX_APT = [
@@ -204,24 +178,6 @@ def pip_install(py, packages, dry_run=False):
     run([py, "-m", "pip", "install"] + packages, dry_run=dry_run)
 
 
-def try_pytsk3(py, dry_run=False):
-    print("🔍 pytsk3 (NTFS/EXT) — попытка установки...")
-    res = run(
-        [py, "-m", "pip", "install", "pytsk3"],
-        dry_run=dry_run,
-        capture=True,
-        quiet=True,
-    )
-    if dry_run:
-        return
-    if res is None or res.returncode != 0:
-        print("⚠️  pytsk3 не установлена. Mount File будет работать только с FAT32.")
-        if IS_WINDOWS:
-            print("    Поставьте 'Microsoft C++ Build Tools' и повторите.")
-    else:
-        print("✅ pytsk3 OK")
-
-
 # ------------------------------------------------------------
 # ГЛАВНОЕ
 # ------------------------------------------------------------
@@ -230,7 +186,11 @@ def main():
     parser.add_argument(
         "--minimal", action="store_true", help="Только базовые зависимости"
     )
-    parser.add_argument("--win7", action="store_true", help="Режим Windows 7")
+    parser.add_argument(
+        "--win7",
+        action="store_true",
+        help="Legacy Windows 7 profile (unsupported by the current release)",
+    )
     parser.add_argument(
         "--no-sys", action="store_true", help="Не ставить системные пакеты"
     )
@@ -247,12 +207,15 @@ def main():
 
     # 1. Валидация Python
     if args.win7:
-        if sys.version_info[:2] != (3, 8):
-            print("❌ Для Win7 нужен Python 3.8.10.")
-            sys.exit(1)
+        print(
+            "❌ Профиль Windows 7/Python 3.8 сохранён для legacy-сборок, "
+            "но текущий пакет требует Python 3.10+."
+        )
+        sys.exit(2)
     else:
         if sys.version_info < (3, 10):
-            print(f"⚠️  Рекомендуется Python 3.10+ (сейчас {PY_VER}).")
+            print(f"❌ Требуется Python 3.10+ (сейчас {PY_VER}).")
+            sys.exit(2)
 
     # 2. Системные пакеты
     if not args.minimal and not args.no_sys:
@@ -269,22 +232,17 @@ def main():
     py = ensure_venv(dry_run=args.dry_run)
 
     # 4. Pip-зависимости
-    if args.win7:
-        pip_install(py, WIN7_DEPS, dry_run=args.dry_run)
-    else:
-        pkgs = list(BASE_DEPS)
-        if not args.minimal:
-            pkgs += AI_DEPS + API_DEPS + DFIR_DEPS
-        pip_install(py, pkgs, dry_run=args.dry_run)
+    pip_install(py, BASE_DEPS, dry_run=args.dry_run)
 
-    # 5. pytsk3 (не критично)
-    if not args.win7:
-        try_pytsk3(py, dry_run=args.dry_run)
-
-    # 6. Сам проект (editable)
+    # 5. Сам проект (editable)
     print("📦 Установка mount-file в editable-режиме...")
-    extras = "" if (args.minimal or args.win7) else "[api,dev]"
-    run([py, "-m", "pip", "install", "-e", f".{extras}"], dry_run=args.dry_run)
+    extras = "" if args.minimal else "[api,ai,dfir,dev]"
+    install_result = run(
+        [py, "-m", "pip", "install", "-e", f".{extras}"],
+        dry_run=args.dry_run,
+    )
+    if not args.dry_run and (install_result is None or install_result.returncode != 0):
+        sys.exit("❌ Установка mount-file завершилась ошибкой.")
 
     # 7. Проверка
     print("\n" + "=" * 64)

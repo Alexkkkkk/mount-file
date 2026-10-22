@@ -2,9 +2,9 @@
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
 
-# Windows 10/11: Python 3.12 + PyQt6
+# Full-featured environment for Windows 10/11, Linux, and macOS.
 PyQt6>=6.11.0
-pytsk3>=20231030 ; python_version >= '3.10'
+pytsk3>=20260715 ; python_version >= '3.10'
 
 # mountfile_ai.py (AI Deep Integration branch)
 mcp[cli]>=1.0.0
@@ -15,3 +15,7 @@ openai>=1.0
 fastapi>=0.115,<1.0
 uvicorn>=0.30,<1.0
 httpx>=0.27,<1.0
+
+# DFIR helpers
+python-dateutil>=2.8.2
+yara-python>=4.5.0 ; platform_system != 'Windows' or python_version >= '3.10'

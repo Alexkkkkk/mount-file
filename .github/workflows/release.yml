@@ -87,29 +87,20 @@ jobs:
     if: needs.gate.outputs.proceed == 'true'
     timeout-minutes: 30
     runs-on: windows-latest
-    continue-on-error: ${{ matrix.legacy }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - label: universal
-            python: '3.8'
-            spec: requirements-win7.txt
-            qt: PyQt5
+          - label: windows-py310
+            python: '3.10'
+            spec: requirements.txt
+            qt: PyQt6
             name: MountFile
-            legacy: false
           - label: win10
             python: '3.12'
             spec: requirements.txt
             qt: PyQt6
             name: MountFile-win10-x64
-            legacy: false
-          - label: win7
-            python: '3.8'
-            spec: requirements-win7.txt
-            qt: PyQt5
-            name: MountFile-win7-x64
-            legacy: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -139,9 +130,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "${{ matrix.qt }} could not be imported" }
           # pytsk3 is optional: without it the app still browses and writes
           # FAT32 with the built-in engine. This probe must never leak its
-          # non-zero exit code into the step - that leak (not a real build
-          # error) is what failed the win7 and universal jobs and left the
-          # release without Windows binaries.
+          # non-zero exit code into the step.
           python -c "import pytsk3" 2>$null
           if ($LASTEXITCODE -eq 0) {
             Write-Host 'pytsk3 OK'
@@ -171,13 +160,13 @@ jobs:
           $flags = @('--noconfirm', '--clean', '--onefile', '--windowed', '--name', $name)
           python -c "import pytsk3" 2>$null
           if ($LASTEXITCODE -eq 0) { $flags += @('--collect-submodules', 'pytsk3') }
-          # App icon + runtime artwork (mountfile/data). Path is picked per OS by
+          # App icon path is picked per OS by
           # mountfile/appicon.py: icon.ico on Windows, icon.icns on macOS, icon.png
-          # on Linux.
+          # on Linux. Collect package data for icons and RT809 XOR tables.
           $icon = (python -m mountfile.appicon).Trim()
           if ($icon) { $flags += @('--icon', $icon); Write-Host "icon: $icon" }
           else { Write-Host '::warning title=icon missing::building with the default PyInstaller icon' }
-          $flags += @('--add-data', "mountfile/data/icon.png$(python -c 'import os;print(os.pathsep)')mountfile/data")
+          $flags += @('--collect-data', 'mountfile')
           python -m PyInstaller @flags main.py
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
 
@@ -286,14 +275,12 @@ jobs:
   publish:
     name: attach binaries to the release
     needs: [gate, build, unix]
-    # A tolerated failure inside a matrix (the win7 leg runs with
-    # continue-on-error) must not stop the upload. Publish runs when at
-    # least one binary job succeeded, so one failed platform can never
-    # again leave the release completely empty (v1.14.0 lesson).
+    # All supported Windows and Unix build jobs must succeed before upload.
     if: >-
       always() &&
       needs.gate.outputs.proceed == 'true' &&
-      (needs.build.result == 'success' || needs.unix.result == 'success')
+      needs.build.result == 'success' &&
+      needs.unix.result == 'success'
     timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
@@ -312,6 +299,19 @@ jobs:
 
       - name: Inspect artifacts
         run: ls -lh dist
+
+      - name: Verify all required platform binaries and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          for asset in MountFile.exe MountFile-win10-x64.exe MountFile-linux-x86-64 MountFile-macos-arm64; do
+            for file in "$asset" "$asset.sha256"; do
+              if [ ! -s "dist/$file" ]; then
+                echo "::error::Missing required release asset: $file"
+                exit 1
+              fi
+            done
+          done
 
       - name: Create/verify the release, then upload (retried)
         env:
@@ -339,6 +339,15 @@ jobs:
             exit 1
           fi
           echo "--- assets now in $TAG ---"
+          HAVE=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for asset in MountFile.exe MountFile-win10-x64.exe MountFile-linux-x86-64 MountFile-macos-arm64; do
+            for expected in "$asset" "$asset.sha256"; do
+              if ! echo "$HAVE" | grep -Fxq "$expected"; then
+                echo "::error::Release is missing uploaded asset: $expected"
+                exit 1
+              fi
+            done
+          done
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
 
 

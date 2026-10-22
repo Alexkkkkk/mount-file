@@ -101,7 +101,7 @@ def test_asset_score_linux(monkeypatch):
     assert updater._asset_score("MountFile.exe") == -1
 
 
-def test_select_asset_prefers_win7_build_even_when_generic_is_first(monkeypatch):
+def test_select_asset_returns_none_on_unsupported_windows7(monkeypatch):
     monkeypatch.setattr(updater.sys, "platform", "win32")
     monkeypatch.setattr(updater, "_on_windows7", lambda: True)
     release = _release(
@@ -112,7 +112,7 @@ def test_select_asset_prefers_win7_build_even_when_generic_is_first(monkeypatch)
             ("MountFile-win7-x64.exe.sha256", b"checksum"),
         ],
     )
-    assert updater.select_asset(release)["name"] == "MountFile-win7-x64.exe"
+    assert updater.select_asset(release) is None
 
 
 def test_fetch_sha256_prefers_github_asset_digest():

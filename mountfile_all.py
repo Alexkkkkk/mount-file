@@ -17,8 +17,9 @@ mountfile_all.py — единый скрипт для запуска ВСЕГО 
   python mountfile_all.py --img dump.img           # указать образ
   python mountfile_all.py --dump dump.bin --udev udev.txt
   python mountfile_all.py --no-gui --no-tests      # только CLI + API
-  python mountfile_all.py --cli-only               # только CLI-команды
-  python mountfile_all.py --api-only               # только Python API
+  python mountfile_all.py --cli-only               # только read-only CLI-команды
+  python mountfile_all.py --api-only               # только read-only Python API
+  python mountfile_all.py --allow-write            # разрешить демонстрационные записи в образ
   python mountfile_all.py --tests-only             # только тесты
   python mountfile_all.py --build                  # + сборка бинарника
   python mountfile_all.py --check-updates          # только проверка обновлений
@@ -172,7 +173,7 @@ def run_cli(cmd: list[str], check: bool = False) -> int:
         return 127
 
 
-def run_all_cli(img: str, dump: str, udev: str) -> None:
+def run_all_cli(img: str, dump: str, udev: str, *, allow_write: bool = False) -> None:
     hr("3. CLI-команды Mount File")
     main = [sys.executable, "main.py"]
 
@@ -184,15 +185,20 @@ def run_all_cli(img: str, dump: str, udev: str) -> None:
         Path(OUT_DIR).mkdir(exist_ok=True)
         run_cli(main + ["get", img, "/", "-o", OUT_DIR])
 
-        # Демонстрационный файл для put
-        demo = Path("hello.txt")
-        if not demo.exists():
-            demo.write_text("Hello Mount File!\n", encoding="utf-8")
-        run_cli(main + ["put", img, str(demo), "--dest", "/", "--yes"])
-        run_cli(main + ["mkdir", img, "/new", "--yes"])
-        # mv переименовывает запись в ТОМ ЖЕ каталоге: вторым аргументом имя, не путь.
-        run_cli(main + ["mv", img, "/hello.txt", "renamed.txt", "--yes"])
-        run_cli(main + ["rm", img, "/new", "--recursive", "--yes"])
+        if allow_write:
+            # Explicit opt-in: these commands modify the image.
+            demo = Path("hello.txt")
+            if not demo.exists():
+                demo.write_text("Hello Mount File!\n", encoding="utf-8")
+            run_cli(main + ["put", img, str(demo), "--dest", "/", "--yes"])
+            run_cli(main + ["mkdir", img, "/new", "--yes"])
+            # mv renames within the same directory; its second path is a name.
+            run_cli(main + ["mv", img, "/hello.txt", "renamed.txt", "--yes"])
+            run_cli(main + ["rm", img, "/new", "--recursive", "--yes"])
+        else:
+            info(
+                "Запись в образ пропущена; для демонстрации записи укажите --allow-write."
+            )
     else:
         warn(
             f"Образ {img} не найден — команды volumes/ls/get/put/mkdir/mv/rm пропущены."
@@ -210,15 +216,15 @@ def run_all_cli(img: str, dump: str, udev: str) -> None:
         warn(f"Нужны {dump} и {udev} для split — пропущено.")
 
 
-def cli_only(img: str, dump: str, udev: str) -> None:
+def cli_only(img: str, dump: str, udev: str, *, allow_write: bool = False) -> None:
     hr("CLI-only режим")
-    run_all_cli(img, dump, udev)
+    run_all_cli(img, dump, udev, allow_write=allow_write)
 
 
 # ============================================================
 # 4. PYTHON API (демонстрация)
 # ============================================================
-def demo_api(img: str, dump: str, udev: str) -> None:
+def demo_api(img: str, dump: str, udev: str, *, allow_write: bool = False) -> None:
     hr("4. Python API — демонстрация")
 
     # --- 4.1. Разделы: mountfile.partition.list_partitions() ---
@@ -247,7 +253,7 @@ def demo_api(img: str, dump: str, udev: str) -> None:
         from mountfile.fat32 import Fat32  # noqa: WPS433
 
         if Path(img).exists():
-            with open(img, "r+b") as fh:
+            with open(img, "r+b" if allow_write else "rb") as fh:
                 fs = Fat32(fh, offset=0)
 
                 info("FAT32: листинг корня")
@@ -259,16 +265,21 @@ def demo_api(img: str, dump: str, udev: str) -> None:
                 except Exception as exc:  # noqa: BLE001
                     warn(f"list_dir не сработал: {exc}")
 
-                try:
-                    # mkdir(dir_path, name) и write_file(dir_path, filename, data)
-                    fs.mkdir("/", "api_test")
-                    fs.write_file("/api_test", "hello.txt", b"Hello from API!\n")
-                    fs.rename("/api_test/hello.txt", "renamed.txt")
-                    fs.delete("/api_test/renamed.txt")
-                    fs.delete("/api_test")
-                    ok("FAT32: запись/переименование/удаление выполнены.")
-                except Exception as exc:  # noqa: BLE001
-                    warn(f"Операции записи FAT32 не удались: {exc}")
+                if allow_write:
+                    try:
+                        # mkdir(dir_path, name) and write_file(dir_path, filename, data)
+                        fs.mkdir("/", "api_test")
+                        fs.write_file("/api_test", "hello.txt", b"Hello from API!\n")
+                        fs.rename("/api_test/hello.txt", "renamed.txt")
+                        fs.delete("/api_test/renamed.txt")
+                        fs.delete("/api_test")
+                        ok("FAT32: запись/переименование/удаление выполнены.")
+                    except Exception as exc:  # noqa: BLE001
+                        warn(f"Операции записи FAT32 не удались: {exc}")
+                else:
+                    info(
+                        "FAT32 открыт только для чтения; для теста записи укажите --allow-write."
+                    )
         else:
             warn(f"{img} не найден — FAT32 API пропущен.")
     except Exception as exc:  # noqa: BLE001
@@ -371,9 +382,9 @@ def demo_api(img: str, dump: str, udev: str) -> None:
         warn(f"updater API недоступен: {exc}")
 
 
-def api_only(img: str, dump: str, udev: str) -> None:
+def api_only(img: str, dump: str, udev: str, *, allow_write: bool = False) -> None:
     hr("API-only режим")
-    demo_api(img, dump, udev)
+    demo_api(img, dump, udev, allow_write=allow_write)
 
 
 # ============================================================
@@ -579,6 +590,11 @@ def parse_args() -> argparse.Namespace:
         "--no-api", action="store_true", help="Не демонстрировать Python API"
     )
     p.add_argument("--no-tests", action="store_true", help="Не запускать тесты")
+    p.add_argument(
+        "--allow-write",
+        action="store_true",
+        help="Разрешить демонстрационные операции записи в указанный образ",
+    )
     p.add_argument("--build", action="store_true", help="Собрать бинарник")
     p.add_argument(
         "--cheatsheet", action="store_true", help="Показать карту команд и выйти"
@@ -610,12 +626,12 @@ def main() -> int:
         return 0
 
     if args.cli_only:
-        cli_only(args.img, args.dump, args.udev)
+        cli_only(args.img, args.dump, args.udev, allow_write=args.allow_write)
         print_cheatsheet()
         return 0
 
     if args.api_only:
-        api_only(args.img, args.dump, args.udev)
+        api_only(args.img, args.dump, args.udev, allow_write=args.allow_write)
         return 0
 
     if args.tests_only:
@@ -626,10 +642,10 @@ def main() -> int:
     show_environment()
 
     if not args.no_cli:
-        run_all_cli(args.img, args.dump, args.udev)
+        run_all_cli(args.img, args.dump, args.udev, allow_write=args.allow_write)
 
     if not args.no_api:
-        demo_api(args.img, args.dump, args.udev)
+        demo_api(args.img, args.dump, args.udev, allow_write=args.allow_write)
 
     if not args.no_tests:
         run_tests()

@@ -180,7 +180,11 @@ def _short(exc):
 
 def _on_windows7():
     try:
-        return sys.platform.startswith("win") and sys.getwindowsversion().major == 6
+        version = sys.getwindowsversion()
+        return sys.platform.startswith("win") and (version.major, version.minor) == (
+            6,
+            1,
+        )
     except Exception:  # pragma: no cover - не Windows
         return False
 
@@ -193,18 +197,11 @@ def _asset_score(name):
     if sys.platform.startswith("win"):
         if not low.endswith(".exe"):
             return -1
-        score = 100 if low == "mountfile.exe" else 60
-        win7_asset = "win7" in low or "win-7" in low or "windows7" in low
-        # Releases contain generic, Win7 and Win10 executables.  The previous
-        # score gave generic.exe and win7.exe the same score on Windows 7, so
-        # the selected build depended on GitHub asset ordering.
         if _on_windows7():
-            score += 100 if win7_asset else 0
-        elif win7_asset:
-            score -= 20
-        if not _on_windows7() and any(
-            marker in low for marker in ("win10", "win-10", "windows10")
-        ):
+            # Current releases require Python 3.10/PyQt6 and cannot run on Win7.
+            return -1
+        score = 100 if low == "mountfile.exe" else 60
+        if any(marker in low for marker in ("win10", "win-10", "windows10")):
             # Keep the generic binary preferred on modern Windows; it is the
             # compatibility build used by the existing release contract.
             score += 20

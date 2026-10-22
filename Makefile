@@ -45,7 +45,7 @@ fmt:
 
 exe:
 	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \
-		--icon mountfile/data/icon.ico --name MountFile main.py
+		--icon mountfile/data/icon.ico --collect-data mountfile --name MountFile main.py
 
 # Standalone single-file build: GUI + CLI in one binary, no package needed.
 mountfile-exe:
@@ -54,7 +54,7 @@ mountfile-exe:
 	@test -f dist/mountfile && echo "Done: dist/mountfile"
 
 clean:
-	rm -rf build dist *.spec
+	rm -rf build dist
 
 # One-shot exercise of everything the project can do (mountfile_all.py):
 # CLI commands, the Python API demo and the test suite. The GUI is skipped so

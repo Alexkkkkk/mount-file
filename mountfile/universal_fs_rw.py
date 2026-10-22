@@ -1476,7 +1476,7 @@ class NtfsRW(RWBackend):
 # 7. LOOP-MOUNT fallback (любая ФС)
 # =============================================================================
 class LoopMountRW(RWBackend):
-    """Универсальная запись через `mount -o loop,rw` (Linux/macOS)."""
+    """Запись через `mount -o loop,rw` на Linux при наличии mount tools."""
 
     def __init__(self, image: Path, offset: int, fs_type: str):
         super().__init__(image, offset)
@@ -1488,10 +1488,28 @@ class LoopMountRW(RWBackend):
                 "%s is an inherently read-only filesystem; mutation is disabled"
                 % self.fs_type
             )
+        _, issue = self._runtime_status()
+        if issue:
+            raise RuntimeError(issue)
+
+    @staticmethod
+    def _runtime_status() -> tuple[str, str]:
+        """Return the available write strategy and any platform/tool issue."""
+        if not sys.platform.startswith("linux"):
+            return "read-only-platform", "loop-mount writing is supported only on Linux"
+        missing = [name for name in ("mount", "umount") if shutil.which(name) is None]
+        if missing:
+            return (
+                "read-only-mount-tools",
+                "loop-mount writing requires these system tools: %s"
+                % ", ".join(missing),
+            )
+        return "loop-mount", ""
 
     def _mount_point(self) -> Path:
-        if shutil.which("mount") is None:
-            raise RuntimeError("mount not available")
+        _, issue = self._runtime_status()
+        if issue:
+            raise RuntimeError(issue)
         mp = Path(tempfile.mkdtemp(prefix="mnt_"))
         opts = f"loop,offset={self.offset},rw"
         if self.fs_type in ("vfat", "fat", "fat32", "exfat"):
@@ -1515,20 +1533,16 @@ class LoopMountRW(RWBackend):
             self._unmount(mp)
 
     def info(self) -> FSInfo:
+        strategy, _ = self._runtime_status()
+        if self.fs_type in INHERENTLY_READ_ONLY_FS:
+            strategy = "read-only-format"
         return FSInfo(
             fs_type=self.fs_type,
             offset=self.offset,
             backend="loop-mount-rw",
             total_size=self.image.stat().st_size,
-            writable=(
-                sys.platform.startswith(("linux", "darwin"))
-                and self.fs_type not in INHERENTLY_READ_ONLY_FS
-            ),
-            write_strategy=(
-                "read-only-format"
-                if self.fs_type in INHERENTLY_READ_ONLY_FS
-                else "loop-mount"
-            ),
+            writable=strategy == "loop-mount",
+            write_strategy=strategy,
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:

@@ -17,6 +17,7 @@ Run:  QT_QPA_PLATFORM=offscreen python -m pytest tests/test_build_ci.py -v
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -218,6 +219,14 @@ def _run_launcher(*args):
     )
 
 
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
 def test_launcher_is_importable_and_compiles():
     r = subprocess.run(
         [sys.executable, "-m", "py_compile", LAUNCHER],
@@ -229,10 +238,23 @@ def test_launcher_is_importable_and_compiles():
     assert r.returncode == 0, r.stderr
 
 
+def test_qt_and_pytsk3_are_required_project_dependencies():
+    with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as stream:
+        project = stream.read()
+    required = project.split("[project.optional-dependencies]", maxsplit=1)[0]
+    assert '"PyQt6>=6.11.0"' in required
+    assert '"pytsk3>=20260715"' in required
+
+    with open(os.path.join(ROOT, "install_mountfile.py"), encoding="utf-8") as stream:
+        installer = stream.read()
+    assert 'BASE_DEPS = ["PyQt6>=6.11.0", "pytsk3>=20260715"]' in installer
+
+
 def test_launcher_help_exits_zero():
     r = _run_launcher("--help")
     assert r.returncode == 0, r.stderr
     assert "--cli-only" in r.stdout
+    assert "--allow-write" in r.stdout
 
 
 def test_launcher_cheatsheet_lists_every_cli_command():
@@ -263,10 +285,34 @@ def test_launcher_cli_only_cli_and_api_refuse_gracefully():
 
 
 @needs_mkfs_vfat
-def test_launcher_api_only_roundtrips_fat32(tmp_path):
-    """The API demo really writes/renames/deletes on a FAT32 image."""
+def test_launcher_api_only_is_read_only_by_default(tmp_path):
+    """API demonstration must leave evidence bytes untouched by default."""
     img = _make_vfat_image(tmp_path)
+    before = _sha256(img)
     r = _run_launcher("--api-only", "--img", img, "--dump", "missing.bin")
+    assert r.returncode == 0, r.stderr
+    assert "--allow-write" in r.stdout
+    assert _sha256(img) == before
+
+
+@needs_mkfs_vfat
+def test_launcher_cli_only_is_read_only_by_default(tmp_path):
+    """CLI demo must not write to the image unless explicitly requested."""
+    img = _make_vfat_image(tmp_path)
+    before = _sha256(img)
+    r = _run_launcher("--cli-only", "--img", img, "--dump", "missing.bin")
+    assert r.returncode == 0, r.stderr
+    assert "--allow-write" in r.stdout
+    assert _sha256(img) == before
+
+
+@needs_mkfs_vfat
+def test_launcher_api_only_writes_only_with_explicit_opt_in(tmp_path):
+    """The API write demo remains available behind an explicit opt-in."""
+    img = _make_vfat_image(tmp_path)
+    r = _run_launcher(
+        "--api-only", "--allow-write", "--img", img, "--dump", "missing.bin"
+    )
     assert r.returncode == 0, r.stderr
     assert "FAT32" in r.stdout
     assert "Traceback" not in r.stdout
@@ -279,3 +325,32 @@ def test_launcher_api_only_roundtrips_fat32(tmp_path):
         names = [e.name for e in fs.list_dir(fs.find_dir("/"))]
     assert "API_TEST" not in [n.upper() for n in names]
     assert "HELLO.TXT" in [n.upper() for n in names], names
+
+
+def test_pyinstaller_entrypoints_collect_package_data():
+    """Every packaged build must include icons and RT809 XOR tables."""
+    build_files = (
+        "build_exe.sh",
+        "build_exe.bat",
+        "Makefile",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "MountFile-linux-x86-64.spec",
+    )
+    for relative in build_files:
+        with open(os.path.join(ROOT, relative), encoding="utf-8") as stream:
+            text = stream.read()
+        assert (
+            "collect-data mountfile" in text
+            or "'mountfile')" in text
+            or "collect_data_files('mountfile')" in text
+        ), relative
+
+    with open(os.path.join(ROOT, "Makefile"), encoding="utf-8") as stream:
+        makefile = stream.read()
+    assert "rm -rf build dist\n" in makefile
+    assert "rm -rf build dist *.spec" not in makefile
+
+    for table in ("XOR_MTK_00.bin", "XOR_MST_00.bin"):
+        path = os.path.join(ROOT, "mountfile", "data", table)
+        assert os.path.isfile(path) and os.path.getsize(path) > 0

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import ipaddress
 import json
 import mmap
 import re
@@ -297,6 +298,19 @@ def cmd_hash(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
+    host = str(args.host).strip()
+    is_loopback = host.lower() == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+        except ValueError:
+            is_loopback = False
+    if not is_loopback:
+        raise SystemExit(
+            "Refusing to expose the unauthenticated DFIR prototype on a non-loopback host. "
+            "Use --host 127.0.0.1 or localhost."
+        )
+
     try:
         import uvicorn
         from fastapi import FastAPI

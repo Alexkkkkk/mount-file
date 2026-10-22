@@ -3,11 +3,10 @@ REM SPDX-License-Identifier: MIT
 REM Copyright (c) 2026 Alexkkkkk
 REM Licensed under the MIT License - see the LICENSE file for details.
 REM Build a standalone MountFile.exe with PyInstaller.
-REM Works on Windows 7 (Python 3.8 + PyQt5) and Windows 10/11 (Python 3.10+ + PyQt6).
+REM Supported on Windows 10/11 with Python 3.10+ and PyQt6.
 REM
 REM Usage:
 REM   build_exe.bat                (uses the active Python environment)
-REM   py -3.8 build_exe.bat        (Windows 7: force Python 3.8)
 REM   build_exe.bat --no-pause     (CI: do not wait for a key press)
 
 setlocal
@@ -26,7 +25,7 @@ if exist "%ICON%" (set ICONARG=--icon %ICON%) else (echo Note: %ICON% not found 
 
 python -m pip install --quiet --upgrade pyinstaller
 python -m PyInstaller --onefile --windowed --name MountFile %EXTRA% %ICONARG% ^
-    --add-data "mountfile\data\icon.png;mountfile\data" main.py
+    --collect-data mountfile main.py
 
 echo.
 if exist dist\MountFile.exe (

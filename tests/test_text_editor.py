@@ -150,7 +150,7 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
 
-    from mountfile.qt_compat import MB_No, QApplication, QMessageBox
+    from mountfile.qt_compat import QApplication, QMessageBox
     from mountfile.tc_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
@@ -169,7 +169,10 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
 
     monkeypatch.setattr(text_editor, "open_in_editor", fake_open)
     monkeypatch.setattr(win, "_text_temp_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: MB_No)
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *args, **kwargs: messages.append(args)
+    )
 
     win.open_text_file(panel)
 
@@ -177,6 +180,8 @@ def test_gui_opens_txt_from_image_in_editor(tmp_path, monkeypatch):
     with open(seen["path"], "rb") as stream:
         assert stream.read().decode("utf-8-sig") == "текст"
     assert panel.provider.calls == ["/notes.txt"]
+    assert messages and messages[-1][1] == "Образ только для чтения"
+    assert seen["path"] in messages[-1][2]
     log = win.log.toPlainText()
     assert "Блокнот" in log and "notes.txt" in log, log[-300:]
 
