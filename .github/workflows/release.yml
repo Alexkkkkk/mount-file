@@ -186,6 +186,20 @@ jobs:
           "$hash  $($item.Name)" | Set-Content "$exe.sha256"
           Get-ChildItem dist | Select-Object Name, Length
 
+      - name: Package the standalone Windows component installer
+        if: matrix.name == 'MountFile'
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'mountfile-components'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item install-components.bat $stage
+          Copy-Item scripts/install-windows-components.ps1 $stage
+          Copy-Item docs/windows-components.md (Join-Path $stage 'README.md')
+          $zip = 'dist/MountFile-Windows-components.zip'
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  MountFile-Windows-components.zip" | Set-Content "$zip.sha256"
+
       - name: Frozen exe self-check (informational)
         shell: pwsh
         continue-on-error: true
@@ -199,6 +213,8 @@ jobs:
           path: |
             dist/${{ matrix.name }}.exe
             dist/${{ matrix.name }}.exe.sha256
+            dist/MountFile-Windows-components.zip
+            dist/MountFile-Windows-components.zip.sha256
           if-no-files-found: error
           retention-days: 90
 

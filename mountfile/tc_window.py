@@ -45,7 +45,7 @@ import threading
 import webbrowser
 from pathlib import PurePosixPath
 
-from . import ai, autopick, tc_style, text_editor
+from . import ai, autopick, components, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .hexview import HexView
 from .partition import list_partitions
@@ -2602,6 +2602,10 @@ class MainWindow(QMainWindow):
 
         m_cfg = mb.addMenu("Конфигурация")
         m_cfg.addAction(self._action("Настройки…", self.open_settings))
+        self.act_install_components = self._action(
+            "Установить компоненты…", self.install_components
+        )
+        m_cfg.addAction(self.act_install_components)
         m_cfg.addSeparator()
         self.theme_acts = {}
         for label, key in sorted(tc_style.THEME_BY_LABEL.items()):
@@ -2685,6 +2689,48 @@ class MainWindow(QMainWindow):
         self.dock.setVisible(bool(dlg.chk_log.isChecked()))
         tc_style.save_settings()
         self._apply_theme(dlg.cmb_theme.currentData() or tc_style.theme())
+
+    def install_components(self):
+        """Offer the optional system installer; never alter an image itself."""
+        if not components.is_windows():
+            QMessageBox.information(
+                self,
+                "Установка компонентов",
+                "В графическом интерфейсе автоустановка доступна только в Windows.\n\n"
+                "%s" % components.installation_hint(),
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Установить компоненты Windows",
+            "Будет открыт отдельный PowerShell-установщик для записи образов:\n"
+            "• отдельный WSL/Ubuntu-дистрибутив MountFileTools для debugfs и ext2/3/4 "
+            "(около 325 МБ загрузки и место на диске);\n"
+            "• подписанный драйвер ImDisk для поддерживаемых Windows-томов.\n\n"
+            "Нужны интернет и подтверждение прав администратора (UAC). После установки "
+            "может потребоваться перезагрузка. Образа не будут записываться этой операцией.\n\n"
+            "Открыть установщик?",
+            MB_Yes | MB_No,
+            MB_No,
+        )
+        if answer != MB_Yes:
+            return
+        try:
+            components.launch_windows_component_installer()
+        except components.ComponentInstallError as exc:
+            QMessageBox.warning(self, "Установка компонентов", str(exc))
+            self.log_msg("Установщик компонентов не запущен: %s" % exc)
+            return
+        QMessageBox.information(
+            self,
+            "Установщик запущен",
+            "PowerShell открыт в отдельном окне; результат установки пока неизвестен. "
+            "Дождитесь сообщений в этом окне (возможна перезагрузка), затем переоткройте "
+            "образ или перезапустите MountFile.",
+        )
+        self.log_msg(
+            "Запущен отдельный установщик компонентов Windows; образ не изменялся."
+        )
 
     def toggle_log(self, checked=None):
         visible = self.dock.isVisible() if checked is None else bool(checked)
@@ -3573,11 +3619,8 @@ class MainWindow(QMainWindow):
                             fs_name = str(adapter.fs_type).lower()
                             if fs_name.startswith(("ext2", "ext3", "ext4", "ext")):
                                 panel.write_reason = (
-                                    "Для записи ext2/3/4 в Windows нужен debugfs.exe "
-                                    "в PATH либо WSL с Linux и e2fsprogs. В WSL "
-                                    "установите пакет e2fsprogs (например, "
-                                    "`sudo apt install e2fsprogs`), затем перезапустите "
-                                    "MountFile."
+                                    "Для записи ext2/3/4 нужен debugfs/e2fsprogs. "
+                                    + components.installation_hint()
                                 )
                             else:
                                 panel.write_reason = (
@@ -3594,7 +3637,9 @@ class MainWindow(QMainWindow):
                         elif adapter.write_strategy == "read-only-imdisk-tools":
                             panel.write_reason = (
                                 "Для записи в Windows установите ImDisk Virtual Disk "
-                                "Driver, затем перезапустите MountFile от имени "
+                                "Driver. "
+                                + components.installation_hint()
+                                + " После установки перезапустите MountFile от имени "
                                 "администратора."
                             )
                         elif adapter.write_strategy == "read-only-admin":
