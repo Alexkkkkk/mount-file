@@ -147,8 +147,9 @@ class _UniversalImageWriter:
     and an available loop-mount backend.
     """
 
-    def __init__(self, filesystem):
+    def __init__(self, filesystem, provider=None):
         self.filesystem = filesystem
+        self.provider = provider
         info = filesystem.info()
         self.total_bytes = int(info.total_size or 0)
         self.fs_type = info.fs_type
@@ -163,21 +164,35 @@ class _UniversalImageWriter:
             return str(PurePosixPath(name))
         return str(PurePosixPath(directory) / name)
 
+    def _mutate(self, operation):
+        close = getattr(self.provider, "close", None)
+        reopen = getattr(self.provider, "reopen", None)
+        release_reader = self.write_strategy == "imdisk-rw" and callable(close)
+        if release_reader:
+            close()
+        try:
+            return operation()
+        finally:
+            if release_reader and callable(reopen):
+                reopen()
+
     def mkdir(self, directory, name):
-        self.filesystem.mkdir(self._join(directory, name))
+        self._mutate(lambda: self.filesystem.mkdir(self._join(directory, name)))
 
     def write_file(self, directory, name, data):
-        self.filesystem.write_file(self._join(directory, name), data)
+        self._mutate(
+            lambda: self.filesystem.write_file(self._join(directory, name), data)
+        )
 
     def rename(self, source, destination):
         source = str(source).replace("\\", "/")
         destination = str(destination).replace("\\", "/")
         if not destination.startswith("/"):
             destination = self._join(str(PurePosixPath(source).parent), destination)
-        self.filesystem.rename(source, destination)
+        self._mutate(lambda: self.filesystem.rename(source, destination))
 
     def delete(self, path, recursive=False):
-        self.filesystem.delete(path, recursive=recursive)
+        self._mutate(lambda: self.filesystem.delete(path, recursive=recursive))
 
     def close(self):
         self.filesystem.close()
@@ -3506,8 +3521,10 @@ class MainWindow(QMainWindow):
         # FAT32 keeps its native writer. Any other filesystem needs a backend:
         # ext2/3/4 prefers the transactional debugfs writer (temporary extent,
         # read-back/SHA-256 verification, rollback snapshot), and the package
-        # facade covers NTFS via ntfs-3g plus the loop-mount fallback. A failed
-        # backend leaves the volume truthfully read-only.
+        # facade covers NTFS via ntfs-3g (Linux) or ImDisk (Windows), plus the
+        # platform-specific loop-mount fallback. ImDisk temporarily releases
+        # the pytsk reader handles before opening the image for shared writes.
+        # A failed backend remains read-only.
         if not fat_writer_ready:
             ext_writer = None
             try:
@@ -3534,7 +3551,7 @@ class MainWindow(QMainWindow):
                     filesystem = UniversalFSRW(
                         self.image_path, offset=offset, auto_backup=False
                     )
-                    adapter = _UniversalImageWriter(filesystem)
+                    adapter = _UniversalImageWriter(filesystem, panel.provider)
                     if not adapter.writable:
                         adapter.close()
                         panel.writer = None
@@ -3548,6 +3565,17 @@ class MainWindow(QMainWindow):
                             panel.write_reason = (
                                 "Для записи через loop-mount не найдены системные "
                                 "утилиты mount/umount; образ открыт только для чтения."
+                            )
+                        elif adapter.write_strategy == "read-only-imdisk-tools":
+                            panel.write_reason = (
+                                "Для записи в Windows установите ImDisk Virtual Disk "
+                                "Driver, затем перезапустите MountFile от имени "
+                                "администратора."
+                            )
+                        elif adapter.write_strategy == "read-only-admin":
+                            panel.write_reason = (
+                                "Для записи через ImDisk перезапустите MountFile "
+                                "от имени администратора."
                             )
                         else:
                             panel.write_reason = (
@@ -4066,7 +4094,7 @@ class MainWindow(QMainWindow):
                 "Копирование в образ",
                 "Целевой том открыт только для чтения: нужен доступный "
                 "backend записи его файловой системы (FAT32 встроен, ext2/3/4 "
-                "требует debugfs, NTFS — ntfs-3g).\n\n%s"
+                "требует debugfs, NTFS — ntfs-3g на Linux или ImDisk на Windows).\n\n%s"
                 % (getattr(other, "write_reason", "") or "Причина не указана."),
             )
             return

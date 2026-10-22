@@ -41,6 +41,7 @@ python -m mountfile --help
 | PyQt6 (в `requirements.txt` `>=6.11`) | основной для Win 10/11, Linux, macOS | GUI `main.py` |
 | `pytsk3` | обязательная Python-зависимость; нужен для NTFS/EXT и прочих ФС | сборка/колёса зависят от Python и платформы |
 | `debugfs` из e2fsprogs | необязателен; нужен для записи в ext2/3/4 через F4/F5 | исполняемый файл должен быть в `PATH`; не поставляется вместе с приложением |
+| ImDisk Virtual Disk Driver | необязателен; нужен для записи в NTFS/exFAT/FAT12/16-образы на Windows | установить отдельно; запуск MountFile от имени администратора; [сайт автора](https://ltr-data.se/opencode.html/) |
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |
 | `dosfstools`, `mtools` | только разработка | создание синтетических образов через `make sample` |
 | `fastapi`, `uvicorn` | только DFIR REST-команда | нужны лишь для `mountfile_dfir.py serve` |

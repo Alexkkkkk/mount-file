@@ -8,8 +8,8 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
   1. NativeFat32Writer  — FAT12/16/32, прямая правка FAT + LFN + каталогов
   2. NativeExt2Writer   — ext2 (без журнала), bitmap + прямой write
   3. ExtDebugfsWriter   — ext2/3/4 через `debugfs -w`
-  4. NtfsWriter         — NTFS через `ntfs-3g` / `ntfsclone`
-  5. LoopMountWriter    — любые ФС через `mount -o loop,rw`
+  4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
+  5. LoopMountWriter    — Linux loop-mount или Windows ImDisk для NTFS/FAT/exFAT
   6. RebuildWriter      — fallback: unpack → mkfs → repack
 
 Единый API:
@@ -22,7 +22,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
         fs.restore_from_backup()  # откат
 
 Зависимости (опциональные):
-    pytsk3, ntfs-3g, e2fsprogs (debugfs, e2fsck), util-linux (mount),
+    pytsk3, ntfs-3g, ImDisk Virtual Disk Driver, e2fsprogs (debugfs, e2fsck), util-linux,
     dosfstools (mkfs.vfat, fsck.fat)
 """
 
@@ -34,6 +34,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import stat
 import struct
 import subprocess
 import sys
@@ -72,6 +73,126 @@ def _normalise_mount_fs(fs_type: str) -> str:
     }.get(value, value)
 
 
+WINDOWS_NATIVE_RW_FS = frozenset(
+    {"ntfs", "vfat", "fat", "fat12", "fat16", "fat32", "exfat"}
+)
+
+
+def _find_imdisk() -> str | None:
+    """Find the ImDisk CLI without assuming its install directory."""
+    executable = shutil.which("imdisk.exe") or shutil.which("imdisk")
+    if executable:
+        return executable
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if system_root:
+        candidate = Path(system_root) / "System32" / "imdisk.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _windows_is_admin() -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def _imdisk_status(fs_type: str) -> tuple[str, str]:
+    """Describe whether Windows can safely mount this filesystem read/write."""
+    if not sys.platform.startswith("win"):
+        return "read-only-platform", "ImDisk image writing is available only on Windows"
+    fs_name = _normalise_mount_fs(fs_type)
+    if fs_name not in WINDOWS_NATIVE_RW_FS:
+        return (
+            "read-only-platform",
+            "Windows native image writing does not support %s" % fs_type,
+        )
+    if not _find_imdisk():
+        return (
+            "read-only-imdisk-tools",
+            "ImDisk Virtual Disk Driver is required for Windows image writing",
+        )
+    if not _windows_is_admin():
+        return (
+            "read-only-admin",
+            "ImDisk image writing requires MountFile to run as Administrator",
+        )
+    return "imdisk-rw", ""
+
+
+def _available_windows_drive_letter() -> str:
+    """Choose a currently unused drive letter for a temporary ImDisk mount."""
+    import ctypes
+
+    used = int(ctypes.windll.kernel32.GetLogicalDrives())
+    for letter in reversed("ZYXWVUTSRQPONMLKJIHGFED"):
+        bit = ord(letter) - ord("A")
+        if not used & (1 << bit):
+            return letter + ":"
+    raise RuntimeError("No free Windows drive letter is available for ImDisk")
+
+
+def _imdisk_mount(image: Path, offset: int) -> tuple[str, Path]:
+    """Attach one detected volume using ImDisk and Windows' native FS driver.
+
+    Deliberately omit ImDisk's ``-s`` option: for file-backed devices it can
+    resize the backing image. The OS filesystem driver observes the volume's
+    own BPB length; ``-b`` confines the virtual device to the detected start.
+    """
+    executable = _find_imdisk()
+    if not executable:
+        raise RuntimeError(
+            "Install ImDisk Virtual Disk Driver from https://ltr-data.se/opencode.html/"
+        )
+    if not _windows_is_admin():
+        raise RuntimeError(
+            "Run MountFile as Administrator to write an image through ImDisk"
+        )
+    if offset < 0 or offset >= image.stat().st_size:
+        raise ValueError("filesystem offset is outside the image")
+
+    drive = _available_windows_drive_letter()
+    command = [
+        executable,
+        "-a",
+        "-t",
+        "file",
+        "-f",
+        str(image),
+        "-b",
+        str(offset),
+        "-m",
+        drive,
+        "-o",
+        "rw,shared",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(
+            "ImDisk could not attach the image. Check Administrator rights, "
+            "volume state and offset. %s" % detail
+        )
+    return drive, Path(drive + "\\")
+
+
+def _imdisk_unmount(drive: str) -> None:
+    executable = _find_imdisk()
+    if not executable:
+        raise RuntimeError("ImDisk CLI disappeared before the volume was detached")
+    result = subprocess.run(
+        [executable, "-d", "-m", drive], capture_output=True, text=True, timeout=120
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError("ImDisk could not safely detach %s: %s" % (drive, detail))
+
+
 def _image_path_parent_name(path: str) -> tuple[str, str]:
     """Split a filesystem-in-image path using FAT/POSIX separators on every OS."""
     image_path = PurePosixPath(str(path).replace("\\", "/"))
@@ -79,6 +200,32 @@ def _image_path_parent_name(path: str) -> tuple[str, str]:
     if parent in ("", "."):
         parent = "/"
     return parent, image_path.name
+
+
+def _safe_mounted_path(mount_point: Path, path: str) -> Path:
+    """Resolve an image-relative path without following links outside the volume."""
+    relative = PurePosixPath(str(path).replace("\\", "/").lstrip("/"))
+    if any(
+        part in ("..", "") or ":" in part or "\x00" in part for part in relative.parts
+    ):
+        raise ValueError("unsafe path in mounted filesystem: %r" % path)
+
+    current = Path(mount_point).resolve()
+    for part in relative.parts:
+        candidate = current / part
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            current = candidate
+            continue
+        reparse_point = bool(getattr(info, "st_file_attributes", 0) & 0x400)
+        if stat.S_ISLNK(info.st_mode) or reparse_point:
+            raise PermissionError(
+                "refusing to follow a link/reparse point inside mounted image: %s"
+                % candidate
+            )
+        current = candidate
+    return current
 
 
 # =============================================================================
@@ -1375,16 +1522,39 @@ class Ext234RW(RWBackend):
 # 6. NTFS via subprocess (ntfs-3g / ntfsclone)
 # =============================================================================
 class NtfsRW(RWBackend):
-    """NTFS — чтение через pytsk3, запись через loop-mount ntfs-3g."""
+    """NTFS reader via pytsk3; writes via ntfs-3g or Windows ImDisk."""
 
     def __init__(self, image: Path, offset: int = 0):
         super().__init__(image, offset)
         if pytsk3 is None:
             raise RuntimeError("pytsk3 required for NTFS")
-        self._img = pytsk3.Img_Info(str(image))
-        self._fs = pytsk3.FS_Info(self._img, offset=offset)
+        self._img = None
+        self._fs = None
+        self._open_reader()
+        self._imdisk_drive: str | None = None
+
+    def _open_reader(self) -> None:
+        self._img = pytsk3.Img_Info(str(self.image))
+        self._fs = pytsk3.FS_Info(self._img, offset=self.offset)
+
+    def _close_reader(self) -> None:
+        fs, self._fs = self._fs, None
+        img, self._img = self._img, None
+        for handle in (fs, img):
+            close = getattr(handle, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
     def _mount_point(self) -> Path:
+        if sys.platform.startswith("win"):
+            strategy, issue = _imdisk_status("ntfs")
+            if strategy != "imdisk-rw":
+                raise RuntimeError(issue)
+            self._imdisk_drive, mount_point = _imdisk_mount(self.image, self.offset)
+            return mount_point
         if not sys.platform.startswith("linux"):
             raise NotImplementedError("NTFS write requires Linux + ntfs-3g")
         if shutil.which("ntfs-3g") is None:
@@ -1398,17 +1568,32 @@ class NtfsRW(RWBackend):
         return mp
 
     def _unmount(self, mp: Path) -> None:
+        if sys.platform.startswith("win"):
+            if self._imdisk_drive:
+                drive, self._imdisk_drive = self._imdisk_drive, None
+                _imdisk_unmount(drive)
+            return
         subprocess.run(["umount", str(mp)], capture_output=True)
         shutil.rmtree(mp, ignore_errors=True)
 
     def info(self) -> FSInfo:
+        if sys.platform.startswith("win"):
+            strategy, _ = _imdisk_status("ntfs")
+        elif sys.platform.startswith("linux"):
+            strategy = (
+                "ntfs-3g"
+                if shutil.which("ntfs-3g") and shutil.which("umount")
+                else "read-only-ntfs-tools"
+            )
+        else:
+            strategy = "read-only-platform"
         return FSInfo(
             fs_type="ntfs",
             offset=self.offset,
-            backend="ntfs-3g-rw",
+            backend="ntfs-rw",
             total_size=self.image.stat().st_size,
-            writable=sys.platform.startswith("linux"),
-            write_strategy="ntfs-3g",
+            writable=strategy in ("ntfs-3g", "imdisk-rw"),
+            write_strategy=strategy,
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
@@ -1439,15 +1624,22 @@ class NtfsRW(RWBackend):
         return f.read_random(0, f.info.meta.size)
 
     def _do_mounted(self, fn) -> None:
-        mp = self._mount_point()
+        release_reader = sys.platform.startswith("win")
+        if release_reader:
+            self._close_reader()
         try:
-            fn(mp)
+            mp = self._mount_point()
+            try:
+                fn(mp)
+            finally:
+                self._unmount(mp)
         finally:
-            self._unmount(mp)
+            if release_reader:
+                self._open_reader()
 
     def write_file(self, path: str, data: bytes) -> None:
         def _do(mp: Path):
-            dst = mp / path.lstrip("/")
+            dst = _safe_mounted_path(mp, path)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
 
@@ -1455,12 +1647,12 @@ class NtfsRW(RWBackend):
 
     def mkdir(self, path: str) -> None:
         self._do_mounted(
-            lambda mp: (mp / path.lstrip("/")).mkdir(parents=True, exist_ok=True)
+            lambda mp: _safe_mounted_path(mp, path).mkdir(parents=True, exist_ok=True)
         )
 
     def delete(self, path: str, recursive: bool = False) -> None:
         def _do(mp: Path):
-            p = mp / path.lstrip("/")
+            p = _safe_mounted_path(mp, path)
             if p.is_dir():
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
@@ -1469,14 +1661,16 @@ class NtfsRW(RWBackend):
         self._do_mounted(_do)
 
     def rename(self, src: str, dst: str) -> None:
-        self._do_mounted(lambda mp: (mp / src.lstrip("/")).rename(mp / dst.lstrip("/")))
+        self._do_mounted(
+            lambda mp: _safe_mounted_path(mp, src).rename(_safe_mounted_path(mp, dst))
+        )
 
 
 # =============================================================================
 # 7. LOOP-MOUNT fallback (любая ФС)
 # =============================================================================
 class LoopMountRW(RWBackend):
-    """Запись через `mount -o loop,rw` на Linux при наличии mount tools."""
+    """Write via Linux loop-mount or Windows ImDisk for native Windows filesystems."""
 
     def __init__(self, image: Path, offset: int, fs_type: str):
         super().__init__(image, offset)
@@ -1492,9 +1686,10 @@ class LoopMountRW(RWBackend):
         if issue:
             raise RuntimeError(issue)
 
-    @staticmethod
-    def _runtime_status() -> tuple[str, str]:
+    def _runtime_status(self) -> tuple[str, str]:
         """Return the available write strategy and any platform/tool issue."""
+        if sys.platform.startswith("win"):
+            return _imdisk_status(self.fs_type)
         if not sys.platform.startswith("linux"):
             return "read-only-platform", "loop-mount writing is supported only on Linux"
         missing = [name for name in ("mount", "umount") if shutil.which(name) is None]
@@ -1507,9 +1702,12 @@ class LoopMountRW(RWBackend):
         return "loop-mount", ""
 
     def _mount_point(self) -> Path:
-        _, issue = self._runtime_status()
+        strategy, issue = self._runtime_status()
         if issue:
             raise RuntimeError(issue)
+        if strategy == "imdisk-rw":
+            self._imdisk_drive, mount_point = _imdisk_mount(self.image, self.offset)
+            return mount_point
         mp = Path(tempfile.mkdtemp(prefix="mnt_"))
         opts = f"loop,offset={self.offset},rw"
         if self.fs_type in ("vfat", "fat", "fat32", "exfat"):
@@ -1522,6 +1720,11 @@ class LoopMountRW(RWBackend):
         return mp
 
     def _unmount(self, mp: Path) -> None:
+        if sys.platform.startswith("win"):
+            if getattr(self, "_imdisk_drive", None):
+                drive, self._imdisk_drive = self._imdisk_drive, None
+                _imdisk_unmount(drive)
+            return
         subprocess.run(["umount", str(mp)], capture_output=True)
         shutil.rmtree(mp, ignore_errors=True)
 
@@ -1539,15 +1742,15 @@ class LoopMountRW(RWBackend):
         return FSInfo(
             fs_type=self.fs_type,
             offset=self.offset,
-            backend="loop-mount-rw",
+            backend=strategy,
             total_size=self.image.stat().st_size,
-            writable=strategy == "loop-mount",
+            writable=strategy in ("loop-mount", "imdisk-rw"),
             write_strategy=strategy,
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
         def _do(mp: Path) -> list[FSEntry]:
-            p = mp / path.lstrip("/")
+            p = _safe_mounted_path(mp, path)
             if not p.exists():
                 return []
             entries: list[FSEntry] = []
@@ -1570,22 +1773,22 @@ class LoopMountRW(RWBackend):
 
     def read(self, path: str) -> bytes:
         result: list[bytes] = []
-        self._do(lambda mp: result.append((mp / path.lstrip("/")).read_bytes()))
+        self._do(lambda mp: result.append(_safe_mounted_path(mp, path).read_bytes()))
         return result[0]
 
     def write_file(self, path: str, data: bytes) -> None:
         self._assert_writable()
-        self._do(lambda mp: (mp / path.lstrip("/")).write_bytes(data))
+        self._do(lambda mp: _safe_mounted_path(mp, path).write_bytes(data))
 
     def mkdir(self, path: str) -> None:
         self._assert_writable()
-        self._do(lambda mp: (mp / path.lstrip("/")).mkdir(parents=True))
+        self._do(lambda mp: _safe_mounted_path(mp, path).mkdir(parents=True))
 
     def delete(self, path: str, recursive: bool = False) -> None:
         self._assert_writable()
 
         def _do(mp: Path):
-            p = mp / path.lstrip("/")
+            p = _safe_mounted_path(mp, path)
             if p.is_dir():
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
@@ -1595,7 +1798,9 @@ class LoopMountRW(RWBackend):
 
     def rename(self, src: str, dst: str) -> None:
         self._assert_writable()
-        self._do(lambda mp: (mp / src.lstrip("/")).rename(mp / dst.lstrip("/")))
+        self._do(
+            lambda mp: _safe_mounted_path(mp, src).rename(_safe_mounted_path(mp, dst))
+        )
 
 
 # =============================================================================
