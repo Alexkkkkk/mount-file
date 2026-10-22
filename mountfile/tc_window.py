@@ -1978,6 +1978,12 @@ class SettingsDialog(QDialog):
         lay.addRow("Адрес OpenAI-сервера:", self.ed_ai_url_openai)
         self.ed_ai_model = QLineEdit(str(tc_style.SETTINGS.get("ai_model") or ""))
         lay.addRow("Модель:", self.ed_ai_model)
+        self.btn_ai_detect = QPushButton("Проверить и настроить Ollama")
+        self.btn_ai_detect.setToolTip(
+            "Найдёт локальный сервер и выберет одну из уже загруженных моделей"
+        )
+        self.btn_ai_detect.clicked.connect(self._detect_ollama)
+        lay.addRow("Локальный AI:", self.btn_ai_detect)
         self.ed_ai_key = QLineEdit(str(tc_style.SETTINGS.get("ai_api_key") or ""))
         self.ed_ai_key.setEchoMode(EchoPassword)
         lay.addRow("Ключ API:", self.ed_ai_key)
@@ -2020,6 +2026,38 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         lay.addRow(buttons)
+
+    def _detect_ollama(self):
+        """Probe Ollama only after an explicit click in Settings."""
+        settings = {"ai_model": self.ed_ai_model.text().strip()}
+        result = ai.configure_local_ollama(settings, self.ed_ai_url.text().strip())
+        if result["ok"]:
+            idx = self.cmb_ai.findData("ollama")
+            self.cmb_ai.setCurrentIndex(max(0, idx))
+            self.ed_ai_url.setText(settings["ai_base_url"])
+            self.ed_ai_model.setText(settings["ai_model"])
+            QMessageBox.information(
+                self,
+                "AI настроен",
+                "Ollama доступна. Выбрана модель: %s\n\nДоступно моделей: %s"
+                % (settings["ai_model"], ", ".join(result["models"])),
+            )
+            return
+        if result["reachable"]:
+            detail = (
+                "Ollama запущена, но модель не загружена.\n\n"
+                "Откройте PowerShell и выполните:\n"
+                "ollama pull llama3.2:3b\n\n"
+                "Затем нажмите кнопку ещё раз."
+            )
+        else:
+            detail = (
+                "Ollama не найдена по адресу http://127.0.0.1:11434.\n\n"
+                "Установите Ollama с https://ollama.com/download/windows,\n"
+                "запустите её и загрузите модель:\n"
+                "ollama pull llama3.2:3b"
+            )
+        QMessageBox.warning(self, "AI не настроен", detail + "\n\n" + result["error"])
 
 
 class MainWindow(QMainWindow):
