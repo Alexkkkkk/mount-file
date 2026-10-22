@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -52,6 +53,39 @@ def _debugfs_quote(value):
     return '"{}"'.format(value.replace("\\", "\\\\"))
 
 
+def _find_debugfs(debugfs="debugfs", windows=None):
+    """Find native debugfs, or the default WSL distribution's debugfs on Windows."""
+    executable = shutil.which(debugfs)
+    if executable:
+        return executable, None
+    if windows is None:
+        windows = sys.platform.startswith("win")
+    if not windows:
+        return None, None
+    wsl = shutil.which("wsl.exe") or shutil.which("wsl")
+    if not wsl:
+        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+        if root:
+            candidate = os.path.join(root, "System32", "wsl.exe")
+            if os.path.isfile(candidate):
+                wsl = candidate
+    if not wsl:
+        return None, None
+    try:
+        result = subprocess.run(
+            [wsl, "--exec", "sh", "-lc", "command -v debugfs"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    executable = (result.stdout or "").strip().splitlines()
+    if result.returncode or not executable or not executable[-1].startswith("/"):
+        return None, None
+    return executable[-1], wsl
+
+
 class Ext234ImageWriter:
     """Write files to one ext filesystem inside a raw image.
 
@@ -68,10 +102,40 @@ class Ext234ImageWriter:
             raise ExtWriteError("negative filesystem offset")
         if self.volume_size is not None and self.volume_size <= 0:
             raise ExtWriteError("invalid selected partition size")
-        self.debugfs = shutil.which(debugfs)
+        self.wsl_executable = None
+        self._wsl_path_cache = {}
+        self.debugfs, self.wsl_executable = _find_debugfs(debugfs)
         if not self.debugfs:
-            raise ExtWriteError("e2fsprogs debugfs is required for ext2/3/4 writes")
+            raise ExtWriteError(
+                "e2fsprogs debugfs is required for ext2/3/4 writes; on Windows, "
+                "add debugfs.exe to PATH or install WSL with a Linux distribution "
+                "and e2fsprogs (for Ubuntu: sudo apt install e2fsprogs)"
+            )
         self._read_superblock()
+
+    def _wsl_path(self, path):
+        """Translate a host path to the active WSL distribution's path space."""
+        host_path = os.path.abspath(os.fspath(path))
+        cached = self._wsl_path_cache.get(host_path)
+        if cached is not None:
+            return cached
+        result = subprocess.run(
+            [self.wsl_executable, "--exec", "wslpath", "-a", host_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        converted = (result.stdout or "").strip()
+        if result.returncode or not converted.startswith("/"):
+            detail = (result.stderr or result.stdout or "no path returned").strip()
+            raise ExtWriteError("WSL could not translate a temporary path: %s" % detail)
+        self._wsl_path_cache[host_path] = converted
+        return converted
+
+    def _host_debugfs_quote(self, path):
+        if self.wsl_executable:
+            return _debugfs_quote(self._wsl_path(path))
+        return _debugfs_quote(path)
 
     def _read_superblock(self):
         with open(self.image_path, "rb") as image:
@@ -109,7 +173,11 @@ class Ext234ImageWriter:
             raise ExtWriteError("ext filesystem extent exceeds image bounds")
 
     def _run(self, image_path, command, write=False):
-        args = [self.debugfs]
+        if self.wsl_executable:
+            args = [self.wsl_executable, "--exec", self.debugfs]
+            image_path = self._wsl_path(image_path)
+        else:
+            args = [self.debugfs]
         if write:
             args.append("-w")
         args.extend(["-R", command, os.fspath(image_path)])
@@ -221,7 +289,7 @@ class Ext234ImageWriter:
             output = os.path.join(work, "out.bin")
             self._run(
                 filesystem,
-                f"dump {_debugfs_quote(image_path)} {_debugfs_quote(output)}",
+                f"dump {_debugfs_quote(image_path)} {self._host_debugfs_quote(output)}",
             )
             with open(output, "rb") as stream:
                 return stream.read()
@@ -271,7 +339,7 @@ class Ext234ImageWriter:
             self._run(working, f"rm {_debugfs_quote(image_path)}", write=True)
             output = self._run(
                 working,
-                f"write {_debugfs_quote(source)} {_debugfs_quote(image_path)}",
+                f"write {self._host_debugfs_quote(source)} {_debugfs_quote(image_path)}",
                 write=True,
             )
             if "Allocated inode:" not in output:
@@ -279,7 +347,7 @@ class Ext234ImageWriter:
             check = os.path.join(work, "verify.bin")
             self._run(
                 working,
-                f"dump {_debugfs_quote(image_path)} {_debugfs_quote(check)}",
+                f"dump {_debugfs_quote(image_path)} {self._host_debugfs_quote(check)}",
             )
             with open(check, "rb") as stream:
                 if stream.read() != data:

@@ -43,7 +43,12 @@ engine.close()
 ## Границы
 
 * FAT12/16/32 — собственный движок (как и раньше).
-* ext2/3/4 — `debugfs -w`; `chmod`/`chown`/`symlink` доступны только на ext.
+* ext2/3/4 — `debugfs -w`; на Windows используется `debugfs.exe` из `PATH` или
+  `debugfs` из WSL, если установлен Linux-дистрибутив с пакетом `e2fsprogs`
+  (например, `sudo apt install e2fsprogs`). MountFile конвертирует host paths
+  для временных файлов, а исходный image extent проходит через существующую
+  проверяемую transactional commit/rollback процедуру. `chmod`/`chown`/`symlink`
+  доступны только на ext.
 
 * NTFS — через `ntfs-3g` на Linux или системный файловый драйвер Windows через
   ImDisk. На Windows требуется отдельно установленный ImDisk Virtual Disk
