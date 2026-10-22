@@ -239,7 +239,7 @@ python install_mountfile.py --dry-run     # показать команды бе
 | `.[ai]` | MCP/AI helpers (`mcp[cli]`, `pydantic`, `openai`) |
 | `.[dfir]` | дополнительные DFIR-модули (`python-dateutil`, `yara-python`) |
 | `.[dev]` | `pytest`, `pytest-cov`, `hypothesis`, `ruff`, `black`, `isort`, `pyinstaller` |
-| `.[rw]`, `.[rw-ext]`, `.[rw-ntfs]` | универсальный RW-слой; внешние writers устанавливаются отдельно (`debugfs`, `ntfs-3g` или Windows ImDisk) |
+| `.[rw]`, `.[rw-ext]`, `.[rw-ntfs]` | универсальный RW-слой; чтение через MountFileBridge, writers для записи устанавливаются отдельно (`debugfs`, WSL/e2fsprogs, `ntfs-3g` или Windows ImDisk) |
 | `.[fuzz]` | `atheris` (только Linux) |
 
 ```bash
