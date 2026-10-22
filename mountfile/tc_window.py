@@ -144,7 +144,7 @@ class _UniversalImageWriter:
     ``(directory, name, data)`` arguments.  The package RW facade uses one
     POSIX path instead.  Keeping this adapter in the GUI avoids changing the
     tested FAT32 engine while enabling the same commands for ext2/3/4, NTFS,
-    and the loop-mount fallback.
+    and an available loop-mount backend.
     """
 
     def __init__(self, filesystem):
@@ -153,6 +153,7 @@ class _UniversalImageWriter:
         self.total_bytes = int(info.total_size or 0)
         self.fs_type = info.fs_type
         self.write_strategy = info.write_strategy
+        self.writable = bool(info.writable)
 
     @staticmethod
     def _join(directory, name):
@@ -3534,6 +3535,30 @@ class MainWindow(QMainWindow):
                         self.image_path, offset=offset, auto_backup=False
                     )
                     adapter = _UniversalImageWriter(filesystem)
+                    if not adapter.writable:
+                        adapter.close()
+                        panel.writer = None
+                        panel.writer_fh = None
+                        if adapter.write_strategy == "read-only-platform":
+                            panel.write_reason = (
+                                "Запись через loop-mount доступна только в Linux; "
+                                "в этой ОС образ открыт только для чтения."
+                            )
+                        elif adapter.write_strategy == "read-only-mount-tools":
+                            panel.write_reason = (
+                                "Для записи через loop-mount не найдены системные "
+                                "утилиты mount/umount; образ открыт только для чтения."
+                            )
+                        else:
+                            panel.write_reason = (
+                                "Выбранный backend не поддерживает запись "
+                                "в этот образ."
+                            )
+                        self.log_msg(
+                            "Том @ offset %d — только чтение (%s)"
+                            % (offset, panel.write_reason)
+                        )
+                        adapter = None
                 except Exception as e:
                     panel.writer = None
                     panel.write_reason = str(e)
@@ -3542,13 +3567,17 @@ class MainWindow(QMainWindow):
                         % (offset, fat_error, e)
                     )
                 else:
-                    panel.writer = adapter
-                    panel.writer_fh = adapter
-                    panel.volume_label = "%s ofs %d" % (adapter.fs_type.upper(), offset)
-                    self.log_msg(
-                        "Том @ offset %d смонтирован — запись включена (%s)"
-                        % (offset, adapter.write_strategy)
-                    )
+                    if adapter is not None:
+                        panel.writer = adapter
+                        panel.writer_fh = adapter
+                        panel.volume_label = "%s ofs %d" % (
+                            adapter.fs_type.upper(),
+                            offset,
+                        )
+                        self.log_msg(
+                            "Том @ offset %d смонтирован — запись включена (%s)"
+                            % (offset, adapter.write_strategy)
+                        )
 
         panel.path = "/"
         panel.tabs = ["/"]
@@ -3689,6 +3718,21 @@ class MainWindow(QMainWindow):
             % (name, " ".join(argv), note, encoding)
         )
         if panel.mode == "img":
+            if panel.writer is None:
+                reason = getattr(panel, "write_reason", "") or (
+                    "для этого тома нет доступного writer"
+                )
+                QMessageBox.information(
+                    self,
+                    "Образ только для чтения",
+                    "Изменения не будут записаны в образ. Временная копия: "
+                    "%s\n\nПричина: %s" % (target, reason),
+                )
+                self.log_msg(
+                    "Копия редактора не импортирована: том только для чтения (%s)"
+                    % name
+                )
+                return
             answer = QMessageBox.question(
                 self,
                 "Сохранить изменения в образ",

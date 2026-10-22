@@ -32,7 +32,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 | **Документация** | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | **Версия в файлах репозитория** | `mountfile/__init__.py` и `pyproject.toml` согласованы; проверка: `python tools/mfsync.py check --strict` |
 | **Лицензия** | [MIT](LICENSE) |
-| **Платформы** | Windows 10/11, Windows 7 (Python 3.8 + PyQt5), Linux, macOS |
+| **Платформы** | Windows 10/11, Linux, macOS |
 
 > **Про версию.** Релизный процесс сначала обновляет обе версии через PR,
 > затем после успешного CI в `main` создаёт тег проверенного коммита.
@@ -141,25 +141,25 @@ Licensed under the MIT License - see the LICENSE file for details.
   эндпоинт — кнопка «AI» на панели инструментов.
 - **Автообновление** из GitHub Releases: проверка при запуске, проверка
   SHA-256, индикатор хода в строке состояния.
-- **Windows 7** через Python 3.8.10 + PyQt5 (`mountfile/qt_compat.py`);
-  Windows 10/11, Linux и macOS — через PyQt6.
+- **GUI** на PyQt6 для Windows 10/11, Linux и macOS.
 
 ## Требования
 
 | Компонент | Версия |
 |---|---|
-| Python | 3.10–3.12 для основной установки (`requires-python = ">=3.10"`); 3.8.10 — только для Windows 7 |
-| Qt | PyQt6 ≥ 6.11 (`requirements.txt`) или PyQt5 5.15 (Windows 7) |
-| `pytsk3` | необязательно; нужен для чтения NTFS/EXT и прочих ФС |
+| Python | 3.10+ (`requires-python = ">=3.10"`; CI проверяет 3.10–3.12) |
+| Qt | PyQt6 ≥ 6.11 для основного приложения |
+| `pytsk3` | обязательная Python-зависимость; чтение NTFS/EXT и прочих ФС |
 | REST API (необязательно) | `fastapi`, `uvicorn`, `httpx` |
 | AI-слой (необязательно) | `mcp[cli]`, `pydantic`, `openai` |
 | Системные пакеты (Linux) | `libgl1`, `libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0` |
 | Системные инструменты (по желанию) | `dosfstools`, `mtools` — только для сборки тестовых образов; `debugfs` (e2fsprogs) и `ntfs-3g` — для записи в ext/NTFS |
 
-Основные зависимости (`requirements.txt`) рассчитаны на Python 3.10–3.12. Для
-Windows 7 используйте отдельный `requirements-win7.txt` с Python 3.8.10 и PyQt5.
-На Python 3.8 `pytsk3` обычно недоступен как готовое колесо, поэтому зависимость
-там пропускается; приложение продолжает работать со встроенным движком FAT32.
+`requirements.txt` — полный набор зависимостей для Python 3.10+. Обычная
+установка через `pip install .` включает PyQt6 и `pytsk3`; последние версии
+этих зависимостей указаны в `pyproject.toml`. Файлы и сценарии Win7/Python 3.8 сохранены как
+legacy-артефакты, но текущий пакет требует Python 3.10+, поэтому этот релиз не
+заявляет поддержку Windows 7.
 
 ## Установка
 
@@ -206,22 +206,22 @@ Linux и macOS — одна команда вместо ручных шагов 
 ```bash
 python install_mountfile.py
 python install_mountfile.py --minimal     # без AI/API/DFIR
-python install_mountfile.py --win7        # Windows 7 (Python 3.8 + PyQt5)
+python install_mountfile.py --win7        # завершится сообщением о неподдерживаемом legacy-профиле
 python install_mountfile.py --no-sys      # не ставить системные пакеты
 python install_mountfile.py --dry-run     # показать команды без запуска
 ```
 
 | Флаг | Что делает |
 |---|---|
-| *(без флагов)* | системные пакеты (`apt`/`brew`), `BASE_DEPS` + AI/API/DFIR, мягкая установка `pytsk3`, `pip install -e .[api,dev]` |
-| `--minimal` | только `BASE_DEPS` и `pip install -e .` |
-| `--win7` | Python 3.8 + PyQt5 (`requirements-win7.txt`), без системных пакетов |
+| *(без флагов)* | системные пакеты (`apt`/`brew`), обязательные Qt/pytsk3 и extras `api,ai,dfir,dev` |
+| `--minimal` | только обязательные Qt/pytsk3 и `pip install -e .` |
+| `--win7` | завершится понятной ошибкой: текущая версия требует Python 3.10+ |
 | `--no-sys` | пропустить `apt-get` / `brew` |
 | `--dry-run` | напечатать команды и ничего не выполнять |
 
 Скрипт идемпотентен: готовый `.venv` переиспользуется, повторный запуск ничего
-не ломает. `pytsk3` ставится «мягко» — если колесо не собралось (нет компилятора),
-установка продолжается, и Mount File работает со встроенным движком FAT32.
+не ломает. `pytsk3` обязателен; если для платформы нет подходящего wheel или
+сборка зависимости не удалась, установка завершится ошибкой.
 В конце печатается команда запуска: `.venv/bin/python main.py` на Linux/macOS
 и `.venv\Scripts\python.exe main.py` на Windows.
 
@@ -237,8 +237,8 @@ python install_mountfile.py --dry-run     # показать команды бе
 |---|---|
 | `.[api]` | authenticated REST API и его тестовый клиент (`fastapi`, `uvicorn`, `httpx`) |
 | `.[ai]` | MCP/AI helpers (`mcp[cli]`, `pydantic`, `openai`) |
+| `.[dfir]` | дополнительные DFIR-модули (`python-dateutil`, `yara-python`) |
 | `.[dev]` | `pytest`, `pytest-cov`, `hypothesis`, `ruff`, `black`, `isort`, `pyinstaller` |
-| `.[win7]` | PyQt5 5.15 для Windows 7 |
 | `.[rw]`, `.[rw-ext]`, `.[rw-ntfs]` | универсальный RW-слой: чтение через `MountFileBridge`, запись через `debugfs` / `ntfs-3g` |
 | `.[fuzz]` | `atheris` (только Linux) |
 
@@ -256,21 +256,11 @@ python main.py path/to/image.img
 [GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases); к каждому
 `.exe` приложен файл `.sha256` с контрольной суммой.
 
-### Windows 7
+### Windows 7 (legacy, unsupported)
 
-```bat
-py -3.8 -m venv .venv
-.venv\Scripts\activate.bat
-python -m pip install -r requirements-win7.txt
-python main.py path\to\image.img
-```
-
-Сборка автономного `dist\MountFile.exe` при активном окружении Win7:
-
-```bat
-build_exe.bat
-py -3.8 build_exe.bat        REM принудительно Python 3.8
-```
+`requirements-win7.txt` и старые build artifacts сохранены для исторической
+совместимости, но текущий код требует Python 3.10+ и не поддерживает Windows 7.
+См. актуальные требования и ограничения в [руководстве установки](docs/install.md).
 
 ### Системные пакеты Qt (Linux)
 
@@ -302,8 +292,7 @@ HEX-просмотрщике, кнопка **Extract…** извлекает ф�
 ## Командная строка
 
 CLI живёт в `mountfile/cli.py` и доступен и через `python main.py`, и через
-`python -m mountfile`; Qt для него не требуется. Для сборки Windows 7
-используйте `python main.py`.
+`python -m mountfile`; Qt для него не требуется.
 
 ```text
 python -m mountfile {volumes,info,ls,get,put,mkdir,mv,rm,decode,split,autopick,
@@ -569,12 +558,11 @@ make mountfile-exe             # автономный mountfile.py → dist/moun
 
 ```bat
 build_exe.bat                  REM Windows → dist\MountFile.exe
-py -3.8 build_exe.bat          REM Windows 7: принудительно Python 3.8
 ```
 
 Если `pytsk3` не установлена, сборка не падает: бинарник собирается с встроенным
-движком FAT32. Релизные сборки собирает workflow `release.yml` (Windows x64,
-Windows 7, Linux x86-64, macOS arm64), а версию в `mountfile/__init__.py`
+движком FAT32. Релизные сборки собирает workflow `release.yml` (Windows x64 / Python 3.10 и 3.12,
+Linux x86-64, macOS arm64), а версию в `mountfile/__init__.py`
 проставляет `scripts/stamp_version.py` из git-тега.
 
 ## Документация, Docker и demos
@@ -675,7 +663,7 @@ pytest tests/ -v
 
 | Действие | Команда |
 |---|---|
-| все тесты (54 файла в `tests/`) | `make test` — `pytest tests/ -v` |
+| все тесты | `make test` — `pytest tests/ -v` |
 | тесты автономного `mountfile.py` (без `pytsk3` и дисплея) | `make test-standalone` |
 | статическая проверка | `make lint` |
 | автоформат (ruff + black + isort) | `make fmt` |
@@ -683,14 +671,16 @@ pytest tests/ -v
 | синтетические образы для прогона | `make sample` |
 | очистка артефактов | `make clean` |
 
-`mountfile_all.py` прогоняет весь функционал за один запуск — окружение и
-версию, CLI-команды, Python API и тесты:
+`mountfile_all.py` прогоняет доступный функционал за один запуск. Команды над
+образом по умолчанию работают без записи; демонстрационные операции записи
+включаются только с `--allow-write`:
 
 ```bash
 python mountfile_all.py                     # CLI + API + тесты + GUI
 python mountfile_all.py --no-gui            # без интерфейса (работает по SSH и в CI)
 python mountfile_all.py --cli-only          # только CLI-команды
 python mountfile_all.py --api-only          # только Python API
+python mountfile_all.py --allow-write       # разрешить демонстрационную запись в образ
 python mountfile_all.py --tests-only        # только тесты
 python mountfile_all.py --cheatsheet        # карта команд и переменных окружения
 python mountfile_all.py --build             # + сборка бинарника
@@ -758,7 +748,7 @@ mount-file/
 ├── archive/legacy/             исторические материалы (вне сборки, тестов и линта)
 ├── Makefile                    основные задачи разработки
 ├── requirements.txt            зависимости Windows 10/11, Linux, macOS
-├── requirements-win7.txt       зависимости Windows 7 (Python 3.8 + PyQt5)
+├── requirements-win7.txt       сохранённый legacy manifest (текущий код не поддерживает Win7)
 ├── requirements-docs.txt       зависимости сборки документации (mkdocs)
 └── pyproject.toml              метаданные, ruff/mypy/pytest, semantic-release
 ```
@@ -768,8 +758,8 @@ mount-file/
 - **Запись поддерживается только для FAT32.** Переименование и удаление также
   работают только на FAT32. Остальные файловые системы доступны для просмотра и
   извлечения, если их поддерживает установленная сборка `libtsk`.
-- **Без `pytsk3`** (в том числе на Windows 7 с Python 3.8) доступен только
-  встроенный движок FAT32; чтение NTFS/EXT недоступно.
+- **Без `pytsk3`** доступен только встроенный движок FAT32; чтение NTFS/EXT
+  недоступно.
 - Универсальный RW-слой (`mountfile/rw/`) требует внешних утилит (`debugfs` для
   ext2/3/4, `ntfs-3g` для NTFS) и остаётся экспериментальным: отсутствие
   утилиты — это явный отказ записи, а не «тихая» деградация.

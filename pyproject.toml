@@ -15,7 +15,7 @@ version = "1.51.0"
 description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
 readme = "README.md"
 dependencies = [
-    "PyQt6>=6.5",
+    "PyQt6>=6.11.0",
     "pytsk3>=20260715",
 ]
 
@@ -58,16 +58,17 @@ api = [
     "uvicorn>=0.30,<1.0",
     "httpx>=0.27,<1.0",
 ]
+dfir = [
+    "python-dateutil>=2.8.2",
+    "yara-python>=4.5.0; platform_system!='Windows' or python_version>='3.10'",
+]
 ai = [
     "mcp[cli]>=1.0.0",
     "pydantic>=2.0",
     "openai>=1.0",
 ]
-win7 = [
-    "PyQt5>=5.15.11,<5.16",
-]
 rw = [
-    "pytsk3>=20231007",   # RO-чтение через MountFileBridge
+    "pytsk3>=20260715",   # RO-чтение через MountFileBridge
 ]
 rw-ext = [
     "mountfile[rw]",

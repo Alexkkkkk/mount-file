@@ -60,6 +60,38 @@ def test_inherently_read_only_formats_fail_closed_before_mount(tmp_path, fs_type
         backend.write_file("/evidence.bin", b"must not mutate")
 
 
+@pytest.mark.parametrize(
+    ("runtime_status", "strategy", "message"),
+    [
+        (
+            ("read-only-platform", "loop-mount writing is supported only on Linux"),
+            "read-only-platform",
+            "supported only on Linux",
+        ),
+        (
+            ("read-only-mount-tools", "loop-mount writing requires mount and umount"),
+            "read-only-mount-tools",
+            "requires mount and umount",
+        ),
+    ],
+)
+def test_loop_mount_fails_closed_when_platform_or_tools_are_unavailable(
+    tmp_path, monkeypatch, runtime_status, strategy, message
+):
+    image = tmp_path / "image.bin"
+    original = b"unchanged forensic image"
+    image.write_bytes(original)
+    backend = LoopMountRW(image, 0, "unknown-fs")
+    monkeypatch.setattr(backend, "_runtime_status", lambda: runtime_status)
+
+    info = backend.info()
+    assert info.writable is False
+    assert info.write_strategy == strategy
+    with pytest.raises(RuntimeError, match=message):
+        backend.write_file("/evidence.bin", b"must not mutate")
+    assert image.read_bytes() == original
+
+
 def test_loop_mount_normalizes_detector_display_names(tmp_path):
     image = tmp_path / "image.bin"
     image.write_bytes(b"placeholder")

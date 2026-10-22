@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Qt compatibility layer: PyQt6 (modern OS) or PyQt5 (Windows 7).
+"""Qt compatibility layer: PyQt6 primary, PyQt5 fallback for legacy environments.
 
-PyQt6/Qt6 requires Windows 10+, so on Windows 7 this project falls back
-to PyQt5 (Qt 5.15 LTS, the last Qt branch supporting Windows 7).
-All GUI code imports Qt names from here and never from PyQt* directly.
+The supported application matrix uses PyQt6. The PyQt5 branch remains for
+legacy/alternate environments, but the current package does not support
+Windows 7. All GUI code imports Qt names from here and never from PyQt* directly.
 
 IMPORTANT: both branches must export the SAME set of names. The PyQt5
 branch used to import only a handful of widgets, so hexview.py died with
@@ -242,7 +242,7 @@ if QT6:  # pragma: no branch
     P_TOOLTIPBASE = _ROLE.ToolTipBase
     P_TOOLTIPTEXT = _ROLE.ToolTipText
     CG_Disabled = QPalette.ColorGroup.Disabled
-else:  # pragma: no cover - PyQt5 / Windows 7
+else:  # pragma: no cover - legacy PyQt5 fallback
     DisplayRole = Qt.DisplayRole
     Horizontal = Qt.Horizontal
     MOUSE_LEFT = Qt.LeftButton

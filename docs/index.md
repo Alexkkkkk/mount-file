@@ -36,7 +36,7 @@ python main.py path/to/image.img
 python main.py path\to\image.img
 ```
 
-Подробности установки и Windows 7 собраны в [Установке](install.md), команды —
+Подробности установки и ограничения платформ собраны в [Установке](install.md), команды —
 в [CLI](cli.md), интерфейс — в [GUI](gui.md).
 Экспериментальные библиотечные интерфейсы описаны в [API reference](api.md),
 а сценарии запуска — в [Demos](demos.md).

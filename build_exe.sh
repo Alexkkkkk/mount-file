@@ -28,7 +28,8 @@ fi
 
 # App icon: platform-specific file, taken from the bundled artwork
 # (mountfile/data). icon.png is also what the window/taskbar icon uses at
-# run time, so a frozen build still shows the real icon.
+# run time. Collecting package data also ships the XOR tables required by
+# RT809H decoding in frozen builds.
 ICON="$("$PYTHON" -m mountfile.appicon 2>/dev/null || true)"
 if [ -n "$ICON" ] && [ -f "$ICON" ]; then
     EXTRA+=(--icon "$ICON")
@@ -38,7 +39,7 @@ else
 fi
 
 "$PYTHON" -m PyInstaller --onefile --windowed --name "$NAME" \
-    --add-data "mountfile/data/icon.png:mountfile/data" \
+    --collect-data mountfile \
     "${EXTRA[@]}" main.py
 
 if [ -f "dist/$NAME" ]; then

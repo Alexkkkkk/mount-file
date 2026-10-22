@@ -15,10 +15,8 @@ if FASTAPI_AVAILABLE:
 else:  # pragma: no cover - exercised when the optional API is absent.
     TestClient = None
 
-#: FastAPI — опциональная зависимость: CI-джобы, которые ставят только
-#: pytest (Quality), и ночная сборка на requirements-win7.txt её не имеют.
-#: Без этого маркера пять тестов ниже падали с APIUnavailableError вместо
-#: честного skip, и красными были и nightly, и quality-gate.
+#: FastAPI — опциональная зависимость. CI jobs that install only pytest
+#: (for example, Quality) skip these tests instead of raising APIUnavailableError.
 needs_fastapi = pytest.mark.skipif(
     not FASTAPI_AVAILABLE,
     reason="fastapi не установлен (опциональная зависимость; см. extras 'api')",

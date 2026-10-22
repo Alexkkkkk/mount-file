@@ -387,7 +387,11 @@ def mountfile_cmd(*args: str) -> list[str]:
 
 
 def run_mountfile_cli(image: Path, args: list[str]) -> int:
-    cmd = mountfile_cmd(*args, str(image))
+    # The CLI grammar is ``<command> <image> [command arguments...]``.
+    # Appending the image at the end mis-parses ``ls`` and ``split``.
+    if not args:
+        raise ValueError("a mountfile CLI subcommand is required")
+    cmd = mountfile_cmd(args[0], str(image), *args[1:])
     print(f"  $ {' '.join(cmd)}")
     return subprocess.run(cmd, check=False).returncode
 

@@ -26,6 +26,9 @@ logical media stream. Это техническая запись одного ha
 `mountfile_dfir.py` использует только стандартную библиотеку для `grep`,
 SHA-256, timeline CSV → SQLite, простого timestomp-детектора и plugin registry.
 REST-команда — отдельная опция и требует `fastapi` и `uvicorn`.
+Этот прототип не имеет аутентификации и поэтому отказывается слушать внешние
+адреса; используйте только loopback. Для сетевого доступа применяйте
+аутентифицированный API из `mountfile.api`.
 
 ```bash
 python mountfile_dfir.py grep evidence.img "powershell" --encoding utf-16le --json
@@ -149,7 +152,7 @@ print(result.model_dump())
 ```
 
 Замените `FAT_OFFSET` и `PDF_INODE` значениями из первого запуска. Требуются
-`pydantic` и `pytsk3`; на Windows 7/Python 3.8 `pytsk3` обычно недоступен.
+`pydantic` и optional `pytsk3` extra (`mountfile[tsk]`).
 Метод читает inode, не карвит фрагменты и не гарантирует целостность PDF.
 `complete=true` означает равенство переданному `original_size` (или размеру
 мета-записи), а не успешное открытие PDF. Сохраните audit JSONL и отдельно

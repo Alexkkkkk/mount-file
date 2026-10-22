@@ -94,6 +94,16 @@ def test_release_checks_both_platform_version_stamping_and_failed_upload():
     assert "python scripts/stamp_version.py $env:TAG" in text
     assert 'python scripts/stamp_version.py "$TAG"' in text
     assert 'gh release view "$TAG" --repo "$GITHUB_REPOSITORY"' in text
+    assert "needs.build.result == 'success'" in text
+    assert "needs.unix.result == 'success'" in text
+    assert "Verify all required platform binaries and checksums" in text
+    for asset in (
+        "MountFile.exe",
+        "MountFile-win10-x64.exe",
+        "MountFile-linux-x86-64",
+        "MountFile-macos-arm64",
+    ):
+        assert asset in text
     assert "UPLOADED=false" in text
     assert 'if [ "$UPLOADED" != true ]' in text
     assert '"$asset.sha256"' in text
