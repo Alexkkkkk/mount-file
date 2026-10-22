@@ -76,6 +76,17 @@ jobs:
           python -m pip install --upgrade pip pytest pytest-cov
           python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0'
 
+      - name: Validate Windows installers without system changes
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          & ./scripts/test-windows-installers.ps1
+          if (-not $?) { throw 'PowerShell mock tests failed' }
+          & ./scripts/install-windows-components.ps1 -DryRun
+          if ($LASTEXITCODE -ne 0) { throw 'component dry-run failed' }
+          & ./scripts/install-windows.ps1 -DryRun
+          if ($LASTEXITCODE -ne 0) { throw 'source bootstrap dry-run failed' }
+
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -v

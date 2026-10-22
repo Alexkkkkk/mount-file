@@ -103,7 +103,7 @@ py-modules = [
 include = ["mountfile*"]
 
 [tool.setuptools.package-data]
-mountfile = ["data/*.bin", "data/*.png", "data/*.ico", "data/*.icns"]
+mountfile = ["data/*.bin", "data/*.png", "data/*.ico", "data/*.icns", "data/*.ps1"]
 
 [tool.ruff]
 line-length = 100

@@ -23,6 +23,7 @@ class ExtWriteError(RuntimeError):
 
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.+@=-]+$")
 _CHUNK = 1024 * 1024
+DEDICATED_WSL_DISTRIBUTION = "MountFileTools"
 
 
 def normalize_image_path(path, allow_root=False):
@@ -53,27 +54,58 @@ def _debugfs_quote(value):
     return '"{}"'.format(value.replace("\\", "\\\\"))
 
 
-def _find_debugfs(debugfs="debugfs", windows=None):
-    """Find native debugfs, or the default WSL distribution's debugfs on Windows."""
+def _find_wsl_executable():
+    """Find WSL, preferring Sysnative from a 32-bit Python on 64-bit Windows."""
+    root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    wow64 = sys.maxsize <= 2**32 and bool(
+        os.environ.get("PROCESSOR_ARCHITEW6432")
+        or os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() == "AMD64"
+    )
+    if root and wow64:
+        candidate = os.path.join(root, "Sysnative", "wsl.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    wsl = shutil.which("wsl.exe") or shutil.which("wsl")
+    if wsl:
+        return wsl
+    if root:
+        candidate = os.path.join(root, "System32", "wsl.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _find_debugfs(debugfs="debugfs", windows=None, distribution=None):
+    """Find native debugfs, Homebrew's keg-only copy, or WSL's copy.
+
+    ``distribution`` is optional to preserve the default WSL behavior and its
+    command shape for existing callers.  When supplied, discovery runs only in
+    that named distribution.
+    """
     executable = shutil.which(debugfs)
     if executable:
         return executable, None
+    if sys.platform == "darwin":
+        for candidate in (
+            "/opt/homebrew/opt/e2fsprogs/sbin/debugfs",
+            "/usr/local/opt/e2fsprogs/sbin/debugfs",
+        ):
+            if os.path.isfile(candidate):
+                return candidate, None
     if windows is None:
         windows = sys.platform.startswith("win")
     if not windows:
         return None, None
-    wsl = shutil.which("wsl.exe") or shutil.which("wsl")
-    if not wsl:
-        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
-        if root:
-            candidate = os.path.join(root, "System32", "wsl.exe")
-            if os.path.isfile(candidate):
-                wsl = candidate
+    wsl = _find_wsl_executable()
     if not wsl:
         return None, None
+    args = [wsl]
+    if distribution:
+        args.extend(["-d", distribution])
+    args.extend(["--exec", "sh", "-lc", "command -v debugfs"])
     try:
         result = subprocess.run(
-            [wsl, "--exec", "sh", "-lc", "command -v debugfs"],
+            args,
             capture_output=True,
             text=True,
             timeout=30,
@@ -103,15 +135,31 @@ class Ext234ImageWriter:
         if self.volume_size is not None and self.volume_size <= 0:
             raise ExtWriteError("invalid selected partition size")
         self.wsl_executable = None
+        self.wsl_distribution = None
         self._wsl_path_cache = {}
         self.debugfs, self.wsl_executable = _find_debugfs(debugfs)
+        if not self.debugfs and sys.platform.startswith("win"):
+            self.debugfs, self.wsl_executable = _find_debugfs(
+                debugfs, distribution=DEDICATED_WSL_DISTRIBUTION
+            )
+            if self.debugfs:
+                self.wsl_distribution = DEDICATED_WSL_DISTRIBUTION
         if not self.debugfs:
             raise ExtWriteError(
                 "e2fsprogs debugfs is required for ext2/3/4 writes; on Windows, "
-                "add debugfs.exe to PATH or install WSL with a Linux distribution "
-                "and e2fsprogs (for Ubuntu: sudo apt install e2fsprogs)"
+                "use Configuration > Install components, or add debugfs.exe to PATH. "
+                "On Linux/macOS run python3 install_mountfile.py."
             )
         self._read_superblock()
+
+    def _wsl_exec_args(self, *command):
+        """Build a WSL command pinned to the selected distribution, if any."""
+        args = [self.wsl_executable]
+        distribution = getattr(self, "wsl_distribution", None)
+        if distribution:
+            args.extend(["-d", distribution])
+        args.extend(["--exec", *command])
+        return args
 
     def _wsl_path(self, path):
         """Translate a host path to the active WSL distribution's path space."""
@@ -120,7 +168,7 @@ class Ext234ImageWriter:
         if cached is not None:
             return cached
         result = subprocess.run(
-            [self.wsl_executable, "--exec", "wslpath", "-a", host_path],
+            self._wsl_exec_args("wslpath", "-a", host_path),
             capture_output=True,
             text=True,
             timeout=30,
@@ -174,7 +222,7 @@ class Ext234ImageWriter:
 
     def _run(self, image_path, command, write=False):
         if self.wsl_executable:
-            args = [self.wsl_executable, "--exec", self.debugfs]
+            args = self._wsl_exec_args(self.debugfs)
             image_path = self._wsl_path(image_path)
         else:
             args = [self.debugfs]
