@@ -6,10 +6,8 @@ Licensed under the MIT License - see the LICENSE file for details.
 [![CI](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml)
 [![Quality](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml)
 [![Docs](https://github.com/Alexkkkkk/mount-file/actions/workflows/docs.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/docs.yml)
-[![CodeQL](https://github.com/Alexkkkkk/mount-file/actions/workflows/codeql.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/codeql.yml)
 [![Security](https://github.com/Alexkkkkk/mount-file/actions/workflows/security.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/security.yml)
 [![Docker](https://github.com/Alexkkkkk/mount-file/actions/workflows/docker.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/docker.yml)
-[![Nightly](https://github.com/Alexkkkkk/mount-file/actions/workflows/nightly.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/nightly.yml)
 [![Latest release](https://img.shields.io/github/v/release/Alexkkkkk/mount-file?sort=semver&label=release)](https://github.com/Alexkkkkk/mount-file/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/Alexkkkkk/mount-file?label=license&color=yellow)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue)
@@ -637,7 +635,7 @@ python tools/mfsync.py watch --push  # авто-синхронизация пр�
 не попадает ни в `.git/config`, ни в вывод (всё проходит через редакцию
 `x-access-token:...@github.com` и `github_pat_*`). Полное описание и рецепты —
 [docs/sync.md](docs/sync.md); в CI это проверяет workflow
-[Sync Guard](.github/workflows/sync-guard.yml).
+[mfsync Verify](.github/workflows/mfsync.yml).
 
 ```bash
 make sync          # pull + commit + push

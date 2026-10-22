@@ -49,8 +49,16 @@ def test_release_calculation_is_gated_on_trusted_main_ci():
 def test_ci_gate_accounts_for_every_build_and_test_stage():
     text = workflow("ci.yml").split("  ci-gate:", 1)[1]
     assert "name: CI-Gate" in text
-    assert "if: always()" in text
-    for job in ("tests", "integration", "build", "gui-import", "gui"):
+    assert "always()" in text
+    assert "github.event_name != 'schedule'" in text
+    for job in (
+        "tests",
+        "ubuntu-py312-compat",
+        "integration",
+        "build",
+        "gui-import",
+        "gui",
+    ):
         assert "needs.%s.result" % job in text
     assert "exit 1" in text
 
@@ -76,7 +84,6 @@ def test_auto_merge_requires_trust_label_head_match_and_all_gates():
         "CI-Gate",
         "quality-gate",
         "dependency-review",
-        "Version parity + secret scan",
         "Verify (status, secrets, versions, tests)",
     ):
         assert name in text
@@ -92,18 +99,26 @@ def test_release_checks_both_platform_version_stamping_and_failed_upload():
     assert '"$asset.sha256"' in text
 
 
-def test_new_privileged_workflows_pin_action_revisions():
-    for name in ("mfsync.yml", "version-bump.yml", "auto-merge.yml"):
-        uses = re.findall(r"uses:\s+([\w.-]+/[\w.-]+)@([^\s]+)", workflow(name))
-        assert uses
-        assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for _, revision in uses)
+def test_all_third_party_actions_are_pinned_to_full_revisions():
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    uses = []
+    for path in workflows:
+        uses.extend(
+            re.findall(
+                r"uses:\s+([\w.-]+/[\w.-]+)@([^\s#]+)", path.read_text(encoding="utf-8")
+            )
+        )
+    assert uses
+    assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for _, revision in uses)
 
 
 def test_autofix_does_not_remove_reexports_or_publish_untested_changes():
     text = workflow("autofix.yml")
     assert "ruff check --fix" not in text
-    assert "--profile black --line-length 100" in text
-    assert "--target-version py38" in text
+    assert "isort mountfile tests main.py" in text
+    assert "black mountfile tests main.py" in text
+    assert "--line-length" not in text
+    assert "--target-version" not in text
     assert "python -m pytest tests/ -q" in text
     assert text.index("python -m pytest tests/ -q") < text.index("gh pr create")
     assert "--label auto-merge" in text
@@ -120,14 +135,86 @@ def test_chatops_reuses_ci_gated_release_pipeline():
     assert "x-access-token:" not in text
 
 
-def test_merged_release_pr_dispatches_full_main_ci_before_tagging():
+def test_merged_release_pr_reuses_push_ci_before_fallback_dispatch():
     text = workflow("version-bump.yml")
     assert "types: [closed]" in text
     assert "github.event.pull_request.merged == true" in text
     assert "head.ref, 'automation/release-'" in text
+    assert '--commit "$MERGED_SHA"' in text
+    assert 'select(.event == "push")' in text
+    assert "No push CI appeared" in text
     assert "gh workflow run ci.yml" in text
     assert "workflow_run.event == 'workflow_dispatch'" in text
     assert "--label auto-merge" in text
+
+
+def test_mfsync_is_the_only_parity_and_secret_pr_gate():
+    assert not (ROOT / ".github" / "workflows" / "sync-guard.yml").exists()
+    text = workflow("mfsync.yml")
+    assert "branches: [main]" in text
+    assert "pull_request:" in text
+    assert "python tools/mfsync.py scan --all" in text
+    assert "python tools/mfsync.py check --strict" in text
+
+
+def test_quality_is_a_lint_gate_and_ci_owns_test_execution():
+    text = workflow("quality.yml")
+    assert "  test:" not in text
+    assert "needs: [lint]" in text
+    assert "needs.test.result" not in text
+
+
+def test_release_assets_and_production_deploy_have_one_owner_each():
+    deploy = workflow("deploy.yml")
+    release = workflow("release.yml")
+    assert "tags: ['v*']" not in deploy
+    assert "gh release create" not in deploy
+    assert "gh release upload" not in deploy
+    assert "source_ref" in deploy
+    assert "gh workflow run deploy.yml" in release
+
+
+def test_manual_publish_paths_are_limited_to_trusted_refs():
+    docker = workflow("docker.yml")
+    docs = workflow("docs.yml")
+    assert "github.ref == 'refs/heads/main'" in docker
+    assert "group: ghcr-mountfile-latest" in docker
+    assert "type=ref,event=tag" not in docker
+    assert "if: ${{ github.ref == 'refs/heads/main' }}" in docs
+    assert "pages: write" not in docs.split("  deploy:\n", 1)[0]
+
+
+def test_nightly_build_is_a_dedicated_job_in_main_ci():
+    assert not (ROOT / ".github" / "workflows" / "nightly.yml").exists()
+    text = workflow("ci.yml")
+    assert "cron: '0 3 * * *'" in text
+    assert "name: Nightly Windows test and build" in text
+    assert "github.event_name != 'schedule'" in text
+    assert "github.event_name == 'schedule'" in text
+    assert "${{ github.event_name }}" in text
+
+
+def test_codeql_shares_the_security_workflow_with_narrow_permissions():
+    assert not (ROOT / ".github" / "workflows" / "codeql.yml").exists()
+    text = workflow("security.yml")
+    analyze = text.split("  analyze:", 1)[1].split("  dependency-review:", 1)[0]
+    assert "name: analyze" in analyze
+    assert "github/codeql-action/init@" in analyze
+    assert "github/codeql-action/analyze@" in analyze
+    assert "security-events: write" in analyze
+    assert "security-events: write" not in text.split("jobs:", 1)[0]
+
+
+def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs():
+    ci = workflow("ci.yml")
+    for context in ("test (3.10)", "test (3.11)", "test (3.12)"):
+        assert f'check_name: "{context}"' in ci
+    assert "name: Tests (ubuntu-latest, py3.12)" in ci
+    assert "name: gui smoke test (offscreen)" in ci
+    assert "TEST_MATRIX_RESULT: ${{ needs.tests.result }}" in ci
+    assert "if [ \"$TEST_MATRIX_RESULT\" != 'success' ]" in ci
+    security = workflow("security.yml")
+    assert "  analyze:\n    name: analyze" in security
 
 
 def test_workflow_quality_validation_is_integrity_checked():

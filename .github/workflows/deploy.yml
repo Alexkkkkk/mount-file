@@ -3,7 +3,6 @@ name: Deploy
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       environment:
@@ -11,12 +10,17 @@ on:
         type: choice
         options: [staging, production]
         default: staging
+      source_ref:
+        description: Stable release tag required for production; ignored by staging
+        required: false
+        default: ''
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-${{ inputs.source_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -24,22 +28,29 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
       - name: Sanity build (byte-compile)
         run: python -m compileall -q mountfile main.py tests
       - name: Package source bundle
+        env:
+          SOURCE_REF: ${{ inputs.source_ref || github.ref_name }}
         run: |
-          STAMP="${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
+          set -euo pipefail
+          STAMP="${SOURCE_REF//\//-}-${GITHUB_SHA::7}"
           mkdir -p dist
           git archive --format=zip --prefix="MountFile-${STAMP}/" -o "dist/MountFile-${STAMP}.zip" HEAD
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: mountfile-bundle
           path: dist/*.zip
           retention-days: 30
+          if-no-files-found: error
 
   staging:
     needs: build
@@ -50,7 +61,7 @@ jobs:
       name: staging
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: mountfile-bundle
           path: dist
@@ -58,39 +69,43 @@ jobs:
         env:
           HOOK: ${{ secrets.DEPLOY_STAGING_COMMAND }}
         run: |
+          set -euo pipefail
           echo "staging deploy of $GITHUB_SHA"
           ls -lh dist
-          if [ -n "$HOOK" ]; then echo "running custom staging hook"; bash -c "$HOOK"; else echo "no DEPLOY_STAGING_COMMAND secret - build artifact published for this run"; fi
+          if [ -n "$HOOK" ]; then
+            echo 'running custom staging hook'
+            bash -c "$HOOK"
+          else
+            echo 'no DEPLOY_STAGING_COMMAND secret - build artifact published for this run'
+          fi
 
   production:
     needs: build
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'production' }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
     environment:
       name: production
       url: https://github.com/${{ github.repository }}/releases
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - name: Require a stable release tag
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: mountfile-bundle
           path: dist
       - name: Publish to production
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOOK: ${{ secrets.DEPLOY_PRODUCTION_COMMAND }}
         run: |
-          set -e
+          set -euo pipefail
           ls -lh dist
-          if [ -n "$HOOK" ]; then bash -c "$HOOK"; fi
-          case "$GITHUB_REF" in
-            refs/tags/*)
-              TAG="$GITHUB_REF_NAME"
-              if gh release view "$TAG" >/dev/null 2>&1; then
-                gh release upload "$TAG" dist/*.zip --clobber
-              else
-                gh release create "$TAG" dist/*.zip --title "$TAG" --generate-notes --verify-tag
-              fi ;;
-            *) echo "manual production run - no tag, skipping release publication" ;;
-          esac
+          if [ -n "$HOOK" ]; then
+            bash -c "$HOOK"
+          else
+            echo 'no DEPLOY_PRODUCTION_COMMAND secret - verified release bundle retained as an artifact'
+          fi

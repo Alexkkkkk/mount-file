@@ -19,7 +19,7 @@ concurrency:
   group: repository-maintenance-write
   cancel-in-progress: false
 jobs:
-  test-merged-release:
+  ensure-main-ci:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&
@@ -30,10 +30,24 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Run complete CI against the merged, protected main
+      - name: Reuse push CI, or dispatch a GITHUB_TOKEN fallback
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
+          MERGED_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            PUSH_RUNS=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+              --commit "$MERGED_SHA" --limit 20 --json event \
+              --jq '[.[] | select(.event == "push")] | length')
+            if [ "$PUSH_RUNS" -gt 0 ]; then
+              echo "push CI already exists for $MERGED_SHA; no duplicate dispatch."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo '::notice::No push CI appeared; dispatching the GITHUB_TOKEN fallback.'
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
   bump:
     if: >-
       (github.event_name == 'workflow_run' &&
