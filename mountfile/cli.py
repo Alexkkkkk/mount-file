@@ -32,6 +32,7 @@ from .dfir_slack import read_file_slack
 from .dfir_timeline import export_timeline_csv
 from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
+from .evidence import EvidenceManifestError, create_evidence_manifest
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
@@ -68,6 +69,7 @@ COMMANDS = (
     "split",
     "grep",
     "hash",
+    "evidence-manifest",
     "timeline",
     "timeline-export",
     "timestomp",
@@ -83,7 +85,15 @@ COMMANDS = (
     "live-diff",
 )
 
-_READ_ERRORS = (Fat32Error, TskError, ExtractError, OSError, ValueError, Rt809Error)
+_READ_ERRORS = (
+    Fat32Error,
+    TskError,
+    ExtractError,
+    EvidenceManifestError,
+    OSError,
+    ValueError,
+    Rt809Error,
+)
 
 
 # --------------------------------------------------------------- helpers
@@ -455,6 +465,16 @@ def cmd_grep(args):
 
 def cmd_hash(args):
     print("SHA-256: %s  %s" % (sha256_file(args.image), args.image))
+    return OK
+
+
+def cmd_evidence_manifest(args):
+    manifest = create_evidence_manifest(
+        args.image, args.output, chunk_size=args.chunk_size
+    )
+    print("Wrote manifest: %s" % args.output)
+    print("SHA-256: %s" % manifest["source"]["sha256"])
+    print("Scope: source-file bytes only; image format was not detected")
     return OK
 
 
@@ -873,6 +893,22 @@ def build_parser():
     sp = sub.add_parser("hash", help="calculate a read-only SHA-256 identity")
     sp.add_argument("image")
     sp.set_defaults(func=cmd_hash)
+
+    sp = sub.add_parser(
+        "evidence-manifest",
+        help="create a read-only SHA-256 manifest for one evidence file",
+    )
+    sp.add_argument("image", help="single regular source file; format is not detected")
+    sp.add_argument(
+        "--output", required=True, help="new JSON manifest path (never overwritten)"
+    )
+    sp.add_argument(
+        "--chunk-size",
+        type=int,
+        default=1024 * 1024,
+        help="bounded read chunk in bytes (1..67108864; default: 1048576)",
+    )
+    sp.set_defaults(func=cmd_evidence_manifest)
 
     sp = sub.add_parser("timeline", help="print records from a timeline CSV")
     sp.add_argument("image", help="image label retained for a stable CLI shape")

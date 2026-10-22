@@ -7,6 +7,22 @@ DFIR-команды работают локально с копией образ
 python mountfile_dfir.py hash evidence.img > evidence.img.sha256
 ```
 
+Для одного исходного файла можно создать sidecar JSON manifest, не открывая
+источник на запись и не перезаписывая существующий manifest:
+
+```bash
+python -m mountfile evidence-manifest evidence.img \
+  --output case-123/evidence.img.manifest.json
+```
+
+Хэш вычисляется потоково с ограниченным размером блока; `O_NOATIME` запрашивается
+там, где это поддерживается, а фактическое применение записывается в manifest.
+Manifest описывает только байты исходного файла: MountFile не определяет здесь
+raw/EWF/AFF4/VM-формат, не проверяет внутренние хэши контейнера и не вычисляет
+logical media stream. Это техническая запись одного hash-измерения, а не полная
+цепочка хранения доказательств; применяйте отдельный write blocker,
+документируйте источник и независимо проверяйте результат.
+
 `mountfile_dfir.py` использует только стандартную библиотеку для `grep`,
 SHA-256, timeline CSV → SQLite, простого timestomp-детектора и plugin registry.
 REST-команда — отдельная опция и требует `fastapi` и `uvicorn`.
