@@ -54,4 +54,4 @@ function Get-Service { return $null }
 Assert-Equal (Test-ImDiskReady) $false 'Missing driver fails readiness'
 function Get-Service { return @{Name='imdisk'} }
 Assert-Equal (Test-ImDiskReady) $true 'CLI and registered driver pass readiness'
-Write-Host 'PowerShell parser and 8 mock assertions passed. No system changes performed.'
+Write-Output 'PowerShell parser and 8 mock assertions passed. No system changes performed.'
