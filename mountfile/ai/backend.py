@@ -216,7 +216,9 @@ class NullBackend(AiBackend):
             backend=self.name,
             error=(
                 "AI-бэкенд не настроен.\n"
-                "Конфигурация → Настройки: укажите адрес и модель локального "
+                "Откройте Конфигурация → Настройки и нажмите "
+                "«Проверить и настроить Ollama», либо укажите адрес и модель "
+                "локального "
                 "Ollama (по умолчанию http://127.0.0.1:11434) либо "
                 "OpenAI-совместимый эндпоинт с ключом."
             ),
@@ -228,6 +230,53 @@ class NullBackend(AiBackend):
 #: it silently (a /v1/chat/completions call against an Ollama server only
 #: produces a confusing error).
 OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
+
+
+def discover_ollama(base_url=OLLAMA_DEFAULT_URL, timeout=3):
+    """Return ``(reachable, models, error)`` for an explicit Ollama probe."""
+    url = (base_url or OLLAMA_DEFAULT_URL).rstrip("/")
+    request = urllib.request.Request(url + "/api/tags", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+    except urllib.error.URLError as exc:
+        return False, [], "Нет соединения с Ollama: %s" % exc.reason
+    except Exception as exc:  # pragma: no cover - defensive network boundary
+        return False, [], "Ollama недоступна: %s" % exc
+    models = (
+        [
+            str(item["name"])
+            for item in payload.get("models", [])
+            if isinstance(item, dict) and item.get("name")
+        ]
+        if isinstance(payload, dict)
+        else []
+    )
+    return True, models, ""
+
+
+def configure_local_ollama(settings, base_url=OLLAMA_DEFAULT_URL):
+    """Configure settings from reachable Ollama without downloading anything."""
+    reachable, models, error = discover_ollama(base_url)
+    if not reachable or not models:
+        return {
+            "ok": False,
+            "reachable": reachable,
+            "models": models,
+            "error": error or ("Ollama запущена, но локальная модель не загружена."),
+        }
+    current = str((settings or {}).get("ai_model") or "")
+    model = current if current in models else models[0]
+    settings["ai_backend"] = "ollama"
+    settings["ai_base_url"] = (base_url or OLLAMA_DEFAULT_URL).rstrip("/")
+    settings["ai_model"] = model
+    return {
+        "ok": True,
+        "reachable": True,
+        "models": models,
+        "model": model,
+        "error": "",
+    }
 
 
 def _openai_base_url(settings):

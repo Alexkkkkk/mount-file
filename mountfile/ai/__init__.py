@@ -24,6 +24,8 @@ from .backend import (
     build_backend,
     build_prompt,
     collect,
+    configure_local_ollama,
+    discover_ollama,
     local_reader,
     looks_textual,
     max_bytes,
@@ -33,6 +35,8 @@ from .backend import (
 __all__ = [
     "BACKENDS",
     "DEFAULT_MAX_BYTES",
+    "configure_local_ollama",
+    "discover_ollama",
     "AiBackend",
     "AiResult",
     "NullBackend",

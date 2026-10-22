@@ -21,6 +21,8 @@ from mountfile.ai import (
     build_backend,
     build_prompt,
     collect,
+    configure_local_ollama,
+    discover_ollama,
     local_reader,
     looks_textual,
     max_bytes,
@@ -150,6 +152,42 @@ def test_network_failure_is_reported_not_raised(monkeypatch):
     res = backend.analyze("a.bin", b"x")
     assert res.ok is False
     assert "Нет соединения" in res.error
+
+
+def test_discover_ollama_lists_local_models(monkeypatch):
+    monkeypatch.setattr(
+        "mountfile.ai.backend.urllib.request.urlopen",
+        lambda req, timeout=None: FakeResponse(
+            {"models": [{"name": "llama3.2:3b"}, {"name": "qwen2.5:7b"}]}
+        ),
+    )
+    assert discover_ollama()[0:2] == (True, ["llama3.2:3b", "qwen2.5:7b"])
+
+
+def test_configure_local_ollama_selects_existing_model(monkeypatch):
+    monkeypatch.setattr(
+        "mountfile.ai.backend.discover_ollama",
+        lambda url: (True, ["llama3.2:3b"], ""),
+    )
+    settings = {"ai_model": ""}
+    result = configure_local_ollama(settings)
+    assert result["ok"] is True
+    assert settings == {
+        "ai_backend": "ollama",
+        "ai_base_url": "http://127.0.0.1:11434",
+        "ai_model": "llama3.2:3b",
+    }
+
+
+def test_configure_local_ollama_does_not_change_settings_when_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        "mountfile.ai.backend.discover_ollama",
+        lambda url: (False, [], "refused"),
+    )
+    settings = {"ai_backend": "none", "ai_model": ""}
+    result = configure_local_ollama(settings)
+    assert result["ok"] is False
+    assert settings == {"ai_backend": "none", "ai_model": ""}
 
 
 def test_available_is_false_when_nothing_configured():
