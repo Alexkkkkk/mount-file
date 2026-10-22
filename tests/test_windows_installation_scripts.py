@@ -31,14 +31,14 @@ def test_windows_installers_are_shipped_and_verified():
     assert "--mount" not in script
     assert "Format-Volume" not in script
     assert "-NoRestart" in script
-    pyproject = (ROOT / "pyproject.toml").read_text()
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert '"data/*.ps1"' in pyproject
     assert (ROOT / "install.bat").is_file()
     assert (ROOT / "install-components.bat").is_file()
 
 
 def test_launcher_uses_venv_and_first_run_bootstrap():
-    launcher = (ROOT / "run.bat").read_text()
+    launcher = (ROOT / "run.bat").read_text(encoding="utf-8")
     assert ".venv\\Scripts\\python.exe" in launcher
     assert "scripts\\install-windows.ps1" in launcher
     assert "3010" in launcher
@@ -59,5 +59,6 @@ def test_powershell_mock_suite():
         text=True,
         timeout=60,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "8 mock assertions passed" in result.stdout
+    output = (result.stdout or "") + (result.stderr or "")
+    assert result.returncode == 0, output
+    assert "8 mock assertions passed" in output
