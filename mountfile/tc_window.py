@@ -324,7 +324,9 @@ class ViewerDialog(QDialog):
         save.setEnabled(save_callback is not None)
         save.clicked.connect(self._save)
         self.hex_view.dataChanged.connect(
-            lambda: save.setEnabled(save_callback is not None and self.hex_view.isModified())
+            lambda: save.setEnabled(
+                save_callback is not None and self.hex_view.isModified()
+            )
         )
         buttons.addWidget(save)
         buttons.addStretch(1)
@@ -369,7 +371,9 @@ class HexEditorPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         top = QHBoxLayout()
-        title = QLabel("HEX-редактор  ·  %s  ·  %s байт" % (name, tc_style.fmt_size(size)))
+        title = QLabel(
+            "HEX-редактор  ·  %s  ·  %s байт" % (name, tc_style.fmt_size(size))
+        )
         title.setObjectName("panelTitle")
         top.addWidget(title, 1)
         self.status = QLabel("Готово")
