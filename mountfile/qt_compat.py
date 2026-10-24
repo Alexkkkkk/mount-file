@@ -190,6 +190,7 @@ if QT6:  # pragma: no branch
     CtrlModifier = Qt.KeyboardModifier.ControlModifier
     ShiftModifier = Qt.KeyboardModifier.ShiftModifier
     AltModifier = Qt.KeyboardModifier.AltModifier
+    FocusStrong = Qt.FocusPolicy.StrongFocus
     BottomDock = Qt.DockWidgetArea.BottomDockWidgetArea
     Stretch = QHeaderView.ResizeMode.Stretch
     HVC_Interactive = QHeaderView.ResizeMode.Interactive
@@ -265,6 +266,7 @@ else:  # pragma: no cover - legacy PyQt5 fallback
     CtrlModifier = Qt.ControlModifier
     ShiftModifier = Qt.ShiftModifier
     AltModifier = Qt.AltModifier
+    FocusStrong = Qt.StrongFocus
     BottomDock = Qt.BottomDockWidgetArea
     Stretch = QHeaderView.Stretch
     HVC_Interactive = QHeaderView.Interactive
@@ -473,6 +475,7 @@ __all__ = [
     "CtrlModifier",
     "ShiftModifier",
     "AltModifier",
+    "FocusStrong",
     "BottomDock",
     "Stretch",
     "HVC_Interactive",

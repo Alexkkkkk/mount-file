@@ -231,6 +231,20 @@ class MainWindow(QMainWindow):
         self.btn_extract = QPushButton("Extract…")
         self.btn_extract.clicked.connect(self.extract_selected)
         tb.addWidget(self.btn_extract)
+        self.btn_save_hex = QPushButton("Save HEX")
+        self.btn_save_hex.setToolTip("Записать изменённый файл обратно в образ (Ctrl+S)")
+        self.btn_save_hex.clicked.connect(self.save_hex)
+        tb.addWidget(self.btn_save_hex)
+        self.act_save_hex = QAction("Save HEX", self)
+        self.act_save_hex.setShortcut("Ctrl+S")
+        self.act_save_hex.triggered.connect(self.save_hex)
+        self.addAction(self.act_save_hex)
+        self.btn_find_hex = QPushButton("Find")
+        self.btn_find_hex.clicked.connect(self.find_hex)
+        tb.addWidget(self.btn_find_hex)
+        self.btn_goto_hex = QPushButton("Go to…")
+        self.btn_goto_hex.clicked.connect(self.goto_hex)
+        tb.addWidget(self.btn_goto_hex)
         self.btn_import = QPushButton("Import file… (FAT32)")
         self.btn_import.clicked.connect(self.import_file)
         tb.addWidget(self.btn_import)
@@ -250,6 +264,7 @@ class MainWindow(QMainWindow):
         self.tree.doubleClicked.connect(self.on_double_click)
 
         self.hex_view = HexView()
+        self.hex_view.dataChanged.connect(self._hex_changed)
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
         tabs = QTabWidget()
@@ -282,6 +297,7 @@ class MainWindow(QMainWindow):
     def _set_loaded(self, loaded):
         for w in (self.cmb_parts, self.btn_extract):
             w.setEnabled(loaded)
+        self.btn_save_hex.setEnabled(False)
         if not loaded:
             self._set_write_enabled(False)
 
@@ -402,15 +418,79 @@ class MainWindow(QMainWindow):
             self.info.setPlainText("")
             return
         try:
-            data = self.provider.read_file_range(node.path, 0, 1 << 20)
+            data = self.provider.read_file(node.path)
             self.hex_view.setData(data)
             self.info.setPlainText(
-                "Path: %s\nSize: %d bytes\nPreview: first %d bytes"
+                "Path: %s\nSize: %d bytes\nLoaded: %d bytes"
                 % (node.path, node.size, len(data))
             )
         except Exception as e:
             self.hex_view.clear()
             self.info.setPlainText("Error: %s" % e)
+
+    def _hex_changed(self):
+        """Keep the save action synchronized with the current document."""
+        node = self._current_node()
+        self.btn_save_hex.setEnabled(
+            bool(node and not node.is_dir and self.writer and self.hex_view.isModified())
+        )
+
+    def save_hex(self):
+        """Replace the selected file in the mounted FAT32 volume."""
+        node = self._current_node()
+        if node is None or node.is_dir or self.writer is None:
+            QMessageBox.information(self, "Save HEX", "Выберите файл на доступном для записи томе.")
+            return
+        data = self.hex_view.data()
+        ret = QMessageBox.warning(
+            self,
+            "Confirm HEX write",
+            "Записать изменения в образ?\n\n  %s\n  Размер: %d байт\n\n"
+            "Перед записью рекомендуется сделать резервную копию. Продолжить?"
+            % (node.path, len(data)),
+            MB_Yes | MB_No,
+        )
+        if ret != MB_Yes:
+            return
+        try:
+            parent = os.path.dirname(node.path) or "/"
+            self.writer.write_file(parent, node.name, data)
+            self.hex_view.setData(data)
+            self.log_msg("HEX changes saved: %s (%d bytes)" % (node.path, len(data)))
+            self._refresh_dir(parent)
+        except Exception as e:
+            QMessageBox.critical(self, "HEX save failed", str(e))
+
+    def find_hex(self):
+        """Find the next byte sequence, accepting hex or plain text."""
+        if not self.hex_view.data():
+            return
+        value, ok = QInputDialog.getText(
+            self, "Find bytes", "Hex bytes (e.g. 89 50 4E 47) or text:"
+        )
+        if not ok or not value:
+            return
+        try:
+            needle = bytes.fromhex("".join(value.split()))
+        except ValueError:
+            needle = value.encode("utf-8")
+        pos = self.hex_view.find(needle)
+        self.statusBar().showMessage(
+            "Found at 0x%X" % pos if pos >= 0 else "Sequence not found", 5000
+        )
+
+    def goto_hex(self):
+        """Move the cursor to a byte offset written in decimal or 0x notation."""
+        value, ok = QInputDialog.getText(self, "Go to offset", "Offset (decimal or 0x…):")
+        if not ok or not value:
+            return
+        try:
+            offset = int(value.strip(), 0)
+        except ValueError:
+            QMessageBox.warning(self, "Go to offset", "Некорректное смещение.")
+            return
+        if not self.hex_view.goto(offset):
+            QMessageBox.information(self, "Go to offset", "Нет загруженных данных.")
 
     def on_double_click(self, index):
         node = self.model.node_for(index)
