@@ -302,25 +302,45 @@ atexit.register(drain_orphan_threads)
 
 
 class ViewerDialog(QDialog):
-    """F3 viewer: hex dump of the first 1 MiB of the selected file."""
+    """F3 full-file HEX editor with an optional persistence callback."""
 
-    def __init__(self, parent, name, size, data):
+    def __init__(self, parent, name, size, data, save_callback=None):
         super().__init__(parent)
         self.setWindowTitle("Просмотр — %s" % name)
         self._fit_to_screen()
         lay = QVBoxLayout(self)
         lay.addWidget(
             QLabel(
-                "%s   ·   %s байт   ·   показаны первые %d байт"
+                "%s   ·   %s байт   ·   загружено %d байт"
                 % (name, tc_style.fmt_size(size), len(data))
             )
         )
-        hv = HexView()
-        hv.setData(data)
-        lay.addWidget(hv, 1)
-        btn = QPushButton("Закрыть (Esc)")
-        btn.clicked.connect(self.accept)
-        lay.addWidget(btn, 0, AlignRight)
+        self.hex_view = HexView()
+        self.hex_view.setData(data)
+        lay.addWidget(self.hex_view, 1)
+        buttons = QHBoxLayout()
+        save = QPushButton("Сохранить")
+        save.setEnabled(save_callback is not None)
+        save.clicked.connect(self._save)
+        self.hex_view.dataChanged.connect(
+            lambda: save.setEnabled(save_callback is not None and self.hex_view.isModified())
+        )
+        buttons.addWidget(save)
+        buttons.addStretch(1)
+        close = QPushButton("Закрыть (Esc)")
+        close.clicked.connect(self.reject)
+        buttons.addWidget(close)
+        lay.addLayout(buttons)
+        self._save_callback = save_callback
+
+    def _save(self):
+        if self._save_callback is None or not self.hex_view.isModified():
+            return
+        try:
+            if self._save_callback(self.hex_view.data()):
+                self.hex_view.setData(self.hex_view.data())
+        except Exception as exc:
+            QMessageBox.critical(self, "Сохранение HEX не удалось", str(exc))
 
     def _fit_to_screen(self):
         """Viewer takes ~90% of the monitor work area, not fixed 820x560."""
@@ -3957,7 +3977,7 @@ class MainWindow(QMainWindow):
         self.f3_hex_view()
 
     def f3_hex_view(self):
-        """HEX-просмотр выбранного файла (первые ``PREVIEW_LIMIT`` байт)."""
+        """Open the selected file in the full interactive HEX editor."""
         p = self.active_panel()
         entry = p.selected_entry()
         if not entry or entry.get("is_dir"):
@@ -3968,16 +3988,59 @@ class MainWindow(QMainWindow):
         try:
             full = p.join(entry["name"])
             if p.mode == "img":
-                data = p.provider.read_file_range(full, 0, PREVIEW_LIMIT)
+                data = p.provider.read_file(full)
             else:
                 with open(full, "rb") as f:
-                    data = f.read(PREVIEW_LIMIT)
+                    data = f.read()
         except Exception as e:
             QMessageBox.critical(self, "Просмотр", str(e))
             return
-        exec_dialog(ViewerDialog(self, entry["name"], entry.get("size") or 0, data))
+
+        def save_edited(updated):
+            answer = QMessageBox.warning(
+                self,
+                "Подтверждение записи HEX",
+                "Записать изменения в файл?\n\n%s\nРазмер: %d байт"
+                % (full, len(updated)),
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                return False
+            if p.mode == "img":
+                if p.writer is None:
+                    raise RuntimeError("том открыт только для чтения")
+                if not self._backup_before_write(p):
+                    return False
+                parent = str(PurePosixPath(full).parent)
+                p.writer.write_file(parent, entry["name"], updated)
+            else:
+                directory = os.path.dirname(full) or "."
+                fd, tmp = tempfile.mkstemp(prefix=".mountfile-hex-", dir=directory)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(updated)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(tmp, full)
+                finally:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+            p.refresh()
+            self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
+            return True
+
+        exec_dialog(
+            ViewerDialog(
+                self,
+                entry["name"],
+                entry.get("size") or 0,
+                data,
+                save_callback=save_edited,
+            )
+        )
         self._maybe_advise(full, size=entry.get("size"))
-        self.log_msg("Просмотр: %s" % entry["name"])
+        self.log_msg("HEX-редактор: %s" % entry["name"])
 
     def f4_edit(self):
         """F4: edit image text in-app; open local text in the system editor."""
