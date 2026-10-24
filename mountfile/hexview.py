@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from .qt_compat import (
-    QApplication,
     FONT_TYPEWRITER,
     MOUSE_LEFT,
     CtrlModifier,
@@ -20,16 +19,17 @@ from .qt_compat import (
     Key_PageUp,
     Key_Right,
     Key_Up,
-    ShiftModifier,
     QAbstractScrollArea,
+    QApplication,
     QColor,
     QFont,
     QFontMetrics,
     QPainter,
     QPen,
-    pyqtSignal,
+    ShiftModifier,
     event_pos,
     font_char_width,
+    pyqtSignal,
 )
 
 
@@ -153,13 +153,27 @@ class HexView(QAbstractScrollArea):
             for i, b in enumerate(chunk):
                 off = row_off + i
                 if lo <= off < hi:
-                    painter.fillRect(x_hex + i * 3 * c, y - self._line_h + 6, 2 * c + 2, self._line_h - 2, self._c_sel)
-                    painter.fillRect(x_ascii + i * c, y - self._line_h + 6, c + 1, self._line_h - 2, self._c_sel)
+                    painter.fillRect(
+                        x_hex + i * 3 * c,
+                        y - self._line_h + 6,
+                        2 * c + 2,
+                        self._line_h - 2,
+                        self._c_sel,
+                    )
+                    painter.fillRect(
+                        x_ascii + i * c,
+                        y - self._line_h + 6,
+                        c + 1,
+                        self._line_h - 2,
+                        self._c_sel,
+                    )
             painter.setPen(self._c_hex)
             for i, b in enumerate(chunk):
                 painter.drawText(x_hex + i * 3 * c, y, "%02X" % b)
             painter.setPen(self._c_ascii)
-            painter.drawText(x_ascii, y, "".join(chr(b) if 32 <= b < 127 else "." for b in chunk))
+            painter.drawText(
+                x_ascii, y, "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+            )
         painter.setPen(QPen(QColor("#dddddd")))
         painter.drawLine(x_hex - 8, 0, x_hex - 8, self.viewport().height())
         painter.drawLine(x_ascii - 8, 0, x_ascii - 8, self.viewport().height())
@@ -269,11 +283,13 @@ class HexView(QAbstractScrollArea):
         payload = bytes(payload)
         if not payload:
             return
+
         def op():
             lo, hi = self.selectedRange()
             self._data[lo:hi] = payload
             self._cursor = lo + len(payload) - 1
             self._sel_start = self._sel_end = self._cursor
+
         self._edit(op)
 
     def deleteSelection(self):
@@ -282,10 +298,12 @@ class HexView(QAbstractScrollArea):
             if not self._data:
                 return
             hi = min(len(self._data), lo + 1)
+
         def op():
             del self._data[lo:hi]
             self._cursor = min(lo, len(self._data) - 1)
             self._sel_start = self._sel_end = max(0, self._cursor)
+
         self._edit(op)
 
     def find(self, needle: bytes, start=None):
@@ -339,40 +357,75 @@ class HexView(QAbstractScrollArea):
         ctrl = bool(e.modifiers() & CtrlModifier)
         text = e.text()
         if ctrl and text.lower() == "z":
-            self.undo(); return
+            self.undo()
+            return
         if ctrl and text.lower() == "y":
-            self.redo(); return
+            self.redo()
+            return
         if ctrl and text.lower() == "c":
-            self.copy(); return
+            self.copy()
+            return
         if ctrl and text.lower() == "x":
-            self.cut(); return
+            self.cut()
+            return
         if ctrl and text.lower() == "v":
-            self.paste(); return
+            self.paste()
+            return
         if ctrl and text.lower() == "a":
-            self.selectAll(); return
+            self.selectAll()
+            return
         if key == Key_Delete or key == Key_Backspace:
-            self.deleteSelection(); return
+            self.deleteSelection()
+            return
         if key == Key_Insert:
-            self.insertBytes(b"\x00"); return
+            self.insertBytes(b"\x00")
+            return
         extend = bool(e.modifiers() & ShiftModifier)
-        if key == Key_Left: self._move(-1, extend); return
-        if key == Key_Right: self._move(1, extend); return
-        if key == Key_Up: self._move(-self.BYTES_PER_ROW, extend); return
-        if key == Key_Down: self._move(self.BYTES_PER_ROW, extend); return
-        if key == Key_PageUp: self._move(-self.BYTES_PER_ROW * max(1, self.viewport().height() // self._line_h - 1), extend); return
-        if key == Key_PageDown: self._move(self.BYTES_PER_ROW * max(1, self.viewport().height() // self._line_h - 1), extend); return
+        if key == Key_Left:
+            self._move(-1, extend)
+            return
+        if key == Key_Right:
+            self._move(1, extend)
+            return
+        if key == Key_Up:
+            self._move(-self.BYTES_PER_ROW, extend)
+            return
+        if key == Key_Down:
+            self._move(self.BYTES_PER_ROW, extend)
+            return
+        if key == Key_PageUp:
+            self._move(
+                -self.BYTES_PER_ROW
+                * max(1, self.viewport().height() // self._line_h - 1),
+                extend,
+            )
+            return
+        if key == Key_PageDown:
+            self._move(
+                self.BYTES_PER_ROW
+                * max(1, self.viewport().height() // self._line_h - 1),
+                extend,
+            )
+            return
         if not self._data or not text:
-            super().keyPressEvent(e); return
+            super().keyPressEvent(e)
+            return
         ch = text[0]
         if ch in "0123456789abcdefABCDEF":
             value = int(ch, 16)
             pos = self._cursor
             nibble = self._hex_nibble
+
             def op():
                 old = self._data[pos]
-                self._data[pos] = ((value << 4) | (old & 0x0F)) if nibble == 0 else ((old & 0xF0) | value)
+                self._data[pos] = (
+                    ((value << 4) | (old & 0x0F))
+                    if nibble == 0
+                    else ((old & 0xF0) | value)
+                )
                 self._cursor = min(len(self._data) - 1, pos + (1 if nibble else 0))
                 self._sel_start = self._sel_end = self._cursor
+
             self._edit(op)
             self._hex_nibble = 1 - nibble
             return

@@ -232,7 +232,9 @@ class MainWindow(QMainWindow):
         self.btn_extract.clicked.connect(self.extract_selected)
         tb.addWidget(self.btn_extract)
         self.btn_save_hex = QPushButton("Save HEX")
-        self.btn_save_hex.setToolTip("Записать изменённый файл обратно в образ (Ctrl+S)")
+        self.btn_save_hex.setToolTip(
+            "Записать изменённый файл обратно в образ (Ctrl+S)"
+        )
         self.btn_save_hex.clicked.connect(self.save_hex)
         tb.addWidget(self.btn_save_hex)
         self.act_save_hex = QAction("Save HEX", self)
@@ -432,14 +434,18 @@ class MainWindow(QMainWindow):
         """Keep the save action synchronized with the current document."""
         node = self._current_node()
         self.btn_save_hex.setEnabled(
-            bool(node and not node.is_dir and self.writer and self.hex_view.isModified())
+            bool(
+                node and not node.is_dir and self.writer and self.hex_view.isModified()
+            )
         )
 
     def save_hex(self):
         """Replace the selected file in the mounted FAT32 volume."""
         node = self._current_node()
         if node is None or node.is_dir or self.writer is None:
-            QMessageBox.information(self, "Save HEX", "Выберите файл на доступном для записи томе.")
+            QMessageBox.information(
+                self, "Save HEX", "Выберите файл на доступном для записи томе."
+            )
             return
         data = self.hex_view.data()
         ret = QMessageBox.warning(
@@ -481,7 +487,9 @@ class MainWindow(QMainWindow):
 
     def goto_hex(self):
         """Move the cursor to a byte offset written in decimal or 0x notation."""
-        value, ok = QInputDialog.getText(self, "Go to offset", "Offset (decimal or 0x…):")
+        value, ok = QInputDialog.getText(
+            self, "Go to offset", "Offset (decimal or 0x…):"
+        )
         if not ok or not value:
             return
         try:
