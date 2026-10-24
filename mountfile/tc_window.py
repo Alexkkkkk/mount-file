@@ -106,6 +106,7 @@ from .qt_compat import (
     QSize,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     Qt,
     QTabBar,
     QTableWidget,
@@ -356,6 +357,64 @@ class ViewerDialog(QDialog):
             self.resize(
                 max(400, geo.width() * 9 // 10), max(300, geo.height() * 9 // 10)
             )
+
+
+class HexEditorPage(QWidget):
+    """Full-window HEX editor page; intentionally not a modal dialog."""
+
+    def __init__(self, parent, name, size, data, save_callback, close_callback):
+        super().__init__(parent)
+        self._save_callback = save_callback
+        self._close_callback = close_callback
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        top = QHBoxLayout()
+        title = QLabel("HEX-редактор  ·  %s  ·  %s байт" % (name, tc_style.fmt_size(size)))
+        title.setObjectName("panelTitle")
+        top.addWidget(title, 1)
+        self.status = QLabel("Готово")
+        self.status.setObjectName("panelSpace")
+        top.addWidget(self.status)
+        layout.addLayout(top)
+        self.hex_view = HexView()
+        self.hex_view.setData(data)
+        self.hex_view.dataChanged.connect(self._changed)
+        layout.addWidget(self.hex_view, 1)
+        buttons = QHBoxLayout()
+        self.save_button = QPushButton("Сохранить")
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.clicked.connect(self.save)
+        buttons.addWidget(self.save_button)
+        find = QPushButton("Найти")
+        find.clicked.connect(self.find)
+        buttons.addWidget(find)
+        buttons.addStretch(1)
+        back = QPushButton("Назад к панелям")
+        back.clicked.connect(self._close_callback)
+        buttons.addWidget(back)
+        layout.addLayout(buttons)
+        self._changed()
+        self.hex_view.setFocus()
+
+    def _changed(self):
+        modified = self.hex_view.isModified()
+        self.save_button.setEnabled(modified)
+        self.status.setText("Есть несохранённые изменения" if modified else "Сохранено")
+
+    def save(self):
+        if self.hex_view.isModified() and self._save_callback(self.hex_view.data()):
+            self.hex_view.setData(self.hex_view.data())
+
+    def find(self):
+        value, ok = QInputDialog.getText(self, "Поиск байтов", "HEX или текст:")
+        if not ok or not value:
+            return
+        try:
+            needle = bytes.fromhex("".join(value.split()))
+        except ValueError:
+            needle = value.encode("utf-8")
+        pos = self.hex_view.find(needle)
+        self.status.setText("Найдено: 0x%X" % pos if pos >= 0 else "Не найдено")
 
 
 class TextEditorDialog(QDialog):
@@ -2547,10 +2606,22 @@ class MainWindow(QMainWindow):
         self.workspace_hint.setWordWrap(True)
         header_row.addWidget(self.workspace_hint, 1)
         v.addWidget(header)
-        v.addWidget(self.splitter, 1)
+        self.workspace_stack = QStackedWidget()
+        self.workspace_stack.addWidget(self.splitter)
+        v.addWidget(self.workspace_stack, 1)
         v.addLayout(cmd_row)
         v.addLayout(fk_row)
         self.setCentralWidget(central)
+
+    def _show_panels(self):
+        """Return from an embedded tool page to the two file panels."""
+        self.workspace_stack.setCurrentWidget(self.splitter)
+        self.workspace_hint.setText("Образы дисков · просмотр и извлечение")
+
+    def _show_hex_page(self, page):
+        self.workspace_stack.addWidget(page)
+        self.workspace_stack.setCurrentWidget(page)
+        self.workspace_hint.setText("HEX-редактор · Ctrl+S сохраняет изменения")
 
     def _press_fkey(self, key):
         slot = {
@@ -4030,15 +4101,15 @@ class MainWindow(QMainWindow):
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
 
-        exec_dialog(
-            ViewerDialog(
-                self,
-                entry["name"],
-                entry.get("size") or 0,
-                data,
-                save_callback=save_edited,
-            )
+        page = HexEditorPage(
+            self,
+            entry["name"],
+            entry.get("size") or 0,
+            data,
+            save_callback=save_edited,
+            close_callback=self._show_panels,
         )
+        self._show_hex_page(page)
         self._maybe_advise(full, size=entry.get("size"))
         self.log_msg("HEX-редактор: %s" % entry["name"])
 
