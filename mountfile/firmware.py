@@ -45,7 +45,9 @@ _MAGIC = (
     (b"FAT12   ", 54, 512, "FAT12"),
     (b"NTFS    ", 3, 512, "NTFS"),
     (b"EXFAT   ", 3, 512, "exFAT"),
-    (b"\x53\xef", 1080, 1024, "ext2/3/4"),
+    # The ext superblock is 1024 bytes from the filesystem start, but the
+    # filesystem itself may begin at a sector-aligned, non-1024-byte offset.
+    (b"\x53\xef", 1080, 1, "ext2/3/4"),
     (b"CD001", 0x8001, 2048, "ISO9660"),
     (b"H+", 1024, 512, "HFS+"),
     (b"hsqs", 0, 512, "squashfs"),

@@ -25,6 +25,7 @@ Author : Alexkkkkk
 License: MIT
 Version: 3.0.0
 """
+
 from __future__ import annotations
 
 import argparse
@@ -364,8 +365,18 @@ class LinuxBackend(MountBackend):
             m = re.search(r"(/dev/loop\d+)", r)
             if m:
                 dev = m.group(1)
-                self._run(["udisksctl", "mount", "-b", dev])
-                return target
+                output = self._run(["udisksctl", "mount", "-b", dev])
+                mounted = re.search(r"^Mounted\s+\S+\s+at\s+(.+?)\.\s*$", output)
+                if not mounted:
+                    raise MountError(
+                        "Could not determine the mount point from udisksctl output."
+                    )
+                mountpoint = Path(mounted.group(1))
+                if not mountpoint.is_absolute():
+                    raise MountError(
+                        "udisksctl reported a mount point that is not an absolute path."
+                    )
+                return mountpoint
 
         if os.geteuid() != 0:
             raise MountError(
@@ -614,6 +625,17 @@ def cli_main(argv: Sequence[str]) -> int:
             print(f"File not found: {image}", file=sys.stderr)
             return 1
         target = Path(args.to) if args.to else default_mount_point(image)
+        if (
+            args.to
+            and IS_LINUX
+            and isinstance(backend, LinuxBackend)
+            and os.geteuid() != 0
+            and shutil.which("udisksctl")
+        ):
+            raise MountError(
+                "--to cannot be honored by unprivileged udisksctl; omit --to "
+                "to use the system-selected mount point"
+            )
         mounted = backend.mount(image, target)
         print(str(mounted))
         if args.open:

@@ -202,6 +202,34 @@ class TestFat32:
         self.fs.write_file("/", "empty.bin", b"")
         assert self.fs.read_file("/empty.bin") == b""
 
+    def test_nonempty_file_with_invalid_start_cluster_raises(self):
+        self.fs.write_file("/", "broken.bin", b"payload")
+        entry = self.fs.entry("/broken.bin")[1]
+        self.fs._write(entry.entry_offset + 20, b"\x00\x00")
+        self.fs._write(entry.entry_offset + 26, b"\x00\x00")
+        with pytest.raises(Fat32Error, match="invalid start cluster"):
+            self.fs.read_chain(0, entry.size)
+        with pytest.raises(Fat32Error, match="invalid start cluster"):
+            self.fs.read_file("/broken.bin")
+
+        from mountfile.fat32 import Fat32Provider
+
+        provider = Fat32Provider(self.path, fileobj=self.fh)
+        with pytest.raises(Fat32Error, match="invalid start cluster"):
+            provider.read_file_range("/broken.bin", 0, 1)
+
+    def test_zero_length_file_with_invalid_start_cluster_stays_empty(self):
+        self.fs.write_file("/", "empty-broken.bin", b"")
+        entry = self.fs.entry("/empty-broken.bin")[1]
+        self.fs._write(entry.entry_offset + 20, b"\x00\x00")
+        self.fs._write(entry.entry_offset + 26, b"\x00\x00")
+        assert self.fs.read_file("/empty-broken.bin") == b""
+
+        from mountfile.fat32 import Fat32Provider
+
+        provider = Fat32Provider(self.path, fileobj=self.fh)
+        assert provider.read_file_range("/empty-broken.bin", 0, 1) == b""
+
     def test_chain_rejects_cluster_outside_declared_volume(self):
         self.fs.write_file("/", "bounded.bin", b"bounded data")
         entry = self.fs.entry("/bounded.bin")[1]

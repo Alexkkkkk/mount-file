@@ -106,6 +106,14 @@ class TestSignatureScan:
         write_at(ext, 1024 + 0x38, b"\x53\xef")
         assert probe_filesystem(ext) == "ext2/3/4"
 
+    def test_ext_volume_at_non_1k_aligned_offset(self):
+        path = self._img("ext-offset-512.img")
+        # Superblock magic at volume start + 1024-byte superblock + 0x38.
+        write_at(path, 512 + 1024 + 0x38, b"\x53\xef")
+        assert [(v.offset, v.fstype) for v in detect_volumes(path)] == [
+            (512, "ext2/3/4")
+        ]
+
         iso = self._img("iso.img", 64 * 1024)
         write_at(iso, 0x8001, b"CD001")
         assert probe_filesystem(iso) == "ISO9660"

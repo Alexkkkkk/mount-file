@@ -35,8 +35,8 @@ class FakeRegistry:
         self.calls.append(("ls", image, path, offset))
         return [{"name": "note.txt", "is_dir": False}]
 
-    def filesystem_read(self, image, path, offset=0):
-        self.calls.append(("read", image, path, offset))
+    def filesystem_read(self, image, path, offset=0, length=1 << 23):
+        self.calls.append(("read", image, path, offset, length))
         return b"evidence"
 
     def timeline(self, image=None, limit=100, path=None, offset=0):
@@ -204,3 +204,37 @@ def test_api_module_remains_importable_without_fastapi():
     if not FASTAPI_AVAILABLE:
         with pytest.raises(Exception, match="FastAPI"):
             create_app(FakeRegistry())
+
+
+@needs_fastapi
+def test_filesystem_read_passes_pre_read_bound_and_rejects_excess(tmp_path):
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+    registry = FakeRegistry()
+    client = _client_or_skip(
+        create_app(registry, image_roots=image, max_response_bytes=16)
+    )
+
+    limited = client.get("/filesystem/read", params={"path": "/note.txt", "length": 7})
+    assert limited.status_code == 200
+    assert registry.calls[-1][-1] == 7
+
+    oversized = client.get(
+        "/filesystem/read", params={"path": "/note.txt", "length": 17}
+    )
+    assert oversized.status_code == 413
+    assert sum(call[0] == "read" for call in registry.calls) == 1
+
+
+@needs_fastapi
+def test_filesystem_read_refuses_unbounded_legacy_registry(tmp_path):
+    class LegacyRegistry:
+        def filesystem_read(self, image, path, offset=0):
+            raise AssertionError("must not call unbounded read")
+
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+    response = _client_or_skip(create_app(LegacyRegistry(), image_roots=image)).get(
+        "/filesystem/read", params={"path": "/note.txt"}
+    )
+    assert response.status_code == 501

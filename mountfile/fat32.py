@@ -290,6 +290,8 @@ class Fat32:
 
     def read_chain(self, start, size=None):
         if start < 2:
+            if size is not None and size > 0:
+                raise Fat32Error("non-empty file has invalid start cluster")
             return b""
         data = b"".join(self.read_cluster(c) for c in self.cluster_chain(start))
         return data if size is None else data[:size]
@@ -929,7 +931,7 @@ class Fat32Provider:
             return b""
         length = min(length, size - offset)
         if entry.cluster < 2:
-            return b""
+            raise Fat32Error("non-empty file has invalid start cluster")
         out = bytearray()
         pos = 0
         csize = self.fs.cluster_size

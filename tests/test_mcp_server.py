@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Focused tests for the optional mount-file MCP façade."""
 
+import re
 import struct
 from pathlib import Path
 
@@ -184,3 +185,74 @@ def test_mcp_dependency_is_optional_and_missing_dependency_is_explicit(tmp_path)
         service._call("not_a_tool", image)
     with pytest.raises(Exception, match="optional 'mcp'"):
         create_server(image, workspace, backend=FakeBackend())
+
+
+@pytest.mark.parametrize("pattern", ["(a+)+$", "(a|aa)+$"])
+def test_search_rejects_catastrophic_regex_before_backend_call(tmp_path, pattern):
+    service, backend, image, _ = make_service(tmp_path)
+    with pytest.raises(ValueError, match="catastrophic"):
+        service.search_files(str(image), 0, pattern)
+    assert not backend.calls
+
+
+def test_default_search_enforces_visit_and_result_limits(tmp_path, monkeypatch):
+    import mountfile.ai.mcp_server as mcp_server
+
+    backend = DefaultBackend(tmp_path)
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"x")
+
+    monkeypatch.setattr(mcp_server, "_MAX_SEARCH_RESULTS", 1)
+    monkeypatch.setattr(
+        backend,
+        "list_directory",
+        lambda *args: [
+            {"name": "a", "path": "/a", "is_dir": False},
+            {"name": "b", "path": "/b", "is_dir": False},
+        ],
+    )
+    with pytest.raises(ValueError, match="result limit"):
+        backend.search_files(image, 0, ".", "/", False)
+
+    monkeypatch.setattr(mcp_server, "_MAX_SEARCH_RESULTS", 10)
+    monkeypatch.setattr(mcp_server, "_MAX_SEARCH_VISITS", 1)
+    monkeypatch.setattr(
+        backend,
+        "list_directory",
+        lambda *args: [{"name": "child", "path": "/child", "is_dir": True}],
+    )
+    with pytest.raises(ValueError, match="visit limit"):
+        backend.search_files(image, 0, "nomatch", "/", False)
+
+
+def test_default_search_stops_when_regex_engine_times_out(tmp_path, monkeypatch):
+    import mountfile.ai.mcp_server as mcp_server
+
+    class TimedOutPattern:
+        def search(self, value, timeout):
+            assert value == "name"
+            assert timeout == mcp_server._SEARCH_REGEX_TIMEOUT
+            raise TimeoutError("simulated regex timeout")
+
+    class TimedOutRegex:
+        IGNORECASE = object()
+        error = re.error
+
+        @staticmethod
+        def compile(pattern, flags):
+            assert pattern == "needle"
+            assert flags is TimedOutRegex.IGNORECASE
+            return TimedOutPattern()
+
+    backend = DefaultBackend(tmp_path)
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"x")
+    monkeypatch.setattr(mcp_server, "_timeout_regex", TimedOutRegex)
+    monkeypatch.setattr(
+        backend,
+        "list_directory",
+        lambda *args: [{"name": "name", "path": "/name", "is_dir": False}],
+    )
+
+    with pytest.raises(ValueError, match="regex time limit"):
+        backend.search_files(image, 0, "needle", "/", False)

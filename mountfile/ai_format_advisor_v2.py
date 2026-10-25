@@ -305,6 +305,15 @@ class _AdvisorWorker(QThread):
         self.completed.emit(hyps, results)
 
 
+# A dialog may close while a backend is blocked in an HTTP request. Keep the
+# QThread alive independently of the dialog until Qt reports that it finished.
+_ACTIVE_ADVISOR_WORKERS = set()
+
+
+def _release_advisor_worker(worker):
+    _ACTIVE_ADVISOR_WORKERS.discard(worker)
+
+
 class FormatAdvisorDialog(QDialog):
     """Диалог советника: гипотезы, ответы модели, отчёт на GitHub."""
 
@@ -373,6 +382,9 @@ class FormatAdvisorDialog(QDialog):
             return
         self.btn_run.setEnabled(False)
         self._worker = _AdvisorWorker(self.fp, self.adapters, self.calibration)
+        _ACTIVE_ADVISOR_WORKERS.add(self._worker)
+        worker = self._worker
+        worker.finished.connect(lambda: _release_advisor_worker(worker))
         self._worker.completed.connect(self._on_models_completed)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()

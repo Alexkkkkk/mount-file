@@ -21,6 +21,60 @@ import struct
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
+
+
+def _run_mixed_delete(monkeypatch, mode):
+    from mountfile import tc_window
+
+    entries = [
+        {"name": "ok", "is_dir": False},
+        {"name": "bad", "is_dir": False},
+    ]
+    messages = []
+    panel = SimpleNamespace(
+        mode=mode,
+        writer=None,
+        marked={"ok", "bad"},
+        join=lambda name: "/test/" + name,
+        refresh=lambda: None,
+    )
+    if mode == "img":
+
+        def delete(path, recursive=False):
+            if path.endswith("bad"):
+                raise OSError("denied")
+
+        panel.writer = SimpleNamespace(delete=delete)
+    fake = SimpleNamespace(
+        active_panel=lambda: panel,
+        _gather=lambda _panel: entries,
+        _backup_before_write=lambda _panel: True,
+        log_msg=messages.append,
+    )
+    monkeypatch.setattr(
+        tc_window.QMessageBox, "warning", lambda *args, **kwargs: tc_window.MB_Yes
+    )
+    if mode == "local":
+
+        def remove(path):
+            if path.endswith("bad"):
+                raise OSError("denied")
+
+        monkeypatch.setattr(tc_window.os, "remove", remove)
+    tc_window.MainWindow.f8_delete(fake)
+    return messages
+
+
+def test_f8_local_delete_reports_mixed_batch_counts(monkeypatch):
+    messages = _run_mixed_delete(monkeypatch, "local")
+    assert messages[-1] == "Удалено объектов: 1; не удалось: 1"
+
+
+def test_f8_image_delete_reports_mixed_batch_counts(monkeypatch):
+    messages = _run_mixed_delete(monkeypatch, "img")
+    assert messages[-1] == "Удалено объектов из образа: 1; не удалось: 1"
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)

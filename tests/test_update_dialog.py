@@ -175,6 +175,64 @@ def test_download_worker_detects_bad_checksum(tmp_path, http_server):
     assert list(tmp_path.iterdir()) == [], "битый файл не должен оставаться"
 
 
+@pytest.mark.parametrize("digest", [None, "", "not-a-digest", "a" * 63, "g" * 64])
+def test_download_worker_fails_closed_without_valid_digest(
+    tmp_path, http_server, monkeypatch, digest
+):
+    """Без доверенного SHA-256 загрузка и установка не должны начинаться."""
+    _Handler.payload = b"unverified release bytes"
+    calls = []
+    original_urlopen = ud.urllib.request.urlopen
+
+    def _record_open(*args, **kwargs):
+        calls.append(args[0])
+        return original_urlopen(*args, **kwargs)
+
+    monkeypatch.setattr(ud.urllib.request, "urlopen", _record_open)
+    worker = ud.DownloadWorker(
+        http_server + "/MountFile.exe",
+        sha256=digest,
+        dest_dir=str(tmp_path),
+    )
+    done, failed = [], []
+    worker.done.connect(done.append)
+    worker.failed.connect(failed.append)
+
+    worker.run()
+
+    assert not done
+    assert failed and "SHA256" in failed[0]
+    assert not calls, "непроверенные данные не должны скачиваться"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_from_release_missing_digest_is_rejected_before_download(
+    app, tmp_path, monkeypatch
+):
+    info = {
+        "version": "1.27.0",
+        "asset": {
+            "name": "MountFile.exe",
+            "browser_download_url": "https://example.invalid/MountFile.exe",
+        },
+    }
+    calls = []
+    monkeypatch.setattr(
+        ud.urllib.request, "urlopen", lambda *args, **kwargs: calls.append(args)
+    )
+    dialog = ud.UpdateDialog.from_release(info, "1.26.0")
+    worker = dialog._installer_factory()
+    worker.dest_dir = str(tmp_path)
+    failed = []
+    worker.failed.connect(failed.append)
+    worker.run()
+
+    assert failed and "SHA256" in failed[0]
+    assert calls == []
+    assert not list(tmp_path.iterdir())
+    dialog.close()
+
+
 def test_download_worker_detects_truncated_body(tmp_path, http_server):
     _Handler.payload = os.urandom(128 * 1024)
     _Handler.truncate = True
@@ -182,6 +240,7 @@ def test_download_worker_detects_truncated_body(tmp_path, http_server):
     failed = []
     worker = ud.DownloadWorker(
         http_server + "/MountFile.exe",
+        sha256=hashlib.sha256(_Handler.payload).hexdigest(),
         dest_dir=str(tmp_path),
         tick_seconds=0.0,
     )
@@ -198,6 +257,7 @@ def test_download_worker_cancel_stops_mid_stream(tmp_path, http_server):
     done, cancelled = [], []
     worker = ud.DownloadWorker(
         http_server + "/MountFile.exe",
+        sha256=hashlib.sha256(_Handler.payload).hexdigest(),
         dest_dir=str(tmp_path),
         tick_seconds=0.0,
     )

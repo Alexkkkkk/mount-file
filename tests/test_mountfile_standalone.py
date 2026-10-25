@@ -209,6 +209,87 @@ def test_default_mount_point_linux(mf):
     assert len(mf.default_mount_point(Path(long_name)).name) <= 40
 
 
+@pytest.mark.skipif(not IS_LINUX, reason="Linux udisksctl backend")
+def test_linux_udisksctl_returns_actual_mountpoint(mf, monkeypatch, tmp_path):
+    backend = mf.LinuxBackend()
+    requested = tmp_path / "requested"
+    actual = tmp_path / "udisks" / "disk name"
+    calls = []
+
+    monkeypatch.setattr(mf.shutil, "which", lambda command: "/usr/bin/udisksctl")
+    monkeypatch.setattr(mf.os, "geteuid", lambda: 1000)
+
+    def fake_run(command):
+        calls.append(command)
+        if command[1] == "loop-setup":
+            return "Set up /dev/loop7\n"
+        return f"Mounted /dev/loop7 at {actual}.\n"
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    assert backend.mount(tmp_path / "image.iso", requested) == actual
+    assert calls[-1] == ["udisksctl", "mount", "-b", "/dev/loop7"]
+
+
+@pytest.mark.skipif(not IS_LINUX, reason="Linux CLI mount path")
+def test_cli_open_uses_backend_returned_mountpoint(mf, monkeypatch, tmp_path, capsys):
+    image = tmp_path / "image.iso"
+    image.touch()
+    actual = tmp_path / "actual-mount"
+    opened = []
+
+    class FakeBackend:
+        def mount(self, image_path, target):
+            return actual
+
+    monkeypatch.setattr(mf, "setup_logging", lambda **kwargs: None)
+    monkeypatch.setattr(mf, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(mf, "reveal_in_file_manager", opened.append)
+
+    assert mf.cli_main([str(image), "--to", str(tmp_path / "requested"), "--open"]) == 0
+    assert capsys.readouterr().out.strip() == str(actual)
+    assert opened == [actual]
+
+
+@pytest.mark.skipif(not IS_LINUX, reason="Linux udisksctl target handling")
+def test_cli_rejects_explicit_target_unsupported_by_udisksctl(
+    mf, monkeypatch, tmp_path, capsys
+):
+    image = tmp_path / "image.iso"
+    image.touch()
+    backend = mf.LinuxBackend()
+    calls = []
+    monkeypatch.setattr(mf, "setup_logging", lambda **kwargs: None)
+    monkeypatch.setattr(mf, "get_backend", lambda: backend)
+    monkeypatch.setattr(mf.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(mf.shutil, "which", lambda command: "/usr/bin/udisksctl")
+    monkeypatch.setattr(backend, "_run", lambda command: calls.append(command))
+
+    result = mf.cli_main([str(image), "--to", str(tmp_path / "requested")])
+
+    assert result == 1
+    assert "--to cannot be honored" in capsys.readouterr().err
+    assert calls == []
+
+
+@pytest.mark.skipif(not IS_LINUX, reason="Linux udisksctl backend")
+def test_linux_udisksctl_rejects_unparseable_mountpoint(mf, monkeypatch, tmp_path):
+    backend = mf.LinuxBackend()
+    monkeypatch.setattr(mf.shutil, "which", lambda command: "/usr/bin/udisksctl")
+    monkeypatch.setattr(mf.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(
+        backend,
+        "_run",
+        lambda command: (
+            "Set up /dev/loop7"
+            if command[1] == "loop-setup"
+            else "Mounted successfully"
+        ),
+    )
+
+    with pytest.raises(mf.MountError, match="Could not determine the mount point"):
+        backend.mount(tmp_path / "image.iso", tmp_path / "requested")
+
+
 # ------------------------------------------------------------------- logging
 def test_setup_logging_writes_a_rotating_file(mf, isolated_home):
     mf.setup_logging(verbose=False)

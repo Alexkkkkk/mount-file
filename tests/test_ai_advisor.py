@@ -29,7 +29,7 @@ from mountfile.ai_format_advisor_v2 import (
     assess_consensus,
     build_fingerprint,
 )
-from mountfile.qt_compat import QApplication, QTimer  # noqa: E402
+from mountfile.qt_compat import QApplication, QEvent, QTimer  # noqa: E402
 
 
 def test_fingerprint_of_a_text_file(tmp_path):
@@ -149,3 +149,46 @@ def test_dialog_displays_consensus_and_backend_errors():
     assert "Расхождение" not in dlg.txt.toPlainText()
     assert "Ошибка: offline" in dlg.txt.toPlainText()
     dlg.close()
+
+
+def test_dialog_can_be_destroyed_while_backend_is_blocked():
+    app = QApplication.instance() or QApplication([])
+    entered, release = threading.Event(), threading.Event()
+
+    class Result:
+        ok, text, error = True, "done", ""
+
+    class Backend:
+        name = "blocked"
+
+        def ask(self, *_args):
+            entered.set()
+            assert release.wait(2)
+            return Result()
+
+    dlg = FormatAdvisorDialog(
+        {"name": "sample.bin", "size": 4, "head": b"data", "entropy": 2},
+        [Backend()],
+    )
+    dlg.ask_models()
+    assert entered.wait(1)
+    worker = dlg._worker
+    finished = threading.Event()
+    worker.finished.connect(finished.set)
+    dlg.close()
+    dlg.deleteLater()
+    del worker
+    del dlg
+    deferred_delete = (
+        QEvent.Type.DeferredDelete if hasattr(QEvent, "Type") else QEvent.DeferredDelete
+    )
+    QApplication.sendPostedEvents(None, deferred_delete)
+    app.processEvents()
+
+    release.set()
+    _wait_for(finished.is_set)
+    _wait_for(
+        lambda: not __import__(
+            "mountfile.ai_format_advisor_v2", fromlist=["_ACTIVE_ADVISOR_WORKERS"]
+        )._ACTIVE_ADVISOR_WORKERS
+    )
