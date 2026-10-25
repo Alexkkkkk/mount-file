@@ -40,8 +40,10 @@ from .qt_compat import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QThread,
     QVBoxLayout,
     exec_dialog,
+    pyqtSignal,
 )
 
 #: Сколько байт файла уходит в «слепок» (сигнатуры + энтропия).
@@ -264,6 +266,45 @@ class GitHubReporter:
 # ------------------------------------------------------------ dialog
 
 
+def assess_consensus(results):
+    """Return a stable consensus label based on normalized successful answers.
+
+    ``results`` is a sequence of ``(backend_name, text)`` pairs. Error entries
+    are excluded; agreement means exact case/whitespace-insensitive matches.
+    """
+    answers = [
+        " ".join(text.split()).casefold()
+        for _, text in results
+        if not text.startswith("Ошибка:") and text.strip()
+    ]
+    if len(answers) < 2:
+        return "Консенсус не определён (нужно не менее двух успешных ответов)."
+    if all(answer == answers[0] for answer in answers[1:]):
+        return "Консенсус: ответы моделей совпадают."
+    return "Расхождение: ответы моделей различаются."
+
+
+class _AdvisorWorker(QThread):
+    completed = pyqtSignal(object, object)
+
+    def __init__(self, fp, adapters, calibration):
+        super().__init__()
+        self.fp, self.adapters, self.calibration = fp, adapters, calibration
+
+    def run(self):
+        engine = HypothesisEngine(self.adapters[0], self.calibration)
+        hyps = engine.diagnose(self.fp)
+        results = []
+        for adapter in self.adapters:
+            try:
+                result = adapter.ask(self.fp, hyps)
+                text = result.text if result.ok else "Ошибка: " + result.error
+            except Exception as exc:
+                text = "Ошибка: %s" % exc
+            results.append((adapter.name, text))
+        self.completed.emit(hyps, results)
+
+
 class FormatAdvisorDialog(QDialog):
     """Диалог советника: гипотезы, ответы модели, отчёт на GitHub."""
 
@@ -275,6 +316,7 @@ class FormatAdvisorDialog(QDialog):
         self.adapters = adapters
         self.calibration = calibration or Calibration()
         self.github = github
+        self._worker = None
 
         lay = QVBoxLayout(self)
         lay.addWidget(
@@ -316,24 +358,31 @@ class FormatAdvisorDialog(QDialog):
             )
         for r in results:
             lines.append("\n— ответ модели (%s) —\n%s" % (r[0], r[1]))
+        if len(results) > 1:
+            lines.append("\n" + assess_consensus(results))
         if not results:
             lines.append("\nНажмите «Спросить модель» для анализа.")
         self.txt.setPlainText("\n".join(lines))
 
     def ask_models(self):
         """Опросить все подключённые бэкенды (консенсус — если их двое)."""
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if not self.adapters:
+            self.txt.appendPlainText("\nНет подключённых бэкендов.")
+            return
         self.btn_run.setEnabled(False)
-        try:
-            engine = HypothesisEngine(self.adapters[0], self.calibration)
-            hyps = engine.diagnose(self.fp)
-            results = []
-            for adapter in self.adapters:
-                result = adapter.ask(self.fp, hyps)
-                text = result.text if result.ok else "Ошибка: " + result.error
-                results.append((adapter.name, text))
-            self._render(hyps, results)
-        finally:
-            self.btn_run.setEnabled(True)
+        self._worker = _AdvisorWorker(self.fp, self.adapters, self.calibration)
+        self._worker.completed.connect(self._on_models_completed)
+        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.start()
+
+    def _on_models_completed(self, hyps, results):
+        """GUI-thread slot: all widget updates happen on the dialog's thread."""
+        self._render(hyps, results)
+
+    def _on_worker_finished(self):
+        self.btn_run.setEnabled(True)
 
     def report_issue(self):
         """Отчёт о разборе файла; токен не пишется в диалог и в журнал."""

@@ -118,6 +118,52 @@ def test_transaction_commit_writes_and_verifies(tmp_path):
         engine.close()
 
 
+def test_commit_verification_failure_rolls_back_and_is_not_committed(
+    tmp_path, monkeypatch
+):
+    image, engine = _engine(tmp_path)
+    try:
+        before = _sha(image)
+        tx = engine.begin("verification must pass")
+        engine.write_file("/UNVERIFIED.TXT", b"payload")
+        monkeypatch.setattr(
+            engine,
+            "verify",
+            lambda: {"ok": False, "problems": ["forced structural failure"]},
+        )
+        with pytest.raises(WriteEngineError, match="post-commit verification failed"):
+            engine.commit(tx.id)
+        assert _sha(image) == before
+        assert tx.status == "rolled_back"
+        assert not any(
+            row["tx"] == tx.id and row["op"] == "commit" for row in engine.history()
+        )
+    finally:
+        engine.close()
+
+
+def test_filesystem_checker_execution_failure_is_unknown(tmp_path, monkeypatch):
+    import mountfile.write_engine as write_engine_module
+
+    _, engine = _engine(tmp_path)
+    try:
+        monkeypatch.setattr(engine, "damage", {"fs_type": "fat"})
+        monkeypatch.setattr(
+            write_engine_module.shutil, "which", lambda tool: "/fake/fsck.fat"
+        )
+        monkeypatch.setattr(write_engine_module, "_run", lambda args: None)
+        assert engine._run_fs_check() is None
+        checker = next(
+            check
+            for check in engine.verify()["checks"]
+            if check["name"] == "filesystem checker"
+        )
+        assert checker["ok"] is None
+        assert "None" in checker["detail"]
+    finally:
+        engine.close()
+
+
 def test_verify_reports_observed_values_not_bare_booleans(tmp_path):
     image, engine = _engine(tmp_path)
     try:
@@ -285,6 +331,25 @@ def test_allow_damaged_override_is_explicit(tmp_path):
     try:
         assert engine.damage["problems"], "the probe must report the corrupted copy"
         assert engine.write_file("/STILL.WORKS", b"ok").status == "applied"
+    finally:
+        engine.close()
+
+
+def test_allow_damaged_accepts_baseline_checker_failure(tmp_path, monkeypatch):
+    image = _image(tmp_path)
+    _corrupt_fat(image)
+    monkeypatch.setattr(WriteEngine, "_run_fs_check", lambda self: False)
+    engine = WriteEngine(
+        image,
+        read_only=False,
+        allow_damaged=True,
+        snapshot_dir=tmp_path / "s",
+        journal_path=tmp_path / "j.jsonl",
+    )
+    try:
+        result = engine.write_file("/ACCEPTED.TXT", b"ok")
+        assert result.status == "applied"
+        assert engine.history()[-1]["op"] == "commit"
     finally:
         engine.close()
 

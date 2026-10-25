@@ -533,6 +533,9 @@ class WriteEngine:
                 % (self.image.name, "; ".join(self.damage["problems"]))
             )
         self._fs = self._open_backend()
+        # When the caller explicitly accepts a damaged image, preserve the
+        # initial external-checker result so commit only rejects regressions.
+        self._baseline_fs_check = self._run_fs_check() if self.allow_damaged else None
 
     # -- backend plumbing ---------------------------------------------------
     def _probe(self) -> dict:
@@ -621,10 +624,31 @@ class WriteEngine:
         tx = self._transaction(tx_id)
         if not self.dry_run:
             self._fs.close()  # flush FAT/metadata before hashing and verifying
+        verification = self.verify()
+        # ``allow_damaged`` explicitly accepts the structural problems present
+        # at open time; require that commit introduces no additional failures.
+        accepted = set((self.damage or {}).get("problems", []))
+        if self.allow_damaged and self._baseline_fs_check is False:
+            accepted.add(
+                "filesystem checker: external checker result "
+                "(None = tool/dependency unavailable)"
+            )
+        new_problems = [
+            problem for problem in verification["problems"] if problem not in accepted
+        ]
+        if new_problems:
+            # Every mutating operation snapshots before writing. Restore when
+            # possible; otherwise keep the transaction open for explicit recovery.
+            if tx.snapshot is not None and tx.snapshot.exists():
+                self.rollback(tx.id, reason="post-commit verification failed")
+            raise WriteEngineError(
+                "post-commit verification failed: " + "; ".join(new_problems)
+            )
         post = self._identity()
         result = {
             "transaction": tx.id,
             "status": "committed",
+            "verification": verification,
             "dry_run": self.dry_run,
             "operations": len(tx.entries),
             "sha256_after": post,
@@ -790,14 +814,14 @@ class WriteEngine:
         fs_type = fs_family((self.damage or {}).get("fs_type"))
         if fs_type == "fat" and shutil.which("fsck.fat"):
             proc = _run([shutil.which("fsck.fat"), "-n", str(self.image)])
-            return True if proc is None else _exitcode_ok(proc)
+            return None if proc is None else _exitcode_ok(proc)
         if fs_type == "ext" and shutil.which("e2fsck"):
             args = [shutil.which("e2fsck"), "-fn"]
             if self.offset:
                 args += ["-E", "offset=%d" % self.offset]
             args.append(str(self.image))
             proc = _run(args)
-            return True if proc is None else _exitcode_ok(proc)
+            return None if proc is None else _exitcode_ok(proc)
         return None
 
     # -- mutating operations ------------------------------------------------
