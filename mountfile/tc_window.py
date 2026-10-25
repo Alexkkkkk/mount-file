@@ -2009,6 +2009,7 @@ class MainWindow(QMainWindow):
 
         self.active_side = "L"
         self.updater = None
+        self._closing = False
         #: Каталог временных копий текстовых файлов из образов (см.
         #: :meth:`open_text_file`); создаётся при первом обращении.
         self._text_tmp = None
@@ -2113,6 +2114,8 @@ class MainWindow(QMainWindow):
         self.updater.start()
 
     def _on_update_available(self, info):
+        if getattr(self, "_closing", False):
+            return
         version = info.get("version") or "?"
         asset = info.get("asset")
         if not asset:
@@ -4537,6 +4540,7 @@ class MainWindow(QMainWindow):
             )
             e.ignore()
             return
+        self._closing = True
         self._close_writer()
         self._cleanup_text_temp()
         tc_style.save_settings()

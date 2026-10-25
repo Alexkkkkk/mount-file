@@ -69,7 +69,15 @@ def app():
 
 @pytest.fixture(scope="module")
 def win(app):
-    w = MainWindow()
+    previous = os.environ.get("MOUNTFILE_NO_UPDATE")
+    os.environ["MOUNTFILE_NO_UPDATE"] = "1"
+    try:
+        w = MainWindow()
+    finally:
+        if previous is None:
+            os.environ.pop("MOUNTFILE_NO_UPDATE", None)
+        else:
+            os.environ["MOUNTFILE_NO_UPDATE"] = previous
     yield w
     w._close_writer()
     w.close()

@@ -55,7 +55,7 @@ def test_flush_checker_is_partition_aware(
         lambda command, **kwargs: calls.append(command)
         or type("Result", (), {"returncode": 0, "stdout": "ok"})(),
     )
-    monkeypatch.setattr(universal_fs_rw.os, "sync", lambda: None)
+    monkeypatch.setattr(universal_fs_rw.os, "sync", lambda: None, raising=False)
 
     result = fs.flush()
 

@@ -53,6 +53,7 @@ def app():
 
 @pytest.fixture(autouse=True)
 def dialogs(monkeypatch):
+    monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
     fake = _Dialogs()
     monkeypatch.setattr("mountfile.mainwindow.QMessageBox", fake)
     return fake
