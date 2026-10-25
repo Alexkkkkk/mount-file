@@ -118,7 +118,9 @@ def test_transaction_commit_writes_and_verifies(tmp_path):
         engine.close()
 
 
-def test_commit_verification_failure_rolls_back_and_is_not_committed(tmp_path, monkeypatch):
+def test_commit_verification_failure_rolls_back_and_is_not_committed(
+    tmp_path, monkeypatch
+):
     image, engine = _engine(tmp_path)
     try:
         before = _sha(image)
@@ -134,8 +136,7 @@ def test_commit_verification_failure_rolls_back_and_is_not_committed(tmp_path, m
         assert _sha(image) == before
         assert tx.status == "rolled_back"
         assert not any(
-            row["tx"] == tx.id and row["op"] == "commit"
-            for row in engine.history()
+            row["tx"] == tx.id and row["op"] == "commit" for row in engine.history()
         )
     finally:
         engine.close()

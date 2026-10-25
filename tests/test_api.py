@@ -165,9 +165,7 @@ def test_image_ids_reject_dot_segments_but_allow_relative_paths(tmp_path):
     client = _client_or_skip(create_app(registry, image_roots=image_root))
 
     for image_id in ("nested/../disk.img", "./disk.img"):
-        response = client.get(
-            "/filesystem/ls", params={"image": image_id, "path": "/"}
-        )
+        response = client.get("/filesystem/ls", params={"image": image_id, "path": "/"})
         assert response.status_code == 400
     assert all(call[0] != "ls" for call in registry.calls)
 

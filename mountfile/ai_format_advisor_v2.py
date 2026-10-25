@@ -272,8 +272,11 @@ def assess_consensus(results):
     ``results`` is a sequence of ``(backend_name, text)`` pairs. Error entries
     are excluded; agreement means exact case/whitespace-insensitive matches.
     """
-    answers = [" ".join(text.split()).casefold() for _, text in results
-               if not text.startswith("Ошибка:") and text.strip()]
+    answers = [
+        " ".join(text.split()).casefold()
+        for _, text in results
+        if not text.startswith("Ошибка:") and text.strip()
+    ]
     if len(answers) < 2:
         return "Консенсус не определён (нужно не менее двух успешных ответов)."
     if all(answer == answers[0] for answer in answers[1:]):

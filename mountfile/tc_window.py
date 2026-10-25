@@ -1740,6 +1740,7 @@ class AiDialog(QDialog):
         self._entry, self._path, self._mode, self._size = None, None, None, 0
         self.lbl_source.setText(label)
         self.lbl_info.setText("")
+
     def use_panel(self):
         """Взять файл, выбранный в активной панели (может быть в образе)."""
         entry = self.panel.selected_entry()

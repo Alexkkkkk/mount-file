@@ -634,8 +634,7 @@ class WriteEngine:
             if tx.snapshot is not None and tx.snapshot.exists():
                 self.rollback(tx.id, reason="post-commit verification failed")
             raise WriteEngineError(
-                "post-commit verification failed: "
-                + "; ".join(new_problems)
+                "post-commit verification failed: " + "; ".join(new_problems)
             )
         post = self._identity()
         result = {

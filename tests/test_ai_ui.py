@@ -97,9 +97,7 @@ def test_ai_entry_duplicated_in_tools_menu(win):
     assert win.act_ai in tools.actions(), "нет пункта AI в меню Инструменты"
 
 
-def test_hypothesis_advisor_is_explicit_and_reads_only_bounded_head(
-    win, monkeypatch
-):
+def test_hypothesis_advisor_is_explicit_and_reads_only_bounded_head(win, monkeypatch):
     from mountfile import ai_format_advisor_v2
 
     entry = {"name": "sample.bin", "size": 8192, "is_dir": False}
@@ -144,9 +142,7 @@ def test_hypothesis_advisor_is_explicit_and_reads_only_bounded_head(
     assert len(calls["head"]) == 256  # fake source returns at most 256 bytes
     assert win.act_ai_hypotheses.text().startswith("AI: гипотезы")
     tools = next(
-        m
-        for m in win.menuBar().findChildren(QMenu)
-        if m.title() == "Инструменты"
+        m for m in win.menuBar().findChildren(QMenu) if m.title() == "Инструменты"
     )
     assert win.act_ai_hypotheses in tools.actions()
 
@@ -245,10 +241,12 @@ def test_switching_from_disk_to_empty_panel_clears_source_and_blocks_analysis(
     reads = []
     monkeypatch.setattr(ai, "local_reader", lambda source: reads.append(source))
     notices = []
+
     class MessageBox:
         @staticmethod
         def information(*args):
             notices.append(args[2])
+
     monkeypatch.setattr(tc_window, "QMessageBox", MessageBox)
 
     dlg.use_panel()

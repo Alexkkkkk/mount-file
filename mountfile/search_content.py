@@ -17,6 +17,7 @@ Two complementary read-only modes:
 Both modes support plain text, ``utf-16le`` (Windows registry / event logs)
 and regular expressions.  Nothing is written to the evidence image.
 """
+
 from __future__ import annotations
 
 import os
