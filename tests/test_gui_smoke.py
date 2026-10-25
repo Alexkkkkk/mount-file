@@ -23,7 +23,7 @@ qt_compat = pytest.importorskip(
 )
 
 from mountfile.mainwindow import ImageModel, MainWindow
-from mountfile.qt_compat import QApplication, QModelIndex
+from mountfile.qt_compat import MB_Yes, QApplication, QMessageBox, QModelIndex
 
 TREE = {
     "/": [("boot", True), ("empty", True), ("README.TXT", False), ("data.bin", False)],
@@ -99,6 +99,35 @@ def test_model_empty_dir_is_marked_loaded(app):
     model.fetchMore(empty)  # legitimate empty directory
     assert model.rowCount(empty) == 0
     assert not model.canFetchMore(empty)  # loaded, just empty
+
+
+def test_model_list_error_is_reported_and_user_can_retry(app, monkeypatch):
+    class RetryProvider(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.failed = False
+
+        def list_dir(self, path):
+            self.calls.append(path)
+            if not self.failed:
+                self.failed = True
+                raise OSError("temporary read failure")
+            return [{"name": "recovered.txt", "is_dir": False, "size": 7}]
+
+    prompts = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: prompts.append(_args[2]) or MB_Yes,
+    )
+    model = ImageModel(RetryProvider())
+    model.fetchMore(QModelIndex())
+
+    assert len(prompts) == 1
+    assert "temporary read failure" in prompts[0]
+    assert model.last_error is None
+    assert model.rowCount() == 1
+    assert model.data(model.index(0, 0)) == "recovered.txt"
 
 
 def test_model_reload_refetches(app):

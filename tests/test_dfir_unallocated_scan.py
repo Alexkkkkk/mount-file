@@ -2,6 +2,7 @@
 """Tests for the independent read-only unallocated signature scanner."""
 
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,62 @@ from mountfile.dfir_unallocated_scan import (
     UnallocatedScanner,
     scan_unallocated,
 )
+
+
+def test_yara_signature_spanning_chunk_boundary_has_exact_absolute_offset():
+    from types import SimpleNamespace
+
+    from mountfile.yara_scan import scan_unallocated_from_fs
+
+    signature = b"BOUNDARY" * (8 * 1024 + 1)
+    image = b"x" * 6 + signature + b"y" * 12
+
+    class FakeFs:
+        _image_path = None
+        info = SimpleNamespace(block_size=512)
+
+        def open_dir(self, _path):
+            return []
+
+        def read_random(self, offset, length):
+            return image[offset : offset + length]
+
+    class FakeRules:
+        temp_path = None
+
+        def match(self, *, filepath):
+            self.temp_path = filepath
+            with open(filepath, "rb") as stream:
+                data = stream.read()
+            result = []
+            start = 0
+            while True:
+                offset = data.find(signature, start)
+                if offset < 0:
+                    break
+                result.append(
+                    SimpleNamespace(
+                        rule="boundary",
+                        namespace="default",
+                        tags=(),
+                        strings=[
+                            SimpleNamespace(
+                                identifier="$a",
+                                instances=[SimpleNamespace(offset=offset)],
+                            )
+                        ],
+                    )
+                )
+                start = offset + 1
+            return result
+
+    rules = FakeRules()
+    hits = scan_unallocated_from_fs(FakeFs(), rules, len(image), chunk=8 * 1024)
+
+    assert [(hit.rule, hit.offset, hit.target) for hit in hits] == [
+        ("boundary", 6, "unallocated")
+    ]
+    assert rules.temp_path and not Path(rules.temp_path).exists()
 
 
 def test_reports_absolute_offsets_for_common_signatures():

@@ -108,13 +108,23 @@ class ImageModel(QAbstractItemModel):
         node = parent.internalPointer() if parent.isValid() else self.root
         if node.loaded:
             return
-        try:
-            items = self.provider.list_dir(node.path)
-            self.last_error = None
-        except Exception as e:
-            self.last_error = str(e)
-            node.loaded = True
-            return
+        while True:
+            try:
+                items = self.provider.list_dir(node.path)
+                self.last_error = None
+                break
+            except Exception as e:
+                self.last_error = str(e)
+                retry = QMessageBox.question(
+                    super().parent(),
+                    "Ошибка чтения каталога",
+                    "Не удалось прочитать %s:\n%s\n\nПовторить?" % (node.path, e),
+                    MB_Yes | MB_No,
+                    MB_No,
+                )
+                if retry != MB_Yes:
+                    node.loaded = True
+                    return
         node.loaded = True
         # An empty directory must not announce a row insertion: calling
         # beginInsertRows(..., 0, 0) without appending anything leaves the

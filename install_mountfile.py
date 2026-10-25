@@ -1,9 +1,11 @@
-"""MountFile installer for Windows, Linux, and macOS.
+"""Source-checkout installer for MountFile on Windows, Linux, and macOS.
 
 The installer is deliberately usable from any current working directory:
 every project and helper-script path is derived from this file.  It returns
 process-style status codes from :func:`main`; the module entry point turns
-that return value into the process exit code.
+that return value into the process exit code.  This script is intended to be
+run from a source checkout and is not published as a wheel entry point: its
+editable install and system-helper paths require the checkout to be present.
 
 Examples::
 

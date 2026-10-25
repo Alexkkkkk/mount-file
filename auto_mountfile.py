@@ -383,7 +383,10 @@ def analyze(path: Path, *, max_scan: int | None = None) -> Analysis:
 # 3. АВТОНАСТРОЙКА И ЗАПУСК MOUNT FILE
 # ============================================================
 def mountfile_cmd(*args: str) -> list[str]:
-    return [sys.executable, "main.py", *args]
+    # The launcher may be invoked from any working directory. Resolve the
+    # package entry point relative to this file, not the caller's cwd.
+    app_main = Path(__file__).resolve().with_name("main.py")
+    return [sys.executable, str(app_main), *args]
 
 
 def run_mountfile_cli(image: Path, args: list[str]) -> int:
@@ -426,7 +429,9 @@ def auto_run(
     # ---- decode (RT809H / MST / MTK) ----
     if decode or a.profile["need_decode"]:
         print("\n── Шаг 1: декодирование дампа (RT809H MST/MTK) ──")
-        run_mountfile_cli(img, ["decode"])
+        status = run_mountfile_cli(img, ["decode"])
+        if status:
+            return status
 
     # ---- split по udev ----
     if split or (a.profile["need_split"] and udev):
@@ -434,26 +439,32 @@ def auto_run(
             print("\n⚠️  Split пропущен: не указан --udev <file>")
         else:
             print(f"\n── Шаг 2: split по udev={udev} ──")
-            run_mountfile_cli(img, ["split", udev, "-o", "parts"])
+            status = run_mountfile_cli(img, ["split", udev, "-o", "parts"])
+            if status:
+                return status
     elif a.profile["need_split"] and not udev:
         print("\nℹ️  Для split укажите --udev <файл разметки>")
 
     # ---- CLI: volumes + ls ----
     for sub in a.profile.get("cli_after_open", []):
         print(f"\n── CLI: {sub} ──")
-        run_mountfile_cli(img, [sub, "/"] if sub == "ls" else [sub])
+        status = run_mountfile_cli(img, [sub, "/"] if sub == "ls" else [sub])
+        if status:
+            return status
 
     # ---- извлечение типовых файлов ----
     if extract:
         print("\n── Шаг 3: извлечение типовых файлов ──")
-        auto_extract_known_files(a, extract_dir)
+        status = auto_extract_known_files(a, extract_dir)
+        if status:
+            return status
 
     # ---- GUI ----
     if gui:
         print("\n── Запуск GUI ──")
         cmd = mountfile_cmd(str(img))
         print(f"  $ {' '.join(cmd)}")
-        subprocess.run(cmd, check=False)
+        return subprocess.run(cmd, check=False).returncode
 
     return 0
 
@@ -581,7 +592,7 @@ KNOWN_FILES = [
 ]
 
 
-def auto_extract_known_files(a: Analysis, out_dir: str = "extracted") -> None:
+def auto_extract_known_files(a: Analysis, out_dir: str = "extracted") -> int:
     """Для tv_firmware / emmc_dump — извлечь типичные интересные файлы."""
     os.makedirs(out_dir, exist_ok=True)
     if a.dtype not in ("tv_firmware", "emmc_dump"):
@@ -590,10 +601,13 @@ def auto_extract_known_files(a: Analysis, out_dir: str = "extracted") -> None:
     for src in KNOWN_FILES:
         dst = os.path.join(out_dir, Path(src).name)
         print(f"  get {src} → {dst}")
-        subprocess.run(
+        status = subprocess.run(
             mountfile_cmd("get", str(img), src, "-o", out_dir),
             check=False,
-        )
+        ).returncode
+        if status:
+            return status
+    return 0
 
 
 if __name__ == "__main__":

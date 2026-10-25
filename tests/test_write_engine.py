@@ -324,6 +324,43 @@ def test_journal_verification_detects_tampering(tmp_path):
         engine.close()
 
 
+def test_journal_image_field_identifies_the_backing_image(tmp_path):
+    image, engine = _engine(tmp_path)
+    try:
+        engine.write_file("/A.TXT", b"a")
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "journal.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert rows
+        assert all(row["image"] == str(image) for row in rows)
+        assert all(row["image"] != str(tmp_path / "journal.jsonl") for row in rows)
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize("damaged_tail", [b'{"tx":"truncated"', b"\xff"])
+def test_journal_rejects_malformed_tail_and_does_not_report_ok(tmp_path, damaged_tail):
+    image, engine = _engine(tmp_path)
+    try:
+        engine.write_file("/A.TXT", b"a")
+        journal = tmp_path / "journal.jsonl"
+        journal.write_bytes(journal.read_bytes() + damaged_tail)
+        assert engine.verify_journal()["ok"] is False
+    finally:
+        engine.close()
+
+    with pytest.raises(WriteEngineError, match="journal integrity failure"):
+        WriteEngine(
+            image,
+            read_only=False,
+            snapshot_dir=tmp_path / "snapshots",
+            journal_path=tmp_path / "journal.jsonl",
+        )
+
+
 # ------------------------------------------------------------- validation
 @pytest.mark.parametrize(
     "bad", ["relative.txt", "", "/../escape.txt", "..\\escape.txt"]

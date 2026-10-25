@@ -7,9 +7,8 @@ Total Commander opens a text file in the system editor, and Mount File does
 the same through this module - the single place where the editor is chosen:
 
 * Windows  - ``notepad.exe`` (Блокнот);
-* macOS    - ``open -t`` (the default text editor, i.e. TextEdit);
-* Linux    - the first editor found on ``PATH`` (gedit, kate, xed, pluma,
-  mousepad, leafpad, featherpad), else ``xdg-open``.
+* macOS    - ``open -W -t`` (wait for the default text editor to exit);
+* Linux    - the first wait-capable editor found on ``PATH`` (gedit or kate).
 
 ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR`` are honoured on **every**
 POSIX host - macOS included - and win over the per-OS default above.
@@ -38,6 +37,7 @@ __all__ = [
     "TEXT_EXTENSIONS",
     "decode_for_editor",
     "editor_command",
+    "has_active_editors",
     "is_text_file",
     "open_in_editor",
     "prepare_image_text",
@@ -70,18 +70,30 @@ TEXT_EXTENSIONS = (
 )
 
 #: GUI editors tried on Linux, in order, when no ``$EDITOR`` is configured.
-LINUX_EDITORS = (
-    "gedit",
-    "kate",
-    "xed",
-    "pluma",
-    "mousepad",
-    "leafpad",
-    "featherpad",
-)
+#: Their explicit wait switches keep the temporary copy alive for the whole
+#: editing session.  Do not fall back to desktop launchers such as xdg-open:
+#: those normally exit as soon as the editor is started.
+LINUX_EDITORS = (("gedit", "--wait"), ("kate", "--block"))
+
+_DETACHED_LAUNCHERS = {"xdg-open", "gio", "kioclient", "kioclient5", "kioclient6"}
+_WAIT_FLAGS = {
+    "gedit": "--wait",
+    "kate": "--block",
+    "xed": "--wait",
+    "pluma": "--wait",
+    "code": "--wait",
+    "code-insiders": "--wait",
+    "codium": "--wait",
+    "subl": "--wait",
+    "sublime_text": "--wait",
+}
 
 #: Encodings tried for a non-UTF-8 copy, most likely first.
 FALLBACK_ENCODINGS = ("cp1251", "cp866")
+
+# Retain child handles for editor commands that stay alive until their window
+# closes (including an explicitly configured ``--wait`` editor).
+_EDITOR_PROCESSES = []
 
 
 def is_text_file(name) -> bool:
@@ -118,16 +130,22 @@ def editor_command(path):
     # macOS included - otherwise "$EDITOR" would be silently ignored there.
     from_env = _editor_from_env()
     if from_env:
+        executable = os.path.basename(from_env[0]).lower()
+        if executable in _DETACHED_LAUNCHERS:
+            return None
+        if executable == "open" and sys.platform == "darwin":
+            options = [option for option in ("-W", "-t") if option not in from_env]
+            return [from_env[0], *options, *from_env[1:], str(path)]
+        wait_flag = _WAIT_FLAGS.get(executable)
+        if wait_flag and wait_flag not in from_env:
+            from_env.insert(1, wait_flag)
         return from_env + [str(path)]
     if sys.platform == "darwin":  # pragma: no cover - macOS only
-        return ["open", "-t", str(path)]
-    for candidate in LINUX_EDITORS:
+        return ["open", "-W", "-t", str(path)]
+    for candidate, wait_flag in LINUX_EDITORS:
         exe = shutil.which(candidate)
         if exe:
-            return [exe, str(path)]
-    xdg = shutil.which("xdg-open")
-    if xdg:
-        return [xdg, str(path)]
+            return [exe, wait_flag, str(path)]
     return None
 
 
@@ -135,7 +153,10 @@ def open_in_editor(path):
     """Start the system editor on `path` and return the argv used.
 
     The editor runs detached and the GUI never blocks waiting for it to exit.
-    Raises :class:`RuntimeError` when no editor is available on this machine.
+    Raises :class:`RuntimeError` when no wait-capable editor is available.
+    Waiting is required because image-backed files are temporary copies and
+    must not be removed while the editor may still be using them.  Custom
+    ``$EDITOR`` commands should include their editor's wait/block option.
     """
     argv = editor_command(path)
     if argv is None:
@@ -143,8 +164,32 @@ def open_in_editor(path):
             "текстовый редактор не найден: задайте MOUNTFILE_EDITOR "
             "(например, MOUNTFILE_EDITOR=notepad.exe)"
         )
-    subprocess.Popen(argv, stdin=subprocess.DEVNULL, close_fds=True)
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, close_fds=True)
+    _EDITOR_PROCESSES.append((os.path.abspath(path), process))
     return argv
+
+
+def has_active_editors(directory):
+    """Whether a tracked editor process still uses a file under `directory`.
+
+    Exited processes are pruned as they are checked.  Keeping the child alive
+    is important for ``--wait`` editors: deleting an extracted copy while its
+    editor is open would discard unsaved work.
+    """
+    root = os.path.realpath(directory)
+    active = []
+    still_running = []
+    for path, process in _EDITOR_PROCESSES:
+        if process.poll() is not None:
+            continue
+        still_running.append((path, process))
+        try:
+            if os.path.commonpath((root, os.path.realpath(path))) == root:
+                active.append(path)
+        except ValueError:  # different Windows drives
+            continue
+    _EDITOR_PROCESSES[:] = still_running
+    return bool(active)
 
 
 def decode_for_editor(data):

@@ -102,6 +102,22 @@ class TestDecode:
         assert data[0x100:0x114] == rt809.MARKER_MTK
         assert data[rt809.MTK_FLAG_ADDR : rt809.MTK_FLAG_ADDR + 4] == b"\x00" * 4
 
+    def test_decode_refuses_source_as_output_without_truncating_it(self):
+        path = os.path.join(self.tmp, "mtk.bin")
+        table = make_encrypted_dump(path, "MTK")
+        with open(os.path.join(self.tmp, "XOR_MTK_00.bin"), "wb") as f:
+            f.write(table)
+        with open(path, "rb") as f:
+            original = f.read()
+        try:
+            decode_dump(path, out_path=path, table_dir=self.tmp)
+        except Rt809Error:
+            pass
+        else:
+            raise AssertionError("source/output collision must be rejected")
+        with open(path, "rb") as f:
+            assert f.read() == original
+
     def test_mst_roundtrip(self):
         path = os.path.join(self.tmp, "mst.bin")
         table = make_encrypted_dump(path, "MST")

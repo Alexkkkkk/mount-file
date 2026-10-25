@@ -32,17 +32,89 @@ def test_auto_launcher_places_image_after_subcommand(monkeypatch, tmp_path, args
     assert auto_mountfile.run_mountfile_cli(image, args) == 0
     assert captured["command"] == [
         auto_mountfile.sys.executable,
-        "main.py",
+        str(
+            auto_mountfile.Path(auto_mountfile.__file__).resolve().with_name("main.py")
+        ),
         args[0],
         str(image),
         *args[1:],
     ]
+    assert auto_mountfile.Path(captured["command"][1]).is_absolute()
     assert captured["check"] is False
 
 
 def test_auto_launcher_requires_a_subcommand(tmp_path):
     with pytest.raises(ValueError, match="subcommand"):
         auto_mountfile.run_mountfile_cli(tmp_path / "image.img", [])
+
+
+def test_auto_run_propagates_cli_failure_without_starting_later_steps(monkeypatch):
+    analysis = SimpleNamespace(
+        path="dump.bin",
+        dtype="generic",
+        matched="",
+        profile={
+            "description": "test",
+            "need_decode": False,
+            "need_split": False,
+            "cli_after_open": ["volumes", "ls"],
+        },
+        recommended_fs="",
+        recommended_offset=0,
+        write_allowed=False,
+    )
+    calls = []
+
+    def fail_cli(_image, args):
+        calls.append(args)
+        return 73
+
+    monkeypatch.setattr(auto_mountfile, "run_mountfile_cli", fail_cli)
+    assert (
+        auto_mountfile.auto_run(
+            analysis,
+            gui=False,
+            decode=False,
+            split=False,
+            udev=None,
+            list_only=False,
+        )
+        == 73
+    )
+    assert calls == [["volumes"]]
+
+
+def test_auto_run_propagates_gui_exit_status(monkeypatch):
+    analysis = SimpleNamespace(
+        path="dump.bin",
+        dtype="generic",
+        matched="",
+        profile={
+            "description": "test",
+            "need_decode": False,
+            "need_split": False,
+            "cli_after_open": [],
+        },
+        recommended_fs="",
+        recommended_offset=0,
+        write_allowed=False,
+    )
+    monkeypatch.setattr(
+        auto_mountfile.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=91),
+    )
+    assert (
+        auto_mountfile.auto_run(
+            analysis,
+            gui=True,
+            decode=False,
+            split=False,
+            udev=None,
+            list_only=False,
+        )
+        == 91
+    )
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.com"])

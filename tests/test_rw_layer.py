@@ -27,8 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image  # noqa: E402
 
 from mountfile.fat32 import Fat32  # noqa: E402
+from mountfile.rw.universal import Journal  # noqa: E402
 from mountfile_rw_complete import Fat32Adapter  # noqa: E402
 from mountfile_rw_complete import (
+    CrashRecovery,
     DryRunFat32,
     VerificationEngine,
     create_rw_full,
@@ -286,3 +288,121 @@ def test_mcp_stdio_answers_one_request_per_line(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1])["ok"] is True
+
+
+# -------------------------------------------------------------- crash recovery
+class _RecoveryVerifier:
+    def __init__(self, expected_image=None):
+        self.expected_image = expected_image
+        self.calls = 0
+
+    def verify(self, image_path, fs):
+        self.calls += 1
+        if self.expected_image is not None:
+            assert Path(image_path).read_bytes() == self.expected_image
+        return type("Report", (), {"ok": True, "details": "ok", "checks": {}})()
+
+
+def test_crash_recovery_restores_snapshot_byte_range_and_verifies_afterward(tmp_path):
+    image = tmp_path / "recovery.img"
+    original = b"0123456789abcdef"
+    image.write_bytes(original)
+    journal = Journal(image)
+    verifier = _RecoveryVerifier(expected_image=original)
+    try:
+        tx_id = journal.begin("write_file", "/evidence.bin")
+        journal.backup_region(4, 6)
+        with image.open("r+b") as stream:
+            stream.seek(4)
+            stream.write(b"CHANGE")
+        # Simulate a process crash: a new process has no active transaction.
+        journal._current = None
+
+        recovered = CrashRecovery(journal, verifier).recover(image, FsType.FAT32)
+
+        assert recovered == 1
+        assert image.read_bytes() == original
+        assert journal.uncommitted() == []
+        assert verifier.calls == 1
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("snapshot_state", ["missing", "corrupt"])
+def test_crash_recovery_fails_closed_and_keeps_unusable_snapshot_record(
+    tmp_path, snapshot_state
+):
+    image = tmp_path / "recovery.img"
+    original = b"0123456789abcdef"
+    image.write_bytes(original)
+    journal = Journal(image)
+    verifier = _RecoveryVerifier()
+    try:
+        tx_id = journal.begin("write_file", "/evidence.bin")
+        backup = journal.backup_region(4, 6)
+        with image.open("r+b") as stream:
+            stream.seek(4)
+            stream.write(b"CHANGE")
+        journal._current = None
+        if snapshot_state == "missing":
+            backup.unlink()
+        else:
+            backup.write_bytes(b"BAD!!!")
+
+        with pytest.raises(RWError, match=tx_id):
+            CrashRecovery(journal, verifier).recover(image, FsType.FAT32)
+
+        assert image.read_bytes() == b"0123CHANGEabcdef"
+        assert [row["tx_id"] for row in journal.uncommitted()] == [tx_id]
+        assert verifier.calls == 0
+    finally:
+        journal.close()
+
+
+def test_crash_recovery_does_not_restore_committed_snapshot(tmp_path):
+    image = tmp_path / "recovery.img"
+    image.write_bytes(b"0123456789abcdef")
+    journal = Journal(image)
+    verifier = _RecoveryVerifier()
+    try:
+        tx_id = journal.begin("write_file", "/evidence.bin")
+        journal.backup_region(4, 6)
+        with image.open("r+b") as stream:
+            stream.seek(4)
+            stream.write(b"CHANGE")
+        journal.commit()
+
+        recovered = CrashRecovery(journal, verifier).recover(image, FsType.FAT32)
+
+        assert recovered == 0
+        assert image.read_bytes() == b"0123CHANGEabcdef"
+        assert journal.uncommitted() == []
+        assert verifier.calls == 0
+        assert journal._conn.execute(
+            "SELECT committed FROM journal WHERE tx_id=?", (tx_id,)
+        ).fetchone() == (1,)
+    finally:
+        journal.close()
+
+
+def test_crash_recovery_leaves_active_journal_transaction_untouched(tmp_path):
+    image = tmp_path / "recovery.img"
+    original = b"0123456789abcdef"
+    image.write_bytes(original)
+    journal = Journal(image)
+    verifier = _RecoveryVerifier()
+    try:
+        tx_id = journal.begin("write_file", "/evidence.bin")
+        journal.backup_region(4, 6)
+        with image.open("r+b") as stream:
+            stream.seek(4)
+            stream.write(b"CHANGE")
+
+        assert CrashRecovery(journal, verifier).recover(image, FsType.FAT32) == 0
+
+        assert journal._current == tx_id
+        assert image.read_bytes() == b"0123CHANGEabcdef"
+        assert [row["tx_id"] for row in journal.uncommitted()] == [tx_id]
+        assert verifier.calls == 0
+    finally:
+        journal.close()

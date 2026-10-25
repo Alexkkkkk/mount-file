@@ -17,10 +17,12 @@ loaded into memory whole.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 #: Never read more than this many bytes of a file for one analysis.
 DEFAULT_MAX_BYTES = 256 * 1024
@@ -158,7 +160,23 @@ def build_prompt(name, data, user_prompt=None, truncated=False, size=None):
     return "\n".join(parts)
 
 
-def _post_json(url, payload, headers=None, timeout=DEFAULT_TIMEOUT):
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so credentials and file data stay at the chosen URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_request(req, timeout, allow_redirects=True):
+    if allow_redirects:
+        return urllib.request.urlopen(req, timeout=timeout)
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    return opener.open(req, timeout=timeout)
+
+
+def _post_json(
+    url, payload, headers=None, timeout=DEFAULT_TIMEOUT, allow_redirects=True
+):
     """POST ``payload`` as JSON; return ``(data, error)``, never raise."""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
@@ -166,7 +184,7 @@ def _post_json(url, payload, headers=None, timeout=DEFAULT_TIMEOUT):
     for key, value in (headers or {}).items():
         req.add_header(key, value)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_request(req, timeout, allow_redirects=allow_redirects) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         detail = ""
@@ -290,6 +308,27 @@ def _openai_base_url(settings):
     return ""  # empty -> the backend's own default (https://api.openai.com)
 
 
+def _api_key_transport_error(base_url):
+    """Require HTTPS for API keys, except HTTP endpoints on loopback."""
+    try:
+        parsed = urlsplit(base_url)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname
+    except ValueError:
+        return "Некорректный адрес OpenAI-совместимого эндпоинта."
+    if scheme == "https":
+        return ""
+    if scheme == "http" and host:
+        if host.lower().rstrip(".") == "localhost":
+            return ""
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return ""
+        except ValueError:
+            pass
+    return "Ключ API можно отправлять только через HTTPS или loopback HTTP."
+
+
 class OllamaBackend(AiBackend):
     """Local Ollama server (``POST /api/generate``)."""
 
@@ -373,6 +412,17 @@ class OpenAiCompatBackend(AiBackend):
         return bool(self.api_key)
 
     def analyze(self, name, data, prompt=None, truncated=False, size=None):
+        if self.api_key:
+            transport_error = _api_key_transport_error(self.base_url)
+            if transport_error:
+                return AiResult(
+                    ok=False,
+                    backend=self.name,
+                    model=self.model,
+                    error=transport_error,
+                    bytes_read=len(data or b""),
+                    truncated=truncated,
+                )
         headers = {}
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key
@@ -391,6 +441,7 @@ class OpenAiCompatBackend(AiBackend):
             payload,
             headers=headers,
             timeout=self.timeout,
+            allow_redirects=False,
         )
         if body is None:
             return AiResult(

@@ -79,6 +79,8 @@ class Fat32Adapter(UniversalRW):
     * timestamps движок не хранит, поэтому ``mtime`` в ``FileStat`` равен 0.0.
     """
 
+    atomic_mutations = True
+
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
         self._fh = None
@@ -353,32 +355,47 @@ class CrashRecovery:
     def recover(self, image_path: Path, fs: FsType) -> int:
         """
         Возвращает число откатанных транзакций.
-        Транзакция считается незавершённой, если для неё есть backup_path,
-        но нет коммита (нет записи в audit). Для простоты:
-        незавершённые — те, что старше 10 секунд и не удалены.
+        Восстанавливает только незавершённые транзакции. Активную транзакцию
+        текущего процесса не трогает; снимок и целостность байтов проверяет
+        Journal.rollback().
         """
-        conn = self.journal._conn
-        rows = conn.execute(
-            "SELECT tx_id, backup_path, created_at FROM journal "
-            "WHERE backup_path IS NOT NULL"
-        ).fetchall()
+        chain = self.journal.verify_chain()
+        if not chain["valid"]:
+            raise RWError(
+                "Проверка целостности журнала не пройдена: %s" % chain["error"]
+            )
         recovered = 0
-        now = time.time()
-        for tx_id, backup_path, created_at in rows:
-            if now - created_at < 10:
-                continue  # возможно, активная транзакция
-            if backup_path and Path(backup_path).exists():
-                # Восстановление: копируем backup обратно в образ
-                # (в реальном движке — по сохранённому offset)
-                # Здесь только помечаем как восстановленную.
-                conn.execute("DELETE FROM journal WHERE tx_id=?", (tx_id,))
-                conn.commit()
-                recovered += 1
+        # Undo newest first if a legacy journal contains multiple pending rows.
+        for transaction in reversed(self.journal.uncommitted()):
+            tx_id = transaction["tx_id"]
+            if tx_id == self.journal._current:
+                continue
+            try:
+                restored = self.journal.rollback(tx_id)
+            except Exception as exc:
+                raise RWError(
+                    f"Не удалось восстановить транзакцию {tx_id} "
+                    f"(backup={transaction['backup']!r}): {exc}"
+                ) from exc
+            if not restored:
+                raise RWError(
+                    f"Не удалось восстановить транзакцию {tx_id}: "
+                    f"backup отсутствует, повреждён или параметры снимка "
+                    f"недействительны (backup={transaction['backup']!r})"
+                )
+            recovered += 1
         if recovered:
-            report = self.verifier.verify(image_path, fs)
+            try:
+                report = self.verifier.verify(image_path, fs)
+            except Exception as exc:
+                raise RWError(
+                    f"Восстановлено транзакций: {recovered}, но проверка "
+                    f"образа завершилась ошибкой: {exc}"
+                ) from exc
             if not report.ok:
                 raise RWError(
-                    f"Recovery завершился, но verify провалился: {report.details}"
+                    f"Восстановлено транзакций: {recovered}, но verify "
+                    f"провалился: {report.details or report.checks}"
                 )
         return recovered
 

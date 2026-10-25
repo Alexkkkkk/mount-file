@@ -136,7 +136,9 @@ class TestValidate:
 
     def test_verify_mount_reports_backend_or_error(self):
         """verify_mount is the check that catches FS_Info_Con before the GUI."""
-        good = _image(os.path.join(self.tmp, "good.img"), FAT32_BYTES, 0x100000)
+        good = _image(
+            os.path.join(self.tmp, "good.img"), FAT32_BYTES + 0x100000, 0x100000
+        )
         backend, entries, error = verify_mount(good, 0x100000)
         assert backend in ("tsk", "fat32")
         assert error is None
@@ -152,7 +154,9 @@ class TestScan:
         self.tmp = tempfile.mkdtemp()
 
     def test_signature_candidate(self):
-        path = _image(os.path.join(self.tmp, "fat.img"), FAT32_BYTES, 0x100000)
+        path = _image(
+            os.path.join(self.tmp, "fat.img"), FAT32_BYTES + 0x100000, 0x100000
+        )
         cands = scan_candidates(path, deep=False)
         assert cands
         assert cands[0].offset == 0x100000
@@ -291,7 +295,9 @@ class TestFormat:
 class TestCli:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
-        self.image = _image(os.path.join(self.tmp, "fat.img"), FAT32_BYTES, 0x100000)
+        self.image = _image(
+            os.path.join(self.tmp, "fat.img"), FAT32_BYTES + 0x100000, 0x100000
+        )
 
     def _args(self, **kw):
         base = dict(

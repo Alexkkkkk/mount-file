@@ -20,7 +20,6 @@ mountfile_rw_v2.py — финальные патчи к Mount File Universal RW 
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -38,7 +37,6 @@ from mountfile.rw.universal import (
     Fat32RW,
     FileStat,
     FsType,
-    Journal,
     Mode,
     NtfsRW,
     RWError,
@@ -49,117 +47,11 @@ from mountfile.rw.universal import (
 
 # The byte-exact implementation now lives in the installable package. Keep
 # this standalone module as a compatibility entry point for existing scripts.
-from mountfile.universal_fs_rw import JournalV2 as PackageJournalV2
-
-# ===========================================================================
-# 1. Journal v2: реальный rollback по offset/length
-# ===========================================================================
-
-
-class JournalV2(Journal):
-    """
-    Наследует Journal, но:
-      • добавляет колонки offset, length (миграция на лету);
-      • backup_region сохраняет реальные байты по смещению;
-      • rollback возвращает байты обратно в образ.
-    """
-
-    SCHEMA_VERSION = 2
-
-    def __init__(self, image_path: Path):
-        super().__init__(image_path)
-        self._migrate()
-
-    def _migrate(self) -> None:
-        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(journal)")}
-        if "offset" not in cols:
-            self._conn.execute("ALTER TABLE journal ADD COLUMN offset INTEGER")
-        if "length" not in cols:
-            self._conn.execute("ALTER TABLE journal ADD COLUMN length INTEGER")
-        if "committed" not in cols:
-            self._conn.execute(
-                "ALTER TABLE journal ADD COLUMN committed INTEGER DEFAULT 0"
-            )
-        self._conn.commit()
-
-    def begin(self, op: str, path: str) -> str:
-        tx_id = super().begin(op, path)
-        return tx_id
-
-    def backup_region(self, offset: int, length: int) -> Path:
-        backup = self.backup_dir / f"{self._current}.bin"
-        with open(self.image_path, "rb") as src, open(backup, "wb") as dst:
-            src.seek(offset)
-            dst.write(src.read(length))
-        sha = hashlib.sha256(backup.read_bytes()).hexdigest()
-        self._conn.execute(
-            "UPDATE journal SET backup_path=?, sha256=?, offset=?, length=? "
-            "WHERE tx_id=?",
-            (str(backup), sha, offset, length, self._current),
-        )
-        self._conn.commit()
-        self._last_hash = sha
-        return backup
-
-    def commit(self) -> None:
-        if self._current:
-            self._conn.execute(
-                "UPDATE journal SET committed=1 WHERE tx_id=?", (self._current,)
-            )
-            self._conn.commit()
-        super().commit()
-
-    def rollback(self, tx_id: Optional[str] = None) -> bool:
-        """
-        Возвращает True, если откат был выполнен (были байты для восстановления).
-        Транзакция удаляется из журнала только при успешном восстановлении.
-        """
-        tid = tx_id or self._current
-        if not tid:
-            return False
-        row = self._conn.execute(
-            "SELECT backup_path, offset, length FROM journal WHERE tx_id=?",
-            (tid,),
-        ).fetchone()
-        restored = False
-        if row and row[0] and row[1] is not None:
-            backup = Path(row[0])
-            if backup.exists():
-                with open(backup, "rb") as b, open(self.image_path, "r+b") as img:
-                    img.seek(row[1])
-                    img.write(b.read())
-                restored = True
-        self._conn.execute("DELETE FROM journal WHERE tx_id=?", (tid,))
-        self._conn.commit()
-        if tid == self._current:
-            self._current = None
-        return restored
-
-    def uncommitted(self) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT tx_id, op, path, offset, length, backup_path, created_at "
-            "FROM journal WHERE committed=0 AND backup_path IS NOT NULL"
-        ).fetchall()
-        return [
-            {
-                "tx_id": r[0],
-                "op": r[1],
-                "path": r[2],
-                "offset": r[3],
-                "length": r[4],
-                "backup": r[5],
-                "created_at": r[6],
-            }
-            for r in rows
-        ]
-
+from mountfile.universal_fs_rw import JournalV2
 
 # ===========================================================================
 # 2. Патч бэкендов: реальный rollback + verify после транзакции
 # ===========================================================================
-
-# Use the package implementation rather than the historical duplicate above.
-JournalV2 = PackageJournalV2
 
 
 class VerifiedFat32Adapter(Fat32Adapter):
@@ -423,17 +315,18 @@ def _fake_fat32_journal() -> Iterator[tuple[Path, JournalV2]]:
 
 
 def test_hash_chain_invariant():
-    """Каждая запись ссылается на sha256 предыдущей."""
+    """Каждая запись ссылается на проверенный hash предыдущей записи."""
     with _fake_fat32_journal() as (img, j):
         tx1 = j.begin("create", "/a")
-        j._conn.execute("UPDATE journal SET sha256=? WHERE tx_id=?", ("a" * 64, tx1))
-        j._conn.commit()
-        j._last_hash = "a" * 64
+        j.commit()
+        first_hash = j._conn.execute(
+            "SELECT record_hash FROM journal WHERE tx_id=?", (tx1,)
+        ).fetchone()[0]
         tx2 = j.begin("delete", "/a")
         prev = j._conn.execute(
             "SELECT prev_hash FROM journal WHERE tx_id=?", (tx2,)
         ).fetchone()[0]
-        assert prev == "a" * 64
+        assert prev == first_hash
 
 
 def test_rollback_restores_bytes():

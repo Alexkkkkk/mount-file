@@ -129,16 +129,18 @@ def test_openai_backend_sends_bearer_and_parses_choice(monkeypatch):
     )
     captured = {}
 
-    def fake_urlopen(req, timeout=None):
+    def fake_open_request(req, timeout=None, allow_redirects=True):
         captured["auth"] = req.get_header("Authorization")
         captured["url"] = req.full_url
+        captured["allow_redirects"] = allow_redirects
         return FakeResponse({"choices": [{"message": {"content": "ok"}}]})
 
-    monkeypatch.setattr("mountfile.ai.backend.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mountfile.ai.backend._open_request", fake_open_request)
     res = backend.analyze("a.bin", b"x")
     assert res.ok and res.text == "ok"
     assert captured["auth"] == "Bearer secret-key"
     assert captured["url"] == "https://example.test/v1/chat/completions"
+    assert captured["allow_redirects"] is False
 
 
 def test_network_failure_is_reported_not_raised(monkeypatch):

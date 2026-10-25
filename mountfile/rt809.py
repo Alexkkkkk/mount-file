@@ -214,6 +214,17 @@ def decode_dump(path, out_path=None, table_dir=None, kind=None):
     if out_path is None:
         out_path = path + "_decode.bin"
 
+    source = os.path.abspath(os.fspath(path))
+    destination = os.path.abspath(os.fspath(out_path))
+    same_path = os.path.normcase(source) == os.path.normcase(destination)
+    if not same_path and os.path.exists(destination):
+        try:
+            same_path = os.path.samefile(source, destination)
+        except OSError:
+            pass
+    if same_path:
+        raise Rt809Error("output path must not refer to the source dump")
+
     head = _head(path, size)
     _decode_head(head, detected, table)
 

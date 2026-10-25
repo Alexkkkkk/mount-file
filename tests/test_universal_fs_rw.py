@@ -1,3 +1,4 @@
+import io
 import sys
 from pathlib import Path
 
@@ -7,6 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
 
 from mountfile import universal_fs_rw
+from mountfile.rw.universal import FsType as RWFsType
+from mountfile.rw.universal import Mode as RWMode
+from mountfile.rw.universal import create_rw
 from mountfile.universal_fs_rw import (
     Fat32RW,
     LoopMountRW,
@@ -61,6 +65,24 @@ def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):
     image.write_bytes(b"not a filesystem")
     with pytest.raises(RuntimeError, match="no filesystem detected"):
         UniversalFSRW(image, auto_backup=False)
+
+
+def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):
+    image = tmp_path / "factory-fat32.img"
+    make_fat32_image(image)
+    rw = create_rw(image, RWFsType.FAT32, RWMode.RW)
+    try:
+        rw.open()
+        rw.create_file("/FACTORY.TXT", io.BytesIO(b"native FAT32 factory"))
+        assert rw.stat("/FACTORY.TXT").size == len(b"native FAT32 factory")
+        rw.rename("/FACTORY.TXT", "/RENAMED.TXT")
+        rw.write_file("/RENAMED.TXT", io.BytesIO(b"!"), offset=0)
+        assert rw.stat("/RENAMED.TXT").size == 1
+        rw.delete("/RENAMED.TXT")
+        with pytest.raises(FileNotFoundError):
+            rw.stat("/RENAMED.TXT")
+    finally:
+        rw.close()
 
 
 @pytest.mark.parametrize("fs_type", ["iso9660", "squashfs", "jffs2", "ubifs"])
