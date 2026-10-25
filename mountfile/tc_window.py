@@ -1987,22 +1987,38 @@ class AiDialog(QDialog):
         backend = ai.build_backend(settings)
         limit = ai.max_bytes(settings)
         name = self._name()
+        prompt = self.ed_prompt.text().strip() or None
+        box = []
+
+        def worker():
+            try:
+                data, truncated = ai.collect(self._reader(), max_bytes=limit)
+                result = backend.analyze(
+                    name, data, prompt=prompt, truncated=truncated, size=self._size
+                )
+            except Exception as e:
+                result = ai.AiResult(ok=False, backend=backend.name, error=str(e))
+            box.append(result)
+
         self.bar.show()
         self.btn_run.setEnabled(False)
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        loop = QEventLoop()
+        timer = QTimer(self)
+        timer.setInterval(50)
+        timer.timeout.connect(lambda: None if t.is_alive() else loop.quit())
+        timer.start()
         try:
-            data, truncated = ai.collect(self._reader(), max_bytes=limit)
-            result = backend.analyze(
-                name,
-                data,
-                prompt=self.ed_prompt.text().strip() or None,
-                truncated=truncated,
-                size=self._size,
-            )
-        except Exception as e:
-            result = ai.AiResult(ok=False, backend=backend.name, error=str(e))
+            loop.exec()
         finally:
+            timer.stop()
+            t.join(timeout=1)
             self.bar.hide()
             self.btn_run.setEnabled(True)
+        result = box[0] if box else ai.AiResult(
+            ok=False, backend=backend.name, error="Анализ не завершился."
+        )
         self._show(name, result)
 
     def _show(self, name, result):
@@ -2716,6 +2732,14 @@ class MainWindow(QMainWindow):
             "Локальные рекомендации по имени, расширению и размеру; файл не читается (Ctrl+Shift+I)",
         )
         m_tool.addAction(self.act_advise)
+        self.act_ai_hypotheses = self._action(
+            "AI: гипотезы о формате файла…",
+            self._on_ai_hypotheses,
+            "Ctrl+Alt+I",
+            "SP_FileDialogContentsView",
+            "Сопоставить сигнатуру и энтропию; запрос модели выполняется только по выбору этого пункта",
+        )
+        m_tool.addAction(self.act_ai_hypotheses)
 
         m_view = mb.addMenu("Вид")
         m_view.addAction(self.act_reload)
@@ -2935,6 +2959,43 @@ class MainWindow(QMainWindow):
                     "Format Advisor",
                     "Не удалось сохранить рекомендацию: %s" % exc,
                 )
+
+    def _on_ai_hypotheses(self):
+        """Run the opt-in multi-hypothesis advisor on a selected file."""
+        panel = self.active_panel()
+        entry = panel.selected_entry()
+        if not entry or entry.get("is_dir") or entry.get("up"):
+            QMessageBox.information(
+                self, "AI-анализ", "Сначала выберите файл в активной панели."
+            )
+            return
+        from mountfile.ai_format_advisor_v2 import advise_and_show
+
+        try:
+            path = panel.join(entry["name"])
+            if panel.mode == "img":
+                reader = lambda offset, length: panel.provider.read_file_range(
+                    path, offset, length
+                )
+            else:
+                reader = ai.local_reader(path)
+            head, _truncated = ai.collect(reader, max_bytes=4096)
+            backend = ai.build_backend(tc_style.SETTINGS)
+            self.log_msg(
+                "AI-гипотезный анализ: %s — ограниченный слепок, бэкенд %s"
+                % (entry["name"], backend.name)
+            )
+            advise_and_show(
+                path,
+                [backend],
+                parent=self,
+                head=head,
+                size=int(entry.get("size") or 0),
+            )
+        except Exception as exc:
+            QMessageBox.information(
+                self, "AI-анализ", "Не удалось запустить анализ: %s" % exc
+            )
 
     @staticmethod
     def _format_metadata_advice(fingerprint, recipes):

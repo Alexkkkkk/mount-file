@@ -97,6 +97,60 @@ def test_ai_entry_duplicated_in_tools_menu(win):
     assert win.act_ai in tools.actions(), "нет пункта AI в меню Инструменты"
 
 
+def test_hypothesis_advisor_is_explicit_and_reads_only_bounded_head(
+    win, monkeypatch
+):
+    from mountfile import ai_format_advisor_v2
+
+    entry = {"name": "sample.bin", "size": 8192, "is_dir": False}
+    panel = FakePanel(mode="img", entry=entry)
+    calls = {}
+
+    def read_range(path, offset, length):
+        calls.setdefault("reads", []).append((path, offset, length))
+        return bytes(range(256))[offset : offset + length]
+
+    panel.provider.read_file_range = read_range
+    monkeypatch.setattr(win, "active_panel", lambda: panel)
+
+    class FakeBackend:
+        name = "test"
+
+    monkeypatch.setattr(ai, "build_backend", lambda _settings: FakeBackend())
+    monkeypatch.setattr(
+        ai_format_advisor_v2,
+        "build_fingerprint",
+        lambda path, head=None, size=None: {
+            "path": path,
+            "name": "sample.bin",
+            "head": head,
+            "size": size,
+        },
+    )
+    monkeypatch.setattr(
+        ai_format_advisor_v2,
+        "advise_and_show",
+        lambda path, backends, **kwargs: calls.update(
+            path=path, backend_count=len(backends), head=kwargs["head"]
+        ),
+    )
+
+    win._on_ai_hypotheses()
+
+    assert calls["reads"][0][2] == 4096
+    assert calls["reads"][-1][2] == 1  # only the truncation probe
+    assert calls["path"] == "/sample.bin"
+    assert calls["backend_count"] == 1
+    assert len(calls["head"]) == 256  # fake source returns at most 256 bytes
+    assert win.act_ai_hypotheses.text().startswith("AI: гипотезы")
+    tools = next(
+        m
+        for m in win.menuBar().findChildren(QMenu)
+        if m.title() == "Инструменты"
+    )
+    assert win.act_ai_hypotheses in tools.actions()
+
+
 def test_format_advisor_uses_metadata_only_and_does_not_call_backend(win, monkeypatch):
     entry = {"name": "blob.bin", "size": 1024, "is_dir": False}
     panel = FakePanel(mode="img", entry=entry)

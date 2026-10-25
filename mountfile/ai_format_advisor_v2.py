@@ -363,9 +363,9 @@ class FormatAdvisorDialog(QDialog):
 # ------------------------------------------------------------ entry points
 
 
-def advise_and_show(path, backends, github=None, parent=None, head=None):
+def advise_and_show(path, backends, github=None, parent=None, head=None, size=None):
     """Меню «AI-советник v2»: слепок, гипотезы, ответы моделей, issue."""
-    fp = build_fingerprint(path, head=head)
+    fp = build_fingerprint(path, head=head, size=size)
     adapters = [LLMBackendAdapter(b) for b in backends]
     dlg = FormatAdvisorDialog(fp, adapters, Calibration(), github=github, parent=parent)
     return exec_dialog(dlg)
