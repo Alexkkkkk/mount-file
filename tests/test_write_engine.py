@@ -335,6 +335,25 @@ def test_allow_damaged_override_is_explicit(tmp_path):
         engine.close()
 
 
+def test_allow_damaged_accepts_baseline_checker_failure(tmp_path, monkeypatch):
+    image = _image(tmp_path)
+    _corrupt_fat(image)
+    monkeypatch.setattr(WriteEngine, "_run_fs_check", lambda self: False)
+    engine = WriteEngine(
+        image,
+        read_only=False,
+        allow_damaged=True,
+        snapshot_dir=tmp_path / "s",
+        journal_path=tmp_path / "j.jsonl",
+    )
+    try:
+        result = engine.write_file("/ACCEPTED.TXT", b"ok")
+        assert result.status == "applied"
+        assert engine.history()[-1]["op"] == "commit"
+    finally:
+        engine.close()
+
+
 # -------------------------------------------------------------- journal
 def test_journal_is_a_verified_hash_chain(tmp_path):
     image, engine = _engine(tmp_path)
