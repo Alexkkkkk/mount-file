@@ -541,8 +541,12 @@ class Installer(QThread):
                     return
                 raise RuntimeError("в релизе нет сборки для этой платформы")
             wanted = self.info.get("sha256")
-            if not isinstance(wanted, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", wanted):
-                raise RuntimeError("отсутствует или некорректна доверенная SHA256-сумма")
+            if not isinstance(wanted, str) or not re.fullmatch(
+                r"[0-9a-fA-F]{64}", wanted
+            ):
+                raise RuntimeError(
+                    "отсутствует или некорректна доверенная SHA256-сумма"
+                )
             self.stage.emit("Скачивание обновления…")
             self.status.emit("Скачивание %s…" % asset.get("name"))
             path, size = download_asset(asset, progress=self.progress.emit)

@@ -17,8 +17,8 @@ loaded into memory whole.
 
 from __future__ import annotations
 
-import json
 import ipaddress
+import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -160,7 +160,23 @@ def build_prompt(name, data, user_prompt=None, truncated=False, size=None):
     return "\n".join(parts)
 
 
-def _post_json(url, payload, headers=None, timeout=DEFAULT_TIMEOUT):
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so credentials and file data stay at the chosen URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_request(req, timeout, allow_redirects=True):
+    if allow_redirects:
+        return urllib.request.urlopen(req, timeout=timeout)
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    return opener.open(req, timeout=timeout)
+
+
+def _post_json(
+    url, payload, headers=None, timeout=DEFAULT_TIMEOUT, allow_redirects=True
+):
     """POST ``payload`` as JSON; return ``(data, error)``, never raise."""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
@@ -168,7 +184,7 @@ def _post_json(url, payload, headers=None, timeout=DEFAULT_TIMEOUT):
     for key, value in (headers or {}).items():
         req.add_header(key, value)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_request(req, timeout, allow_redirects=allow_redirects) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         detail = ""
@@ -425,6 +441,7 @@ class OpenAiCompatBackend(AiBackend):
             payload,
             headers=headers,
             timeout=self.timeout,
+            allow_redirects=False,
         )
         if body is None:
             return AiResult(

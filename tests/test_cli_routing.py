@@ -33,9 +33,7 @@ def test_auto_launcher_places_image_after_subcommand(monkeypatch, tmp_path, args
     assert captured["command"] == [
         auto_mountfile.sys.executable,
         str(
-            auto_mountfile.Path(auto_mountfile.__file__)
-            .resolve()
-            .with_name("main.py")
+            auto_mountfile.Path(auto_mountfile.__file__).resolve().with_name("main.py")
         ),
         args[0],
         str(image),
@@ -55,8 +53,12 @@ def test_auto_run_propagates_cli_failure_without_starting_later_steps(monkeypatc
         path="dump.bin",
         dtype="generic",
         matched="",
-        profile={"description": "test", "need_decode": False, "need_split": False,
-                 "cli_after_open": ["volumes", "ls"]},
+        profile={
+            "description": "test",
+            "need_decode": False,
+            "need_split": False,
+            "cli_after_open": ["volumes", "ls"],
+        },
         recommended_fs="",
         recommended_offset=0,
         write_allowed=False,
@@ -68,14 +70,17 @@ def test_auto_run_propagates_cli_failure_without_starting_later_steps(monkeypatc
         return 73
 
     monkeypatch.setattr(auto_mountfile, "run_mountfile_cli", fail_cli)
-    assert auto_mountfile.auto_run(
-        analysis,
-        gui=False,
-        decode=False,
-        split=False,
-        udev=None,
-        list_only=False,
-    ) == 73
+    assert (
+        auto_mountfile.auto_run(
+            analysis,
+            gui=False,
+            decode=False,
+            split=False,
+            udev=None,
+            list_only=False,
+        )
+        == 73
+    )
     assert calls == [["volumes"]]
 
 
@@ -84,8 +89,12 @@ def test_auto_run_propagates_gui_exit_status(monkeypatch):
         path="dump.bin",
         dtype="generic",
         matched="",
-        profile={"description": "test", "need_decode": False, "need_split": False,
-                 "cli_after_open": []},
+        profile={
+            "description": "test",
+            "need_decode": False,
+            "need_split": False,
+            "cli_after_open": [],
+        },
         recommended_fs="",
         recommended_offset=0,
         write_allowed=False,
@@ -95,14 +104,17 @@ def test_auto_run_propagates_gui_exit_status(monkeypatch):
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=91),
     )
-    assert auto_mountfile.auto_run(
-        analysis,
-        gui=True,
-        decode=False,
-        split=False,
-        udev=None,
-        list_only=False,
-    ) == 91
+    assert (
+        auto_mountfile.auto_run(
+            analysis,
+            gui=True,
+            decode=False,
+            split=False,
+            udev=None,
+            list_only=False,
+        )
+        == 91
+    )
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.com"])

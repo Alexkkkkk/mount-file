@@ -33,7 +33,6 @@ import hashlib
 import logging
 import os
 import shutil
-import sqlite3
 import stat
 import struct
 import subprocess
@@ -45,6 +44,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
+
+from mountfile.rw.journal import Journal as _VerifiedJournal
 
 try:
     import pytsk3
@@ -313,143 +314,7 @@ class RWJournal:
         self._prev = digest
 
 
-class JournalV2:
-    """SQLite transaction journal with byte-exact rollback support.
-
-    This is the package home of the v2 journal that was previously implemented
-    only by ``mountfile_rw_v2.py``.  The schema is deliberately compatible with
-    the legacy journal: opening an existing journal adds ``offset``, ``length``
-    and ``committed`` columns in place.  Backups are made before a mutation and
-    rollback restores exactly the recorded byte range.
-    """
-
-    SCHEMA_VERSION = 2
-
-    def __init__(self, image: Path):
-        self.image_path = Path(image)
-        self.db_path = self.image_path.with_suffix(
-            self.image_path.suffix + ".rw-journal.sqlite"
-        )
-        self.backup_dir = self.image_path.with_suffix(
-            self.image_path.suffix + ".rw-backups"
-        )
-        self.backup_dir.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS journal (
-                   tx_id TEXT PRIMARY KEY,
-                   op TEXT NOT NULL,
-                   path TEXT NOT NULL,
-                   backup_path TEXT,
-                   sha256 TEXT,
-                   prev_hash TEXT NOT NULL,
-                   created_at REAL NOT NULL
-               )"""
-        )
-        self._migrate()
-        self._current = None
-        self._last_hash = self._get_last_hash()
-
-    def _migrate(self):
-        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(journal)")}
-        if "offset" not in columns:
-            self._conn.execute("ALTER TABLE journal ADD COLUMN offset INTEGER")
-        if "length" not in columns:
-            self._conn.execute("ALTER TABLE journal ADD COLUMN length INTEGER")
-        if "committed" not in columns:
-            self._conn.execute(
-                "ALTER TABLE journal ADD COLUMN committed INTEGER DEFAULT 0"
-            )
-        self._conn.commit()
-
-    def _get_last_hash(self):
-        row = self._conn.execute(
-            "SELECT sha256 FROM journal WHERE sha256 IS NOT NULL "
-            "ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-        return row[0] if row else "0" * 64
-
-    def begin(self, op: str, path: str) -> str:
-        tx_id = str(uuid.uuid4())
-        self._current = tx_id
-        self._conn.execute(
-            "INSERT INTO journal(tx_id, op, path, prev_hash, created_at) "
-            "VALUES (?,?,?,?,?)",
-            (tx_id, op, path, self._last_hash, time.time()),
-        )
-        self._conn.commit()
-        return tx_id
-
-    def backup_region(self, offset: int, length: int) -> Path:
-        if self._current is None:
-            raise RuntimeError("begin() must be called before backup_region()")
-        if offset < 0 or length < 0:
-            raise ValueError("offset and length must be non-negative")
-        backup = self.backup_dir / (self._current + ".bin")
-        with self.image_path.open("rb") as source, backup.open("wb") as target:
-            source.seek(offset)
-            target.write(source.read(length))
-        digest = hashlib.sha256(backup.read_bytes()).hexdigest()
-        self._conn.execute(
-            "UPDATE journal SET backup_path=?, sha256=?, offset=?, length=? "
-            "WHERE tx_id=?",
-            (str(backup), digest, offset, length, self._current),
-        )
-        self._conn.commit()
-        self._last_hash = digest
-        return backup
-
-    def commit(self):
-        if self._current is not None:
-            self._conn.execute(
-                "UPDATE journal SET committed=1 WHERE tx_id=?", (self._current,)
-            )
-            self._conn.commit()
-        self._current = None
-
-    def rollback(self, tx_id=None):
-        tx_id = tx_id or self._current
-        if not tx_id:
-            return False
-        row = self._conn.execute(
-            "SELECT backup_path, offset, length FROM journal WHERE tx_id=?",
-            (tx_id,),
-        ).fetchone()
-        restored = False
-        if row and row[0] and row[1] is not None and row[2] is not None:
-            backup = Path(row[0])
-            if backup.exists():
-                with backup.open("rb") as source, self.image_path.open("r+b") as image:
-                    image.seek(int(row[1]))
-                    image.write(source.read(int(row[2])))
-                restored = True
-        self._conn.execute("DELETE FROM journal WHERE tx_id=?", (tx_id,))
-        self._conn.commit()
-        if tx_id == self._current:
-            self._current = None
-        return restored
-
-    def uncommitted(self):
-        rows = self._conn.execute(
-            "SELECT tx_id, op, path, offset, length, backup_path, created_at "
-            "FROM journal WHERE committed=0 AND backup_path IS NOT NULL "
-            "ORDER BY created_at"
-        ).fetchall()
-        return [
-            {
-                "tx_id": row[0],
-                "op": row[1],
-                "path": row[2],
-                "offset": row[3],
-                "length": row[4],
-                "backup": row[5],
-                "created_at": row[6],
-            }
-            for row in rows
-        ]
-
-    def close(self):
-        self._conn.close()
+JournalV2 = _VerifiedJournal
 
 
 class ImageBackup:

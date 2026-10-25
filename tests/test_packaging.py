@@ -64,9 +64,10 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
         entry_points = wheel.read(entry_points_name).decode("utf-8")
         assert "mountfile = mountfile.__main__:main" in entry_points
         assert "mountfile-install" not in entry_points
-        assert wheel.read(resource_name) == (
-            ROOT / "scripts/install-windows-components.ps1"
-        ).read_bytes()
+        assert (
+            wheel.read(resource_name)
+            == (ROOT / "scripts/install-windows-components.ps1").read_bytes()
+        )
 
     target = tmp_path / "installed"
     install = subprocess.run(

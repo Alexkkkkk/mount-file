@@ -26,6 +26,9 @@ def win(app, monkeypatch, tmp_path):
     window = MainWindow()
     yield window
     window.close()
+    window.deleteLater()
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
     tc_style.SETTINGS.clear()
     tc_style.SETTINGS.update(old)
 

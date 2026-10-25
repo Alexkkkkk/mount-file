@@ -330,7 +330,9 @@ def test_journal_image_field_identifies_the_backing_image(tmp_path):
         engine.write_file("/A.TXT", b"a")
         rows = [
             json.loads(line)
-            for line in (tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+            for line in (tmp_path / "journal.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         assert rows
         assert all(row["image"] == str(image) for row in rows)
@@ -340,9 +342,7 @@ def test_journal_image_field_identifies_the_backing_image(tmp_path):
 
 
 @pytest.mark.parametrize("damaged_tail", [b'{"tx":"truncated"', b"\xff"])
-def test_journal_rejects_malformed_tail_and_does_not_report_ok(
-    tmp_path, damaged_tail
-):
+def test_journal_rejects_malformed_tail_and_does_not_report_ok(tmp_path, damaged_tail):
     image, engine = _engine(tmp_path)
     try:
         engine.write_file("/A.TXT", b"a")

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import struct
+from contextlib import contextmanager
 
 # --- MOUNTFILE_FIX: OLMA FAT32 helpers -------------------------------------
 try:
@@ -77,6 +78,12 @@ MAX_CHAIN = 0x1000000  # loop guard
 
 class Fat32Error(Exception):
     pass
+
+
+class _MutationRollbackError(Fat32Error):
+    """A metadata write failed and its best-effort restoration also failed."""
+
+    rollback_failed = True
 
 
 class DirEntry:
@@ -177,9 +184,50 @@ class Fat32:
             raise Fat32Error("short read at 0x%X" % pos)
         return data
 
+    @contextmanager
+    def _atomic_metadata(self):
+        """Restore every written metadata range if an operation raises."""
+        if getattr(self, "_mutation_log", None) is not None:
+            yield
+            return
+
+        changes = []
+        self._mutation_log = changes
+        try:
+            yield
+        except BaseException as original_error:
+            self._mutation_log = None
+            failures = []
+            for pos, original in reversed(changes):
+                try:
+                    self.f.seek(pos)
+                    written = self.f.write(original)
+                    if written is not None and written != len(original):
+                        raise Fat32Error("short write while restoring metadata")
+                except Exception as rollback_error:
+                    failures.append(rollback_error)
+            try:
+                self.f.flush()
+            except Exception as rollback_error:
+                failures.append(rollback_error)
+            if failures:
+                raise _MutationRollbackError(
+                    "FAT32 metadata rollback failed; the image may be inconsistent"
+                ) from original_error
+            raise
+        else:
+            self._mutation_log = None
+
     def _write(self, pos, data):
         if pos < self.offset or pos + len(data) > self.volume_end:
             raise Fat32Error("write exceeds FAT32 volume bounds at 0x%X" % pos)
+        changes = getattr(self, "_mutation_log", None)
+        if changes is not None and data:
+            self.f.seek(pos)
+            original = self.f.read(len(data))
+            if len(original) != len(data):
+                raise Fat32Error("short read before metadata write at 0x%X" % pos)
+            changes.append((pos, original))
         self.f.seek(pos)
         written = self.f.write(data)
         if written is not None and written != len(data):
@@ -263,8 +311,14 @@ class Fat32:
                     self._fat_set(n, EOC)
                     try:
                         self._write(self.cluster_offset(n), b"\x00" * self.cluster_size)
-                    except Exception:
-                        self._fat_set(n, FREE)
+                    except Exception as original_error:
+                        try:
+                            self._fat_set(n, FREE)
+                        except Exception as rollback_error:
+                            raise _MutationRollbackError(
+                                "cluster initialization failed and its allocation "
+                                "could not be reclaimed: %s" % rollback_error
+                            ) from original_error
                         self._alloc_hint = min(self._alloc_hint, n)
                         raise
                     self._alloc_hint = n + 1 if n + 1 < total else 2
@@ -283,13 +337,21 @@ class Fat32:
                 else:
                     first = n
                 prev = n
-        except Exception:
+        except Exception as original_error:
             # Allocation may run out of space partway through a request. Free
             # every cluster allocated so far, including one not yet linked if
             # updating the previous FAT entry itself failed.
+            rollback_errors = []
             for n in allocated:
-                self._fat_set(n, FREE)
+                try:
+                    self._fat_set(n, FREE)
+                except Exception as rollback_error:
+                    rollback_errors.append(rollback_error)
                 self._alloc_hint = min(self._alloc_hint, n)
+            if rollback_errors:
+                raise _MutationRollbackError(
+                    "cluster chain allocation failed and cleanup was incomplete"
+                ) from original_error
             raise
         return first
 
@@ -586,22 +648,21 @@ class Fat32:
     def delete(self, path, recursive=False):
         """Delete a file, or a directory (recursively with `recursive=True`).
 
-        The directory tombstone is written and flushed before any referenced
-        clusters are released. A failed tombstone can therefore leak space, but
-        cannot leave a live directory entry pointing at reusable clusters.
+        Directory and FAT metadata are restored if any step fails, so a partial
+        recursive delete cannot expose clusters still referenced by live entries.
         """
         parent, entry = self.entry(path)
         if entry.is_dir:
             if not recursive and not self.dir_is_empty(entry):
                 raise Fat32Error("directory is not empty: %s" % path)
-            if recursive:
+        with self._atomic_metadata():
+            if entry.is_dir and recursive:
                 self._delete_tree(entry)
-        self._delete_entry(parent, entry.entry_offset)
-        self.f.flush()
-        if entry.cluster >= 2:
-            self._free_chain(entry.cluster)
-        self.sync_fsinfo()
-        self.f.flush()
+            self._delete_entry(parent, entry.entry_offset)
+            if entry.cluster >= 2:
+                self._free_chain(entry.cluster)
+            self.sync_fsinfo()
+            self.f.flush()
         return entry
 
     def _delete_tree(self, directory):
@@ -631,10 +692,11 @@ class Fat32:
         short = self._make_short_name(new_name, used)
         attr = 0x10 if entry.is_dir else 0x20
         raw = self._build_entries(new_name, short, entry.cluster, entry.size, attr=attr)
-        self._insert_entries(parent, raw)
-        self._delete_entry(parent, entry.entry_offset)
-        self.sync_fsinfo()
-        self.f.flush()
+        with self._atomic_metadata():
+            self._insert_entries(parent, raw)
+            self._delete_entry(parent, entry.entry_offset)
+            self.sync_fsinfo()
+            self.f.flush()
         return entry
 
     # -------------------------------------------------------- writing
@@ -737,30 +799,42 @@ class Fat32:
         first = self._alloc_chain(nclusters) if nclusters else 0
         try:
             self._write_chain_data(first, data)
-        except Exception:
-            if first >= 2:
-                self._free_chain(first)
+        except Exception as original_error:
+            try:
+                if first >= 2:
+                    self._free_chain(first)
+            except Exception as rollback_error:
+                raise _MutationRollbackError(
+                    "file data write failed and its allocation could not be freed"
+                ) from original_error
             raise
         raw = self._build_entries(filename, short, first, len(data))
-        # Publish the new entry before removing the old one. If insertion
-        # raises after a partial directory write, retain the new allocation:
-        # it may already be referenced by a short entry in the image.
+        # Keep the old entry and its chain until the replacement is fully
+        # published. Directory/FAT metadata writes are reversible as a unit.
         try:
-            self._insert_entries(dir_cluster, raw)
-        except Exception:
-            if first >= 2 and not self._directory_references_cluster(dir_cluster, first):
-                self._free_chain(first)
-            # If a partial directory write already references the new chain,
-            # retain it rather than expose freed clusters through that entry.
-            self.sync_fsinfo()
+            with self._atomic_metadata():
+                self._insert_entries(dir_cluster, raw)
+                if target is not None:
+                    self._delete_entry(dir_cluster, target.entry_offset)
+                    if target.cluster >= 2:
+                        self._free_chain(target.cluster)
+                self.sync_fsinfo()
+                self.f.flush()
+        except _MutationRollbackError:
+            # Do not free the new chain when directory restoration is uncertain.
             raise
-        if target is not None:
-            self._delete_entry(dir_cluster, target.entry_offset)
-            self.f.flush()
-        if target is not None and target.cluster >= 2:
-            self._free_chain(target.cluster)
-        self.sync_fsinfo()
-        self.f.flush()
+        except BaseException as original_error:
+            try:
+                if first >= 2:
+                    self._free_chain(first)
+                self.sync_fsinfo()
+                self.f.flush()
+            except Exception as rollback_error:
+                raise _MutationRollbackError(
+                    "replacement failed and its new cluster chain could not be "
+                    "reclaimed: %s" % rollback_error
+                ) from original_error
+            raise
 
     def mkdir(self, dir_path, name):
         dir_cluster = self.find_dir(dir_path)
@@ -770,34 +844,31 @@ class Fat32:
         used = {e.short_raw for e in entries_now}
         used |= {self._short_to_name(e.short_raw) for e in entries_now}
         short = self._make_short_name(name, used)
-        c = self._alloc_cluster()
-        dot = bytearray(32)
-        # The self/parent entries are spelled "." and ".." padded with
-        # spaces - writing the short name there made list_dir() report a
-        # phantom entry inside every freshly created directory.
-        dot[0:11] = b"." + b" " * 10
-        dot[11] = 0x10
-        struct.pack_into("<H", dot, 20, (c >> 16) & 0xFFFF)
-        struct.pack_into("<H", dot, 26, c & 0xFFFF)
-        dotdot = bytearray(32)
-        dotdot[0:11] = b"..".ljust(8) + b"   "
-        dotdot[11] = 0x10
-        # Microsoft's FAT specification: a directory created in the *root*
-        # directory stores 0 in the ".." cluster field - the root directory has
-        # no cluster number of its own.  Writing the root cluster number (2)
-        # there produced an image fsck.fat rejects with "Invalid '..' entry in
-        # the second slot", i.e. a volume our own writer declared verified.
-        parent_cluster = 0 if dir_cluster == self.root_cluster else dir_cluster
-        struct.pack_into("<H", dotdot, 20, (parent_cluster >> 16) & 0xFFFF)
-        struct.pack_into("<H", dotdot, 26, parent_cluster & 0xFFFF)
-        self._write(
-            self.cluster_offset(c),
-            bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64),
-        )
-        raw = self._build_entries(name, short, c, 0, attr=0x10)
-        self._insert_entries(dir_cluster, raw)
-        self.sync_fsinfo()
-        self.f.flush()
+        with self._atomic_metadata():
+            c = self._alloc_cluster()
+            dot = bytearray(32)
+            # The self/parent entries are spelled "." and ".." padded with
+            # spaces - writing the short name there made list_dir() report a
+            # phantom entry inside every freshly created directory.
+            dot[0:11] = b"." + b" " * 10
+            dot[11] = 0x10
+            struct.pack_into("<H", dot, 20, (c >> 16) & 0xFFFF)
+            struct.pack_into("<H", dot, 26, c & 0xFFFF)
+            dotdot = bytearray(32)
+            dotdot[0:11] = b"..".ljust(8) + b"   "
+            dotdot[11] = 0x10
+            # Root-level directories store 0 in the ".." cluster field.
+            parent_cluster = 0 if dir_cluster == self.root_cluster else dir_cluster
+            struct.pack_into("<H", dotdot, 20, (parent_cluster >> 16) & 0xFFFF)
+            struct.pack_into("<H", dotdot, 26, parent_cluster & 0xFFFF)
+            self._write(
+                self.cluster_offset(c),
+                bytes(dot) + bytes(dotdot) + b"\x00" * (self.cluster_size - 64),
+            )
+            raw = self._build_entries(name, short, c, 0, attr=0x10)
+            self._insert_entries(dir_cluster, raw)
+            self.sync_fsinfo()
+            self.f.flush()
 
 
 class Fat32Provider:

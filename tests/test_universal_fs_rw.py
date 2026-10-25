@@ -1,5 +1,5 @@
-import sys
 import io
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,13 +8,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
 
 from mountfile import universal_fs_rw
+from mountfile.rw.universal import FsType as RWFsType
+from mountfile.rw.universal import Mode as RWMode
+from mountfile.rw.universal import create_rw
 from mountfile.universal_fs_rw import (
     Fat32RW,
     LoopMountRW,
     UniversalFSRW,
     _image_path_parent_name,
 )
-from mountfile.rw.universal import FsType as RWFsType, Mode as RWMode, create_rw
 
 
 def test_image_paths_use_posix_semantics_independent_of_host_os():

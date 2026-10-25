@@ -14,7 +14,7 @@ except ImportError as exc:  # pragma: no cover
     pytest.skip("Qt bindings are not usable: %s" % exc, allow_module_level=True)
 
 from mountfile import tc_style, text_editor
-from mountfile.qt_compat import QApplication, MB_Yes, QMessageBox
+from mountfile.qt_compat import MB_Yes, QApplication, QMessageBox
 from mountfile.tc_window import MainWindow
 
 
@@ -46,7 +46,9 @@ def test_panel_list_error_has_visible_retry_button(app, monkeypatch):
         panel.path = "/"
         panel.refresh()
 
-        assert panel._listing_hint and "temporary listing failure" in panel._listing_hint
+        assert (
+            panel._listing_hint and "temporary listing failure" in panel._listing_hint
+        )
         assert not panel.empty_retry.isHidden()
         panel.empty_retry.click()
         assert provider.calls == 2

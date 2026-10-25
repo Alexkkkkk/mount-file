@@ -205,7 +205,8 @@ _HOME = os.path.expanduser("~")
 _USER_PATH_RE = re.compile(r"(?i)(/home/|/Users/|C:\\Users\\)[^/\\\s:;\"]+")
 _SECRET_RE = re.compile(
     r"(?i)(gh[a-z]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
-    r"|Bearer\s+\S+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})"
+    r"|sk-(?:proj-)?[A-Za-z0-9_-]{16,}|Bearer\s+\S+"
+    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})"
 )
 
 
@@ -382,6 +383,9 @@ def _find_issue(repo, fp, token):
 
 def _deliver(tb_text, context, state, analysis=""):
     """Send one report (create or comment). Returns the issue URL or ''."""
+    tb_text = sanitize(tb_text)
+    context = sanitize(context)
+    analysis = sanitize(analysis)
     fp = fingerprint(tb_text)
     known = state["issues"].get(fp) or {}
     occurrences = int(known.get("count", 0)) + 1
@@ -434,11 +438,13 @@ def report_text(tb_text, context="", wait=True):
         _save_state(state)
         return None, "достигнут лимит отчётов (%d в час)" % MAX_PER_HOUR
 
-    analysis = _ollama_analyze_with_timeout(tb_text)
+    safe_traceback = sanitize(tb_text)
+    safe_context = sanitize(context)
+    analysis = _ollama_analyze_with_timeout(safe_traceback)
 
-    url, err = _deliver(tb_text, context, state, analysis=analysis)
+    url, err = _deliver(safe_traceback, safe_context, state, analysis=analysis)
     if url:
-        fp = fingerprint(tb_text)
+        fp = fingerprint(safe_traceback)
         known = state["issues"].get(fp) or {}
         state["issues"][fp] = {
             "number": known.get("number")
@@ -452,8 +458,8 @@ def report_text(tb_text, context="", wait=True):
     # Network down / token missing: keep the report for the next start.
     state["pending"].append(
         {
-            "traceback": sanitize(tb_text)[:20000],
-            "context": sanitize(context)[:2000],
+            "traceback": safe_traceback[:20000],
+            "context": safe_context[:2000],
             "time": now,
         }
     )
@@ -469,10 +475,15 @@ def flush_pending(log=None):
     sent = 0
     still = []
     for item in state["pending"]:
-        url, _err = _deliver(item.get("traceback", ""), item.get("context", ""), state)
+        clean_item = {
+            "traceback": sanitize(item.get("traceback", ""))[:20000],
+            "context": sanitize(item.get("context", ""))[:2000],
+            "time": item.get("time", 0),
+        }
+        url, _err = _deliver(clean_item["traceback"], clean_item["context"], state)
         if url:
             sent += 1
-            fp = fingerprint(item.get("traceback", ""))
+            fp = fingerprint(clean_item["traceback"])
             known = state["issues"].get(fp) or {}
             state["issues"][fp] = {
                 "number": known.get("number")
@@ -482,7 +493,7 @@ def flush_pending(log=None):
             }
             state["sent"].append(time.time())
         else:
-            still.append(item)
+            still.append(clean_item)
     state["pending"] = still
     _save_state(state)
     if sent and log is not None:

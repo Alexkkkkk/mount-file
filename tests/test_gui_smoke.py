@@ -23,7 +23,7 @@ qt_compat = pytest.importorskip(
 )
 
 from mountfile.mainwindow import ImageModel, MainWindow
-from mountfile.qt_compat import QApplication, MB_Yes, QMessageBox, QModelIndex
+from mountfile.qt_compat import MB_Yes, QApplication, QMessageBox, QModelIndex
 
 TREE = {
     "/": [("boot", True), ("empty", True), ("README.TXT", False), ("data.bin", False)],

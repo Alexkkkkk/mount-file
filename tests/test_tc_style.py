@@ -52,7 +52,9 @@ def _load_tc_style():
 tc_style = _load_tc_style()
 
 
-def test_posix_settings_are_private_and_other_preferences_are_saved(tmp_path, monkeypatch):
+def test_posix_settings_are_private_and_other_preferences_are_saved(
+    tmp_path, monkeypatch
+):
     if os.name != "posix":
         return
     path = tmp_path / "ui.json"

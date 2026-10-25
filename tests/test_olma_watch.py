@@ -55,13 +55,15 @@ def test_sanitize_hides_home_and_user_paths():
 
 
 def test_sanitize_hides_tokens_and_emails():
+    openai_key = "sk-proj-" + "A" * 32
     out = ow.sanitize(
         "token github_pat_FAKE0000FAKE0000FAKE leaked, "
-        "authorization: Bearer abcdef123456, mail me@example.com"
+        "authorization: Bearer abcdef123456, mail me@example.com, " + openai_key
     )
     assert "github_pat_FAKE0000FAKE0000FAKE" not in out
     assert "abcdef123456" not in out
     assert "me@example.com" not in out
+    assert openai_key not in out
     assert "<secret>" in out
 
 
@@ -151,17 +153,23 @@ def test_duplicate_comments_instead_of_new_issue(monkeypatch):
 
 
 def test_offline_report_is_queued_then_flushed(monkeypatch):
+    openai_key = "sk-proj-" + "B" * 32
+    traceback = TRACEBACK.replace("bad image header", openai_key)
+    analyzed = []
+
     def dead_http(method, url, payload=None, token=None, timeout=15):
         return None, None, "нет соединения"
 
     monkeypatch.setattr(ow, "_http_json", dead_http)
-    monkeypatch.setattr(ow, "_ollama_analyze", lambda t: "")
+    monkeypatch.setattr(ow, "_ollama_analyze", lambda t: analyzed.append(t) or "")
     monkeypatch.setenv(ow.ENV_TOKEN, "test-token")
     monkeypatch.setenv(ow.ENV_ENABLE, "1")
-    url, err = ow.report_text(TRACEBACK, context="офлайн")
+    url, err = ow.report_text(traceback, context="офлайн")
     assert url is None
     state = json.loads(open(ow.state_path(), encoding="utf-8").read())
     assert len(state["pending"]) == 1
+    assert openai_key not in state["pending"][0]["traceback"]
+    assert openai_key not in analyzed[0]
 
     # The network is back on the next start.
     def live_http(method, url, payload=None, token=None, timeout=15):
@@ -207,9 +215,7 @@ def test_analysis_timeout_does_not_block_reporting_thread(monkeypatch):
 
     monkeypatch.setattr(ow, "_ollama_analyze", slow_analysis)
     monkeypatch.setattr(ow, "ANALYZE_TIMEOUT", 0.02)
-    monkeypatch.setattr(
-        ow, "_http_json", lambda *a, **k: (201, {"html_url": "u"}, "")
-    )
+    monkeypatch.setattr(ow, "_http_json", lambda *a, **k: (201, {"html_url": "u"}, ""))
     monkeypatch.setenv(ow.ENV_TOKEN, "test-token")
     monkeypatch.setenv(ow.ENV_ENABLE, "1")
 
@@ -248,8 +254,7 @@ def test_offline_pending_queue_sanitizes_traceback_and_context(monkeypatch):
     monkeypatch.setenv(ow.ENV_TOKEN, "test-token")
     monkeypatch.setenv(ow.ENV_ENABLE, "1")
     private_tb = (
-        TRACEBACK
-        + "\nfile /home/ivan/private.py token github_pat_FAKE0000FAKE0000FAKE"
+        TRACEBACK + "\nfile /home/ivan/private.py token github_pat_FAKE0000FAKE0000FAKE"
     )
     private_context = "opened /home/ivan/disk.img with github_pat_FAKE0000FAKE0000FAKE"
 

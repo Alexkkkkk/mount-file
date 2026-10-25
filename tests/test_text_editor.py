@@ -135,9 +135,7 @@ def test_default_linux_editors_are_started_in_wait_mode(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX editor command behavior")
-def test_editor_command_does_not_fall_back_to_detached_xdg_open(
-    monkeypatch, tmp_path
-):
+def test_editor_command_does_not_fall_back_to_detached_xdg_open(monkeypatch, tmp_path):
     monkeypatch.setattr(text_editor.sys, "platform", "linux")
     monkeypatch.setattr(text_editor, "_editor_from_env", lambda: None)
     monkeypatch.setattr(

@@ -9,9 +9,9 @@ mountfile_universal_rw.py — Universal RW-слой для Mount File (Task 2.1,
 
 Безопасность:
   • RO по умолчанию
-  • Автоматический backup перед первой записью
-  • Hash-chain журнал транзакций (SQLite)
-  • Восстановление из backup
+  • Полный исходный backup перед первой записью
+  • Перед каждой неатомарной mutation — byte-exact full-image snapshot
+  • Проверяемая hash-linked SQLite-журнализация и crash recovery
 
 Зависимости: только стандартная библиотека.
 Внешние утилиты (опционально): debugfs, ntfs-3g / ntfsmount.
@@ -19,17 +19,17 @@ mountfile_universal_rw.py — Universal RW-слой для Mount File (Task 2.1,
 
 from __future__ import annotations
 
-import hashlib
 import shutil
-import sqlite3
 import subprocess
 import time
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import BinaryIO, Optional
+
+from mountfile.rw.journal import Journal as _VerifiedJournal
 
 # ---------------------------------------------------------------------------
 # 0. Типы
@@ -63,102 +63,13 @@ class FileStat:
     is_dir: bool
 
 
-@dataclass
-class TransactionRecord:
-    tx_id: str
-    op: str
-    path: str
-    backup_path: Optional[Path]
-    sha256: Optional[str]
-    prev_hash: str
-    created_at: float = field(default_factory=time.time)
-
-
 # ---------------------------------------------------------------------------
 # 1. Hash-chain журнал транзакций
 # ---------------------------------------------------------------------------
 
 
-class Journal:
-    """
-    SQLite-журнал с hash-chain: каждая запись содержит хэш предыдущей.
-    Это позволяет обнаружить подмену или удаление записей.
-    """
-
-    def __init__(self, image_path: Path):
-        self.image_path = image_path
-        self.db_path = image_path.with_suffix(image_path.suffix + ".rw-journal.sqlite")
-        self.backup_dir = image_path.with_suffix(image_path.suffix + ".rw-backups")
-        self.backup_dir.mkdir(exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS journal (
-                   tx_id TEXT PRIMARY KEY,
-                   op TEXT NOT NULL,
-                   path TEXT NOT NULL,
-                   backup_path TEXT,
-                   sha256 TEXT,
-                   prev_hash TEXT NOT NULL,
-                   created_at REAL NOT NULL
-               )"""
-        )
-        self._conn.commit()
-        self._current: Optional[str] = None
-        self._last_hash = self._get_last_hash()
-
-    def _get_last_hash(self) -> str:
-        row = self._conn.execute(
-            "SELECT sha256 FROM journal ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-        return row[0] if row and row[0] else "0" * 64
-
-    def begin(self, op: str, path: str) -> str:
-        tx_id = str(uuid.uuid4())
-        self._current = tx_id
-        self._conn.execute(
-            "INSERT INTO journal(tx_id, op, path, prev_hash, created_at) "
-            "VALUES (?,?,?,?,?)",
-            (tx_id, op, path, self._last_hash, time.time()),
-        )
-        self._conn.commit()
-        return tx_id
-
-    def backup_region(self, offset: int, length: int) -> Path:
-        backup = self.backup_dir / f"{self._current}.bin"
-        with open(self.image_path, "rb") as src, open(backup, "wb") as dst:
-            src.seek(offset)
-            dst.write(src.read(length))
-        sha = hashlib.sha256(backup.read_bytes()).hexdigest()
-        self._conn.execute(
-            "UPDATE journal SET backup_path=?, sha256=? WHERE tx_id=?",
-            (str(backup), sha, self._current),
-        )
-        self._conn.commit()
-        self._last_hash = sha
-        return backup
-
-    def commit(self) -> None:
-        self._current = None
-
-    def rollback(self, tx_id: Optional[str] = None) -> None:
-        tid = tx_id or self._current
-        if not tid:
-            return
-        row = self._conn.execute(
-            "SELECT backup_path FROM journal WHERE tx_id=?", (tid,)
-        ).fetchone()
-        if row and row[0]:
-            backup = Path(row[0])
-            if backup.exists():
-                # В реальном движке нужен offset из журнала.
-                # Здесь показан принцип: восстановление из backup.
-                pass
-        self._conn.execute("DELETE FROM journal WHERE tx_id=?", (tid,))
-        self._conn.commit()
-        self._current = None
-
-    def close(self) -> None:
-        self._conn.close()
+# All public RW adapters share the byte-exact, verifiable journal.
+Journal = _VerifiedJournal
 
 
 # ---------------------------------------------------------------------------
@@ -172,68 +83,136 @@ class UniversalRW(ABC):
         self.mode = mode
         self.journal = Journal(self.image_path)
         self._backup_made = False
+        self._backend_open = False
 
     # --- публичный API -----------------------------------------------------
 
     def open(self) -> None:
+        if self._backend_open:
+            return
         if self.mode == Mode.RW and not self._backup_made:
             self._make_full_backup()
         self._open_backend()
+        self._backend_open = True
 
     def close(self) -> None:
-        self._close_backend()
-        self.journal.close()
+        try:
+            if self._backend_open:
+                self._close_backend()
+                self._backend_open = False
+        finally:
+            self.journal.close()
+
+    def _rollback_failed_transaction(self, tx_id: str, original_error: Exception):
+        reopen_backend = self._backend_open and not getattr(
+            self, "atomic_mutations", False
+        )
+        if reopen_backend:
+            try:
+                # Mounted filesystems may cache and later flush the partial
+                # mutation. Detach before restoring raw image bytes.
+                self._close_backend()
+                self._backend_open = False
+            except Exception as close_error:
+                raise RWError(
+                    "operation failed (%s); backend could not be detached before "
+                    "rollback (%s), so transaction %s remains pending"
+                    % (original_error, close_error, tx_id)
+                ) from original_error
+        try:
+            restored = self.journal.rollback(tx_id)
+        except Exception as rollback_error:
+            raise RWError(
+                "operation failed (%s); transaction rollback also failed (%s)"
+                % (original_error, rollback_error)
+            ) from original_error
+        if restored and reopen_backend:
+            try:
+                self._open_backend()
+                self._backend_open = True
+            except Exception as reopen_error:
+                raise RWError(
+                    "transaction %s was restored, but backend could not be "
+                    "reopened (%s)" % (tx_id, reopen_error)
+                ) from original_error
+        if not restored:
+            if getattr(self, "atomic_mutations", False) and not getattr(
+                original_error, "rollback_failed", False
+            ):
+                self.journal.cancel(tx_id)
+                return
+            raise RWError(
+                "operation failed (%s); no valid byte backup was available, "
+                "so transaction %s remains pending for recovery"
+                % (original_error, tx_id)
+            ) from original_error
+
+    def _begin_transaction(self, op: str, path: str) -> str:
+        tx_id = self.journal.begin(op, path)
+        if getattr(self, "atomic_mutations", False):
+            return tx_id
+        try:
+            self.journal.backup_region(0, self.image_path.stat().st_size)
+        except Exception:
+            # No backend mutation has happened yet, so do not attempt recovery.
+            # Preserve the snapshot error even if journal cleanup itself fails.
+            try:
+                self.journal.cancel(tx_id, snapshot_failed=True)
+            except Exception:
+                pass
+            raise
+        return tx_id
 
     def create_file(
         self, path: str, data: BinaryIO, *, overwrite: bool = False
     ) -> None:
         self._require_rw()
-        tx = self.journal.begin("create_file", path)
+        tx = self._begin_transaction("create_file", path)
         try:
             self._create_file(path, data, overwrite)
             self.journal.commit()
-        except Exception:
-            self.journal.rollback(tx)
+        except Exception as exc:
+            self._rollback_failed_transaction(tx, exc)
             raise
 
     def create_dir(self, path: str) -> None:
         self._require_rw()
-        tx = self.journal.begin("mkdir", path)
+        tx = self._begin_transaction("mkdir", path)
         try:
             self._create_dir(path)
             self.journal.commit()
-        except Exception:
-            self.journal.rollback(tx)
+        except Exception as exc:
+            self._rollback_failed_transaction(tx, exc)
             raise
 
     def delete(self, path: str, *, recursive: bool = False) -> None:
         self._require_rw()
-        tx = self.journal.begin("delete", path)
+        tx = self._begin_transaction("delete", path)
         try:
             self._delete(path, recursive)
             self.journal.commit()
-        except Exception:
-            self.journal.rollback(tx)
+        except Exception as exc:
+            self._rollback_failed_transaction(tx, exc)
             raise
 
     def rename(self, src: str, dst: str) -> None:
         self._require_rw()
-        tx = self.journal.begin("rename", f"{src} -> {dst}")
+        tx = self._begin_transaction("rename", f"{src} -> {dst}")
         try:
             self._rename(src, dst)
             self.journal.commit()
-        except Exception:
-            self.journal.rollback(tx)
+        except Exception as exc:
+            self._rollback_failed_transaction(tx, exc)
             raise
 
     def write_file(self, path: str, data: BinaryIO, *, offset: int = 0) -> None:
         self._require_rw()
-        tx = self.journal.begin("write_file", path)
+        tx = self._begin_transaction("write_file", path)
         try:
             self._write_file(path, data, offset)
             self.journal.commit()
-        except Exception:
-            self.journal.rollback(tx)
+        except Exception as exc:
+            self._rollback_failed_transaction(tx, exc)
             raise
 
     def stat(self, path: str) -> FileStat:
@@ -286,6 +265,8 @@ class UniversalRW(ABC):
 
 class Fat32RW(UniversalRW):
     """UniversalRW adapter over the package's native FAT32 implementation."""
+
+    atomic_mutations = True
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
@@ -464,17 +445,30 @@ class NtfsRW(UniversalRW):
         if self.mode == Mode.RW:
             mnt = Path(f"/tmp/mf_ntfs_{uuid.uuid4().hex[:8]}")
             mnt.mkdir()
-            subprocess.run(
-                ["ntfs-3g", "-o", "rw", str(self.image_path), str(mnt)],
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    ["ntfs-3g", "-o", "rw", str(self.image_path), str(mnt)],
+                    check=True,
+                )
+            except Exception:
+                try:
+                    subprocess.run(["umount", str(mnt)], check=False)
+                finally:
+                    mnt.rmdir()
+                raise
             self._mnt = mnt
         # RO-режим можно не монтировать — чтение остаётся pytsk3.
 
     def _close_backend(self) -> None:
         if self._mnt:
-            subprocess.run(["umount", str(self._mnt)], check=False)
+            result = subprocess.run(
+                ["umount", str(self._mnt)], capture_output=True, text=True, check=False
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                raise RWError("NTFS image could not be safely unmounted: %s" % detail)
             self._mnt.rmdir()
+            self._mnt = None
 
     def _path(self, p: str) -> Path:
         if not self._mnt:

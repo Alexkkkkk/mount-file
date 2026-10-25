@@ -62,9 +62,7 @@ def test_yara_signature_spanning_chunk_boundary_has_exact_absolute_offset():
             return result
 
     rules = FakeRules()
-    hits = scan_unallocated_from_fs(
-        FakeFs(), rules, len(image), chunk=8 * 1024
-    )
+    hits = scan_unallocated_from_fs(FakeFs(), rules, len(image), chunk=8 * 1024)
 
     assert [(hit.rule, hit.offset, hit.target) for hit in hits] == [
         ("boundary", 6, "unallocated")

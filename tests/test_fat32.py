@@ -227,8 +227,9 @@ def test_fat32_rejects_bpb_volume_beyond_physical_eof(tmp_path):
     with open(image, "r+b") as handle:
         handle.seek(32)
         handle.write(struct.pack("<I", TOTAL_SECTORS + 1))
-    with open(image, "rb") as handle, pytest.raises(
-        Fat32Error, match="extends beyond image EOF"
+    with (
+        open(image, "rb") as handle,
+        pytest.raises(Fat32Error, match="extends beyond image EOF"),
     ):
         Fat32(handle)
 
@@ -238,8 +239,9 @@ def test_fat32_rejects_physically_truncated_volume(tmp_path):
     make_fat32_image(image)
     with open(image, "r+b") as handle:
         handle.truncate(TOTAL_SECTORS * BPS - BPS)
-    with open(image, "rb") as handle, pytest.raises(
-        Fat32Error, match="extends beyond image EOF"
+    with (
+        open(image, "rb") as handle,
+        pytest.raises(Fat32Error, match="extends beyond image EOF"),
     ):
         Fat32(handle)
 
