@@ -1050,6 +1050,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             "  → try: python mountfile_ai.py agent --image "
             f"{img} --query 'decrypt and inspect'"
         )
+        return 1
     return 0
 
 

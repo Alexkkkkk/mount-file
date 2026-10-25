@@ -210,7 +210,14 @@ def search_image(
     context: int = 32,
     max_hits: Optional[int] = None,
 ) -> list[ContentHit]:
-    """Stream ``image_path`` and return every match, chunked with overlap."""
+    """Stream ``image_path`` and return every match, chunked with overlap.
+
+    Literal searches grow the overlap to the encoded pattern length, so matches
+    of any pattern size remain exact while memory stays bounded by one chunk
+    plus that pattern. Regex searches retain the caller-supplied overlap: Python
+    regexes may match an unbounded amount of input, so matches longer than the
+    overlap can cross a chunk boundary undetected.
+    """
 
     path = Path(image_path)
     if not path.exists():
@@ -218,6 +225,8 @@ def search_image(
     if chunk <= 0:
         raise SearchError("chunk must be positive")
     overlap = max(0, min(overlap, chunk - 1)) if chunk > 1 else 0
+    if not regex:
+        overlap = max(overlap, len(encode_pattern(pattern, encoding)) - 1)
 
     size = path.stat().st_size
     hits: list[ContentHit] = []
@@ -325,8 +334,11 @@ def _load_ranges(source: Any) -> Sequence[tuple[int, int]]:
             length = int(item.get("length", item.get("len", 0)))
         else:
             start, length = int(item[0]), int(item[1])
-        if length > 0:
-            ranges.append((start, length))
+        if start < 0:
+            raise SearchError("range offset must be non-negative")
+        if length <= 0:
+            raise SearchError("range length must be positive")
+        ranges.append((start, length))
     return tuple(ranges)
 
 
@@ -339,10 +351,23 @@ def search_regions(
     """Search only the supplied ``(offset, length)`` ranges (e.g. unallocated)."""
 
     path = Path(image_path)
+    if not path.exists():
+        raise SearchError("image not found: %s" % path)
+    size = path.stat().st_size
     hits: list[ContentHit] = []
     with open(path, "rb") as stream:
         for offset, length in _load_ranges(ranges):
+            if offset + length > size:
+                raise SearchError(
+                    "range (%d, %d) extends beyond image size %d"
+                    % (offset, length, size)
+                )
             stream.seek(offset)
             data = stream.read(length)
+            if len(data) != length:
+                raise SearchError(
+                    "short read for range (%d, %d): got %d bytes"
+                    % (offset, length, len(data))
+                )
             hits.extend(search_blob(data, pattern, base_offset=offset, **kwargs))
     return hits

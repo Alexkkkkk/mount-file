@@ -348,6 +348,10 @@ def _resolve_image(raw: Any, roots: Sequence[Path]) -> Path:
     # constructor (and into CodeQL's path-injection sink).
     if value.startswith(("/", "~")):
         raise APIPathError("image must be a relative id")
+    # FastAPI has URL-decoded request identifiers by this point. Reject dot
+    # segments before normpath can erase them from the decoded slash path.
+    if any(part in {".", ".."} for part in value.split("/")):
+        raise APIPathError("image contains an unsafe path")
     normalized = posixpath.normpath(value)
     if normalized in ("", ".", "..") or normalized.startswith("../"):
         raise APIPathError("image contains an unsafe path")

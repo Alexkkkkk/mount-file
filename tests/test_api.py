@@ -155,6 +155,30 @@ def test_image_and_virtual_paths_cannot_escape_configured_root(tmp_path):
 
 
 @needs_fastapi
+def test_image_ids_reject_dot_segments_but_allow_relative_paths(tmp_path):
+    image_root = tmp_path / "images"
+    nested = image_root / "nested"
+    nested.mkdir(parents=True)
+    (image_root / "disk.img").write_bytes(b"image")
+    (nested / "disk.img").write_bytes(b"nested image")
+    registry = FakeRegistry()
+    client = _client_or_skip(create_app(registry, image_roots=image_root))
+
+    for image_id in ("nested/../disk.img", "./disk.img"):
+        response = client.get(
+            "/filesystem/ls", params={"image": image_id, "path": "/"}
+        )
+        assert response.status_code == 400
+    assert all(call[0] != "ls" for call in registry.calls)
+
+    valid = client.get(
+        "/filesystem/ls", params={"image": "nested/disk.img", "path": "/"}
+    )
+    assert valid.status_code == 200
+    assert any(call[0] == "ls" for call in registry.calls)
+
+
+@needs_fastapi
 def test_symlink_image_cannot_escape_configured_root(tmp_path):
     image_root = tmp_path / "images"
     image_root.mkdir()

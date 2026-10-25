@@ -1735,11 +1735,16 @@ class AiDialog(QDialog):
         self.use_panel()
 
     # ---------------------------------------------------------- источник
+    def _clear_source(self, label="Файл не выбран"):
+        """Сбросить все поля источника как единое состояние."""
+        self._entry, self._path, self._mode, self._size = None, None, None, 0
+        self.lbl_source.setText(label)
+        self.lbl_info.setText("")
     def use_panel(self):
         """Взять файл, выбранный в активной панели (может быть в образе)."""
         entry = self.panel.selected_entry()
         if not entry or entry.get("is_dir") or entry.get("up"):
-            self.lbl_source.setText("В активной панели файл не выбран")
+            self._clear_source("В активной панели файл не выбран")
             return
         self._entry = entry
         self._mode = self.panel.mode
@@ -1841,183 +1846,6 @@ class AiDialog(QDialog):
             else ai.AiResult(
                 ok=False, backend=backend.name, error="Анализ не завершился."
             )
-        )
-        self._show(name, result)
-
-    def _show(self, name, result):
-        """Результат в поле диалога + одна строка в журнал окна."""
-        head = "Файл: %s\nРазмер: %s байт · прочитано: %d байт%s\nБэкенд: %s" % (
-            name,
-            tc_style.fmt_size(self._size),
-            result.bytes_read or 0,
-            " · данные усечены" if result.truncated else "",
-            result.backend,
-        )
-        if result.model:
-            head += " (%s)" % result.model
-        if result.ok:
-            self.txt.setPlainText(head + "\n\n" + result.text)
-            self.log("AI-анализ: %s — готово (%s)" % (name, result.backend))
-        else:
-            self.txt.setPlainText(head + "\n\nОшибка: " + result.error)
-            self.log(
-                "AI-анализ: %s — ошибка: %s"
-                % (name, result.error.splitlines()[0] if result.error else "?")
-            )
-
-
-class AiDialog(QDialog):
-    """Кнопка «AI»: добавить файл для анализа и показать ответ модели.
-
-    Источником может быть файл, выбранный в активной панели (в том числе
-    внутри образа), либо произвольный файл на диске. Оба читаются через
-    :func:`mountfile.ai.collect`, поэтому усечение видно прямо в интерфейсе,
-    а результат одинаков для образа и локального диска. Ключ API в журнал
-    не попадает - в журнал идёт только имя файла, бэкенд и итог.
-    """
-
-    def __init__(self, parent, panel, log=None):
-        super().__init__(parent)
-        self.panel = panel
-        self.log = log or (lambda msg: None)
-        self.setWindowTitle("AI — анализ файла")
-        self.resize(780, 560)
-        self._entry = None
-        self._mode = None
-        self._path = None
-        self._size = 0
-
-        lay = QVBoxLayout(self)
-        top = QHBoxLayout()
-        self.lbl_source = QLabel("Файл не выбран")
-        top.addWidget(self.lbl_source, 1)
-        btn_disk = QPushButton("Файл с диска…")
-        btn_disk.clicked.connect(self.pick_file)
-        top.addWidget(btn_disk)
-        btn_panel = QPushButton("Из активной панели")
-        btn_panel.clicked.connect(self.use_panel)
-        top.addWidget(btn_panel)
-        lay.addLayout(top)
-
-        self.lbl_info = QLabel("")
-        lay.addWidget(self.lbl_info)
-
-        self.ed_prompt = QLineEdit()
-        self.ed_prompt.setPlaceholderText("Что спросить у модели (необязательно)")
-        lay.addWidget(self.ed_prompt)
-
-        self.txt = QTextEdit()
-        self.txt.setReadOnly(True)
-        lay.addWidget(self.txt, 1)
-
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 0)
-        self.bar.hide()
-        lay.addWidget(self.bar)
-
-        buttons = QDialogButtonBox()
-        self.btn_run = buttons.addButton("Анализировать", DlgActionRole)
-        self.btn_run.clicked.connect(self.run_analysis)
-        buttons.addButton(DlgClose)
-        buttons.rejected.connect(self.reject)
-        lay.addWidget(buttons)
-
-        # Активная панель - источник по умолчанию: чаще всего анализируют
-        # именно файл, на котором стоит курсор.
-        self.use_panel()
-
-    # ---------------------------------------------------------- источник
-    def use_panel(self):
-        """Взять файл, выбранный в активной панели (может быть в образе)."""
-        entry = self.panel.selected_entry()
-        if not entry or entry.get("is_dir") or entry.get("up"):
-            self.lbl_source.setText("В активной панели файл не выбран")
-            return
-        self._entry = entry
-        self._mode = self.panel.mode
-        self._path = None
-        self._size = int(entry.get("size") or 0)
-        self.lbl_source.setText(
-            "Из панели: %s (%s)" % (entry["name"], tc_style.fmt_size(self._size))
-        )
-        self.lbl_info.setText("")
-
-    def pick_file(self):
-        """Взять произвольный файл с диска."""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Файл для анализа", "", AI_FILE_FILTER
-        )
-        if not path:
-            return
-        try:
-            size = os.path.getsize(path)
-        except OSError:
-            size = 0
-        self._entry = None
-        self._mode = None
-        self._path = path
-        self._size = size
-        self.lbl_source.setText(
-            "С диска: %s (%s)" % (os.path.basename(path), tc_style.fmt_size(size))
-        )
-        self.lbl_info.setText("")
-
-    def _name(self):
-        if self._entry is not None:
-            return self._entry["name"]
-        return os.path.basename(self._path or "")
-
-    def _reader(self):
-        """``reader(offset, length)`` - одинаковый для образа и для диска."""
-        if self._entry is not None:
-            full = self.panel.join(self._entry["name"])
-            if self._mode == "img":
-                provider = self.panel.provider
-                return lambda off, ln: provider.read_file_range(full, off, ln)
-            return ai.local_reader(full)
-        return ai.local_reader(self._path)
-
-    # ------------------------------------------------------------ анализ
-    def run_analysis(self):
-        """Прочитать файл чанками и отдать его выбранному бэкенду."""
-        if self._entry is None and not self._path:
-            QMessageBox.information(self, "AI", "Сначала выберите файл для анализа.")
-            return
-        settings = tc_style.SETTINGS
-        backend = ai.build_backend(settings)
-        limit = ai.max_bytes(settings)
-        name = self._name()
-        prompt = self.ed_prompt.text().strip() or None
-        box = []
-
-        def worker():
-            try:
-                data, truncated = ai.collect(self._reader(), max_bytes=limit)
-                result = backend.analyze(
-                    name, data, prompt=prompt, truncated=truncated, size=self._size
-                )
-            except Exception as e:
-                result = ai.AiResult(ok=False, backend=backend.name, error=str(e))
-            box.append(result)
-
-        self.bar.show()
-        self.btn_run.setEnabled(False)
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
-        loop = QEventLoop()
-        timer = QTimer(self)
-        timer.setInterval(50)
-        timer.timeout.connect(lambda: None if t.is_alive() else loop.quit())
-        timer.start()
-        try:
-            loop.exec()
-        finally:
-            timer.stop()
-            t.join(timeout=1)
-            self.bar.hide()
-            self.btn_run.setEnabled(True)
-        result = box[0] if box else ai.AiResult(
-            ok=False, backend=backend.name, error="Анализ не завершился."
         )
         self._show(name, result)
 

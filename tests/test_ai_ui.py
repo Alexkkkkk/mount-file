@@ -226,6 +226,43 @@ def test_dialog_reads_local_file_with_shared_collect(app, tmp_path):
     dlg.deleteLater()
 
 
+def test_switching_from_disk_to_empty_panel_clears_source_and_blocks_analysis(
+    app, monkeypatch, tmp_path
+):
+    path = tmp_path / "stale.txt"
+    path.write_text("must not be read")
+    panel = FakePanel(entry=None)
+    dlg = AiDialog(None, panel, log=lambda m: None)
+    monkeypatch.setattr(
+        tc_window.QFileDialog,
+        "getOpenFileName",
+        lambda *args: (str(path), "All files (*)"),
+    )
+    dlg.pick_file()
+    assert dlg._path == str(path)
+    assert dlg._size == path.stat().st_size
+
+    reads = []
+    monkeypatch.setattr(ai, "local_reader", lambda source: reads.append(source))
+    notices = []
+    class MessageBox:
+        @staticmethod
+        def information(*args):
+            notices.append(args[2])
+    monkeypatch.setattr(tc_window, "QMessageBox", MessageBox)
+
+    dlg.use_panel()
+    assert dlg._entry is None
+    assert dlg._path is None
+    assert dlg._mode is None
+    assert dlg._size == 0
+    assert dlg.lbl_source.text() == "В активной панели файл не выбран"
+    dlg.run_analysis()
+    assert reads == []
+    assert notices and "выберите файл" in notices[0].lower()
+    dlg.deleteLater()
+
+
 def test_dialog_without_any_file_does_nothing(app):
     panel = FakePanel(entry=None)
     dlg = AiDialog(None, panel, log=lambda m: None)
