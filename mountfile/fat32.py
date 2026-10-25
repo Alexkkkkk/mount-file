@@ -111,6 +111,8 @@ class Fat32:
     def __init__(self, fileobj, offset=0):
         self.f = fileobj
         self.offset = offset
+        if offset < 0:
+            raise Fat32Error("negative volume offset")
         self.f.seek(offset)
         bpb = self.f.read(64)
         if len(bpb) < 64:
@@ -127,6 +129,8 @@ class Fat32:
         spf32 = struct.unpack_from("<I", bpb, 36)[0]
         if spf32 == 0:
             raise Fat32Error("FAT12/16 not supported by this module")
+        if self.reserved == 0 or self.nfats == 0:
+            raise Fat32Error("invalid FAT32 reserved-sector/FAT count")
         self.spf = spf32
         self.root_cluster = struct.unpack_from("<I", bpb, 44)[0]
         # FSINFO is only a cache of the allocator state; the FAT stays the
@@ -146,14 +150,27 @@ class Fat32:
             struct.unpack_from("<I", bpb, 32)[0] or struct.unpack_from("<H", bpb, 19)[0]
         )
         data_sectors = total_sectors - (self.reserved + self.nfats * self.spf)
+        if total_sectors <= 0 or data_sectors <= 0:
+            raise Fat32Error("invalid FAT32 volume size")
+        self.f.seek(0, 2)
+        physical_size = self.f.tell()
+        if self.offset + total_sectors * self.bps > physical_size:
+            raise Fat32Error("FAT32 BPB volume extends beyond image EOF")
+        self.volume_end = self.offset + total_sectors * self.bps
         cluster_count = data_sectors // self.spc
         if cluster_count < 65525:
             raise Fat32Error("not FAT32 (cluster count %d)" % cluster_count)
+        if cluster_count + 2 > self.fat_size // 4:
+            raise Fat32Error("FAT32 FAT is too small for the declared volume")
+        if not 2 <= self.root_cluster < cluster_count + 2:
+            raise Fat32Error("invalid FAT32 root cluster")
         self.cluster_count = cluster_count
         self._alloc_hint = 2
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):
+        if pos < self.offset or size < 0 or pos + size > self.volume_end:
+            raise Fat32Error("read exceeds FAT32 volume bounds at 0x%X" % pos)
         self.f.seek(pos)
         data = self.f.read(size)
         if len(data) != size:
@@ -161,8 +178,12 @@ class Fat32:
         return data
 
     def _write(self, pos, data):
+        if pos < self.offset or pos + len(data) > self.volume_end:
+            raise Fat32Error("write exceeds FAT32 volume bounds at 0x%X" % pos)
         self.f.seek(pos)
-        self.f.write(data)
+        written = self.f.write(data)
+        if written is not None and written != len(data):
+            raise Fat32Error("short write at 0x%X" % pos)
 
     def _fat_get(self, n):
         return struct.unpack_from("<I", self._read(self.fat_start + n * 4, 4))[0]
@@ -183,6 +204,8 @@ class Fat32:
         n = start
         seen = set()
         while FREE < n < BAD:
+            if n >= self.cluster_count + 2 or n >= self.fat_size // 4:
+                raise Fat32Error("FAT chain references out-of-range cluster %d" % n)
             if n in seen or len(chain) > MAX_CHAIN:
                 raise Fat32Error("FAT chain loop detected at cluster %d" % n)
             seen.add(n)
@@ -563,9 +586,9 @@ class Fat32:
     def delete(self, path, recursive=False):
         """Delete a file, or a directory (recursively with `recursive=True`).
 
-        Returns the removed :class:`DirEntry`. Cluster chains are released
-        before the entries are tombstoned, so a failure leaves the image with
-        the data still reachable instead of leaking clusters.
+        The directory tombstone is written and flushed before any referenced
+        clusters are released. A failed tombstone can therefore leak space, but
+        cannot leave a live directory entry pointing at reusable clusters.
         """
         parent, entry = self.entry(path)
         if entry.is_dir:
@@ -573,9 +596,10 @@ class Fat32:
                 raise Fat32Error("directory is not empty: %s" % path)
             if recursive:
                 self._delete_tree(entry)
+        self._delete_entry(parent, entry.entry_offset)
+        self.f.flush()
         if entry.cluster >= 2:
             self._free_chain(entry.cluster)
-        self._delete_entry(parent, entry.entry_offset)
         self.sync_fsinfo()
         self.f.flush()
         return entry
@@ -585,9 +609,10 @@ class Fat32:
         for child in self.list_dir(directory.cluster):
             if child.is_dir:
                 self._delete_tree(child)
+            self._delete_entry(directory.cluster, child.entry_offset)
+            self.f.flush()
             if child.cluster >= 2:
                 self._free_chain(child.cluster)
-            self._delete_entry(directory.cluster, child.entry_offset)
 
     def rename(self, path, new_name):
         """Rename a file or directory in place (LFN entries are rebuilt)."""
@@ -606,8 +631,8 @@ class Fat32:
         short = self._make_short_name(new_name, used)
         attr = 0x10 if entry.is_dir else 0x20
         raw = self._build_entries(new_name, short, entry.cluster, entry.size, attr=attr)
-        self._delete_entry(parent, entry.entry_offset)
         self._insert_entries(parent, raw)
+        self._delete_entry(parent, entry.entry_offset)
         self.sync_fsinfo()
         self.f.flush()
         return entry
@@ -667,12 +692,27 @@ class Fat32:
                 i = ci * epc + (abs_offset - base) // 32
                 break
         if i is None:
-            return
+            raise Fat32Error("directory entry to tombstone was not found")
         j = i - 1
         while j >= 0 and data[j * 32 + 11] == 0x0F and data[j * 32] != 0xE5:
             j -= 1
         for k in range(j + 1, i + 1):
             self._write_slots(chain, k, b"\xe5" + b"\x00" * 31)
+        return True
+
+    def _directory_references_cluster(self, dir_cluster, cluster):
+        """Check raw short entries, including an entry from a partial insert."""
+        _, data = self._dir_stream(dir_cluster)
+        for i in range(0, len(data) - 31, 32):
+            entry = data[i : i + 32]
+            if entry[0] in (0x00, 0xE5) or entry[11] == 0x0F:
+                continue
+            first = (struct.unpack_from("<H", entry, 20)[0] << 16) | struct.unpack_from(
+                "<H", entry, 26
+            )[0]
+            if first == cluster:
+                return True
+        return False
 
     def write_file(self, dir_path, filename, data):
         """Create or overwrite `filename` in directory `dir_path`."""
@@ -697,14 +737,26 @@ class Fat32:
         first = self._alloc_chain(nclusters) if nclusters else 0
         try:
             self._write_chain_data(first, data)
-            raw = self._build_entries(filename, short, first, len(data))
-            if target is not None:
-                self._delete_entry(dir_cluster, target.entry_offset)
-            self._insert_entries(dir_cluster, raw)
         except Exception:
             if first >= 2:
                 self._free_chain(first)
             raise
+        raw = self._build_entries(filename, short, first, len(data))
+        # Publish the new entry before removing the old one. If insertion
+        # raises after a partial directory write, retain the new allocation:
+        # it may already be referenced by a short entry in the image.
+        try:
+            self._insert_entries(dir_cluster, raw)
+        except Exception:
+            if first >= 2 and not self._directory_references_cluster(dir_cluster, first):
+                self._free_chain(first)
+            # If a partial directory write already references the new chain,
+            # retain it rather than expose freed clusters through that entry.
+            self.sync_fsinfo()
+            raise
+        if target is not None:
+            self._delete_entry(dir_cluster, target.entry_offset)
+            self.f.flush()
         if target is not None and target.cluster >= 2:
             self._free_chain(target.cluster)
         self.sync_fsinfo()

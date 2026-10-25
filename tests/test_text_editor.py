@@ -113,6 +113,50 @@ def test_open_in_editor_starts_the_command(tmp_path):
     assert marker.read_text() == str(target)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX editor command behavior")
+@pytest.mark.parametrize(
+    ("candidate", "wait_flag"),
+    [("gedit", "--wait"), ("kate", "--block")],
+)
+def test_default_linux_editors_are_started_in_wait_mode(
+    monkeypatch, tmp_path, candidate, wait_flag
+):
+    monkeypatch.setattr(text_editor.sys, "platform", "linux")
+    monkeypatch.setattr(text_editor, "_editor_from_env", lambda: None)
+    monkeypatch.setattr(
+        text_editor.shutil,
+        "which",
+        lambda name: "/usr/bin/" + name if name == candidate else None,
+    )
+
+    argv = text_editor.editor_command(tmp_path / "copy.txt")
+
+    assert argv == ["/usr/bin/" + candidate, wait_flag, str(tmp_path / "copy.txt")]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX editor command behavior")
+def test_editor_command_does_not_fall_back_to_detached_xdg_open(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(text_editor.sys, "platform", "linux")
+    monkeypatch.setattr(text_editor, "_editor_from_env", lambda: None)
+    monkeypatch.setattr(
+        text_editor.shutil,
+        "which",
+        lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None,
+    )
+
+    assert text_editor.editor_command(tmp_path / "copy.txt") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX editor command behavior")
+def test_detached_env_launcher_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(text_editor.sys, "platform", "linux")
+    monkeypatch.setattr(text_editor, "_editor_from_env", lambda: ["xdg-open"])
+
+    assert text_editor.editor_command(tmp_path / "copy.txt") is None
+
+
 # --------------------------------------------------------------- кодировки
 def test_decode_for_editor_keeps_utf8_and_fixes_cp1251():
     assert text_editor.decode_for_editor("Привет".encode("utf-8")) == (

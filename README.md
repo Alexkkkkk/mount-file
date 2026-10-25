@@ -255,11 +255,15 @@ wheel либо отдельно установленный C++ toolchain. AI-с�
 В конце печатается команда запуска: `.venv/bin/python main.py` на Linux/macOS
 и `.venv\Scripts\python.exe main.py` на Windows.
 
-После установки доступна и консольная команда:
+Для повторного предварительного просмотра из корня исходного репозитория:
 
 ```bash
-.venv/bin/mountfile-install --dry-run
+python install_mountfile.py --dry-run
 ```
+
+Wheel-установка предоставляет команду запуска приложения `mountfile`; отдельная
+команда `mountfile-install` в установленном пакете не публикуется, поскольку
+системный установщик должен запускаться из исходного checkout.
 
 ### Необязательные extras
 

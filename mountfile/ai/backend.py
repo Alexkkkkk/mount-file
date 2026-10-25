@@ -18,9 +18,11 @@ loaded into memory whole.
 from __future__ import annotations
 
 import json
+import ipaddress
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 #: Never read more than this many bytes of a file for one analysis.
 DEFAULT_MAX_BYTES = 256 * 1024
@@ -290,6 +292,27 @@ def _openai_base_url(settings):
     return ""  # empty -> the backend's own default (https://api.openai.com)
 
 
+def _api_key_transport_error(base_url):
+    """Require HTTPS for API keys, except HTTP endpoints on loopback."""
+    try:
+        parsed = urlsplit(base_url)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname
+    except ValueError:
+        return "Некорректный адрес OpenAI-совместимого эндпоинта."
+    if scheme == "https":
+        return ""
+    if scheme == "http" and host:
+        if host.lower().rstrip(".") == "localhost":
+            return ""
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return ""
+        except ValueError:
+            pass
+    return "Ключ API можно отправлять только через HTTPS или loopback HTTP."
+
+
 class OllamaBackend(AiBackend):
     """Local Ollama server (``POST /api/generate``)."""
 
@@ -373,6 +396,17 @@ class OpenAiCompatBackend(AiBackend):
         return bool(self.api_key)
 
     def analyze(self, name, data, prompt=None, truncated=False, size=None):
+        if self.api_key:
+            transport_error = _api_key_transport_error(self.base_url)
+            if transport_error:
+                return AiResult(
+                    ok=False,
+                    backend=self.name,
+                    model=self.model,
+                    error=transport_error,
+                    bytes_read=len(data or b""),
+                    truncated=truncated,
+                )
         headers = {}
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key

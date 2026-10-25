@@ -202,6 +202,47 @@ class TestFat32:
         self.fs.write_file("/", "empty.bin", b"")
         assert self.fs.read_file("/empty.bin") == b""
 
+    def test_chain_rejects_cluster_outside_declared_volume(self):
+        self.fs.write_file("/", "bounded.bin", b"bounded data")
+        entry = self.fs.entry("/bounded.bin")[1]
+        self.fs._fat_set(entry.cluster, self.fs.cluster_count + 2)
+        with pytest.raises(Fat32Error, match="out-of-range cluster"):
+            self.fs.read_file("/bounded.bin")
+
+    def test_io_cannot_cross_bpb_extent_into_trailing_image_bytes(self):
+        trailing = b"trailing evidence"
+        self.fh.seek(0, 2)
+        self.fh.write(trailing)
+        with pytest.raises(Fat32Error, match="volume bounds"):
+            self.fs._read(self.fs.volume_end, 1)
+        with pytest.raises(Fat32Error, match="volume bounds"):
+            self.fs._write(self.fs.volume_end, b"X")
+        self.fh.seek(self.fs.volume_end)
+        assert self.fh.read(len(trailing)) == trailing
+
+
+def test_fat32_rejects_bpb_volume_beyond_physical_eof(tmp_path):
+    image = tmp_path / "bpb-too-large.img"
+    make_fat32_image(image)
+    with open(image, "r+b") as handle:
+        handle.seek(32)
+        handle.write(struct.pack("<I", TOTAL_SECTORS + 1))
+    with open(image, "rb") as handle, pytest.raises(
+        Fat32Error, match="extends beyond image EOF"
+    ):
+        Fat32(handle)
+
+
+def test_fat32_rejects_physically_truncated_volume(tmp_path):
+    image = tmp_path / "truncated.img"
+    make_fat32_image(image)
+    with open(image, "r+b") as handle:
+        handle.truncate(TOTAL_SECTORS * BPS - BPS)
+    with open(image, "rb") as handle, pytest.raises(
+        Fat32Error, match="extends beyond image EOF"
+    ):
+        Fat32(handle)
+
 
 class TestPartitions:
     def setup_method(self):

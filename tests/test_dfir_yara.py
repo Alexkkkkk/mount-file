@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import mountfile.dfir_yara as dfir_yara
+from mountfile import yara_scan
 from mountfile.dfir_yara import YaraUnavailableError, scan_file, scan_yara
 
 
@@ -119,3 +120,44 @@ def test_missing_optional_dependency_has_actionable_error(tmp_path, monkeypatch)
     monkeypatch.setattr(dfir_yara.importlib, "import_module", missing)
     with pytest.raises(YaraUnavailableError, match="pip install yara-python"):
         scan_yara(image, "rule x { condition: true }")
+
+
+def test_match_blob_propagates_yara_error_with_cause():
+    class BrokenRules:
+        def match(self, *, data):
+            raise ValueError("engine failed")
+
+    with pytest.raises(yara_scan.YaraScanError, match="engine failed") as caught:
+        yara_scan.match_blob(BrokenRules(), b"evidence")
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_match_blob_uses_current_string_instance_occurrence_offsets():
+    match = SimpleNamespace(
+        rule="located",
+        strings=[
+            SimpleNamespace(
+                identifier="$a",
+                instances=[
+                    SimpleNamespace(offset=12),
+                    SimpleNamespace(offset=4),
+                ],
+            )
+        ],
+    )
+    rules = FakeRules([match])
+    # This test fake has the project API's data= call contract.
+    rules.match = lambda *, data: [match]
+
+    hits = yara_scan.match_blob(rules, b"x" * 20)
+    assert hits[0].offset == 4
+    assert hits[0].as_dict()["offset"] == 4
+
+
+def test_match_blob_keeps_offset_unknown_when_api_has_no_occurrence():
+    class BlobRules:
+        def match(self, *, data):
+            return [SimpleNamespace(rule="unknown")]
+
+    hit = yara_scan.match_blob(BlobRules(), b"x")
+    assert hit[0].offset is None

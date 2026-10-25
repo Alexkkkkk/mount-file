@@ -12,6 +12,8 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -47,6 +49,21 @@ class TestDelete:
         # Every data cluster of the file went back to the free pool.
         assert self._free() - used == math.ceil(len(payload) / self.fs.cluster_size)
         assert [e.name for e in self.fs.list_dir()] == []
+
+    def test_failed_tombstone_does_not_release_file_clusters(self, monkeypatch):
+        payload = b"preserve until tombstone" * 80
+        self.fs.write_file("/", "protected.bin", payload)
+        entry = self.fs.entry("/protected.bin")[1]
+        chain = self.fs.cluster_chain(entry.cluster)
+
+        def fail_tombstone(*_args):
+            raise OSError("injected directory write failure")
+
+        monkeypatch.setattr(self.fs, "_delete_entry", fail_tombstone)
+        with pytest.raises(OSError, match="injected directory write failure"):
+            self.fs.delete("/protected.bin")
+        assert self.fs.read_file("/protected.bin") == payload
+        assert self.fs.cluster_chain(entry.cluster) == chain
 
     def test_delete_is_case_insensitive(self):
         self.fs.write_file("/", "Hello.TXT", b"data")
@@ -159,6 +176,36 @@ class TestRename:
             raise AssertionError("expected Fat32Error on a name collision")
         assert self.fs.read_file("/a.txt") == b"a"
         assert self.fs.read_file("/b.txt") == b"b"
+
+    def test_failed_rename_insert_keeps_old_entry(self, monkeypatch):
+        self.fs.write_file("/", "old.bin", b"original rename payload")
+
+        def fail_insert(*_args):
+            raise OSError("injected directory insertion failure")
+
+        monkeypatch.setattr(self.fs, "_insert_entries", fail_insert)
+        with pytest.raises(OSError, match="injected directory insertion failure"):
+            self.fs.rename("/old.bin", "new.bin")
+        assert self.fs.read_file("/old.bin") == b"original rename payload"
+        assert [entry.name for entry in self.fs.list_dir()] == ["old.bin"]
+
+    def test_failed_overwrite_insert_keeps_old_file(self, monkeypatch):
+        original = b"original overwrite payload" * 20
+        self.fs.write_file("/", "same.bin", original)
+        original_entry = self.fs.entry("/same.bin")[1]
+        original_chain = self.fs.cluster_chain(original_entry.cluster)
+        free_before = self.fs.free_clusters()[0]
+
+        def fail_insert(*_args):
+            raise OSError("injected directory insertion failure")
+
+        monkeypatch.setattr(self.fs, "_insert_entries", fail_insert)
+        with pytest.raises(OSError, match="injected directory insertion failure"):
+            self.fs.write_file("/", "same.bin", b"replacement data" * 100)
+        assert self.fs.read_file("/same.bin") == original
+        surviving_entry = self.fs.entry("/same.bin")[1]
+        assert self.fs.cluster_chain(surviving_entry.cluster) == original_chain
+        assert self.fs.free_clusters()[0] == free_before
 
     def test_no_duplicate_entries_after_many_renames(self):
         self.fs.write_file("/", "x.bin", b"payload")

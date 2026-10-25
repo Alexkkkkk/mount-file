@@ -273,6 +273,11 @@ def _ollama_analyze(tb_text):
     except Exception:
         return ""
     backend = ai.build_backend(settings)
+    if hasattr(backend, "timeout"):
+        try:
+            backend.timeout = min(float(backend.timeout), ANALYZE_TIMEOUT)
+        except (TypeError, ValueError):
+            backend.timeout = ANALYZE_TIMEOUT
     result = backend.analyze(
         "traceback.txt",
         tb_text.encode("utf-8", "replace")[:60000],
@@ -281,6 +286,37 @@ def _ollama_analyze(tb_text):
     if result is not None and getattr(result, "ok", False):
         return sanitize(result.text)
     return ""
+
+
+def _ollama_analyze_with_timeout(tb_text, timeout=None):
+    """Run local triage without blocking the reporting thread past timeout.
+
+    Python cannot safely interrupt an in-flight backend call.  The daemon
+    worker is therefore abandoned on timeout and its result is discarded;
+    it cannot hold process shutdown open or block the crash-report path.
+    """
+    if timeout is None:
+        timeout = ANALYZE_TIMEOUT
+    finished = threading.Event()
+    abandoned = threading.Event()
+    result = []
+
+    def run():
+        try:
+            value = _ollama_analyze(tb_text)
+            if not abandoned.is_set():
+                result.append(value)
+        except Exception:
+            pass
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=run, daemon=True, name="olma-analysis")
+    worker.start()
+    if not finished.wait(max(0, timeout)):
+        abandoned.set()
+        return ""
+    return result[0] if result else ""
 
 
 # ------------------------------------------------------------ report body
@@ -398,10 +434,7 @@ def report_text(tb_text, context="", wait=True):
         _save_state(state)
         return None, "достигнут лимит отчётов (%d в час)" % MAX_PER_HOUR
 
-    try:
-        analysis = _ollama_analyze(tb_text)
-    except Exception:
-        analysis = ""
+    analysis = _ollama_analyze_with_timeout(tb_text)
 
     url, err = _deliver(tb_text, context, state, analysis=analysis)
     if url:
@@ -419,8 +452,8 @@ def report_text(tb_text, context="", wait=True):
     # Network down / token missing: keep the report for the next start.
     state["pending"].append(
         {
-            "traceback": tb_text[:20000],
-            "context": context,
+            "traceback": sanitize(tb_text)[:20000],
+            "context": sanitize(context)[:2000],
             "time": now,
         }
     )

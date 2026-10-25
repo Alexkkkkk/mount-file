@@ -12,6 +12,8 @@ Run:  python -m pytest tests/test_olma_watch.py -v
 import json
 import os
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -191,6 +193,73 @@ def test_missing_token_is_reported_readably(monkeypatch):
     url, err = ow.report_text(TRACEBACK, context="тест")
     assert url is None
     assert ow.ENV_TOKEN in err
+
+
+def test_analysis_timeout_does_not_block_reporting_thread(monkeypatch):
+    started = threading.Event()
+    finished = threading.Event()
+
+    def slow_analysis(_text):
+        started.set()
+        time.sleep(0.4)
+        finished.set()
+        return "late result"
+
+    monkeypatch.setattr(ow, "_ollama_analyze", slow_analysis)
+    monkeypatch.setattr(ow, "ANALYZE_TIMEOUT", 0.02)
+    monkeypatch.setattr(
+        ow, "_http_json", lambda *a, **k: (201, {"html_url": "u"}, "")
+    )
+    monkeypatch.setenv(ow.ENV_TOKEN, "test-token")
+    monkeypatch.setenv(ow.ENV_ENABLE, "1")
+
+    before = time.monotonic()
+    url, err = ow.report_text(TRACEBACK, context="тест")
+    elapsed = time.monotonic() - before
+
+    assert url == "u" and err == ""
+    assert started.is_set()
+    assert elapsed < 0.3
+    assert finished.wait(1)
+
+
+def test_local_backend_timeout_is_capped_at_analyze_timeout(monkeypatch):
+    from types import SimpleNamespace
+
+    from mountfile import ai
+
+    class Backend:
+        timeout = 60
+
+        def analyze(self, *_args, **_kwargs):
+            return SimpleNamespace(ok=True, text="готово")
+
+    backend = Backend()
+    monkeypatch.setattr(ow, "_ollama_settings", lambda: {"ai_backend": "ollama"})
+    monkeypatch.setattr(ai, "build_backend", lambda _settings: backend)
+
+    assert ow._ollama_analyze(TRACEBACK) == "готово"
+    assert backend.timeout == ow.ANALYZE_TIMEOUT
+
+
+def test_offline_pending_queue_sanitizes_traceback_and_context(monkeypatch):
+    monkeypatch.setattr(ow, "_http_json", lambda *a, **k: (None, None, "offline"))
+    monkeypatch.setattr(ow, "_ollama_analyze", lambda _text: "")
+    monkeypatch.setenv(ow.ENV_TOKEN, "test-token")
+    monkeypatch.setenv(ow.ENV_ENABLE, "1")
+    private_tb = (
+        TRACEBACK
+        + "\nfile /home/ivan/private.py token github_pat_FAKE0000FAKE0000FAKE"
+    )
+    private_context = "opened /home/ivan/disk.img with github_pat_FAKE0000FAKE0000FAKE"
+
+    ow.report_text(private_tb, context=private_context)
+
+    queued = json.loads(open(ow.state_path(), encoding="utf-8").read())["pending"][0]
+    assert "ivan" not in queued["traceback"] + queued["context"]
+    assert "github_pat_FAKE0000FAKE0000FAKE" not in (
+        queued["traceback"] + queued["context"]
+    )
 
 
 # ------------------------------------------------------------ no secrets

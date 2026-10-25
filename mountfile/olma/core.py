@@ -249,7 +249,7 @@ class OlmaChain:
             yield cur
             left -= 1
             cur = cur.next_from(self._fat_get)
-        if left <= 0:
+        if left <= 0 and cur is not None:
             raise OlmaIntegrityError("chain budget exceeded")
 
 

@@ -109,7 +109,7 @@ class WriterUnavailableError(WriteEngineError):
 @dataclass
 class JournalEntry:
     ts: str
-    image: str
+    image: str | None
     tx: str
     op: str
     path: str
@@ -132,28 +132,32 @@ class JournalEntry:
 class EngineJournal:
     """Hash-chained JSONL journal of every engine operation."""
 
-    def __init__(self, path: str | Path | None = None):
+    def __init__(
+        self, path: str | Path | None = None, image_path: str | Path | None = None
+    ):
         self.path = Path(path) if path is not None else _default_journal_path()
+        self.image_path = Path(image_path) if image_path is not None else None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._prev = self._tail_hash()
 
     def _tail_hash(self) -> str:
-        if not self.path.exists():
-            return "0" * 64
-        for line in reversed(self.path.read_text(encoding="utf-8").splitlines()):
-            if line.strip():
-                try:
-                    return json.loads(line)["hash"]
-                except Exception:  # pragma: no cover - unreadable tail
-                    return "0" * 64
-        return "0" * 64
+        report = self.verify_chain()
+        if not report["ok"]:
+            raise WriteEngineError(
+                "journal integrity failure at line(s): "
+                + ", ".join(str(line + 1) for line in report["broken"])
+            )
+        entries = self.entries()
+        return entries[-1].hash if entries else "0" * 64
 
     def append(
         self, *, tx: str, op: str, path: str, status: str, extra: dict | None = None
     ) -> JournalEntry:
+        # Refuse to extend a chain changed since this object was opened.
+        self._prev = self._tail_hash()
         entry = JournalEntry(
             ts=_dt.datetime.now(_dt.timezone.utc).isoformat(),
-            image=str(self.path),
+            image=str(self.image_path) if self.image_path is not None else None,
             tx=tx,
             op=op,
             path=str(path),
@@ -173,26 +177,30 @@ class EngineJournal:
         if not self.path.exists():
             return []
         out: list[JournalEntry] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise WriteEngineError("journal cannot be decoded or read") from exc
+        for line in lines:
             if not line.strip():
                 continue
             try:
                 data = json.loads(line)
-            except json.JSONDecodeError:
-                break
-            if "tx" not in data or "hash" not in data:
-                # a line written by another journal format is not part of this
-                # chain; skipping it keeps ``verify_chain`` meaningful instead
-                # of reporting a fake tamper.
-                continue
+            except json.JSONDecodeError as exc:
+                raise WriteEngineError("malformed journal JSON") from exc
+            if not isinstance(data, dict) or any(
+                key not in data for key in (*JOURNAL_FIELDS, "hash")
+            ):
+                raise WriteEngineError("journal entry is missing required fields")
+            if not isinstance(data.get("extra"), dict):
+                raise WriteEngineError("journal entry has invalid extra field")
             tx = data.get("tx", "")
-            op = data.get("op", "")
             out.append(
                 JournalEntry(
                     ts=data.get("ts", ""),
                     image=data.get("image", ""),
                     tx=tx,
-                    op=op,
+                    op=data.get("op", ""),
                     path=data.get("path", ""),
                     status=data.get("status", ""),
                     extra=dict(data.get("extra", {})),
@@ -206,11 +214,15 @@ class EngineJournal:
         """Recompute every hash and check the ``prev`` links."""
         previous = "0" * 64
         broken: list[int] = []
-        for index, entry in enumerate(self.entries()):
+        try:
+            entries = self.entries()
+        except WriteEngineError:
+            return {"entries": 0, "broken": [0], "ok": False}
+        for index, entry in enumerate(entries):
             if entry.prev != previous or entry.compute() != entry.hash:
                 broken.append(index)
             previous = entry.hash
-        return {"entries": len(self.entries()), "broken": broken, "ok": not broken}
+        return {"entries": len(entries), "broken": broken, "ok": not broken}
 
 
 def _default_journal_path() -> Path:
@@ -509,7 +521,7 @@ class WriteEngine:
             Path(snapshot_dir) if snapshot_dir is not None else _default_snapshot_dir()
         )
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        self.journal = EngineJournal(journal_path)
+        self.journal = EngineJournal(journal_path, image_path=self.image)
         self._session_snapshot: Path | None = None
         self._active: Transaction | None = None
         self._transactions: dict[str, Transaction] = {}

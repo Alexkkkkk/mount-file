@@ -168,9 +168,9 @@ class Journal:
 
 class UniversalRW(ABC):
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
-        self.image_path = image_path
+        self.image_path = Path(image_path)
         self.mode = mode
-        self.journal = Journal(image_path)
+        self.journal = Journal(self.image_path)
         self._backup_made = False
 
     # --- публичный API -----------------------------------------------------
@@ -285,34 +285,109 @@ class UniversalRW(ABC):
 
 
 class Fat32RW(UniversalRW):
+    """UniversalRW adapter over the package's native FAT32 implementation."""
+
+    def __init__(self, image_path: Path, mode: Mode = Mode.RO):
+        super().__init__(image_path, mode)
+        self._fh = None
+        self._fs = None
+
     def _open_backend(self) -> None:
-        # Здесь должен быть вызов mountfile/fat32.py
-        # Для демонстрации — простая проверка сигнатуры.
-        pass
+        from mountfile.fat32 import Fat32
+
+        self._fh = open(self.image_path, "r+b" if self.mode == Mode.RW else "rb")
+        try:
+            self._fs = Fat32(self._fh)
+        except Exception:
+            self._fh.close()
+            self._fh = None
+            raise
 
     def _close_backend(self) -> None:
-        pass
+        if self._fh is not None:
+            try:
+                self._fh.flush()
+            except (OSError, ValueError):
+                pass
+            self._fh.close()
+            self._fh = None
+        self._fs = None
+
+    def _backend(self):
+        if self._fs is None:
+            raise StrategyUnavailable("FAT32 backend is not open; call open()")
+        return self._fs
+
+    @staticmethod
+    def _split(path: str) -> tuple[str, str]:
+        clean = "/" + str(path).replace("\\", "/").strip("/")
+        parent, _, name = clean.rpartition("/")
+        return parent or "/", name
+
+    def _lookup(self, path: str):
+        from mountfile.fat32 import Fat32Error
+
+        try:
+            return self._backend().entry(path)[1]
+        except Fat32Error:
+            return None
 
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
-        # TODO: подключить mountfile/fat32.py
-        raise NotImplementedError(
-            "FAT32 native backend — подключите mountfile/fat32.py"
-        )
+        fs = self._backend()
+        parent, name = self._split(path)
+        if not name:
+            raise RWError("cannot create a file at the FAT32 root")
+        existing = self._lookup(path)
+        if existing is not None:
+            if existing.is_dir:
+                raise IsADirectoryError(path)
+            if not overwrite:
+                raise FileExistsError(path)
+        fs.write_file(parent, name, data.read())
 
     def _create_dir(self, path: str) -> None:
-        raise NotImplementedError("FAT32 native backend")
+        fs = self._backend()
+        parent, name = self._split(path)
+        if not name:
+            raise RWError("cannot create the FAT32 root directory")
+        if self._lookup(path) is not None:
+            raise FileExistsError(path)
+        fs.mkdir(parent, name)
 
     def _delete(self, path: str, recursive: bool) -> None:
-        raise NotImplementedError("FAT32 native backend")
+        self._backend().delete(path, recursive=recursive)
 
     def _rename(self, src: str, dst: str) -> None:
-        raise NotImplementedError("FAT32 native backend")
+        fs = self._backend()
+        src_parent, _ = self._split(src)
+        dst_parent, dst_name = self._split(dst)
+        if src_parent != dst_parent:
+            raise RWError("FAT32 rename is supported only within one directory")
+        fs.rename(src, dst_name)
 
     def _write_file(self, path: str, data: BinaryIO, offset: int) -> None:
-        raise NotImplementedError("FAT32 native backend")
+        fs = self._backend()
+        parent, name = self._split(path)
+        if offset < 0:
+            raise RWError("negative write offset")
+        payload = data.read()
+        if offset:
+            try:
+                current = bytearray(fs.read_file(path))
+            except Exception as exc:
+                raise RWError(f"cannot read {path} for offset write: {exc}") from exc
+            end = offset + len(payload)
+            if end > len(current):
+                current.extend(b"\x00" * (end - len(current)))
+            current[offset:end] = payload
+            payload = bytes(current)
+        fs.write_file(parent, name, payload)
 
     def _stat(self, path: str) -> FileStat:
-        raise NotImplementedError("FAT32 native backend")
+        entry = self._lookup(path)
+        if entry is None:
+            raise FileNotFoundError(path)
+        return FileStat(path, entry.size, 0.0, entry.is_dir)
 
 
 # ---------------------------------------------------------------------------

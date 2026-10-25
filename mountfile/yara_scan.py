@@ -23,6 +23,7 @@ Rules are compiled from a single ``.yar`` file or from a directory of them
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional, Sequence
@@ -133,12 +134,61 @@ def match_blob(
 
     try:
         matches = rules.match(data=data)
-    except Exception:  # pragma: no cover - malformed rule/scan failure
-        return []
+    except Exception as exc:
+        detail = str(exc) or exc.__class__.__name__
+        raise YaraScanError("YARA match failed: %s" % detail) from exc
     return [
-        _normalise_match(item, path=path, offset=None, target=target)
+        _normalise_match(
+            item,
+            path=path,
+            offset=(
+                min(offsets)
+                if (offsets := _string_offsets(getattr(item, "strings", ())))
+                else None
+            ),
+            target=target,
+        )
         for item in matches
     ]
+
+
+def _string_offsets(strings: Any) -> tuple[int, ...]:
+    """Read occurrence offsets exposed by yara-python 4.5+ or legacy tuples.
+
+    New yara-python results expose ``StringMatch.instances`` with ``offset``;
+    older versions returned ``(offset, identifier, data)`` tuples.  If neither
+    representation supplies an offset, no location is inferred.
+    """
+    offsets: set[int] = set()
+
+    def visit(value: Any) -> None:
+        if value is None or isinstance(value, (str, bytes, bytearray)):
+            return
+        if isinstance(value, dict):
+            if "offset" in value:
+                offset = value.get("offset")
+                if isinstance(offset, int) and not isinstance(offset, bool):
+                    offsets.add(offset)
+            for key in ("instances", "strings"):
+                if key in value:
+                    visit(value[key])
+            return
+        if isinstance(value, (tuple, list, set, frozenset)):
+            if value and isinstance(value[0], int) and not isinstance(value[0], bool):
+                offsets.add(value[0])
+                return
+            for item in value:
+                visit(item)
+            return
+        offset = getattr(value, "offset", None)
+        if isinstance(offset, int) and not isinstance(offset, bool):
+            offsets.add(offset)
+        instances = getattr(value, "instances", None)
+        if instances is not None:
+            visit(instances)
+
+    visit(strings)
+    return tuple(sorted(offsets))
 
 
 # ----------------------------------------------------------------------- scans
@@ -154,8 +204,8 @@ def scan_files_from_fs(
             continue
         try:
             data = entry.read_random(0, size)
-        except Exception:  # pragma: no cover - unreadable file
-            continue
+        except Exception as exc:
+            raise YaraScanError("unable to read file %s: %s" % (path, exc)) from exc
         if not data:
             continue
         hits.extend(match_blob(rules, bytes(data), path=path, target=TARGET_FILES))
@@ -226,21 +276,69 @@ def scan_unallocated_from_fs(
     *,
     chunk: int = DEFAULT_CHUNK,
 ) -> list[YaraHit]:
-    """Scan the unallocated regions of an open filesystem."""
+    """Scan complete unallocated extents without signature-length limits.
 
+    YARA scans a private 0600 temporary file for each contiguous extent.  Input
+    is still read in bounded chunks, but matching is performed over the whole
+    extent so arbitrarily long signatures cannot disappear at chunk edges.
+    The temporary file is removed even when reading or matching fails.
+    """
+
+    if chunk <= 0:
+        raise ValueError("chunk must be positive")
     hits: list[YaraHit] = []
     source = getattr(fs, "_image_path", None)
     for start, end in unallocated_ranges(fs, image_size):
-        for offset in range(start, end, chunk):
-            length = min(chunk, end - offset)
-            data = _read_region(fs, source, offset, length)
-            if not data:
-                continue
-            for hit in match_blob(
-                rules, data, path="<unallocated>", target=TARGET_UNALLOCATED
-            ):
-                hit.offset = offset
-                hits.append(hit)
+        fd, temp_path = tempfile.mkstemp(prefix="mountfile-yara-")
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                for offset in range(start, end, chunk):
+                    length = min(chunk, end - offset)
+                    data = _read_region(fs, source, offset, length)
+                    if len(data) != length:
+                        raise YaraScanError(
+                            "short read in unallocated range at %d: expected %d, got %d"
+                            % (offset, length, len(data))
+                        )
+                    stream.write(data)
+            try:
+                matches = rules.match(filepath=temp_path)
+            except Exception as exc:
+                detail = str(exc) or exc.__class__.__name__
+                raise YaraScanError("YARA match failed: %s" % detail) from exc
+            for item in matches:
+                offsets = _string_offsets(getattr(item, "strings", ()))
+                if offsets:
+                    for relative in offsets:
+                        hits.append(
+                            _normalise_match(
+                                item,
+                                path="<unallocated>",
+                                offset=start + relative,
+                                target=TARGET_UNALLOCATED,
+                            )
+                        )
+                else:
+                    hits.append(
+                        _normalise_match(
+                            item,
+                            path="<unallocated>",
+                            offset=None,
+                            target=TARGET_UNALLOCATED,
+                        )
+                    )
+        except YaraScanError:
+            raise
+        except Exception as exc:
+            detail = str(exc) or exc.__class__.__name__
+            raise YaraScanError(
+                "unable to scan unallocated range %d:%d: %s" % (start, end, detail)
+            ) from exc
+        finally:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
     return hits
 
 
@@ -249,13 +347,22 @@ def _read_region(fs: Any, image_path: Optional[str], offset: int, length: int) -
     if callable(reader):  # pragma: no cover - not part of the public pytsk3 API
         try:
             return bytes(reader(offset, length))
-        except Exception:
-            return b""
+        except Exception as exc:
+            raise YaraScanError(
+                "unable to read image region %d:%d: %s" % (offset, length, exc)
+            ) from exc
     if not image_path:
-        return b""
-    with open(image_path, "rb") as stream:
-        stream.seek(offset)
-        return stream.read(length)
+        raise YaraScanError(
+            "image source is unavailable for region %d:%d" % (offset, length)
+        )
+    try:
+        with open(image_path, "rb") as stream:
+            stream.seek(offset)
+            return stream.read(length)
+    except OSError as exc:
+        raise YaraScanError(
+            "unable to read image region %d:%d: %s" % (offset, length, exc)
+        ) from exc
 
 
 def scan_unallocated(

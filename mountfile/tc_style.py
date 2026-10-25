@@ -499,8 +499,25 @@ def save_settings():
     """Persist the switches; failures are not worth interrupting the user."""
     try:
         os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(SETTINGS, f, indent=2, sort_keys=True)
+        if os.name == "posix":
+            # os.open's mode applies only on creation; fchmod also hardens an
+            # existing settings file which may previously have been public.
+            fd = os.open(
+                SETTINGS_PATH,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            try:
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    fd = None
+                    json.dump(SETTINGS, f, indent=2, sort_keys=True)
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        else:
+            with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(SETTINGS, f, indent=2, sort_keys=True)
         return True
     except OSError:
         return False

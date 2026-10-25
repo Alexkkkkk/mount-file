@@ -135,7 +135,7 @@ class Partition:
         )
 
 
-def _parse_ebr_chain(f, ebr_lba, start_index=0):
+def _parse_ebr_chain(f, extended_base, extended_sectors, image_sectors, start_index=0):
     """Walk the EBR chain of an extended partition (logical volumes).
 
     Each EBR repeats in its first slot the logical volume it describes and
@@ -144,7 +144,13 @@ def _parse_ebr_chain(f, ebr_lba, start_index=0):
     """
     parts = []
     seen = set()
-    while ebr_lba and ebr_lba not in seen and len(parts) < _MAX_LOGICAL:
+    extended_end = min(extended_base + extended_sectors, image_sectors)
+    ebr_lba = extended_base
+    while (
+        extended_base <= ebr_lba < extended_end
+        and ebr_lba not in seen
+        and len(parts) < _MAX_LOGICAL
+    ):
         seen.add(ebr_lba)
         f.seek(ebr_lba * SECTOR_SIZE)
         sector = f.read(SECTOR_SIZE)
@@ -153,13 +159,20 @@ def _parse_ebr_chain(f, ebr_lba, start_index=0):
         e0 = sector[446:462]
         ptype0 = e0[4]
         rel0, size0 = struct.unpack_from("<II", e0, 8)
-        if ptype0 and size0 and ptype0 not in _EXTENDED_TYPES:
+        logical_start = ebr_lba + rel0
+        if (
+            ptype0
+            and size0
+            and ptype0 not in _EXTENDED_TYPES
+            and extended_base <= logical_start < extended_end
+            and logical_start + size0 <= extended_end
+        ):
             idx = start_index + len(parts) + 1
             parts.append(
                 Partition(
                     idx,
                     "Logical %d" % idx,
-                    ebr_lba + rel0,
+                    logical_start,
                     size0,
                     ptype0,
                     bool(e0[0] & 0x80),
@@ -168,7 +181,14 @@ def _parse_ebr_chain(f, ebr_lba, start_index=0):
         e1 = sector[462:478]
         ptype1 = e1[4]
         rel1 = struct.unpack_from("<I", e1, 8)[0]
-        ebr_lba = (ebr_lba + rel1) if (ptype1 in _EXTENDED_TYPES and rel1) else 0
+        # The second EBR entry is relative to the beginning of the extended
+        # partition (unlike slot 0, which is relative to this EBR).
+        next_ebr = extended_base + rel1
+        ebr_lba = (
+            next_ebr
+            if ptype1 in _EXTENDED_TYPES and rel1 and next_ebr < extended_end
+            else 0
+        )
     return parts
 
 
@@ -179,6 +199,7 @@ def _parse_mbr(f):
         return []
     parts = []
     extended_lba = 0
+    extended_sectors = 0
     for i in range(4):
         e = mbr[446 + 16 * i : 446 + 16 * (i + 1)]
         ptype = e[4]
@@ -187,6 +208,7 @@ def _parse_mbr(f):
             continue
         if ptype in _EXTENDED_TYPES and not extended_lba:
             extended_lba = start
+            extended_sectors = size
         parts.append(
             Partition(
                 i + 1, "Partition %d" % (i + 1), start, size, ptype, bool(e[0] & 0x80)
@@ -194,11 +216,20 @@ def _parse_mbr(f):
         )
     # Logical volumes live inside the extended container and are chained
     # through EBR sectors, so they are appended after the primary entries.
-    parts.extend(_parse_ebr_chain(f, extended_lba, start_index=len(parts)))
+    f.seek(0, 2)
+    image_sectors = f.tell() // SECTOR_SIZE
+    if extended_lba:
+        parts.extend(
+            _parse_ebr_chain(
+                f, extended_lba, extended_sectors, image_sectors, start_index=len(parts)
+            )
+        )
     return parts
 
 
 def _parse_gpt(f):
+    f.seek(0, 2)
+    image_sectors = f.tell() // SECTOR_SIZE
     f.seek(SECTOR_SIZE)
     hdr = f.read(SECTOR_SIZE)
     if len(hdr) < SECTOR_SIZE or hdr[:8] != b"EFI PART":
@@ -220,7 +251,7 @@ def _parse_gpt(f):
         if type_guid.int == 0:
             continue
         first, last = struct.unpack_from("<QQ", e, 32)
-        if last < first:
+        if last < first or last >= image_sectors:
             continue
         name = e[56:128].decode("utf-16-le", "ignore").rstrip("\x00")
         parts.append(

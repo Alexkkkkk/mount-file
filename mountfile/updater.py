@@ -540,16 +540,17 @@ class Installer(QThread):
                     webbrowser.open(self.info["url"])
                     return
                 raise RuntimeError("в релизе нет сборки для этой платформы")
+            wanted = self.info.get("sha256")
+            if not isinstance(wanted, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", wanted):
+                raise RuntimeError("отсутствует или некорректна доверенная SHA256-сумма")
             self.stage.emit("Скачивание обновления…")
             self.status.emit("Скачивание %s…" % asset.get("name"))
             path, size = download_asset(asset, progress=self.progress.emit)
-            wanted = self.info.get("sha256")
-            if wanted:
-                self.stage.emit("Проверка контрольной суммы…")
-                actual = sha256_file(path)
-                if actual != wanted:
-                    raise RuntimeError("контрольная сумма не совпала (файл повреждён)")
-                self.status.emit("Контрольная сумма совпала")
+            self.stage.emit("Проверка контрольной суммы…")
+            actual = sha256_file(path)
+            if actual != wanted.lower():
+                raise RuntimeError("контрольная сумма не совпала (файл повреждён)")
+            self.status.emit("Контрольная сумма совпала")
             self.status.emit("Скачано %d байт" % size)
 
             if not is_frozen():

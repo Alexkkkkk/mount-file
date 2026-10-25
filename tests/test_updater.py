@@ -215,6 +215,44 @@ def test_download_detects_truncated_file(tmp_path, monkeypatch):
     assert not (tmp_path / "MountFile.exe.part").exists()
 
 
+def test_installer_fails_closed_without_valid_sha256(monkeypatch):
+    downloads = []
+    installs = []
+    monkeypatch.setattr(
+        updater, "download_asset", lambda *args, **kwargs: downloads.append(args)
+    )
+    monkeypatch.setattr(
+        updater, "install_and_restart", lambda *args, **kwargs: installs.append(args)
+    )
+
+    class SignalCollector:
+        def __init__(self):
+            self.messages = []
+
+        def emit(self, message):
+            self.messages.append(message)
+
+    class InstallerHarness:
+        run = updater.Installer.run
+
+    invalid_values = (None, "", "   ", "not-a-digest", "a" * 63, "g" * 64)
+    for digest in invalid_values:
+        info = {"asset": {"name": "MountFile.exe"}}
+        if digest is not None:
+            info["sha256"] = digest
+        installer = InstallerHarness()
+        installer.info = info
+        installer.failed = SignalCollector()
+
+        installer.run()
+
+        assert installer.failed.messages
+        assert "SHA256" in installer.failed.messages[-1]
+
+    assert downloads == []
+    assert installs == []
+
+
 def test_sha256_file(tmp_path):
     p = tmp_path / "f.bin"
     p.write_bytes(b"abc")

@@ -79,10 +79,10 @@ class TestExtendedMBR:
     def test_chained_logical_volumes(self):
         path = _blank_image(self.tmp)
         _put_sector(path, 0, _mbr([(0x0F, 2048, 65536)]))
-        # EBR #1 at the start of the extended area, chain: 2048 -> 6144 -> 14336
+        # EBR links are relative to the extended base: 2048 -> 6144 -> 14336.
         _put_sector(path, 2048, _ebr(logical=(0x0B, 63, 2048), nxt=4096))
-        _put_sector(path, 2048 + 4096, _ebr(logical=(0x07, 63, 2048), nxt=8192))
-        _put_sector(path, 2048 + 4096 + 8192, _ebr(logical=(0x83, 63, 1024)))
+        _put_sector(path, 2048 + 4096, _ebr(logical=(0x07, 63, 2048), nxt=12288))
+        _put_sector(path, 2048 + 12288, _ebr(logical=(0x83, 63, 1024)))
 
         parts = list_partitions(path)
         assert [p.start_lba for p in parts] == [2048, 2111, 6207, 14399]
@@ -171,6 +171,14 @@ class TestGptRobustness:
         with open(path, "r+b") as f:  # entry_lba 2 -> 0
             f.seek(SECTOR_SIZE + 72)
             f.write(struct.pack("<Q", 0))
+        assert list_partitions(path) == []
+
+    def test_partition_ending_at_or_beyond_gpt_image_eof_is_rejected(self):
+        path = _blank_image(self.tmp)
+        self._gpt_image(path, 128, 128)
+        with open(path, "r+b") as f:
+            f.seek(2 * SECTOR_SIZE + 40)
+            f.write(struct.pack("<Q", IMG_SECTORS))
         assert list_partitions(path) == []
 
 

@@ -986,6 +986,9 @@ class TcPanel(QWidget):
         self.empty_hint.setObjectName("emptyHint")
         self.empty_hint.setWordWrap(True)
         empty.addWidget(self.empty_hint)
+        self.empty_retry = QPushButton("Повторить")
+        self.empty_retry.clicked.connect(self.refresh)
+        empty.addWidget(self.empty_retry, 0, AlignRight)
         self.empty_open = QPushButton("Открыть образ…")
         self.empty_open.setObjectName("primaryButton")
         self.empty_open.setIcon(standard_icon(self, "SP_DialogOpenButton"))
@@ -1392,6 +1395,7 @@ class TcPanel(QWidget):
             self.mode == "img" and self.provider is None and not self.win.image_path
         )
         self.empty_open.setVisible(unopened)
+        self.empty_retry.setVisible(hint is not None and not unopened)
         if empty:
             if unopened:
                 title = "Откройте образ диска"
@@ -3885,12 +3889,24 @@ class MainWindow(QMainWindow):
             self._text_tmp = tempfile.mkdtemp(prefix="mountfile-text-")
         return self._text_tmp
 
+    def _cleanup_text_temp(self):
+        """Remove extracted editor copies once the window is being closed.
+
+        Image edits are offered for import synchronously in
+        :meth:`_open_text_entry`, so a confirmed save is committed before this
+        session directory is removed.
+        """
+        directory, self._text_tmp = self._text_tmp, None
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
+
     def open_text_file(self, panel=None):
         """Открыть выбранный текстовый файл в системном редакторе.
 
-        Windows - Блокнот (``notepad.exe``), macOS - ``open -t``, Linux -
-        ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе первый
-        найденный редактор, иначе ``xdg-open``. Файл внутри образа сначала
+        Windows - Блокнот (``notepad.exe``), macOS - ``open -W -t``, Linux -
+        wait-capable ``$MOUNTFILE_EDITOR`` / ``$VISUAL`` / ``$EDITOR``, иначе
+        gedit/kate с режимом ожидания. Detached launchers не используются,
+        чтобы временную копию не удалить до закрытия редактора. Файл внутри образа сначала
         извлекается во временный каталог; после закрытия редактора изменённая
         копия предлагается к записи обратно в образ.
         """
@@ -4612,7 +4628,17 @@ class MainWindow(QMainWindow):
         _ORPHAN_THREADS.append(updater)
 
     def closeEvent(self, e):
+        if self._text_tmp and text_editor.has_active_editors(self._text_tmp):
+            QMessageBox.information(
+                self,
+                "Текстовый редактор ещё открыт",
+                "Сохраните изменения и закройте внешний редактор, затем "
+                "повторите закрытие Mount File. Временные копии пока сохранены.",
+            )
+            e.ignore()
+            return
         self._close_writer()
+        self._cleanup_text_temp()
         tc_style.save_settings()
         self._detach_updater()
         super().closeEvent(e)
