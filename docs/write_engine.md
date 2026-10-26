@@ -5,6 +5,9 @@
 profile; legacy ext2/3/4 через `debugfs`; NTFS через системный/mount-helper
 backend). Native ext2 — первая фаза собственной записи; ext3/ext4 и NTFS остаются
 внешними backend-ами до отдельной journal/recovery-aware реализации (issue #182).
+Новый NTFS boot-sector probe и FILE-record parser ниже только проверяют
+метаданные и не переключают существующий backend, не предоставляют полное
+чтение файлов и не разрешают запись.
 
 ## Что гарантирует MF-WE
 
@@ -113,3 +116,39 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
   детерминированные crash/rollback-сценарии в `tests/test_write_engine.py`.
 * Покрытие строк/ветвей из §9.3 (≥85% / ≥75%, транзакционный слой ≥95%) на
   текущем прогоне не подтверждено для всего пакета.
+
+## NTFS boot-sector probe (read-only groundwork)
+
+`mountfile.vfs.probe_ntfs_profile(image_path, offset, volume_size)` вызывает
+pure-Python probe первичного 512-байтового NTFS boot sector. Он требует явную
+внешнюю границу образа/раздела и проверяет OEM/signature, bytes-per-sector,
+sectors-per-cluster, объявленный размер тома, расположение `$MFT`/`$MFTMirr` и
+кодирование размеров MFT/index records. Автопоиск томов использует тот же parser,
+чтобы отвергать NTFS-подобные случайные boot sectors и геометрию вне образа.
+Разметка полей и кодирование размеров сверены с upstream Linux NTFS3 [структурами
+on-disk](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/ntfs.h)
+и [проверками геометрии](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/super.c).
+
+Успешный результат означает только валидную геометрию boot sector. Probe не
+проверяет сам backup boot sector, MFT FILE records и USA fixups, атрибуты и
+runlists, каталоговые индексы, `$Volume` dirty flag либо `$LogFile` recovery.
+Поэтому он не является готовым NTFS reader, clean-volume verdict или разрешением
+на запись. Native VFS routing остаётся выключенным до завершения последующих
+read-only metadata-validation этапов.
+
+## NTFS FILE-record header and USA validation
+
+`mountfile.vfs.parse_ntfs_file_record_header(record)` валидирует заголовок одного
+in-use `FILE` record и Update Sequence Array: требуемый count, границы массива,
+совпадение update sequence number в конце каждого 512-байтового блока и поля
+размера/смещения заголовка. Исправленные trailer words возвращаются в отдельной
+копии только после успешной проверки всех блоков. При несовпадении parser
+отклоняет запись целиком; атрибуты остаются непрочитанными.
+
+Реализация принимает старое и новое расположение USA (`0x2A` и `0x30`) и
+ограничивает запись 1 MiB. Формат заголовка и алгоритм fixup сверены с
+[документацией Microsoft](https://learn.microsoft.com/en-us/windows/win32/devnotes/file-record-segment-header)
+и [реализацией NTFS3](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/fsntfs.c).
+Это низкоуровневый parser, а не чтение `$MFT` с диска: он не проверяет атрибуты,
+родительские ссылки, каталоги, `$Volume`/`$LogFile` и не включает NTFS read/write
+routing.
