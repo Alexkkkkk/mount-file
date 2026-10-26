@@ -138,6 +138,7 @@ class NativeExt2Image:
             self.blocks_per_group = self.profile.blocks_per_group
             self.inodes_per_group = self.profile.inodes_per_group
             self.inode_size = self.profile.inode_size
+            self.group_descriptor_size = self.profile.group_descriptor_size
             self.filesystem_size = self.profile.filesystem_size
             self.feature_compat = self.profile.feature_compat
             self.feature_incompat = self.profile.feature_incompat
@@ -152,10 +153,15 @@ class NativeExt2Image:
             if inode_groups > self.group_count:
                 raise Ext2ReadError("inode groups exceed ext block groups")
             self._gdt_offset = (self.first_data_block + 1) * self.block_size
-            self._gdt_blocks = math.ceil(self.group_count * 32 / self.block_size)
+            self._gdt_blocks = math.ceil(
+                self.group_count * self.group_descriptor_size / self.block_size
+            )
             if self._gdt_blocks >= self.blocks_per_group:
                 raise Ext2ReadError("group descriptor table exceeds a block group")
-            if self._gdt_offset + self.group_count * 32 > self.filesystem_size:
+            if (
+                self._gdt_offset + self.group_count * self.group_descriptor_size
+                > self.filesystem_size
+            ):
                 raise Ext2ReadError("group descriptor table exceeds filesystem bounds")
             self._primary_metadata_start = self.first_data_block
             self._primary_metadata_end = self.first_data_block + 1 + self._gdt_blocks
@@ -263,7 +269,10 @@ class NativeExt2Image:
         cached = self._group_cache.get(group)
         if cached is not None:
             return cached
-        raw = self._read_at(self._gdt_offset + group * 32, 32)
+        raw = self._read_at(
+            self._gdt_offset + group * self.group_descriptor_size,
+            self.group_descriptor_size,
+        )
         block_bitmap, inode_bitmap, inode_table = struct.unpack_from("<III", raw, 0)
         first_block = self.first_data_block + group * self.blocks_per_group
         end_block = min(self.blocks_count, first_block + self.blocks_per_group)

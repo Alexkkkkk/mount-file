@@ -122,6 +122,7 @@ class ExtSuperblockProfile:
     blocks_per_group: int
     inodes_per_group: int
     inode_size: int
+    group_descriptor_size: int
     revision: int
     state: int
     feature_compat: int
@@ -209,6 +210,7 @@ def _probe_stream(
     else:
         blocks_count = blocks_low
     inode_size = _u16(superblock, 0x58) if revision else 128
+    group_descriptor_size = (_u16(superblock, 0xFE) or 32) if revision else 32
     state = _u16(superblock, 0x3A)
 
     if blocks_count <= first_data_block or inodes_count == 0:
@@ -222,6 +224,16 @@ def _probe_stream(
         raise ExtProbeError("ext filesystem exceeds selected partition bounds")
     if offset + filesystem_size > image_size:
         raise ExtProbeError("ext filesystem exceeds image bounds")
+    if (
+        group_descriptor_size < 32
+        or group_descriptor_size > block_size
+        or group_descriptor_size % 8
+    ):
+        raise ExtProbeError("invalid ext group-descriptor size")
+    if feature_incompat & _INCOMPAT_64BIT and group_descriptor_size < 64:
+        raise ExtProbeError("64-bit ext profile requires 64-byte group descriptors")
+    if not feature_incompat & _INCOMPAT_64BIT and group_descriptor_size != 32:
+        raise ExtProbeError("non-64-bit ext profile has a non-classic descriptor size")
 
     has_journal = bool(
         feature_compat & _COMPAT_HAS_JOURNAL or feature_incompat & _INCOMPAT_JOURNAL_DEV
@@ -281,6 +293,7 @@ def _probe_stream(
         blocks_per_group=blocks_per_group,
         inodes_per_group=inodes_per_group,
         inode_size=inode_size,
+        group_descriptor_size=group_descriptor_size,
         revision=revision,
         state=state,
         feature_compat=feature_compat,

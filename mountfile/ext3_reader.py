@@ -25,6 +25,7 @@ from mountfile.ext2_reader import (
     _S_IFREG,
     Ext2ReadError,
     NativeExt2Image,
+    _GroupDescriptor,
     _Inode,
 )
 
@@ -69,7 +70,7 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("unsupported compatible ext feature")
         incompat_allowed = _INCOMPAT_FILETYPE
         if profile.fs_type == "ext4":
-            incompat_allowed |= 0x0040  # EXTENTS
+            incompat_allowed |= 0x00C0  # EXTENTS | 64BIT
         if profile.feature_incompat & ~incompat_allowed:
             raise Ext3ReadError("unsupported incompatible ext feature")
         ro_allowed = _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE
@@ -83,7 +84,7 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("journal feature is inconsistent")
         if profile.feature_incompat & 0x0040 and profile.fs_type != "ext4":  # EXTENTS
             raise Ext3ReadError("extent layout is not enabled in classic profile")
-        if profile.feature_incompat & 0x0080:  # 64BIT
+        if profile.feature_incompat & 0x0080 and profile.fs_type != "ext4":  # 64BIT
             raise Ext3ReadError("64-bit group layout is not enabled in classic profile")
         if profile.feature_ro_compat & 0x0400:  # METADATA_CSUM
             raise Ext3ReadError("metadata checksums are not implemented in this profile")
@@ -126,6 +127,11 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("invalid JBD2 journal superblock")
         journal_block_size, max_length = struct.unpack_from(">II", raw, 0x0C)
         first, start = struct.unpack_from(">II", raw, 0x14)
+        journal_compat, journal_incompat, journal_ro_compat = struct.unpack_from(
+            ">III", raw, 0x24
+        )
+        if journal_compat or journal_incompat or journal_ro_compat:
+            raise Ext3ReadError("unsupported or unchecked JBD2 journal feature")
         if journal_block_size != self.block_size:
             raise Ext3ReadError("JBD2 block size disagrees with filesystem")
         if not 1 <= first < max_length <= journal_blocks:
@@ -215,6 +221,41 @@ class NativeExt4Image(NativeExt3Image):
             self._inode_cache.clear()
         self._inode_cache[number] = inode
         return inode
+
+    def _group_descriptor(self, group: int) -> _GroupDescriptor:
+        """Read high descriptor words for the explicitly gated 64-bit profile."""
+        if not self.feature_incompat & 0x0080:
+            return super()._group_descriptor(group)
+        cached = self._group_cache.get(group)
+        if cached is not None and cached.block_bitmap >= (1 << 32):
+            return cached
+        base = super()._group_descriptor(group)
+        raw = self._read_at(
+            self._gdt_offset + group * self.group_descriptor_size,
+            self.group_descriptor_size,
+        )
+        block_bitmap = base.block_bitmap | (struct.unpack_from("<I", raw, 32)[0] << 32)
+        inode_bitmap = base.inode_bitmap | (struct.unpack_from("<I", raw, 36)[0] << 32)
+        inode_table = base.inode_table | (struct.unpack_from("<I", raw, 40)[0] << 32)
+        if not (
+            base.first_block <= block_bitmap < base.end_block
+            and base.first_block <= inode_bitmap < base.end_block
+            and base.first_block <= inode_table < base.end_block
+            and inode_table + base.inode_table_blocks <= base.end_block
+        ):
+            raise Ext3ReadError("64-bit group descriptor points outside its group")
+        if block_bitmap == inode_bitmap or inode_table <= block_bitmap < inode_table + base.inode_table_blocks:
+            raise Ext3ReadError("64-bit group descriptor metadata ranges overlap")
+        result = _GroupDescriptor(
+            block_bitmap,
+            inode_bitmap,
+            inode_table,
+            base.first_block,
+            base.end_block,
+            base.inode_table_blocks,
+        )
+        self._group_cache[group] = result
+        return result
 
     def _extent_block(self, block: int) -> bytes:
         if not 0 < block < self.blocks_count:
