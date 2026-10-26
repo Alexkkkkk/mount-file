@@ -5,7 +5,9 @@
 """Read-only filesystem access via The Sleuth Kit (pytsk3).
 
 Supports FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 and more
-(depending on the libtsk build). Used for browsing and extracting files.
+(depending on the libtsk build). Used for browsing and extracting files. The
+pure-Python NTFS probe in this module validates boot-sector geometry only; it
+does not replace the pytsk3 reader or enable NTFS writes.
 """
 
 from __future__ import annotations
@@ -55,6 +57,13 @@ except ImportError:  # pragma: no cover
 
 class TskError(Exception):
     pass
+
+
+def probe_ntfs_profile(image_path, offset=0, volume_size=None):
+    """Validate NTFS boot-sector geometry without opening pytsk3 or mounting."""
+    from mountfile.ntfs_probe import probe_ntfs_boot_sector
+
+    return probe_ntfs_boot_sector(image_path, offset=offset, volume_size=volume_size)
 
 
 def _fmt_mtime(meta):

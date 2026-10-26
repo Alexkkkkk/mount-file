@@ -1,10 +1,12 @@
 # MF-WE — движок записи (ТЗ MF-WE-TZ-001)
 
 `mountfile/write_engine.py` — транзакционный фасад над RW-бэкендами
-`mountfile/universal_fs_rw.py` (native FAT12/16/32, ext2/3/4 через `debugfs`,
+`mountfile/universal_fs_rw.py` (native FAT12/16, ext2/3/4 через `debugfs`,
 NTFS через mount-helper, loop mount, rebuild). Собственный нативный движок
-NTFS/ext не реализуется: по ТЗ §15 стоимость и риск такого решения
-несопоставимы с выгодой.
+NTFS/ext RW пока не включён в этот фасад; его поэтапная разработка отслеживается
+в Issue #182. Новый NTFS boot-sector probe ниже только проверяет геометрию и не
+переключает существующий backend, не предоставляет чтение файлов и не разрешает
+запись.
 
 ## Что гарантирует MF-WE
 
@@ -80,3 +82,22 @@ engine.close()
   детерминированные crash/rollback-сценарии в `tests/test_write_engine.py`.
 * Покрытие строк/ветвей из §9.3 (≥85% / ≥75%, транзакционный слой ≥95%) на
   текущем прогоне не подтверждено для всего пакета.
+
+## NTFS boot-sector probe (read-only groundwork)
+
+`mountfile.vfs.probe_ntfs_profile(image_path, offset, volume_size)` вызывает
+pure-Python probe первичного 512-байтового NTFS boot sector. Он требует явную
+внешнюю границу образа/раздела и проверяет OEM/signature, bytes-per-sector,
+sectors-per-cluster, объявленный размер тома, расположение `$MFT`/`$MFTMirr` и
+кодирование размеров MFT/index records. Автопоиск томов использует тот же parser,
+чтобы отвергать NTFS-подобные случайные boot sectors и геометрию вне образа.
+Разметка полей и кодирование размеров сверены с upstream Linux NTFS3 [структурами
+on-disk](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/ntfs.h)
+и [проверками геометрии](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/super.c).
+
+Успешный результат означает только валидную геометрию boot sector. Probe не
+проверяет сам backup boot sector, MFT FILE records и USA fixups, атрибуты и
+runlists, каталоговые индексы, `$Volume` dirty flag либо `$LogFile` recovery.
+Поэтому он не является готовым NTFS reader, clean-volume verdict или разрешением
+на запись. Native VFS routing остаётся выключенным до завершения последующих
+read-only metadata-validation этапов.
