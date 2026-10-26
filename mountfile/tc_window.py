@@ -3607,13 +3607,10 @@ class MainWindow(QMainWindow):
                 fh.close()
                 fat_error = e
 
-        # FAT32 keeps its native writer. Any other filesystem needs a backend:
-        # ext2/3/4 prefers the transactional debugfs writer (temporary extent,
-        # read-back/SHA-256 verification, rollback snapshot), and the package
-        # facade covers NTFS via ntfs-3g (Linux) or ImDisk (Windows), plus the
-        # platform-specific loop-mount fallback. ImDisk temporarily releases
-        # the pytsk reader handles before opening the image for shared writes.
-        # A failed backend remains read-only.
+        # FAT32 keeps its native writer. Supported clean ext2 volumes use the
+        # in-process MountFile writer; ext2 outside its strict feature profile
+        # and ext3/ext4 retain the legacy debugfs path. NTFS remains mount-driver
+        # backed through the package facade. A failed backend remains read-only.
         if not fat_writer_ready:
             ext_writer = None
             try:
@@ -3624,15 +3621,29 @@ class MainWindow(QMainWindow):
                 )
             except Exception as ext_error:
                 fat_error = "%s; ext: %s" % (fat_error, ext_error)
-            if ext_writer is not None:
+            if ext_writer is not None and not ext_writer.writable:
+                panel.writer = None
+                panel.writer_fh = None
+                panel.write_reason = (
+                    "Запись заблокирована проверкой безопасности ext2: "
+                    + ext_writer.native_unsafe_error
+                )
+                self.log_msg(panel.write_reason)
+            elif ext_writer is not None:
                 adapter = _ExtPanelWriter(ext_writer, panel.provider)
                 panel.writer = adapter
                 panel.writer_fh = adapter
                 panel.volume_label = "%s ofs %d" % (ext_writer.fs_type, offset)
-                self.log_msg(
-                    "Том @ offset %d смонтирован — запись %s через debugfs включена"
-                    % (offset, ext_writer.fs_type)
-                )
+                if ext_writer.write_strategy == "native-ext2":
+                    self.log_msg(
+                        "Том @ offset %d открыт — встроенная запись чистого ext2 включена"
+                        % offset
+                    )
+                else:
+                    self.log_msg(
+                        "Том @ offset %d смонтирован — запись %s через debugfs включена"
+                        % (offset, ext_writer.fs_type)
+                    )
             else:
                 try:
                     from .universal_fs_rw import UniversalFSRW

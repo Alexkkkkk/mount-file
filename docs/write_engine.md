@@ -1,10 +1,10 @@
 # MF-WE — движок записи (ТЗ MF-WE-TZ-001)
 
 `mountfile/write_engine.py` — транзакционный фасад над RW-бэкендами
-`mountfile/universal_fs_rw.py` (native FAT12/16/32, ext2/3/4 через `debugfs`,
-NTFS через mount-helper, loop mount, rebuild). Собственный нативный движок
-NTFS/ext не реализуется: по ТЗ §15 стоимость и риск такого решения
-несопоставимы с выгодой.
+`mountfile/universal_fs_rw.py` (native FAT12/16/32 и ограниченный clean ext2
+profile; legacy ext2/3/4 через `debugfs`; NTFS через системный/mount-helper
+backend). Native ext2 — первая фаза собственной записи; ext3/ext4 и NTFS остаются
+внешними backend-ами до отдельной journal/recovery-aware реализации (issue #182).
 
 ## Что гарантирует MF-WE
 
@@ -13,7 +13,7 @@ NTFS/ext не реализуется: по ТЗ §15 стоимость и ри�
 | RO по умолчанию | `WriteEngine(image)` — все мутации бросают `ReadOnlyError`; запись только при `read_only=False` |
 | Backup перед записью | снапшот сессии + снапшот транзакции (ротация `keep_snapshots`, по умолчанию 3) |
 | Транзакции с журналом | `EngineJournal`: JSONL с полями `prev`/`hash`; `verify_journal()` пересчитывает цепочку |
-| Verify после commit | `verify()`: размер образа, структурные проверки BPB/суперблока, внешний чеккер (`fsck.fat`/`e2fsck`) — с фактическими значениями в `detail` |
+| Verify после commit | `verify()`: размер образа, структурные проверки BPB/суперблока; ext2 writer проверяет staged metadata после каждой мутации, независимый `e2fsck` для него не запускается |
 | Откат | `rollback()` возвращает образ к состоянию на старте транзакции побайтово; `restore_from_backup()` — к снапшоту |
 | Dry-run | `dry_run=True`: проверяются пути и предусловия, ни один байт образа не меняется |
 | Запрет записи в повреждённые образы | `damage_report()` + `DamagedImageError`; обход только явным `allow_damaged=True` |
@@ -43,12 +43,14 @@ engine.close()
 ## Границы
 
 * FAT12/16/32 — собственный движок (как и раньше).
-* ext2/3/4 — `debugfs -w`; на Windows используется `debugfs.exe` из `PATH` или
-  `debugfs` из WSL, если установлен Linux-дистрибутив с пакетом `e2fsprogs`
-  (например, `sudo apt install e2fsprogs`). MountFile конвертирует host paths
-  для временных файлов, а исходный image extent проходит через существующую
-  проверяемую transactional commit/rollback процедуру. `chmod`/`chown`/`symlink`
-  доступны только на ext.
+* Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
+  один single-indirect pointer для данных файла) использует собственный Python
+  writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
+  sparse/double/triple indirect. Рост каталогов за пределы direct blocks не
+  поддерживается. Unsupported/dirty/out-of-bounds volumes не
+  получают native RW. Для ext2 вне этого профиля и ext3/ext4 пока сохраняется
+  legacy `debugfs -w` fallback: на Windows нужен `debugfs.exe` из `PATH` либо
+  WSL/e2fsprogs. `chmod`/`chown`/`symlink` поддерживаются только этим fallback.
 
 * NTFS — через `ntfs-3g` на Linux или системный файловый драйвер Windows через
   ImDisk. На Windows требуется отдельно установленный ImDisk Virtual Disk
@@ -70,8 +72,9 @@ engine.close()
 
 ## Ограничения и риски
 
-* Корректность записи в NTFS/ext равна корректности бэкенда, который её
-  выполняет; MF-WE добавляет транзакционность и аудит, а не новую реализацию ФС.
+* Native ext2 имеет консервативный feature allowlist и проверяет staged image
+  до commit, но не является power-loss-atomic; NTFS, ext3/ext4 и unsupported ext2
+  профили всё ещё зависят от внешних backend-ов.
 
   GUI и `WriteEngine(read_only=False)` используют тот же `UniversalFSRW`,
   поэтому это не только read/extract режим.
