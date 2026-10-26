@@ -3,9 +3,9 @@
 # Licensed under the MIT License - see the LICENSE file for details.
 """Extraction of files and whole directories out of an image.
 
-Works against any provider exposing `list_dir(path)`, `read_file(path)` and
-`file_size(path)` - that is :class:`mountfile.vfs.TskImage`,
-:class:`mountfile.fat32.Fat32Provider` and the test doubles.
+Works against providers exposing `list_dir(path)`, `read_file(path)` and
+`file_size(path)`. Providers with `read_file_range` are copied in bounded
+chunks; older providers retain the whole-file compatibility path.
 """
 
 from __future__ import annotations
@@ -148,6 +148,34 @@ def _open_rooted_directory(root, path, create=False):
         raise
 
 
+_COPY_CHUNK_SIZE = 1 << 20
+
+
+def _write_provider_contents(provider, src_path, output):
+    """Stream providers with ranged reads; retain compatibility with old providers."""
+    read_range = getattr(provider, "read_file_range", None)
+    get_size = getattr(provider, "file_size", None)
+    if not callable(read_range) or not callable(get_size):
+        data = provider.read_file(src_path)
+        output.write(data)
+        return len(data)
+
+    size = get_size(src_path)
+    if not isinstance(size, int) or size < 0:
+        raise ExtractError("provider returned an invalid file size")
+    written = 0
+    while written < size:
+        requested = min(_COPY_CHUNK_SIZE, size - written)
+        chunk = read_range(src_path, written, requested)
+        if not chunk:
+            raise ExtractError("provider returned a short read during extraction")
+        if len(chunk) > requested:
+            raise ExtractError("provider returned more data than requested")
+        output.write(chunk)
+        written += len(chunk)
+    return written
+
+
 def _write_file(provider, src_path, dst_path, root=None):
     dst_path = os.path.abspath(dst_path)
     if root is not None:
@@ -176,7 +204,6 @@ def _write_file(provider, src_path, dst_path, root=None):
                     "refusing to replace non-regular destination: %s" % dst_path
                 )
 
-            data = provider.read_file(src_path)
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
             temp_name = None
             fd = None
@@ -193,7 +220,7 @@ def _write_file(provider, src_path, dst_path, root=None):
             try:
                 with os.fdopen(fd, "wb") as output:
                     fd = None
-                    output.write(data)
+                    written = _write_provider_contents(provider, src_path, output)
                     output.flush()
                     os.fsync(output.fileno())
                 os.replace(
@@ -211,7 +238,7 @@ def _write_file(provider, src_path, dst_path, root=None):
                         os.unlink(temp_name, dir_fd=parent_fd)
                     except FileNotFoundError:
                         pass
-            return len(data)
+            return written
         except ExtractError:
             raise
         except OSError as exc:
@@ -234,23 +261,31 @@ def _write_file(provider, src_path, dst_path, root=None):
     if mode is not None and not stat.S_ISREG(mode):
         raise ExtractError("refusing to replace non-regular destination: %s" % dst_path)
 
-    data = provider.read_file(src_path)
     fd, temp_path = tempfile.mkstemp(prefix=".mountfile-", suffix=".tmp", dir=parent)
+    written = 0
     try:
         with os.fdopen(fd, "wb") as output:
-            output.write(data)
+            fd = None
+            written = _write_provider_contents(provider, src_path, output)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temp_path, dst_path)
-    except OSError as exc:
+    except BaseException as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             os.unlink(temp_path)
         except FileNotFoundError:
             pass
-        raise ExtractError(
-            "cannot safely write destination file %s: %s" % (dst_path, exc)
-        ) from exc
-    return len(data)
+        if isinstance(exc, OSError):
+            raise ExtractError(
+                "cannot safely write destination file %s: %s" % (dst_path, exc)
+            ) from exc
+        raise
+    return written
 
 
 def extract_file(provider, src_path, dst_path):
