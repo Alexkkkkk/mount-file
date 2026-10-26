@@ -121,6 +121,13 @@ def parse_ntfs_file_record_header(raw_record):
     return parse_record(raw_record)
 
 
+def probe_ntfs_metadata(image_path, offset=0, volume_size=None):
+    """Validate bounded NTFS boot, backup boot, MFT and attribute metadata."""
+    from mountfile.ntfs_reader import probe_ntfs_metadata as probe_metadata
+
+    return probe_metadata(image_path, offset=offset, volume_size=volume_size)
+
+
 def _fmt_mtime(meta):
     """Modification time of a TSK meta record as 'YYYY-MM-DD HH:MM'."""
     try:

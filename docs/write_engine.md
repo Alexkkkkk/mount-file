@@ -152,3 +152,12 @@ in-use `FILE` record и Update Sequence Array: требуемый count, гра�
 Это низкоуровневый parser, а не чтение `$MFT` с диска: он не проверяет атрибуты,
 родительские ссылки, каталоги, `$Volume`/`$LogFile` и не включает NTFS read/write
 routing.
+
+`mountfile.vfs.probe_ntfs_metadata(image_path, offset, volume_size)` — следующий
+read-only этап. Он требует точную границу тома, повторно проверяет backup boot
+sector, читает `$MFT` и `$MFTMirr` record 0 с bounded reads и проверяет полный
+поток атрибутов: длины, выравнивание, resident/nonresident layout, VCN bounds и
+структуру runlist. Результат является metadata profile и не включает обход
+каталогов, восстановление `$LogFile`, symlink traversal или любые операции
+записи. При несогласованности primary/backup boot, MFT или USA весь профиль
+отклоняется.
