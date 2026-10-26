@@ -45,6 +45,25 @@ def _join(path, name):
     return (path.rstrip("/") + "/" + name) if path != "/" else "/" + name
 
 
+def _normalize_system_path_alias(path):
+    """Canonicalize only well-known POSIX system aliases before safe walking.
+
+    macOS exposes temporary directories under /var/folders, while /var and
+    /tmp are symlinks to /private/var and /private/tmp. Resolve those fixed
+    prefixes only; never resolve arbitrary destination components, which must
+    continue to be rejected by the no-follow walk.
+    """
+    path = os.path.abspath(path)
+    if os.name != "posix":
+        return path
+    for alias in ("/var", "/tmp"):
+        if (path == alias or path.startswith(alias + os.sep)) and os.path.islink(alias):
+            target = os.path.realpath(alias)
+            suffix = path[len(alias) :].lstrip(os.sep)
+            return os.path.join(target, suffix) if suffix else target
+    return path
+
+
 def _find(provider, parent, name):
     """Case-insensitive lookup inside `parent`; returns the provider entry."""
     for item in provider.list_dir(parent or "/"):
@@ -57,6 +76,7 @@ def _ensure_directory(path, root=None):
     """Create directories without following symlinks inside the output tree."""
     path = os.path.abspath(path)
     if root is None:
+        path = _normalize_system_path_alias(path)
         if _HAS_DIR_FD:
             try:
                 fd = _open_rooted_directory(os.path.sep, path, create=True)
@@ -189,6 +209,8 @@ def _write_file(provider, src_path, dst_path, root=None):
     dst_path = os.path.abspath(dst_path)
     if root is not None:
         dst_path = _ensure_within(dst_path, root)
+    else:
+        dst_path = _normalize_system_path_alias(dst_path)
     parent = os.path.dirname(dst_path)
     _ensure_directory(parent, root=root)
 

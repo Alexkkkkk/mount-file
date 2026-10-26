@@ -122,6 +122,31 @@ def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path)
     assert protected.read_bytes() == b"must remain unchanged"
 
 
+def test_system_path_alias_normalization_is_prefix_scoped(monkeypatch):
+    realpath = os.path.realpath
+    monkeypatch.setattr(os.path, "islink", lambda path: path == "/var")
+    monkeypatch.setattr(
+        os.path,
+        "realpath",
+        lambda path: "/private/var" if path == "/var" else realpath(path),
+    )
+
+    assert (
+        extract_module._normalize_system_path_alias("/var/folders/session/output")
+        == "/private/var/folders/session/output"
+    )
+    assert (
+        extract_module._normalize_system_path_alias("/various/folders/output")
+        == "/various/folders/output"
+    )
+    # A symlink later in the path is deliberately not canonicalized here; the
+    # descriptor walk must still reject it instead of following it.
+    assert (
+        extract_module._normalize_system_path_alias("/var/folders/output/nested/link")
+        == "/private/var/folders/output/nested/link"
+    )
+
+
 def test_extract_replaces_hardlink_without_mutating_external_file(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
