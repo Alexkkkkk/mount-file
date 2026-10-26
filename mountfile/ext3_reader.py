@@ -306,13 +306,15 @@ class NativeExt4Image(NativeExt3Image):
                     end = start + length
                     if end > 1 << 32:
                         raise Ext3ReadError("extent logical range overflow")
+                    physical_start = (start_hi << 32) | start_lo
+                    if (
+                        physical_start <= 0
+                        or physical_start + length > self.blocks_count
+                    ):
+                        raise Ext3ReadError("extent physical range is out of bounds")
                     previous_end = end
                     if start <= logical < end:
-                        physical = ((start_hi << 32) | start_lo) + (logical - start)
-                        if physical >= self.blocks_count:
-                            raise Ext3ReadError(
-                                "extent physical block is out of bounds"
-                            )
+                        physical = physical_start + (logical - start)
                         return physical, unwritten
                 return 0, False
             expected_depth = node_depth - 1

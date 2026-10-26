@@ -258,18 +258,21 @@ class TskImage:
 
 
 def _has_ext_superblock_magic(image_path, offset, volume_size):
-    if volume_size is None:
-        return False
     try:
         offset = int(offset)
-        volume_size = int(volume_size)
-        if offset < 0 or volume_size < 0:
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
+        if volume_size is not None and volume_size < 0:
             raise TskError("negative filesystem offset or volume size")
         with open(image_path, "rb") as stream:
             image_size = os.fstat(stream.fileno()).st_size
-            if offset + volume_size > image_size:
+            if volume_size is not None and offset + volume_size > image_size:
                 raise TskError("selected filesystem extent exceeds image bounds")
-            if volume_size < 2048:
+            if (
+                volume_size is not None and volume_size < 2048
+            ) or offset + 2048 > image_size:
                 return False
             stream.seek(offset + 1024 + 0x38)
             return stream.read(2) == b"\x53\xef"
@@ -278,13 +281,20 @@ def _has_ext_superblock_magic(image_path, offset, volume_size):
 
 
 def _has_ntfs_boot_magic(image_path, offset, volume_size):
-    if volume_size is None:
-        return False
     try:
+        offset = int(offset)
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
         with open(image_path, "rb") as stream:
             image_size = os.fstat(stream.fileno()).st_size
-            if offset < 0 or volume_size <= 0 or offset + volume_size > image_size:
+            if volume_size is not None and (
+                volume_size <= 0 or offset + volume_size > image_size
+            ):
                 raise TskError("selected filesystem extent exceeds image bounds")
+            if offset + 11 > image_size:
+                return False
             stream.seek(offset + 3)
             return stream.read(8) == b"NTFS    "
     except OSError as exc:
@@ -294,6 +304,10 @@ def _has_ntfs_boot_magic(image_path, offset, volume_size):
 def open_image_provider(image_path, offset=0, volume_size=None):
     """Open a read-only provider with fail-closed routing for recognized formats."""
     if _has_ext_superblock_magic(image_path, offset, volume_size):
+        if volume_size is None:
+            raise RecognizedFilesystemError(
+                "recognized ext volume requires an explicit bounded extent"
+            )
         try:
             profile = probe_ext_superblock(
                 image_path, offset=offset, volume_size=volume_size
@@ -326,6 +340,10 @@ def open_image_provider(image_path, offset=0, volume_size=None):
                 ) from exc
 
     if _has_ntfs_boot_magic(image_path, offset, volume_size):
+        if volume_size is None:
+            raise RecognizedFilesystemError(
+                "recognized NTFS volume requires an explicit bounded extent"
+            )
         try:
             return open_native_ntfs_metadata(image_path, offset, volume_size)
         except Exception as exc:
