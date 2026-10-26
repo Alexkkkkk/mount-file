@@ -305,6 +305,34 @@ def test_cli_selects_native_ext2_for_bounded_whole_image(tmp_path, monkeypatch):
         provider.close()
 
 
+def test_native_ext2_provider_can_close_and_reopen(tmp_path):
+    image_path = tmp_path / "reopen-ext2.img"
+    _make_image(image_path)
+    provider = NativeExt2Image(image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
+    try:
+        provider.close()
+        with pytest.raises(Ext2ReadError, match="image is closed"):
+            provider.read_file("/hello.txt")
+        provider.reopen()
+        assert provider.read_file("/hello.txt") == b"hello ext2!"
+    finally:
+        provider.close()
+
+
+def test_native_ext2_failed_reopen_after_truncation_stays_closed(tmp_path):
+    image_path = tmp_path / "truncated-reopen-ext2.img"
+    _make_image(image_path)
+    provider = NativeExt2Image(image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
+    provider.close()
+    image_path.write_bytes(b"truncated")
+
+    with pytest.raises(Ext2ReadError):
+        provider.reopen()
+    assert provider._stream is None
+    with pytest.raises(Ext2ReadError, match="image is closed"):
+        provider.read_file("/hello.txt")
+
+
 def test_reads_single_double_and_triple_indirect_blocks(tmp_path):
     image_path = tmp_path / "indirect.img"
     _make_image(image_path)
