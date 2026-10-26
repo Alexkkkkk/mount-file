@@ -6,7 +6,11 @@ import struct
 import pytest
 
 from mountfile import vfs
-from mountfile.ntfs_reader import NtfsMetadataError, probe_ntfs_metadata
+from mountfile.ntfs_reader import (
+    NtfsMetadataError,
+    _parse_runlist,
+    probe_ntfs_metadata,
+)
 
 BPS = 512
 SPC = 8
@@ -102,3 +106,16 @@ def test_rejects_mismatched_mft_mirror(tmp_path):
     path.write_bytes(image)
     with pytest.raises(NtfsMetadataError, match="MFT mirror"):
         probe_ntfs_metadata(path, volume_size=VOLUME_SIZE)
+
+
+def test_decodes_bounded_signed_ntfs_runs():
+    runs = _parse_runlist(bytes([0x11, 0x03, 0x05, 0x11, 0x02, 0xFF, 0x00]), 32)
+    assert [(run.vcn, run.lcn, run.length) for run in runs] == [
+        (0, 5, 3),
+        (3, 4, 2),
+    ]
+
+
+def test_rejects_sparse_ntfs_run():
+    with pytest.raises(NtfsMetadataError, match="sparse"):
+        _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)

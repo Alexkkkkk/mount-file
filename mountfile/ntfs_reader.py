@@ -13,15 +13,32 @@ import struct
 from dataclasses import dataclass
 
 from mountfile.ntfs_mft import NtfsFileRecordHeader, NtfsRecordError, parse_ntfs_file_record_header
-from mountfile.ntfs_probe import NtfsBootProfile, NtfsProbeError, parse_ntfs_boot_sector, probe_ntfs_boot_sector
+from mountfile.ntfs_probe import (
+    NtfsBootProfile,
+    NtfsProbeError,
+    parse_ntfs_boot_sector,
+    probe_ntfs_boot_sector,
+)
 
 _ATTRIBUTE_END = 0xFFFFFFFF
 _MAX_ATTRIBUTES = 4096
 _MAX_RUNLIST_BYTES = 1 << 20
+_ATTRIBUTE_FLAG_COMPRESSED = 0x0001
+_ATTRIBUTE_FLAG_ENCRYPTED = 0x4000
+_ATTRIBUTE_FLAG_SPARSE = 0x8000
 
 
 class NtfsMetadataError(ValueError):
     """NTFS metadata is malformed, inconsistent, or outside the selected extent."""
+
+
+@dataclass(frozen=True)
+class NtfsRun:
+    """One validated nonresident NTFS run; ``lcn`` is None for sparse data."""
+
+    vcn: int
+    lcn: int | None
+    length: int
 
 
 @dataclass(frozen=True)
@@ -33,6 +50,8 @@ class NtfsAttributeSummary:
     lowest_vcn: int | None = None
     highest_vcn: int | None = None
     run_count: int = 0
+    runs: tuple[NtfsRun, ...] = ()
+    resident_value: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -70,10 +89,12 @@ def _decode_name(raw: bytes, length: int, offset: int) -> str:
         raise NtfsMetadataError("NTFS attribute name is not valid UTF-16LE") from exc
 
 
-def _parse_runlist(raw: bytes, cluster_count: int) -> int:
-    """Validate a nonresident runlist and return its extent count."""
+def _parse_runlist(raw: bytes, cluster_count: int) -> tuple[NtfsRun, ...]:
+    """Decode and validate a nonresident runlist within the volume."""
     pos = 0
     previous_lcn = 0
+    vcn = 0
+    result: list[NtfsRun] = []
     count = 0
     while True:
         if pos >= len(raw) or pos >= _MAX_RUNLIST_BYTES:
@@ -81,10 +102,10 @@ def _parse_runlist(raw: bytes, cluster_count: int) -> int:
         header = raw[pos]
         pos += 1
         if header == 0:
-            return count
+            return tuple(result)
         length_size = header & 0x0F
         offset_size = header >> 4
-        if not length_size or not offset_size or length_size > 8 or offset_size > 8:
+        if not length_size or length_size > 8 or offset_size > 8:
             raise NtfsMetadataError("invalid NTFS runlist element sizes")
         if pos + length_size + offset_size > len(raw):
             raise NtfsMetadataError("truncated NTFS runlist element")
@@ -94,13 +115,22 @@ def _parse_runlist(raw: bytes, cluster_count: int) -> int:
             raise NtfsMetadataError("NTFS runlist contains a zero-length extent")
         encoded = raw[pos : pos + offset_size]
         pos += offset_size
-        if offset_size and encoded[-1] & 0x80:
+        if offset_size == 0:
+            raise NtfsMetadataError("sparse NTFS run is unsupported")
+        if encoded[-1] & 0x80:
             delta = int.from_bytes(encoded, "little", signed=False) - (1 << (8 * offset_size))
+            previous_lcn += delta
+            lcn = previous_lcn
         else:
             delta = int.from_bytes(encoded, "little", signed=False)
-        previous_lcn += delta
-        if previous_lcn < 0 or previous_lcn + run_length > cluster_count:
+            previous_lcn += delta
+            lcn = previous_lcn
+        if lcn is not None and (lcn < 0 or lcn + run_length > cluster_count):
             raise NtfsMetadataError("NTFS runlist points outside the volume")
+        if vcn + run_length < vcn:
+            raise NtfsMetadataError("NTFS runlist VCN range overflows")
+        result.append(NtfsRun(vcn, lcn, run_length))
+        vcn += run_length
         count += 1
         if count > _MAX_ATTRIBUTES:
             raise NtfsMetadataError("NTFS runlist has too many extents")
@@ -137,6 +167,9 @@ def parse_ntfs_attribute_stream(
         name = _decode_name(raw[pos : pos + length], name_length, name_offset)
         lowest_vcn = highest_vcn = None
         run_count = 0
+        runs: tuple[NtfsRun, ...] = ()
+        resident_value = None
+        flags = struct.unpack_from("<H", raw, pos + 12)[0]
         if nonresident:
             if length < 64:
                 raise NtfsMetadataError("NTFS nonresident attribute header is truncated")
@@ -146,7 +179,10 @@ def parse_ntfs_attribute_stream(
                 raise NtfsMetadataError("invalid NTFS attribute VCN range")
             if run_offset < 64 or run_offset >= length:
                 raise NtfsMetadataError("NTFS runlist offset is outside the attribute")
-            run_count = _parse_runlist(raw[pos + run_offset : pos + length], cluster_count)
+            if flags & (_ATTRIBUTE_FLAG_COMPRESSED | _ATTRIBUTE_FLAG_ENCRYPTED | _ATTRIBUTE_FLAG_SPARSE):
+                raise NtfsMetadataError("compressed, encrypted or sparse NTFS attributes are unsupported")
+            runs = _parse_runlist(raw[pos + run_offset : pos + length], cluster_count)
+            run_count = len(runs)
         else:
             if length < 24:
                 raise NtfsMetadataError("NTFS resident attribute header is truncated")
@@ -154,7 +190,20 @@ def parse_ntfs_attribute_stream(
             value_offset = struct.unpack_from("<H", raw, pos + 20)[0]
             if value_offset < 24 or value_offset + value_length > length:
                 raise NtfsMetadataError("NTFS resident attribute value exceeds record")
-        result.append(NtfsAttributeSummary(type_code, length, nonresident, name, lowest_vcn, highest_vcn, run_count))
+            resident_value = bytes(raw[pos + value_offset : pos + value_offset + value_length])
+        result.append(
+            NtfsAttributeSummary(
+                type_code,
+                length,
+                nonresident,
+                name,
+                lowest_vcn,
+                highest_vcn,
+                run_count,
+                runs,
+                resident_value,
+            )
+        )
         pos += length
     raise NtfsMetadataError("NTFS FILE record has no attribute end marker")
 
@@ -166,7 +215,7 @@ def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None 
         with open(image_path, "rb") as stream:
             image_size = os.fstat(stream.fileno()).st_size
             end = offset + boot.filesystem_size
-            primary_boot = _read_exact(stream, offset, 512, image_size, offset + volume_size)
+            _read_exact(stream, offset, 512, image_size, offset + volume_size)
             backup_boot = _read_exact(stream, boot.backup_boot_sector_image_offset, 512, image_size, end)
             backup = parse_ntfs_boot_sector(backup_boot, volume_size=boot.filesystem_size)
             if (backup.bytes_per_sector, backup.sectors_per_cluster, backup.total_sectors, backup.mft_lcn, backup.mft_mirror_lcn) != (boot.bytes_per_sector, boot.sectors_per_cluster, boot.total_sectors, boot.mft_lcn, boot.mft_mirror_lcn):
@@ -191,6 +240,7 @@ __all__ = [
     "NtfsAttributeSummary",
     "NtfsMetadataError",
     "NtfsMetadataProfile",
+    "NtfsRun",
     "parse_ntfs_attribute_stream",
     "probe_ntfs_metadata",
 ]
