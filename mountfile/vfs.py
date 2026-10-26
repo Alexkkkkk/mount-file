@@ -273,8 +273,22 @@ def _has_ext_superblock_magic(image_path, offset, volume_size):
         raise TskError(f"cannot inspect image for native ext2: {exc}") from exc
 
 
+def _has_ntfs_boot_magic(image_path, offset, volume_size):
+    if volume_size is None:
+        return False
+    try:
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset < 0 or volume_size <= 0 or offset + volume_size > image_size:
+                raise TskError("selected filesystem extent exceeds image bounds")
+            stream.seek(offset + 3)
+            return stream.read(8) == b"NTFS    "
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for native NTFS: {exc}") from exc
+
+
 def open_image_provider(image_path, offset=0, volume_size=None):
-    """Open a read-only provider with fail-closed routing for recognized ext."""
+    """Open a read-only provider with fail-closed routing for recognized formats."""
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         try:
             profile = probe_ext_superblock(
@@ -296,5 +310,11 @@ def open_image_provider(image_path, offset=0, volume_size=None):
                 raise TskError(
                     f"native ext3/ext4 reader declined the ext profile: {exc}"
                 ) from exc
+
+    if _has_ntfs_boot_magic(image_path, offset, volume_size):
+        try:
+            return open_native_ntfs_metadata(image_path, offset, volume_size)
+        except Exception as exc:
+            raise TskError(f"native NTFS reader declined the NTFS profile: {exc}") from exc
 
     return TskImage(image_path, offset=offset)
