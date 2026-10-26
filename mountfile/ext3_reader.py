@@ -68,6 +68,8 @@ class NativeExt3Image(NativeExt2Image):
         compat_allowed = _COMPAT_EXT_ATTR | _COMPAT_RESIZE_INODE | _COMPAT_HAS_JOURNAL
         if profile.feature_compat & ~compat_allowed:
             raise Ext3ReadError("unsupported compatible ext feature")
+        if profile.feature_incompat & 0x0008:  # JOURNAL_DEV
+            raise Ext3ReadError("external JBD2 journal devices are not supported")
         incompat_allowed = _INCOMPAT_FILETYPE
         if profile.fs_type == "ext4":
             incompat_allowed |= 0x00C0  # EXTENTS | 64BIT
@@ -125,6 +127,8 @@ class NativeExt3Image(NativeExt2Image):
         magic, block_type, _sequence = struct.unpack_from(">III", raw, 0)
         if magic != _JBD2_MAGIC or block_type not in (3, 4):
             raise Ext3ReadError("invalid JBD2 journal superblock")
+        if raw[0x30:0x40] != self.profile.filesystem_uuid:
+            raise Ext3ReadError("JBD2 journal UUID does not match filesystem UUID")
         journal_block_size, max_length = struct.unpack_from(">II", raw, 0x0C)
         first, start = struct.unpack_from(">II", raw, 0x14)
         journal_compat, journal_incompat, journal_ro_compat = struct.unpack_from(

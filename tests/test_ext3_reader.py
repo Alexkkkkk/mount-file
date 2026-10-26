@@ -46,6 +46,13 @@ def test_dirty_ext_profile_fails_before_any_provider_open(tmp_path, monkeypatch)
         )
 
 
+def test_external_journal_device_is_rejected_explicitly(tmp_path):
+    image_path = tmp_path / "external-journal.img"
+    _make_image(image_path, compat=0x000C, incompat=0x000A)
+    with pytest.raises(Ext3ReadError, match="external JBD2"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
 def test_extent_profile_reads_a_real_clean_ext4_image(tmp_path):
     mke2fs = shutil.which("mke2fs")
     if mke2fs is None:

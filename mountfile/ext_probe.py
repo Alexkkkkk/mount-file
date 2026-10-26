@@ -126,6 +126,7 @@ class ExtSuperblockProfile:
     inodes_per_group: int
     inode_size: int
     group_descriptor_size: int
+    filesystem_uuid: bytes
     revision: int
     state: int
     feature_compat: int
@@ -312,6 +313,7 @@ def _probe_stream(
         inodes_per_group=inodes_per_group,
         inode_size=inode_size,
         group_descriptor_size=group_descriptor_size,
+        filesystem_uuid=bytes(superblock[0x68:0x78]),
         revision=revision,
         state=state,
         feature_compat=feature_compat,
