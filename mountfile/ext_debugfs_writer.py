@@ -125,17 +125,35 @@ class Ext234ImageWriter:
     superblock's own block count bounds the copied extent; bytes after the
     filesystem (for example, following partitions) are never included. A
     conservative clean ext2 feature subset is handled by MountFile's native
-    writer; other ext variants retain the legacy debugfs-backed path.
+    writer. Other ext variants may use the legacy debugfs-backed compatibility
+    path only when callers explicitly pass ``allow_legacy_debugfs=True``.
     """
 
-    def __init__(self, image_path, offset=0, debugfs="debugfs", volume_size=None):
+    def __init__(
+        self,
+        image_path,
+        offset=0,
+        debugfs="debugfs",
+        volume_size=None,
+        *,
+        allow_legacy_debugfs=False,
+    ):
         self.image_path = os.path.realpath(os.fspath(image_path))
         self.offset = int(offset)
-        self.volume_size = int(volume_size) if volume_size is not None else None
         if self.offset < 0:
             raise ExtWriteError("negative filesystem offset")
-        if self.volume_size is not None and self.volume_size <= 0:
+        if volume_size is None:
+            if self.offset:
+                raise ExtWriteError(
+                    "an explicit selected partition size is required for a nonzero offset"
+                )
+            volume_size = os.path.getsize(self.image_path)
+        self.volume_size = int(volume_size)
+        if self.volume_size <= 0 or self.offset + self.volume_size > os.path.getsize(
+            self.image_path
+        ):
             raise ExtWriteError("invalid selected partition size")
+        self.allow_legacy_debugfs = bool(allow_legacy_debugfs)
         self.wsl_executable = None
         self.wsl_distribution = None
         self._wsl_path_cache = {}
@@ -143,6 +161,15 @@ class Ext234ImageWriter:
         self.native_rejection = ""
         self.native_unsafe_error = ""
         if self._try_native_ext2():
+            return
+        self._read_superblock()
+        if not self.allow_legacy_debugfs:
+            self.write_strategy = (
+                "read-only-unsafe"
+                if self.native_unsafe_error
+                else "read-only-unsupported"
+            )
+            self.debugfs = None
             return
         self.debugfs, self.wsl_executable = _find_debugfs(debugfs)
         if not self.debugfs and sys.platform.startswith("win"):
@@ -162,7 +189,6 @@ class Ext234ImageWriter:
                 "use Configuration > Install components, or add debugfs.exe to PATH. "
                 "On Linux/macOS run python3 install_mountfile.py." + native_detail
             )
-        self._read_superblock()
         if self.native_unsafe_error:
             self.write_strategy = "read-only-unsafe"
 
@@ -178,6 +204,11 @@ class Ext234ImageWriter:
                 return False
             compat = int.from_bytes(sb[92:96], "little")
             incompat = int.from_bytes(sb[96:100], "little")
+            state = int.from_bytes(sb[58:60], "little")
+            if state != 1 or incompat & 0x0004:
+                self.native_rejection = "ext volume is dirty or requires recovery; external mutation is forbidden"
+                self.native_unsafe_error = self.native_rejection
+                return False
             if compat & 0x4 or incompat & 0xC0:
                 return False
             self.native_backend = NativeExt2ImageWriter(
@@ -203,13 +234,28 @@ class Ext234ImageWriter:
 
     @property
     def writable(self):
-        return not bool(self.native_unsafe_error)
+        return self.native_backend is not None or (
+            self.allow_legacy_debugfs
+            and self.debugfs is not None
+            and not self.native_unsafe_error
+        )
 
     def _require_safe_write(self):
         if self.native_unsafe_error:
             raise ExtWriteError(
                 "native ext2 safety gate refused mutation: " + self.native_unsafe_error
             )
+        if not self.allow_legacy_debugfs:
+            raise ExtWriteError(
+                "legacy debugfs compatibility is disabled; only the native ext2 "
+                "writer is enabled by default"
+            )
+        if not self.debugfs:
+            raise ExtWriteError("legacy debugfs compatibility backend is unavailable")
+
+    def _require_legacy_backend(self):
+        if self.native_backend is None:
+            self._require_safe_write()
 
     def _wsl_exec_args(self, *command):
         """Build a WSL command pinned to the selected distribution, if any."""
@@ -392,6 +438,7 @@ class Ext234ImageWriter:
     def read_file(self, path):
         if self.native_backend is not None:
             return self.native_backend.read_file(path)
+        self._require_legacy_backend()
         image_path = normalize_image_path(path, allow_root=True)
         with tempfile.TemporaryDirectory(prefix="mountfile-ext-read-") as work:
             filesystem = os.path.join(work, "filesystem.ext")
@@ -407,6 +454,7 @@ class Ext234ImageWriter:
     def list_dir(self, path="/"):
         if self.native_backend is not None:
             return self.native_backend.list_dir(path)
+        self._require_legacy_backend()
         image_path = normalize_image_path(path, allow_root=True)
         with tempfile.TemporaryDirectory(prefix="mountfile-ext-list-") as work:
             filesystem = os.path.join(work, "filesystem.ext")
@@ -550,6 +598,7 @@ class Ext234ImageWriter:
         """Free bytes reported by the superblock, or None when unknown."""
         if self.native_backend is not None:
             return self.native_backend.free_space()
+        self._require_legacy_backend()
         if not self.free_blocks:
             return None
         return self.free_blocks * self.block_size
@@ -562,11 +611,16 @@ class Ext234ImageWriter:
 
 
 class Ext234Provider:
-    """Minimal read provider backed by debugfs for systems without pytsk3."""
+    """Explicit compatibility provider backed by debugfs, never GUI fallback."""
 
-    def __init__(self, image_path, offset=0, volume_size=None):
+    def __init__(
+        self, image_path, offset=0, volume_size=None, *, allow_legacy_debugfs=True
+    ):
         self.backend = Ext234ImageWriter(
-            image_path, offset=offset, volume_size=volume_size
+            image_path,
+            offset=offset,
+            volume_size=volume_size,
+            allow_legacy_debugfs=allow_legacy_debugfs,
         )
 
     def list_dir(self, path="/"):

@@ -122,10 +122,10 @@ carver или chain-of-custody система.
 features, 1/2/4 KiB blocks и одним single-indirect pointer для данных файла
 (`12 + block_size/4` blocks; без sparse/double/triple indirect и роста каталогов);
 неподдерживаемый или нечистый том не получает native RW. Для иных ext2 features
-и ext3/ext4 пока
-используется legacy `debugfs` из `PATH`; на Windows также поддерживается
-`debugfs.exe` или WSL/e2fsprogs. Перед записью приложение создаёт резервную копию
-образа рядом с ним; отказ от копии отменяет запись. Native ext2 сначала
+и ext3/ext4 GUI оставляет том read-only: legacy `debugfs` (`PATH`, `debugfs.exe`
+или WSL/e2fsprogs) является только явным library-level compatibility opt-in
+`allow_legacy_debugfs=True`, не скрытым GUI fallback. Перед записью приложение
+создаёт резервную копию образа рядом с ним; отказ от копии отменяет запись. Native ext2 сначала
 проверяет staged extent, затем применяет изменения; внешние ext writers также
 используют временную копию и read-back. NTFS требует отдельный системный backend.
 

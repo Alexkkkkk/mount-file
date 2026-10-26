@@ -57,6 +57,17 @@ class _Ext2FS:
         if not self.path.is_file():
             raise NativeExt2Error("native ext2 writes require a regular image file")
         self.image_size = self.path.stat().st_size
+        if volume_size is None:
+            if self.offset:
+                raise NativeExt2UnsafeError(
+                    "an explicit selected partition size is required for a nonzero offset"
+                )
+            volume_size = self.image_size
+        self.volume_size = int(volume_size)
+        if self.volume_size < 2048 or self.offset + self.volume_size > self.image_size:
+            raise NativeExt2UnsafeError(
+                "selected ext2 partition extent is outside the image"
+            )
         self.sb_offset = self.offset + 1024
         self.sb = bytearray(self._read_at(self.sb_offset, 1024, absolute=True))
         if self.sb[56:58] != _EXT_MAGIC:
@@ -79,9 +90,12 @@ class _Ext2FS:
         self.state = self._u16(self.sb, 58)
         self.reserved_gdt_blocks = self._u16(self.sb, 206) if self.revision else 0
         self.filesystem_size = self.blocks_count * self.block_size
-        self.volume_size = int(volume_size) if volume_size is not None else None
         if self.blocks_count <= self.first_data_block or self.inodes_count < 2:
             raise NativeExt2UnsafeError("invalid ext2 geometry")
+        if self.revision not in (0, 1):
+            raise NativeExt2UnsafeError("unsupported ext2 superblock revision")
+        if self.first_data_block != (1 if self.block_size == 1024 else 0):
+            raise NativeExt2UnsafeError("invalid ext2 first-data-block value")
         if self.blocks_per_group <= 0 or self.inodes_per_group <= 0:
             raise NativeExt2UnsafeError("invalid ext2 group geometry")
         if self.blocks_per_group > self.block_size * 8:
@@ -94,6 +108,10 @@ class _Ext2FS:
             or self.inode_size % 4
         ):
             raise NativeExt2Error("unsupported ext2 inode size")
+        if self.state != 1 or self.incompat & 0x0004:
+            raise NativeExt2UnsafeError(
+                "ext2 volume is dirty or requires journal recovery; refusing writes"
+            )
         if self.compat & ~_ALLOWED_COMPAT:
             raise NativeExt2Error("unsupported ext2 compatible feature flags")
         if self.incompat != _FEATURE_INCOMPAT_FILETYPE:
@@ -102,10 +120,6 @@ class _Ext2FS:
             )
         if self.ro_compat & ~_ALLOWED_RO_COMPAT:
             raise NativeExt2Error("unsupported ext2 read-only-compatible feature flags")
-        if self.state != 1:
-            raise NativeExt2UnsafeError(
-                "ext2 volume is not marked clean; refusing writes"
-            )
         self.groups = math.ceil(
             (self.blocks_count - self.first_data_block) / self.blocks_per_group
         )
@@ -117,7 +131,7 @@ class _Ext2FS:
         self.inode_table_blocks = math.ceil(
             self.inodes_per_group * self.inode_size / self.block_size
         )
-        if self.volume_size is not None and self.filesystem_size > self.volume_size:
+        if self.filesystem_size > self.volume_size:
             raise NativeExt2UnsafeError("ext2 extent exceeds selected partition bounds")
         if self.offset + self.filesystem_size > self.image_size:
             raise NativeExt2UnsafeError("ext2 extent exceeds image bounds")
@@ -158,6 +172,9 @@ class _Ext2FS:
             self._descriptors.append(bytearray(desc))
         self._metadata = self._metadata_blocks()
         self._validate_initial_counters()
+        root = self._read_inode(2)
+        if stat.S_IFMT(self._u16(root, 0)) != stat.S_IFDIR:
+            raise NativeExt2UnsafeError("ext2 root inode is not an allocated directory")
 
     @staticmethod
     def _u16(buf: bytes | bytearray, off: int) -> int:
@@ -463,6 +480,7 @@ class _Ext2FS:
         bitmap = bytearray(self._read_at(bitmap_off, self.block_size))
         if not self._bit_is_set(bitmap, bit):
             raise NativeExt2Error("ext2 inode is already free")
+        self._write_inode(inode, bytes(self.inode_size))
         self._set_bit(bitmap, bit, False)
         self._write_at(bitmap_off, bitmap)
         desc = self._group_desc(group)
@@ -475,11 +493,12 @@ class _Ext2FS:
         self._write_group_desc(group, desc)
         self.free_inodes += 1
         self._write_super_counts()
-        self._write_inode(inode, bytes(self.inode_size))
 
     def _read_inode(self, inode: int) -> bytearray:
         if inode < 1 or inode > self.inodes_count:
             raise NativeExt2Error("inode number is outside the filesystem")
+        if not self._inode_is_allocated(inode):
+            raise NativeExt2UnsafeError("ext2 inode is marked free in the bitmap")
         group = (inode - 1) // self.inodes_per_group
         index = (inode - 1) % self.inodes_per_group
         table = self._u32(self._descriptors[group], 8)
@@ -489,11 +508,22 @@ class _Ext2FS:
     def _write_inode(self, inode: int, raw: bytes | bytearray) -> None:
         if len(raw) != self.inode_size:
             raise NativeExt2Error("ext2 inode write has wrong size")
+        if not self._inode_is_allocated(inode):
+            raise NativeExt2UnsafeError("refusing to write an ext2 inode marked free")
         group = (inode - 1) // self.inodes_per_group
         index = (inode - 1) % self.inodes_per_group
         table = self._u32(self._descriptors[group], 8)
         off = table * self.block_size + index * self.inode_size
         self._write_at(off, raw)
+
+    def _inode_is_allocated(self, inode: int) -> bool:
+        if inode < 1 or inode > self.inodes_count:
+            return False
+        group = (inode - 1) // self.inodes_per_group
+        bit = (inode - 1) % self.inodes_per_group
+        bitmap_off, _ = self._bitmap_location(group, inode=True)
+        bitmap = self._read_at(bitmap_off, self.block_size)
+        return self._bit_is_set(bitmap, bit)
 
     def _max_file_blocks(self) -> int:
         return _DIRECT_BLOCKS + self.block_size // 4

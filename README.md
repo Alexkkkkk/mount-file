@@ -484,8 +484,10 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 FAT32 и ограниченный профиль чистого ext2 имеют встроенную запись. В фазе 1
 native ext2 использует allowlisted features и один single-indirect block
 (до `12 + block_size/4` data blocks на файл); sparse/double/triple-indirect
-не поддерживаются. ext2 вне этого профиля и ext3/4 используют legacy `debugfs`
-(`debugfs.exe`/WSL на Windows).
+не поддерживаются. ext2 вне этого профиля и ext3/4 остаются read-only в GUI и
+`WriteEngine`: legacy `debugfs` доступен только как явный library-level
+compatibility opt-in (`allow_legacy_debugfs=True`), а не как автоматический
+fallback (`debugfs.exe`/WSL на Windows).
 NTFS использует `ntfs-3g` на Linux или ImDisk и системный драйвер Windows при
 запуске от администратора. На Windows ImDisk также даёт запись в exFAT и FAT12/16.
 Перед изменением образа создаётся отдельная резервная копия; если её нельзя
@@ -797,15 +799,16 @@ mount-file/
 
 - **Запись зависит от файловой системы и системного backend.** FAT32 и
   allowlisted clean ext2 имеют встроенные writers; ext2 вне native-профиля и
-  ext3/4 требуют legacy `debugfs` (на Windows доступен через WSL с `e2fsprogs`);
+  ext3/4 по умолчанию остаются read-only. Legacy `debugfs` (на Windows через
+  WSL с `e2fsprogs`) требует явного library-level compatibility opt-in;
   NTFS — `ntfs-3g` на Linux или
   ImDisk и права администратора на Windows. На Windows ImDisk поддерживает
   NTFS, exFAT и FAT12/16 через системный драйвер. Остальные ФС доступны только
   для просмотра/извлечения, если их поддерживает установленная `libtsk`.
 - **Без `pytsk3`** доступны собственные readers FAT32 и supported clean ext2;
   чтение других ФС зависит от внешнего reader/backend.
-- Native FAT32 и supported ext2 subset не требуют внешних CLI. Legacy ext2/3/4
-  fallback использует `debugfs`; NTFS/exFAT/FAT12/16 на Windows требуют ImDisk,
+- Native FAT32 и supported ext2 subset не требуют внешних CLI. Явный legacy
+  ext2/3/4 compatibility backend использует `debugfs`; NTFS/exFAT/FAT12/16 на Windows требуют ImDisk,
   а NTFS на Linux — `ntfs-3g`.
   Если требуемый backend отсутствует, приложение явно отказывает в записи, а
   не сообщает об успехе после открытия тома только для чтения.

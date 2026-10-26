@@ -36,13 +36,20 @@ def test_ext4_create_overwrite_and_verify_at_nonzero_offset(tmp_path):
         shutil.copyfileobj(source, target)
         target.write(suffix)
 
-    writer = Ext234ImageWriter(str(image), offset=offset)
+    writer = Ext234ImageWriter(
+        str(image),
+        offset=offset,
+        volume_size=partition.stat().st_size,
+        allow_legacy_debugfs=True,
+    )
     writer.mkdir("/config")
     writer.write_file("/config/factorySrv.ini", b"UARTOnOff=0\r\n")
     assert writer.read_file("/config/factorySrv.ini") == b"UARTOnOff=0\r\n"
     writer.write_file("/config/factorySrv.ini", b"UARTOnOff=1\r\n")
     assert writer.read_file("/config/factorySrv.ini") == b"UARTOnOff=1\r\n"
-    provider = Ext234Provider(str(image), offset=offset)
+    provider = Ext234Provider(
+        str(image), offset=offset, volume_size=partition.stat().st_size
+    )
     listing = provider.list_dir("/config")
     assert listing == [
         {"name": "factorySrv.ini", "is_dir": False, "size": 13, "date": ""}
@@ -58,7 +65,7 @@ def test_ext4_create_overwrite_and_verify_at_nonzero_offset(tmp_path):
 def test_invalid_image_paths_never_change_image(tmp_path):
     image = tmp_path / "filesystem.ext4"
     _make_ext4(image)
-    writer = Ext234ImageWriter(str(image))
+    writer = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     before = image.read_bytes()
 
     with pytest.raises(ExtWriteError, match="simple ASCII path"):
@@ -71,13 +78,29 @@ def test_superblock_size_must_fit_partition_bound(tmp_path):
     image = tmp_path / "filesystem.ext4"
     _make_ext4(image)
     with pytest.raises(ExtWriteError, match="selected partition bounds"):
-        Ext234ImageWriter(str(image), volume_size=1024)
+        Ext234ImageWriter(str(image), volume_size=1024, allow_legacy_debugfs=True)
+
+
+def test_unsupported_ext_profile_does_not_auto_enable_debugfs(tmp_path, monkeypatch):
+    image = tmp_path / "filesystem.ext4"
+    _make_ext4(image)
+    before = image.read_bytes()
+    monkeypatch.setattr(
+        "mountfile.ext_debugfs_writer._find_debugfs",
+        lambda *_args, **_kwargs: pytest.fail("debugfs discovery must be explicit"),
+    )
+    writer = Ext234ImageWriter(str(image))
+    assert not writer.writable
+    assert writer.write_strategy == "read-only-unsupported"
+    with pytest.raises(ExtWriteError, match="legacy debugfs compatibility is disabled"):
+        writer.write_file("/blocked.txt", b"no mutation")
+    assert image.read_bytes() == before
 
 
 def test_failure_before_commit_keeps_original_image_unchanged(tmp_path, monkeypatch):
     image = tmp_path / "filesystem.ext4"
     _make_ext4(image)
-    writer = Ext234ImageWriter(str(image))
+    writer = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     before = image.read_bytes()
 
     def fail_commit(_working):
@@ -93,7 +116,7 @@ def test_failure_before_commit_keeps_original_image_unchanged(tmp_path, monkeypa
 def test_free_space_and_delete_round_trip(tmp_path):
     image = tmp_path / "filesystem.ext4"
     _make_ext4(image)
-    writer = Ext234ImageWriter(str(image))
+    writer = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     assert writer.free_space() is None or writer.free_space() > 0
 
     writer.mkdir("/keep")

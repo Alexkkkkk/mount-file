@@ -106,7 +106,7 @@ def test_rejects_backup_geometry_mismatch(tmp_path):
     struct.pack_into("<Q", image, VOLUME_SIZE - 512 + 0x28, TOTAL - 1)
     path = tmp_path / "bad-backup.img"
     path.write_bytes(image)
-    with pytest.raises(NtfsMetadataError, match="backup boot geometry"):
+    with pytest.raises(NtfsMetadataError, match="backup boot profile"):
         probe_ntfs_metadata(path, volume_size=VOLUME_SIZE)
 
 
@@ -132,6 +132,16 @@ def test_rejects_sparse_ntfs_run():
         _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
 
 
+def test_rejects_ntfs_runlist_that_does_not_cover_declared_vcn_range():
+    with pytest.raises(NtfsMetadataError, match="does not cover"):
+        _parse_runlist(
+            bytes([0x11, 0x01, 0x05, 0x00]),
+            32,
+            lowest_vcn=0,
+            highest_vcn=2,
+        )
+
+
 def test_mft_record_loader_validates_record_number_and_sequence():
     from types import SimpleNamespace
 
@@ -140,14 +150,10 @@ def test_mft_record_loader_validates_record_number_and_sequence():
         profile=SimpleNamespace(boot=SimpleNamespace(file_record_size=RECORD)),
         read_file_range=lambda _path, _offset, _length: raw,
     )
-    parsed = NativeNtfsMetadataImage.read_mft_record(
-        fake, 42, reference=(3 << 48) | 42
-    )
+    parsed = NativeNtfsMetadataImage.read_mft_record(fake, 42, reference=(3 << 48) | 42)
     assert parsed.sequence_number == 3
     with pytest.raises(NtfsMetadataError, match="record number"):
-        NativeNtfsMetadataImage.read_mft_record(
-            fake, 41, reference=(3 << 48) | 42
-        )
+        NativeNtfsMetadataImage.read_mft_record(fake, 41, reference=(3 << 48) | 42)
 
 
 def test_parses_bounded_index_root_file_name_entry():
@@ -160,13 +166,18 @@ def test_parses_bounded_index_root_file_name_entry():
     key[0x42:0x4A] = "note".encode("utf-16le")
     struct.pack_into("<QHHI", value, entry, (3 << 48) | 9, 96, len(key), 0)
     value[entry + 16 : entry + 16 + len(key)] = key
-    struct.pack_into("<QHHI", value, entry + 96, 0, 16, 0, 1)
+    struct.pack_into("<QHHI", value, entry + 96, 0, 16, 0, 2)
     entries = parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 9)
     assert entries[0].name == "note"
     assert entries[0].reference == (3 << 48) | 9
     with pytest.raises(NtfsMetadataError, match="parent reference mismatch"):
         parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 10)
     struct.pack_into("<I", value, 28, 1)
+    with pytest.raises(NtfsMetadataError, match="INDEX_ALLOCATION"):
+        parse_ntfs_index_root(bytes(value))
+
+    struct.pack_into("<I", value, 28, 0)
+    struct.pack_into("<I", value, entry + 96 + 12, 1)
     with pytest.raises(NtfsMetadataError, match="INDEX_ALLOCATION"):
         parse_ntfs_index_root(bytes(value))
 
@@ -186,7 +197,7 @@ def test_validates_indx_usa_before_parsing_entries():
     key[0x42:0x4A] = "file".encode("utf-16le")
     struct.pack_into("<QHHI", block, 48, (3 << 48) | 9, 96, 74, 0)
     block[64:138] = key
-    struct.pack_into("<QHHI", block, 144, 0, 16, 0, 1)
+    struct.pack_into("<QHHI", block, 144, 0, 16, 0, 2)
     assert parse_ntfs_index_block(bytes(block))[0].name == "file"
     block[1022] ^= 1
     with pytest.raises(NtfsMetadataError, match="USA mismatch"):
@@ -195,10 +206,11 @@ def test_validates_indx_usa_before_parsing_entries():
 
 def test_parses_ntfs_volume_flags_and_rejects_missing_information():
     value = bytearray(12)
+    value[8:10] = b"\x03\x01"
     clean = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
     assert parse_ntfs_volume_state((clean,)).clean
     struct.pack_into("<H", value, 10, 0x0021)
     dirty = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
     assert not parse_ntfs_volume_state((dirty,)).clean
-    with pytest.raises(NtfsMetadataError, match="no resident"):
+    with pytest.raises(NtfsMetadataError, match="ambiguous volume information"):
         parse_ntfs_volume_state(())

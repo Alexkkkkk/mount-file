@@ -164,7 +164,7 @@ def test_f4_saves_existing_ext4_ini_through_real_backend(monkeypatch, tmp_path, 
         [shutil.which("mke2fs"), "-q", "-F", "-t", "ext4", str(image)],
         check=True,
     )
-    backend = Ext234ImageWriter(str(image))
+    backend = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     backend.mkdir("/config")
     backend.write_file("/config/factorySrv.ini", b"UARTOnOff=0\r\n")
 
@@ -230,7 +230,7 @@ def test_f4_saves_existing_ext4_ini_through_real_backend(monkeypatch, tmp_path, 
     not (shutil.which("debugfs") and shutil.which("mke2fs")),
     reason="e2fsprogs debugfs and mke2fs are required",
 )
-def test_mount_ext_uses_debugfs_fallback_without_pytsk3(monkeypatch, tmp_path):
+def test_mount_ext_does_not_use_debugfs_fallback_without_pytsk3(monkeypatch, tmp_path):
     partition = tmp_path / "data.ext4"
     with partition.open("wb") as stream:
         stream.truncate(8 * 1024 * 1024)
@@ -238,7 +238,7 @@ def test_mount_ext_uses_debugfs_fallback_without_pytsk3(monkeypatch, tmp_path):
         [shutil.which("mke2fs"), "-q", "-F", "-t", "ext4", str(partition)],
         check=True,
     )
-    initial = Ext234ImageWriter(str(partition))
+    initial = Ext234ImageWriter(str(partition), allow_legacy_debugfs=True)
     initial.mkdir("/config")
     initial.write_file("/config/factorySrv.ini", b"UARTOnOff=0\r\n")
 
@@ -287,11 +287,13 @@ def test_mount_ext_uses_debugfs_fallback_without_pytsk3(monkeypatch, tmp_path):
         def _update_cmd_prompt(self):
             pass
 
-    assert tc_window.MainWindow.mount_volume(Window(), panel, offset)
-    assert panel.provider.read_file("/config/factorySrv.ini") == b"UARTOnOff=0\r\n"
-    assert panel.writer is not None
-    panel.writer.write_file("/config", "factorySrv.ini", b"UARTOnOff=1\r\n")
-    assert panel.provider.read_file("/config/factorySrv.ini") == b"UARTOnOff=1\r\n"
+        def _auto_pick(self, _panel, quiet=False):
+            return False
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: MB_Yes)
+    assert not tc_window.MainWindow.mount_volume(Window(), panel, offset)
+    assert panel.provider is None
+    assert panel.writer is None
 
 
 def test_text_dialog_preserves_existing_terminal_newline(qapp):

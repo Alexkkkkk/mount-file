@@ -2,9 +2,10 @@
 
 `mountfile/write_engine.py` — транзакционный фасад над RW-бэкендами
 `mountfile/universal_fs_rw.py` (native FAT12/16/32 и ограниченный clean ext2
-profile; legacy ext2/3/4 через `debugfs`; NTFS через системный/mount-helper
-backend). Native ext2 — первая фаза собственной записи; ext3/ext4 и NTFS остаются
-внешними backend-ами до отдельной journal/recovery-aware реализации (issue #182).
+profile; явный library-level legacy ext2/3/4 compatibility backend через
+`debugfs`; NTFS через системный/mount-helper backend). Native ext2 — первая фаза
+собственной записи; GUI и `WriteEngine` не переключают ext3/ext4 автоматически
+на внешний writer до отдельной journal/recovery-aware реализации (issue #182).
 Новый NTFS boot-sector probe и FILE-record parser ниже только проверяют
 метаданные и не переключают существующий backend, не предоставляют полное
 чтение файлов и не разрешают запись.
@@ -50,10 +51,12 @@ engine.close()
   один single-indirect pointer для данных файла) использует собственный Python
   writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
   sparse/double/triple indirect. Рост каталогов за пределы direct blocks не
-  поддерживается. Unsupported/dirty/out-of-bounds volumes не
-  получают native RW. Для ext2 вне этого профиля и ext3/ext4 пока сохраняется
-  legacy `debugfs -w` fallback: на Windows нужен `debugfs.exe` из `PATH` либо
-  WSL/e2fsprogs. `chmod`/`chown`/`symlink` поддерживаются только этим fallback.
+  поддерживается. Unsupported/dirty/out-of-bounds volumes не получают native RW.
+  Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
+  `debugfs -w` доступен только прямому library caller с
+  `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
+  Он staging-копирует и commit-ит ровно filesystem extent; `chmod`/`chown`/
+  `symlink` остаются за этим compatibility API.
 
 * NTFS — через `ntfs-3g` на Linux или системный файловый драйвер Windows через
   ImDisk. На Windows требуется отдельно установленный ImDisk Virtual Disk
@@ -106,8 +109,10 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 ## Ограничения и риски
 
 * Native ext2 имеет консервативный feature allowlist и проверяет staged image
-  до commit, но не является power-loss-atomic; NTFS, ext3/ext4 и unsupported ext2
-  профили всё ещё зависят от внешних backend-ов.
+  до commit, но не является power-loss-atomic; ext3/ext4 и unsupported ext2
+  профили по умолчанию остаются read-only. Native NTFS metadata browse также
+  fail-closed до отдельной реализации валидации restart area `$LogFile`; boot/MFT
+  probe остаётся доступным только для диагностики.
 
   GUI и `WriteEngine(read_only=False)` используют тот же `UniversalFSRW`,
   поэтому это не только read/extract режим.

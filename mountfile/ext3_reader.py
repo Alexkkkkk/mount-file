@@ -54,7 +54,9 @@ class NativeExt3Image(NativeExt2Image):
     @staticmethod
     def _validate_profile(profile) -> None:
         if profile.fs_type not in ("ext3", "ext4"):
-            raise Ext3ReadError("native ext3/ext4 reader requires an ext3 or ext4 profile")
+            raise Ext3ReadError(
+                "native ext3/ext4 reader requires an ext3 or ext4 profile"
+            )
         if not profile.clean_unmounted or profile.state != 0x0001:
             raise Ext3ReadError("dirty or recovery-required ext volume")
         if profile.journal_recovery_needed:
@@ -89,7 +91,9 @@ class NativeExt3Image(NativeExt2Image):
         if profile.feature_incompat & 0x0080 and profile.fs_type != "ext4":  # 64BIT
             raise Ext3ReadError("64-bit group layout is not enabled in classic profile")
         if profile.feature_ro_compat & 0x0400:  # METADATA_CSUM
-            raise Ext3ReadError("metadata checksums are not implemented in this profile")
+            raise Ext3ReadError(
+                "metadata checksums are not implemented in this profile"
+            )
 
     def __init__(self, image_path, offset=0, volume_size=None):
         super().__init__(image_path, offset=offset, volume_size=volume_size)
@@ -248,7 +252,10 @@ class NativeExt4Image(NativeExt3Image):
             and inode_table + base.inode_table_blocks <= base.end_block
         ):
             raise Ext3ReadError("64-bit group descriptor points outside its group")
-        if block_bitmap == inode_bitmap or inode_table <= block_bitmap < inode_table + base.inode_table_blocks:
+        if (
+            block_bitmap == inode_bitmap
+            or inode_table <= block_bitmap < inode_table + base.inode_table_blocks
+        ):
             raise Ext3ReadError("64-bit group descriptor metadata ranges overlap")
         result = _GroupDescriptor(
             block_bitmap,
@@ -270,8 +277,8 @@ class NativeExt4Image(NativeExt3Image):
         """Return (physical block, unwritten) or (0, False) for a hole."""
         if not inode.flags & _EXT4_EXTENTS_FL:
             return super()._logical_block(inode, logical), False
-        if logical < 0:
-            raise Ext3ReadError("negative logical extent index")
+        if logical < 0 or logical >= 1 << 32:
+            raise Ext3ReadError("logical extent index is outside uint32")
         node = struct.pack("<15I", *inode.block_pointers)
         visited: set[int] = set()
         expected_depth = None
@@ -281,25 +288,31 @@ class NativeExt4Image(NativeExt3Image):
             magic, entries, maximum, node_depth = struct.unpack_from("<HHHH", node, 0)
             if magic != 0xF30A or entries > maximum or maximum > (len(node) - 12) // 12:
                 raise Ext3ReadError("invalid extent header bounds")
-            if node_depth < 0 or (expected_depth is not None and node_depth != expected_depth):
+            if node_depth < 0 or (
+                expected_depth is not None and node_depth != expected_depth
+            ):
                 raise Ext3ReadError("invalid extent tree depth")
             if node_depth == 0:
                 previous_end = -1
                 for pos in range(entries):
                     off = 12 + pos * 12
-                    start, length, start_hi, start_lo = struct.unpack_from("<IHHI", node, off)
+                    start, length, start_hi, start_lo = struct.unpack_from(
+                        "<IHHI", node, off
+                    )
                     unwritten = bool(length & 0x8000)
                     length &= 0x7FFF
                     if length == 0 or start < previous_end:
                         raise Ext3ReadError("empty or overlapping extent")
                     end = start + length
-                    if end < start:
+                    if end > 1 << 32:
                         raise Ext3ReadError("extent logical range overflow")
                     previous_end = end
                     if start <= logical < end:
                         physical = ((start_hi << 32) | start_lo) + (logical - start)
                         if physical >= self.blocks_count:
-                            raise Ext3ReadError("extent physical block is out of bounds")
+                            raise Ext3ReadError(
+                                "extent physical block is out of bounds"
+                            )
                         return physical, unwritten
                 return 0, False
             expected_depth = node_depth - 1
@@ -307,14 +320,18 @@ class NativeExt4Image(NativeExt3Image):
             selected = None
             for pos in range(entries):
                 off = 12 + pos * 12
-                logical_start, child_lo, child_hi = struct.unpack_from("<IIH", node, off)
+                logical_start, child_lo, child_hi = struct.unpack_from(
+                    "<IIH", node, off
+                )
                 if logical_start < previous_key:
                     raise Ext3ReadError("extent index keys are not sorted")
                 previous_key = logical_start
                 if logical >= logical_start:
                     selected = (logical_start, child_lo | (child_hi << 32))
-            if selected is None or selected[1] in visited:
+            if selected is None:
                 return 0, False
+            if selected[1] in visited:
+                raise Ext3ReadError("cyclic extent tree")
             visited.add(selected[1])
             node = self._extent_block(selected[1])
         raise Ext3ReadError("extent tree exceeds conservative depth limit")
@@ -333,6 +350,8 @@ class NativeExt4Image(NativeExt3Image):
             raise Ext3ReadError("only regular files can be read as file content")
         if offset >= inode.size or length == 0:
             return b""
+        if inode.size > (1 << 32) * self.block_size:
+            raise Ext3ReadError("extent file exceeds the logical block address space")
         remaining = min(length, inode.size - offset)
         if remaining > 16 * 1024 * 1024:
             raise Ext3ReadError("requested file range exceeds native read limit")

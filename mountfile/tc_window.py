@@ -3536,13 +3536,13 @@ class MainWindow(QMainWindow):
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
-        from .vfs import TskError, open_image_provider, volume_size_for_offset
+        from .vfs import TskError, open_image_provider
 
         try:
             panel.provider = open_image_provider(
                 self.image_path,
                 offset=offset,
-                volume_size=volume_size_for_offset(self.image_path, offset),
+                volume_size=volume_size,
             )
         except TskError as tsk_error:
             from .fat32 import Fat32Error, Fat32Provider
@@ -3550,45 +3550,32 @@ class MainWindow(QMainWindow):
             try:
                 panel.provider = Fat32Provider(self.image_path, offset=offset)
             except (Fat32Error, OSError, ValueError) as fat_error:
-                try:
-                    from .ext_debugfs_writer import Ext234Provider
-
-                    panel.provider = Ext234Provider(
-                        self.image_path, offset=offset, volume_size=volume_size
-                    )
-                    self.log_msg(
-                        "Том @ offset %d открыт через debugfs (fallback без pytsk3)"
-                        % offset
-                    )
-                except Exception as ext_error:
-                    panel.provider = None
-                    self.log_msg(
-                        "Том @ offset %d не открылся — The Sleuth Kit: %s; "
-                        "FAT32: %s; debugfs: %s"
-                        % (offset, tsk_error, fat_error, ext_error)
-                    )
-                    panel.refresh()
-                    # A partition table (or a udev offset) that does not point at a
-                    # filesystem is the normal case in NAND/eMMC dumps: pick the
-                    # working volume automatically instead of stopping on an error.
-                    if getattr(self, "_autopick_busy", False):
-                        QMessageBox.warning(
-                            self,
-                            "Не удалось смонтировать том",
-                            "The Sleuth Kit: %s\nFAT32: %s\ndebugfs: %s"
-                            % (tsk_error, fat_error, ext_error),
-                        )
-                        return False
-                    if self._auto_pick(panel, quiet=True):
-                        return True
+                panel.provider = None
+                self.log_msg(
+                    "Том @ offset %d не открылся — The Sleuth Kit: %s; FAT32: %s"
+                    % (offset, tsk_error, fat_error)
+                )
+                panel.refresh()
+                # A partition table (or a udev offset) that does not point at a
+                # filesystem is the normal case in NAND/eMMC dumps: pick the
+                # working volume automatically instead of stopping on an error.
+                if getattr(self, "_autopick_busy", False):
                     QMessageBox.warning(
                         self,
                         "Не удалось смонтировать том",
-                        "The Sleuth Kit: %s\nFAT32: %s\ndebugfs: %s\n\n"
-                        "Авто-подбор не нашёл рабочий том — подробности в журнале."
-                        % (tsk_error, fat_error, ext_error),
+                        "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
                     )
                     return False
+                if self._auto_pick(panel, quiet=True):
+                    return True
+                QMessageBox.warning(
+                    self,
+                    "Не удалось смонтировать том",
+                    "The Sleuth Kit: %s\nFAT32: %s\n\n"
+                    "Авто-подбор не нашёл рабочий том — подробности в журнале."
+                    % (tsk_error, fat_error),
+                )
+                return False
 
         panel.mode = "img"
         panel.volume_offset = offset
@@ -3615,10 +3602,9 @@ class MainWindow(QMainWindow):
                 fh.close()
                 fat_error = e
 
-        # FAT32 keeps its native writer. Supported clean ext2 volumes use the
-        # in-process MountFile writer; ext2 outside its strict feature profile
-        # and ext3/ext4 retain the legacy debugfs path. NTFS remains mount-driver
-        # backed through the package facade. A failed backend remains read-only.
+        # FAT32 keeps its native writer. The ordinary GUI enables writes only
+        # for MountFile's in-process clean-ext2 profile; legacy debugfs is a
+        # library-only explicit compatibility backend.
         if not fat_writer_ready:
             ext_writer = None
             try:
@@ -3635,6 +3621,9 @@ class MainWindow(QMainWindow):
                 panel.write_reason = (
                     "Запись заблокирована проверкой безопасности ext2: "
                     + ext_writer.native_unsafe_error
+                    if ext_writer.native_unsafe_error
+                    else "Запись доступна только для поддерживаемого чистого "
+                    "native-ext2 профиля; legacy debugfs отключён по умолчанию."
                 )
                 self.log_msg(panel.write_reason)
             elif ext_writer is not None:
@@ -3649,7 +3638,7 @@ class MainWindow(QMainWindow):
                     )
                 else:
                     self.log_msg(
-                        "Том @ offset %d смонтирован — запись %s через debugfs включена"
+                        "Том @ offset %d смонтирован — включена запись %s"
                         % (offset, ext_writer.fs_type)
                     )
             else:

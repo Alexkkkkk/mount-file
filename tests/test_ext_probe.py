@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from mountfile.ext_checksum import crc32c
+from mountfile.ext_checksum import ext4_superblock_checksum
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 
 
@@ -86,10 +86,8 @@ def test_ext4_features_are_not_mistaken_for_ext2_block_pointers():
 def test_metadata_checksum_profile_requires_a_valid_superblock_crc32c():
     image = bytearray(_image(ro_compat=0x0403))
     superblock = memoryview(image)[1024:2048]
-    candidate = bytearray(superblock)
-    struct.pack_into("<I", candidate, 0x3FC, 0)
-    checksum = crc32c(bytes(superblock[0x68:0x78]))
-    checksum = crc32c(bytes(candidate), checksum)
+    superblock[0x175] = 1
+    checksum = ext4_superblock_checksum(bytes(superblock))
     struct.pack_into("<I", superblock, 0x3FC, checksum)
 
     profile = probe_ext_superblock(io.BytesIO(image))

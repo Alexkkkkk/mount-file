@@ -129,7 +129,7 @@ def test_dedicated_wsl_distro_is_pinned_for_all_followup_calls(monkeypatch, tmp_
     monkeypatch.setattr(ext_debugfs_writer.shutil, "which", fake_which)
     monkeypatch.setattr(ext_debugfs_writer.subprocess, "run", fake_run)
 
-    writer = ext_debugfs_writer.Ext234ImageWriter(image)
+    writer = ext_debugfs_writer.Ext234ImageWriter(image, allow_legacy_debugfs=True)
     assert writer.wsl_distribution == "MountFileTools"
     assert writer._run(image, "ls -l /") == "Filesystem OK\n"
 

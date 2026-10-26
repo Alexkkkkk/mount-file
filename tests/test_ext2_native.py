@@ -116,6 +116,35 @@ def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     _assert_e2fsck_clean(check_image)
 
 
+def test_native_ext2_requires_explicit_extent_for_nonzero_offset(tmp_path):
+    partition = tmp_path / "partition.ext2"
+    _make_ext2(partition, size=8 * 1024 * 1024)
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"prefix" + partition.read_bytes() + b"suffix")
+    with pytest.raises(NativeExt2Error, match="explicit selected partition size"):
+        NativeExt2ImageWriter(image, offset=len(b"prefix"))
+
+
+def test_native_ext2_rejects_root_inode_marked_free(tmp_path):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    with image.open("r+b") as stream:
+        stream.seek(1024)
+        superblock = stream.read(1024)
+        block_size = 1024 << int.from_bytes(superblock[24:28], "little")
+        first_data_block = int.from_bytes(superblock[20:24], "little")
+        gdt = (first_data_block + 1) * block_size
+        stream.seek(gdt + 4)
+        inode_bitmap_block = int.from_bytes(stream.read(4), "little")
+        stream.seek(inode_bitmap_block * block_size)
+        bitmap = bytearray(stream.read(block_size))
+        bitmap[0] &= ~(1 << 1)  # inode 2
+        stream.seek(inode_bitmap_block * block_size)
+        stream.write(bitmap)
+    with pytest.raises(NativeExt2Error, match="free-inode count|marked free"):
+        NativeExt2ImageWriter(image)
+
+
 def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
     tmp_path,
 ):

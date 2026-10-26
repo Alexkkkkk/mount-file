@@ -48,7 +48,9 @@ def _measure(provider, paths: list[str], extract_root: Path) -> dict:
     }
 
 
-def _run_one(factory, image: Path, offset: int, volume_size: int, paths: list[str]) -> dict:
+def _run_one(
+    factory, image: Path, offset: int, volume_size: int, paths: list[str]
+) -> dict:
     provider = factory(image, offset, volume_size)
     try:
         with tempfile.TemporaryDirectory(prefix="mountfile-bench-") as tmp:

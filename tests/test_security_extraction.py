@@ -102,6 +102,26 @@ def test_extract_does_not_follow_destination_symlink(tmp_path):
     assert link.is_symlink()
 
 
+def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    protected = outside / "secret.bin"
+    protected.write_bytes(b"must remain unchanged")
+    destination_root = tmp_path / "output"
+    destination_root.mkdir()
+    try:
+        (destination_root / "nested").symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks unavailable in test environment")
+
+    with pytest.raises(ExtractError, match="symlink|safely"):
+        extract_file(
+            TreeProvider(), "/secret.bin", destination_root / "nested/secret.bin"
+        )
+
+    assert protected.read_bytes() == b"must remain unchanged"
+
+
 def test_extract_replaces_hardlink_without_mutating_external_file(tmp_path):
     output = tmp_path / "output"
     output.mkdir()

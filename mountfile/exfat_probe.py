@@ -24,6 +24,7 @@ class ExfatBootProfile:
     sectors_per_cluster: int
     cluster_size: int
     volume_length: int
+    number_of_fats: int
     fat_offset: int
     fat_length: int
     cluster_heap_offset: int
@@ -35,7 +36,9 @@ class ExfatBootProfile:
     boot_checksum: int
 
 
-def exfat_boot_checksum(boot_region: bytes | bytearray, *, sector_size: int = 512) -> int:
+def exfat_boot_checksum(
+    boot_region: bytes | bytearray, *, sector_size: int = 512
+) -> int:
     """Compute the exFAT rotating checksum for sectors 0..10."""
     if sector_size not in (512, 1024, 2048, 4096):
         raise ExfatProbeError("unsupported exFAT sector size")
@@ -51,7 +54,11 @@ def exfat_boot_checksum(boot_region: bytes | bytearray, *, sector_size: int = 51
 
 
 def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProfile:
-    if not isinstance(volume_size, int) or isinstance(volume_size, bool) or volume_size <= 0:
+    if (
+        not isinstance(volume_size, int)
+        or isinstance(volume_size, bool)
+        or volume_size <= 0
+    ):
         raise ExfatProbeError("a positive integer volume_size is required")
     if len(region) < 512:
         raise ExfatProbeError("truncated exFAT boot region")
@@ -80,14 +87,31 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     cluster_size = bytes_per_sector * sectors_per_cluster
     if cluster_size > _MAX_CLUSTER_SIZE:
         raise ExfatProbeError("exFAT cluster size is too large")
-    if volume_length == 0 or volume_length > volume_size:
+    if volume_length == 0 or volume_length > (1 << 63) // bytes_per_sector:
         raise ExfatProbeError("exFAT volume length exceeds selected bounds")
-    total_sectors = volume_length // bytes_per_sector
-    if fat_offset < 24 or fat_length == 0 or fat_offset + fat_length > total_sectors:
+    volume_bytes = volume_length * bytes_per_sector
+    if volume_bytes > volume_size:
+        raise ExfatProbeError("exFAT volume length exceeds selected bounds")
+    total_sectors = volume_length
+    number_of_fats = boot[0x6E]
+    if number_of_fats not in (1, 2):
+        raise ExfatProbeError("exFAT number of FATs is invalid")
+    fat_end = fat_offset + fat_length * number_of_fats
+    if (
+        fat_offset < 24
+        or fat_length == 0
+        or fat_end < fat_offset
+        or fat_end > total_sectors
+    ):
         raise ExfatProbeError("exFAT FAT extent is invalid")
-    if heap_offset < fat_offset + fat_length or heap_offset >= total_sectors:
+    if fat_length * bytes_per_sector < (cluster_count + 2) * 4:
+        raise ExfatProbeError("exFAT FAT is too small for the declared clusters")
+    if heap_offset < fat_end or heap_offset >= total_sectors:
         raise ExfatProbeError("exFAT cluster heap offset is invalid")
-    if cluster_count == 0 or heap_offset + cluster_count * sectors_per_cluster > total_sectors:
+    if (
+        cluster_count == 0
+        or heap_offset + cluster_count * sectors_per_cluster > total_sectors
+    ):
         raise ExfatProbeError("exFAT cluster heap exceeds volume bounds")
     if not 2 <= root_cluster <= cluster_count + 1:
         raise ExfatProbeError("exFAT root directory cluster is invalid")
@@ -96,7 +120,9 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
         raise ExfatProbeError("exFAT percent-in-use is invalid")
     boot_region_size = 11 * bytes_per_sector
     checksum_sector = boot_region_size
-    calculated = exfat_boot_checksum(region[:boot_region_size], sector_size=bytes_per_sector)
+    calculated = exfat_boot_checksum(
+        region[:boot_region_size], sector_size=bytes_per_sector
+    )
     stored_words = [
         struct.unpack_from("<I", region, checksum_sector + n)[0]
         for n in range(0, bytes_per_sector, 4)
@@ -110,6 +136,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
         sectors_per_cluster,
         cluster_size,
         volume_length,
+        number_of_fats,
         fat_offset,
         fat_length,
         heap_offset,
@@ -122,10 +149,16 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     )
 
 
-def probe_exfat_boot_region(image_path, *, offset: int = 0, volume_size: int | None = None) -> ExfatBootProfile:
+def probe_exfat_boot_region(
+    image_path, *, offset: int = 0, volume_size: int | None = None
+) -> ExfatBootProfile:
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ExfatProbeError("offset must be a non-negative integer")
-    if not isinstance(volume_size, int) or isinstance(volume_size, bool) or volume_size <= 0:
+    if (
+        not isinstance(volume_size, int)
+        or isinstance(volume_size, bool)
+        or volume_size <= 0
+    ):
         raise ExfatProbeError("a positive integer volume_size is required")
     try:
         with open(image_path, "rb") as stream:
@@ -150,4 +183,10 @@ def probe_exfat_boot_region(image_path, *, offset: int = 0, volume_size: int | N
     return replace(profile, partition_offset=offset)
 
 
-__all__ = ["ExfatBootProfile", "ExfatProbeError", "exfat_boot_checksum", "parse_exfat_boot_region", "probe_exfat_boot_region"]
+__all__ = [
+    "ExfatBootProfile",
+    "ExfatProbeError",
+    "exfat_boot_checksum",
+    "parse_exfat_boot_region",
+    "probe_exfat_boot_region",
+]

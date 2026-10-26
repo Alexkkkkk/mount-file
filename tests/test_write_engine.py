@@ -534,35 +534,20 @@ HAVE_MKFS_EXT4 = (
 
 
 @pytest.mark.skipif(not HAVE_MKFS_EXT4, reason="mkfs.ext4/debugfs not available")
-def test_ext_backend_verifies_and_rolls_back(tmp_path):
+def test_write_engine_does_not_auto_enable_legacy_ext_backend(tmp_path):
     image = tmp_path / "ext4.img"
     with open(image, "wb") as handle:
         handle.truncate(16 * 1024 * 1024)
     subprocess.run(
         ["mkfs.ext4", "-q", "-F", str(image)], check=True, capture_output=True
     )
-    engine = WriteEngine(
-        image,
-        read_only=False,
-        snapshot_dir=tmp_path / "s",
-        journal_path=tmp_path / "j.jsonl",
-    )
-    try:
-        with engine.transaction("ext write"):
-            engine.write_file("/HELLO.TXT", b"hello ext")
-        assert engine.read("/HELLO.TXT") == b"hello ext"
-        report = engine.verify()
-        assert report["fs_type"] == "ext"
-        assert report["checks"], report
-        before = _sha(image)
-        with pytest.raises(RuntimeError):
-            with engine.transaction("ext rollback"):
-                engine.write_file("/VOLATILE.TXT", b"gone")
-                raise RuntimeError("boom")
-        assert _sha(image) == before
-        assert engine.exists("/VOLATILE.TXT") is False
-    finally:
-        engine.close()
+    with pytest.raises(RuntimeError, match="explicit legacy compatibility backend"):
+        WriteEngine(
+            image,
+            read_only=False,
+            snapshot_dir=tmp_path / "s",
+            journal_path=tmp_path / "j.jsonl",
+        )
 
 
 # ------------------------------------------------- writer/fat32 consistency

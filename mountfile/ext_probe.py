@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from mountfile.ext_checksum import crc32c
+from mountfile.ext_checksum import ext4_superblock_checksum
 
 
 class ExtProbeError(ValueError):
@@ -152,16 +152,16 @@ def _u32(buf: bytes, offset: int) -> int:
     return struct.unpack_from("<I", buf, offset)[0]
 
 
-def _validate_superblock_checksum(superblock: bytes, feature_incompat: int, feature_ro_compat: int) -> None:
+def _validate_superblock_checksum(
+    superblock: bytes, feature_incompat: int, feature_ro_compat: int
+) -> None:
     """Validate the ext4 superblock checksum before exposing its profile."""
     if not feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
         return
+    if superblock[0x175] != 1:
+        raise ExtProbeError("unsupported ext superblock checksum type")
     expected = _u32(superblock, 0x3FC)
-    candidate = bytearray(superblock)
-    struct.pack_into("<I", candidate, 0x3FC, 0)
-    uuid_seed = crc32c(superblock[0x68:0x78])
-    seed = _u32(superblock, 0x270) if feature_incompat & _INCOMPAT_CSUM_SEED else uuid_seed
-    actual = crc32c(bytes(candidate), seed)
+    actual = ext4_superblock_checksum(superblock)
     if actual != expected:
         raise ExtProbeError("ext superblock checksum mismatch")
 
