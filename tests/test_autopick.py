@@ -183,7 +183,13 @@ class TestValidate:
             os.path.join(self.tmp, "good.img"), FAT32_BYTES + 0x100000, 0x100000
         )
         backend, entries, error = verify_mount(good, 0x100000)
-        assert backend in ("tsk", "fat32")
+        assert backend in (
+            "tsk",
+            "fat32",
+            "native-fat12",
+            "native-fat16",
+            "native-fat32",
+        )
         assert error is None
 
         bad = _image(os.path.join(self.tmp, "bad.img"), 0x400000, 0x100000)
@@ -282,7 +288,13 @@ class TestAutoSelect:
         assert best is not None
         assert best.offset == 0x180000
         assert best.fstype == "FAT32"
-        assert best.backend in ("tsk", "fat32")
+        assert best.backend in (
+            "tsk",
+            "fat32",
+            "native-fat12",
+            "native-fat16",
+            "native-fat32",
+        )
         # every udev offset is present but none of them is a mountable volume
         raw = [c.offset for c in cands if c.fstype == "raw"]
         assert 0x00A5A000 in raw and 0x00E5A000 in raw

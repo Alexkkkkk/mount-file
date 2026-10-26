@@ -4,9 +4,10 @@
 # Licensed under the MIT License - see the LICENSE file for details.
 """Read-only filesystem providers for raw images.
 
-``TskImage`` uses The Sleuth Kit (pytsk3) for supported formats. The separate
-``NativeExt2Image`` provider reads a strict, clean ext2 subset in pure Python.
-Legacy format coverage still depends on the installed libtsk build.
+``TskImage`` uses The Sleuth Kit (pytsk3) for formats without an accepted native
+profile. ``NativeFatImage`` reads FAT12/16/32 and ``NativeExt2Image`` reads a
+strict, clean ext2 subset in pure Python. Legacy format coverage still depends
+on the explicitly optional libtsk build.
 
 The module also exports a dependency-free ext superblock probe. The probe
 reports format features and geometry only; it does not browse files or authorize
@@ -23,6 +24,7 @@ import time
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
+from mountfile.fat_reader import FatReadError, NativeFatImage
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
@@ -152,6 +154,15 @@ def probe_exfat_profile(image_path, offset=0, volume_size=None):
     from mountfile.exfat_probe import probe_exfat_boot_region
 
     return probe_exfat_boot_region(image_path, offset=offset, volume_size=volume_size)
+
+
+def probe_fat_profile(image_path, offset=0, volume_size=None):
+    """Validate a bounded FAT12/16/32 boot sector without requiring pytsk3."""
+    provider = NativeFatImage(image_path, offset=offset, volume_size=volume_size)
+    try:
+        return provider.profile
+    finally:
+        provider.close()
 
 
 def _fmt_mtime(meta):
@@ -301,6 +312,27 @@ def _has_ntfs_boot_magic(image_path, offset, volume_size):
         raise TskError(f"cannot inspect image for native NTFS: {exc}") from exc
 
 
+def _has_fat_boot_magic(image_path, offset, volume_size):
+    try:
+        offset = int(offset)
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
+            if volume_size <= 0 or offset + volume_size > os.path.getsize(image_path):
+                raise TskError("selected filesystem extent exceeds image bounds")
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset + 512 > image_size:
+                return False
+            if volume_size is not None and volume_size < 512:
+                return False
+            stream.seek(offset)
+            return NativeFatImage.looks_like_boot_sector(stream.read(512))
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for native FAT: {exc}") from exc
+
+
 def open_image_provider(image_path, offset=0, volume_size=None):
     """Open a read-only provider with fail-closed routing for recognized formats."""
     if _has_ext_superblock_magic(image_path, offset, volume_size):
@@ -349,6 +381,14 @@ def open_image_provider(image_path, offset=0, volume_size=None):
         except Exception as exc:
             raise RecognizedFilesystemError(
                 f"native NTFS reader declined the NTFS profile: {exc}"
+            ) from exc
+
+    if _has_fat_boot_magic(image_path, offset, volume_size):
+        try:
+            return NativeFatImage(image_path, offset=offset, volume_size=volume_size)
+        except FatReadError as exc:
+            raise RecognizedFilesystemError(
+                f"native FAT reader declined the FAT profile: {exc}"
             ) from exc
 
     return TskImage(image_path, offset=offset)

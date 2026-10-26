@@ -489,10 +489,25 @@ def _score_alignment(cand, path):
 def verify_mount(path, offset, fstype=None):
     """Реально открыть том. Возвращает ``(backend, entries, error)``.
 
-    ``backend`` — ``"tsk"``, ``"fat32"`` или None. Это единственная проверка,
-    которая ловит ошибки ``FS_Info_Con`` до показа их пользователю.
+    ``backend`` — ``"native-fat12"``, ``"native-fat16"``, ``"native-fat32"``,
+    ``"tsk"`` или None. Это единственная проверка, которая ловит ошибки
+    ``FS_Info_Con`` до показа их пользователю.
     """
     errors = []
+    if str(fstype or "").lower().startswith("fat"):
+        try:
+            from .fat_reader import NativeFatImage
+
+            provider = NativeFatImage(path, offset=offset)
+            try:
+                entries = len(provider.list_dir("/"))
+                return "native-fat%d" % provider.fat_type, entries, None
+            finally:
+                provider.close()
+        except Exception as e:
+            errors.append("native FAT: %s" % e)
+            return None, 0, " | ".join(errors)
+
     try:
         from .vfs import TskImage
 

@@ -88,7 +88,7 @@ def _rows(model):
 
 
 def test_open_mount_write_refresh_delete(tmp_path, app, dialogs, monkeypatch):
-    # Exercise the advertised no-TSK fallback even when CI installed pytsk3.
+    # Exercise the native no-TSK reader even when CI installed pytsk3.
     monkeypatch.setattr("mountfile.vfs.pytsk3", None)
     disk = build_disk(tmp_path)
     assert [v.fstype for v in detect_volumes(disk)] == ["FAT32"]
@@ -101,7 +101,7 @@ def test_open_mount_write_refresh_delete(tmp_path, app, dialogs, monkeypatch):
         assert win.cmb_parts.count() == 2
         assert win.cmb_parts.currentData() == 2048 * BPS
         assert win.provider is not None
-        assert win.backend == "built-in FAT32 engine"  # forced fallback
+        assert win.backend == "native FAT32 (Python, read-only)"
         assert win.writer is not None
         assert win.btn_import.isEnabled()
         assert win.btn_rename.isEnabled()

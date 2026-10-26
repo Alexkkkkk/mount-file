@@ -211,12 +211,21 @@ class DefaultBackend:
     def _provider(image: Path, offset: int) -> Any:
         errors = []
         try:
-            from mountfile.vfs import open_image_provider, volume_size_for_offset
+            from mountfile.vfs import (
+                RecognizedFilesystemError,
+                open_image_provider,
+                volume_size_for_offset,
+            )
 
             volume_size = volume_size_for_offset(str(image), offset)
             return open_image_provider(
                 str(image), offset=offset, volume_size=volume_size
             )
+        except RecognizedFilesystemError as exc:
+            raise OperationUnavailable(
+                "recognized filesystem was rejected without a compatibility fallback: %s"
+                % exc
+            ) from exc
         except Exception as exc:
             errors.append(exc)
         try:
@@ -272,14 +281,12 @@ class DefaultBackend:
             raise ValueError(
                 "search pattern uses a potentially catastrophic regex form"
             )
-        if _timeout_regex is None:
-            raise ValueError(
-                "safe regex search is unavailable; install the MountFile AI dependencies"
-            )
+        regex_engine = _timeout_regex or re
         try:
-            regex = _timeout_regex.compile(pattern, _timeout_regex.IGNORECASE)
-        except _timeout_regex.error as exc:
+            regex = regex_engine.compile(pattern, regex_engine.IGNORECASE)
+        except regex_engine.error as exc:
             raise ValueError("invalid search pattern: %s" % exc) from exc
+        supports_timeout = _timeout_regex is not None
         matches = []
         stack = [start]
         seen = set()
@@ -309,9 +316,15 @@ class DefaultBackend:
                 if deleted and not include_deleted:
                     continue
                 try:
-                    matched = regex.search(
-                        str(item.get("name", "")), timeout=_SEARCH_REGEX_TIMEOUT
-                    )
+                    value = str(item.get("name", ""))
+                    if supports_timeout:
+                        matched = regex.search(value, timeout=_SEARCH_REGEX_TIMEOUT)
+                    else:
+                        # The stdlib fallback is intentionally limited to the
+                        # already-rejected-safe pattern subset above and to
+                        # bounded directory-entry names. Global visit/result
+                        # limits remain active when ``regex`` is not installed.
+                        matched = regex.search(value[:256])
                 except TimeoutError as exc:
                     raise ValueError("search exceeded regex time limit") from exc
                 if matched:

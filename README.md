@@ -85,9 +85,11 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 - **Разметка диска:** определение MBR и GPT, выбор раздела или всего образа,
   чтение смещений из файла `udev`.
-- **Просмотр и извлечение:** через The Sleuth Kit (`pytsk3`) — FAT12/16/32,
-  exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 и другие файловые системы,
-  поддерживаемые установленной сборкой `libtsk`.
+- **Просмотр и извлечение:** встроенные bounded pure-Python readers для FAT12/16/32
+  и ограниченных clean ext2/ext3/ext4 профилей выбираются первыми; The Sleuth Kit
+  (`pytsk3`) остаётся явно optional fallback для остальных форматов — exFAT,
+  NTFS, HFS+, ISO9660 и других файловых систем, поддерживаемых установленной
+  сборкой `libtsk`.
 - **Запись в FAT32:** создание и перезапись файлов, длинные имена (LFN) и
   имена 8.3, создание каталогов, переименование и удаление, выделение и
   освобождение кластеров — собственным движком `mountfile/fat32.py`.
@@ -149,14 +151,15 @@ Licensed under the MIT License - see the LICENSE file for details.
 |---|---|
 | Python | 3.10+ (`requires-python = ">=3.10"`; CI проверяет 3.10–3.12) |
 | Qt | PyQt6 ≥ 6.11 для основного приложения |
-| `pytsk3` | обязательная Python-зависимость; чтение NTFS/EXT и прочих ФС |
+| `pytsk3` | optional extra `legacy-tsk`; legacy чтение неподдержанных native-профилей |
 | REST API (необязательно) | `fastapi`, `uvicorn`, `httpx` |
 | AI-слой (необязательно) | `mcp[cli]`, `pydantic`, `openai` |
 | Системные пакеты (Linux) | `libgl1`, `libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0` |
 | Системные инструменты (по желанию) | `debugfs` для ext (на Windows — `debugfs.exe` или WSL с `e2fsprogs`); `ntfs-3g` для NTFS на Linux; ImDisk Virtual Disk Driver для NTFS/exFAT/FAT12/16 на Windows (нужен запуск от администратора) |
 
 `requirements.txt` — полный набор зависимостей для Python 3.10+. Обычная
-установка через `pip install .` включает PyQt6 и `pytsk3`; последние версии
+установка через `pip install .` включает PyQt6, а `pytsk3` подключается только
+через extra `legacy-tsk`; последние версии
 этих зависимостей указаны в `pyproject.toml`. Файлы и сценарии Win7/Python 3.8 сохранены как
 legacy-артефакты, но текущий пакет требует Python 3.10+, поэтому этот релиз не
 заявляет поддержку Windows 7.
@@ -238,15 +241,16 @@ python install_mountfile.py --dev         # дополнительно инст�
 
 | Флаг | Что делает |
 |---|---|
-| *(без флагов)* | системные пакеты (`apt`/`brew`/WSL/ImDisk), обязательные Qt/pytsk3 и extras `api,ai,dfir` |
-| `--minimal` | только обязательные Qt/pytsk3 и `pip install -e .` |
+| *(без флагов)* | системные пакеты (`apt`/`brew`/WSL/ImDisk), Qt и extras `api,ai,dfir,legacy-tsk` |
+| `--minimal` | только Qt и `pip install -e .`; native FAT/ext read работает без pytsk3 |
 | `--win7` | завершится понятной ошибкой: текущая версия требует Python 3.10+ |
 | `--no-sys` | пропустить системные пакеты, WSL и ImDisk |
 | `--dry-run` | напечатать команды и ничего не выполнять |
 
 Скрипт идемпотентен: готовый `.venv` переиспользуется, повторный запуск ничего
-не ломает. `pytsk3` обязателен; если для платформы нет подходящего wheel или
-сборка зависимости не удалась, установка завершится ошибкой.
+не ломает. В полном профиле `pytsk3` устанавливается как legacy fallback; в
+`--minimal` он не нужен. Если выбранный optional wheel недоступен, ошибка
+показывается явно и не маскируется сообщением «Готово».
 Проверяются `pip check` и импорты выбранного профиля; ошибка не маскируется
 сообщением «Готово». Visual Studio C++ Build Tools не устанавливаются безусловно:
 если Windows-зависимость требует сборки из исходников, потребуется совместимый

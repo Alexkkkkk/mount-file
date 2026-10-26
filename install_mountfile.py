@@ -46,10 +46,11 @@ IS_WINDOWS = SYSTEM == "Windows"
 IS_LINUX = SYSTEM == "Linux"
 IS_MAC = SYSTEM == "Darwin"
 
-# These are also project dependencies.  Installing them first gives a clear
-# failure point for a source-built dependency such as pytsk3.
-BASE_DEPS = ["PyQt6>=6.11.0", "pytsk3>=20260715"]
-RUNTIME_EXTRAS = ("api", "ai", "dfir")
+# Native FAT/ext readers do not require libtsk.  The full profile opts into the
+# legacy fallback explicitly, while --minimal stays usable on platforms where
+# pytsk3 has no wheel.
+BASE_DEPS = ["PyQt6>=6.11.0"]
+RUNTIME_EXTRAS = ("api", "ai", "dfir", "legacy-tsk")
 
 # Qt runtime libraries are needed for PyQt6 on a stock Debian/Ubuntu desktop.
 # The compiler/Python headers are required when a dependency has no wheel.
@@ -362,11 +363,11 @@ def checks_for_profile(*, minimal: bool, dev: bool) -> list[tuple[str, str]]:
     checks = [
         ("PyQt6", "import PyQt6"),
         ("mountfile", "import mountfile"),
-        ("pytsk3", "import pytsk3"),
     ]
     if not minimal:
         checks.extend(
             [
+                ("pytsk3", "import pytsk3"),
                 ("fastapi", "import fastapi"),
                 ("mcp", "import mcp"),
                 ("pydantic", "import pydantic"),
@@ -442,7 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_header(args: argparse.Namespace) -> None:
-    mode = "Minimal" if args.minimal else "Полный (api, ai, dfir)"
+    mode = "Minimal" if args.minimal else "Полный (api, ai, dfir, legacy-tsk)"
     if args.dev:
         mode += " + dev"
     print("=" * 64)
