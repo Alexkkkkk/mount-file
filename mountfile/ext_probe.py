@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from mountfile.ext_checksum import crc32c
+
 
 class ExtProbeError(ValueError):
     """The selected extent is not a structurally valid ext superblock."""
@@ -54,6 +56,7 @@ _RO_COMPAT_PROJECT = 0x2000
 _RO_COMPAT_SHARED_BLOCKS = 0x4000
 _RO_COMPAT_VERITY = 0x8000
 _RO_COMPAT_ORPHAN_PRESENT = 0x10000
+_RO_COMPAT_METADATA_CSUM = 0x0400
 
 _KNOWN_INCOMPAT = (
     0x0001
@@ -148,6 +151,20 @@ def _u32(buf: bytes, offset: int) -> int:
     return struct.unpack_from("<I", buf, offset)[0]
 
 
+def _validate_superblock_checksum(superblock: bytes, feature_incompat: int, feature_ro_compat: int) -> None:
+    """Validate the ext4 superblock checksum before exposing its profile."""
+    if not feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
+        return
+    expected = _u32(superblock, 0x3FC)
+    candidate = bytearray(superblock)
+    struct.pack_into("<I", candidate, 0x3FC, 0)
+    uuid_seed = crc32c(superblock[0x68:0x78])
+    seed = _u32(superblock, 0x270) if feature_incompat & _INCOMPAT_CSUM_SEED else uuid_seed
+    actual = crc32c(bytes(candidate), seed)
+    if actual != expected:
+        raise ExtProbeError("ext superblock checksum mismatch")
+
+
 def _stream_size(stream: BinaryIO) -> int:
     try:
         position = stream.tell()
@@ -205,6 +222,7 @@ def _probe_stream(
     feature_compat = _u32(superblock, 0x5C)
     feature_incompat = _u32(superblock, 0x60)
     feature_ro_compat = _u32(superblock, 0x64)
+    _validate_superblock_checksum(superblock, feature_incompat, feature_ro_compat)
     if feature_incompat & _INCOMPAT_64BIT:
         blocks_count = blocks_low | (_u32(superblock, 0x150) << 32)
     else:
