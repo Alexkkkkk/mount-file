@@ -228,7 +228,9 @@ def parse_ntfs_attribute_stream(
     raise NtfsMetadataError("NTFS FILE record has no attribute end marker")
 
 
-def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
+def parse_ntfs_index_root(
+    value: bytes, *, parent_reference: int | None = None
+) -> tuple[NtfsIndexEntry, ...]:
     """Parse a resident INDEX_ROOT value containing FILE_NAME keys."""
     if len(value) < 32:
         raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
@@ -264,8 +266,13 @@ def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
         if key_length < 66 or 16 + key_length > entry_length:
             raise NtfsMetadataError("NTFS FILE_NAME key is truncated")
         key = value[pos + 16 : pos + 16 + key_length]
-        if key[0x00] == 0:
-            raise NtfsMetadataError("NTFS FILE_NAME parent reference is null")
+        parent = struct.unpack_from("<Q", key, 0)[0]
+        try:
+            decode_ntfs_file_reference(parent)
+        except NtfsRecordError as exc:
+            raise NtfsMetadataError("invalid NTFS FILE_NAME parent reference") from exc
+        if parent_reference is not None and parent != parent_reference:
+            raise NtfsMetadataError("NTFS FILE_NAME parent reference mismatch")
         name_length = key[0x40]
         name_end = 0x42 + name_length * 2
         if name_end > len(key):
@@ -286,7 +293,9 @@ def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
     raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
 
 
-def parse_ntfs_index_block(raw_block: bytes) -> tuple[NtfsIndexEntry, ...]:
+def parse_ntfs_index_block(
+    raw_block: bytes, *, parent_reference: int | None = None
+) -> tuple[NtfsIndexEntry, ...]:
     """Validate an INDX block's USA and parse its bounded index entries."""
     if len(raw_block) < 512 or len(raw_block) % 512:
         raise NtfsMetadataError("NTFS INDX block size is invalid")
@@ -305,7 +314,7 @@ def parse_ntfs_index_block(raw_block: bytes) -> tuple[NtfsIndexEntry, ...]:
             raise NtfsMetadataError("NTFS INDX USA mismatch")
         replacement = struct.unpack_from("<H", raw_block, fixup_offset + 2 + index * 2)[0]
         struct.pack_into("<H", fixed, trailer, replacement)
-    return parse_ntfs_index_root(bytes(fixed[8:]))
+    return parse_ntfs_index_root(bytes(fixed[8:]), parent_reference=parent_reference)
 
 
 def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None = None) -> NtfsMetadataProfile:

@@ -153,9 +153,11 @@ def test_parses_bounded_index_root_file_name_entry():
     struct.pack_into("<QHHI", value, entry, (3 << 48) | 9, 96, len(key), 0)
     value[entry + 16 : entry + 16 + len(key)] = key
     struct.pack_into("<QHHI", value, entry + 96, 0, 16, 0, 1)
-    entries = parse_ntfs_index_root(bytes(value))
+    entries = parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 9)
     assert entries[0].name == "note"
     assert entries[0].reference == (3 << 48) | 9
+    with pytest.raises(NtfsMetadataError, match="parent reference mismatch"):
+        parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 10)
 
 
 def test_validates_indx_usa_before_parsing_entries():
