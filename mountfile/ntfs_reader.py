@@ -244,6 +244,13 @@ def parse_ntfs_index_root(
     if len(value) < 32:
         raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
     entry_offset, total_size, allocated_size = struct.unpack_from("<III", value, 16)
+    index_flags = struct.unpack_from("<I", value, 28)[0]
+    if index_flags & ~1:
+        raise NtfsMetadataError("unsupported NTFS INDEX_ROOT flags")
+    if index_flags & 1:
+        raise NtfsMetadataError(
+            "NTFS directory requires INDEX_ALLOCATION traversal"
+        )
     if allocated_size < total_size or entry_offset < 16:
         raise NtfsMetadataError("invalid NTFS INDEX_ROOT header bounds")
     start = 16 + entry_offset
