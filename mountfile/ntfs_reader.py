@@ -238,7 +238,8 @@ def parse_ntfs_attribute_stream(
 
 
 def parse_ntfs_index_root(
-    value: bytes, *, parent_reference: int | None = None
+    value: bytes, *, parent_reference: int | None = None,
+    allow_index_allocation: bool = False,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Parse a resident INDEX_ROOT value containing FILE_NAME keys."""
     if len(value) < 32:
@@ -247,7 +248,7 @@ def parse_ntfs_index_root(
     index_flags = struct.unpack_from("<I", value, 28)[0]
     if index_flags & ~1:
         raise NtfsMetadataError("unsupported NTFS INDEX_ROOT flags")
-    if index_flags & 1:
+    if index_flags & 1 and not allow_index_allocation:
         raise NtfsMetadataError(
             "NTFS directory requires INDEX_ALLOCATION traversal"
         )
@@ -432,15 +433,7 @@ class NativeNtfsMetadataImage:
         record_number, record = self._resolve(path)
         if not record.is_directory:
             raise NtfsMetadataError("NTFS path is not a directory")
-        attrs = parse_ntfs_attribute_stream(
-            record, cluster_count=self.profile.boot.cluster_count
-        )
-        root = next((a for a in attrs if a.type_code == 0x90 and not a.name), None)
-        if root is None or root.nonresident or root.resident_value is None:
-            raise NtfsMetadataError("NTFS directory has no resident INDEX_ROOT")
-        entries = parse_ntfs_index_root(
-            root.resident_value, parent_reference=(record_number | (record.sequence_number << 48))
-        )
+        entries = self.list_dir_by_record(record_number, record)
         result = []
         for entry in entries:
             child_number = entry.reference & ((1 << 48) - 1)
@@ -552,11 +545,35 @@ class NativeNtfsMetadataImage:
         root = next((a for a in attrs if a.type_code == 0x90 and not a.name), None)
         if root is None or root.nonresident or root.resident_value is None:
             raise NtfsMetadataError("NTFS directory has no resident INDEX_ROOT")
+        root_value = root.resident_value
+        index_flags = struct.unpack_from("<I", root_value, 28)[0]
         entries = parse_ntfs_index_root(
-            root.resident_value,
+            root_value,
             parent_reference=record_number | (record.sequence_number << 48),
+            allow_index_allocation=True,
         )
-        return entries
+        if index_flags & 1:
+            allocation = next(
+                (a for a in attrs if a.type_code == 0xA0 and a.name.casefold() == "$i30"),
+                None,
+            )
+            if allocation is None or not allocation.nonresident:
+                raise NtfsMetadataError("NTFS indexed directory has no $I30 allocation")
+            if allocation.data_size > 64 * 1024 * 1024:
+                raise NtfsMetadataError("NTFS index allocation exceeds native read limit")
+            block_size = self.profile.boot.index_record_size
+            if allocation.data_size % block_size:
+                raise NtfsMetadataError("NTFS $I30 allocation is not block aligned")
+            for position in range(0, allocation.data_size, block_size):
+                block = self._read_runs(allocation.runs, position, block_size)
+                entries += parse_ntfs_index_block(
+                    block,
+                    parent_reference=record_number | (record.sequence_number << 48),
+                )
+        unique = {}
+        for entry in entries:
+            unique[(entry.name.casefold(), entry.reference)] = entry
+        return tuple(sorted(unique.values(), key=lambda item: item.name.casefold()))
 
     def read_file(self, path):
         return self.read_file_range(path, 0, self.file_size(path))
