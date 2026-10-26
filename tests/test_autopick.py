@@ -155,6 +155,14 @@ class TestValidate:
         with open(path, "rb") as f:
             assert autopick._validate_at(f, 0x100000) is None
 
+    def test_ntfs_header_cannot_cross_the_selected_partition_extent(self):
+        path = _image(os.path.join(self.tmp, "ntfs-partition.img"), 0x300000)
+        with open(path, "r+b") as f:
+            f.seek(0x100000)
+            f.write(_ntfs_boot_sector())  # declares 1 MiB
+        with open(path, "rb") as f:
+            assert autopick._validate_at(f, 0x100000, 512 * 1024) is None
+
     def test_zeroed_offset_rejected(self):
         path = _image(os.path.join(self.tmp, "fat.img"), 0x400000, 0x100000)
         with open(path, "rb") as f:
@@ -200,8 +208,10 @@ class TestScan:
 
     def test_inner_search_inside_partition(self):
         """A partition whose start is not a filesystem is searched inside."""
-        path = _image(os.path.join(self.tmp, "dump.bin"), 0x400000, 0x180000)
-        _put_mbr(path, 0x0B, 2048, 2048)  # partition @ 0x100000, no FS there
+        path = _image(
+            os.path.join(self.tmp, "dump.bin"), FAT32_BYTES + 0x180000, 0x180000
+        )
+        _put_mbr(path, 0x0B, 2048, TOTAL_SECTORS + 1024)  # no FS at partition start
 
         cands = scan_candidates(path, scan_limit=0x100000, inner_window=0x200000)
         assert any(c.offset == 0x180000 and c.source == "inner" for c in cands)

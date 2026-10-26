@@ -57,6 +57,15 @@ def _ensure_directory(path, root=None):
     """Create directories without following symlinks inside the output tree."""
     path = os.path.abspath(path)
     if root is None:
+        if _HAS_DIR_FD:
+            try:
+                fd = _open_rooted_directory(os.path.sep, path, create=True)
+            except OSError as exc:
+                raise ExtractError(
+                    "cannot safely create directory %s: %s" % (path, exc)
+                ) from exc
+            os.close(fd)
+            return
         try:
             os.makedirs(path, exist_ok=True)
             mode = os.lstat(path).st_mode
@@ -187,7 +196,7 @@ def _write_file(provider, src_path, dst_path, root=None):
         parent_fd = (
             _open_rooted_directory(root, parent, create=True)
             if root is not None
-            else os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            else _open_rooted_directory(os.path.sep, parent, create=True)
         )
         try:
             name = os.path.basename(dst_path)

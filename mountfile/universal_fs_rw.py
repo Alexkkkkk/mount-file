@@ -7,7 +7,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
   1. NativeFat32Writer  — FAT12/16/32, прямая правка FAT + LFN + каталогов
   2. NativeExt2Writer   — ограниченный clean ext2 profile, in-process Python
-  3. ExtDebugfsWriter   — legacy ext2/3/4 fallback через `debugfs -w`
+  3. ExtDebugfsWriter   — явный legacy ext2/3/4 compatibility backend через `debugfs -w`
   4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
   5. LoopMountWriter    — Linux loop-mount или Windows ImDisk для NTFS/FAT/exFAT
   6. RebuildWriter      — fallback: unpack → mkfs → repack
@@ -1208,18 +1208,28 @@ class Fat32RW(RWBackend):
 
 
 # =============================================================================
-# 5. EXT2/3/4 (native ext2 phase 1; debugfs legacy fallback)
+# 5. EXT2/3/4 (native ext2 phase 1; explicit debugfs compatibility)
 # =============================================================================
 class Ext234RW(RWBackend):
     """
     ext2 uses MountFile's bounded in-process writer when its clean feature
-    profile is supported; ext3/ext4 retain the e2fsprogs debugfs fallback.
+    profile is supported. The e2fsprogs debugfs compatibility path is disabled
+    unless the library caller explicitly sets ``allow_legacy_debugfs=True``.
     """
 
-    def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
+    def __init__(
+        self,
+        image: Path,
+        offset: int = 0,
+        volume_size: int | None = None,
+        *,
+        allow_legacy_debugfs: bool = False,
+    ):
         super().__init__(image, offset)
         self.volume_size = int(volume_size) if volume_size is not None else None
+        self.allow_legacy_debugfs = bool(allow_legacy_debugfs)
         self._native = None
+        self._native_rejection = ""
         from .ext2_native import NativeExt2ImageWriter, NativeExt2UnsafeError
 
         try:
@@ -1232,15 +1242,21 @@ class Ext234RW(RWBackend):
             # Do not let debugfs or a generic loop mount bypass failed native
             # geometry/clean-state checks for an ext2 image.
             raise
-        except Exception:
-            # ext3/ext4 and ext2 volumes outside the explicitly supported
-            # profile continue through the pre-existing external backend.
+        except Exception as exc:
             self._native = None
+            self._native_rejection = str(exc)
         self._check_ext()
         if self._native is None:
+            if not self.allow_legacy_debugfs:
+                raise RuntimeError(
+                    "native ext2 profile rejected this volume; legacy debugfs "
+                    "compatibility requires allow_legacy_debugfs=True: %s"
+                    % self._native_rejection
+                )
             self._require_debugfs()
         else:
             self._tmp = None
+            self._tmp_source_hash = None
 
     def _check_ext(self) -> None:
         sb = self._read_at(1024, 1024)
@@ -1267,6 +1283,7 @@ class Ext234RW(RWBackend):
         )
         self.is_ext3 = (self.feature_compat & 0x4) and not self.is_ext4
         self._tmp: Path | None = None
+        self._tmp_source_hash: bytes | None = None
 
     @staticmethod
     def _require_debugfs() -> None:
@@ -1276,15 +1293,41 @@ class Ext234RW(RWBackend):
             )
 
     def _ensure_local(self) -> Path:
-        """debugfs работает с raw-образом; если offset != 0 — извлечь."""
+        """Stage exactly one filesystem extent for explicit debugfs compatibility."""
         if self.offset == 0:
             return self.image
         if self._tmp is None:
             self._tmp = Path(tempfile.mkstemp(suffix=".ext")[1])
             with self.image.open("rb") as src, self._tmp.open("wb") as dst:
                 src.seek(self.offset)
-                shutil.copyfileobj(src, dst)
+                remaining = self.filesystem_size
+                digest = hashlib.sha256()
+                while remaining:
+                    chunk = src.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise RuntimeError(
+                            "short read while staging ext filesystem extent"
+                        )
+                    dst.write(chunk)
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            self._tmp_source_hash = digest.digest()
         return self._tmp
+
+    def _extent_hash(self, path: Path, offset: int) -> bytes:
+        digest = hashlib.sha256()
+        remaining = self.filesystem_size
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise RuntimeError("short read while hashing ext filesystem extent")
+                digest.update(chunk)
+                remaining -= len(chunk)
+        return digest.digest()
 
     def _debugfs(self, *args: str, write: bool = False) -> str:
         img = self._ensure_local()
@@ -1299,10 +1342,28 @@ class Ext234RW(RWBackend):
 
     def _flush_tmp(self) -> None:
         if self._tmp and self.offset > 0:
+            if self._tmp.stat().st_size != self.filesystem_size:
+                raise RuntimeError("debugfs staging extent has an unexpected size")
+            if self._tmp_source_hash != self._extent_hash(self.image, self.offset):
+                raise RuntimeError(
+                    "image changed concurrently; refusing legacy ext commit"
+                )
             with self.image.open("r+b") as dst:
                 dst.seek(self.offset)
                 with self._tmp.open("rb") as src:
-                    shutil.copyfileobj(src, dst)
+                    remaining = self.filesystem_size
+                    while remaining:
+                        chunk = src.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise RuntimeError("debugfs staging extent is truncated")
+                        if dst.write(chunk) != len(chunk):
+                            raise RuntimeError(
+                                "short write while committing ext filesystem extent"
+                            )
+                        remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            self._tmp_source_hash = self._extent_hash(self.image, self.offset)
 
     # ---- public API -------------------------------------------------------
     def info(self) -> FSInfo:
@@ -1414,10 +1475,11 @@ class Ext234RW(RWBackend):
         if self._native is not None:
             return self._native.delete(path, recursive=recursive)
         if recursive:
-            self._debugfs(f"rmdir {path}")
-        else:
-            self._debugfs(f"rm {path}", write=True)
-            self._flush_tmp()
+            raise NotImplementedError(
+                "recursive ext deletion is not supported by debugfs"
+            )
+        self._debugfs(f"rm {path}", write=True)
+        self._flush_tmp()
 
     def rename(self, src: str, dst: str) -> None:
         if self._native is not None:
@@ -1445,6 +1507,12 @@ class Ext234RW(RWBackend):
             self._flush_tmp()
         finally:
             tmp.unlink(missing_ok=True)
+
+    def close(self) -> None:
+        if self._tmp is not None:
+            self._tmp.unlink(missing_ok=True)
+            self._tmp = None
+        self._tmp_source_hash = None
 
 
 # =============================================================================
@@ -1942,6 +2010,10 @@ class UniversalFSRW:
                             raise RuntimeError(
                                 "refusing unsafe ext2 geometry/state: %s" % e
                             ) from e
+                        raise RuntimeError(
+                            "refusing unsupported ext profile without an explicit "
+                            "legacy compatibility backend: %s" % e
+                        ) from e
         # Last resort remains opt-in through an actually detected filesystem.
         try:
             self.backend = LoopMountRW(self.image, off, fs_type)

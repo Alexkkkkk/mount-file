@@ -300,7 +300,9 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             try:
                 return open_native_ext2(image_path, offset, volume_size)
             except Ext2ReadError as exc:
-                raise TskError(f"native ext2 reader declined the ext profile: {exc}") from exc
+                raise TskError(
+                    f"native ext2 reader declined the ext profile: {exc}"
+                ) from exc
         if profile.fs_type in ("ext3", "ext4"):
             if not profile.clean_unmounted or profile.journal_recovery_needed:
                 raise TskError("ext volume is dirty or requires journal recovery")
@@ -315,6 +317,8 @@ def open_image_provider(image_path, offset=0, volume_size=None):
         try:
             return open_native_ntfs_metadata(image_path, offset, volume_size)
         except Exception as exc:
-            raise TskError(f"native NTFS reader declined the NTFS profile: {exc}") from exc
+            raise TskError(
+                f"native NTFS reader declined the NTFS profile: {exc}"
+            ) from exc
 
     return TskImage(image_path, offset=offset)

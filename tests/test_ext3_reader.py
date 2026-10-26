@@ -27,9 +27,7 @@ def test_vfs_does_not_downgrade_rejected_ext3_profile(tmp_path, monkeypatch):
 
     monkeypatch.setattr(vfs, "TskImage", fail_fallback)
     with pytest.raises(vfs.TskError, match="native ext3/ext4 reader declined"):
-        vfs.open_image_provider(
-            image_path, offset=0, volume_size=BLOCKS_COUNT * 1024
-        )
+        vfs.open_image_provider(image_path, offset=0, volume_size=BLOCKS_COUNT * 1024)
 
 
 def test_dirty_ext_profile_fails_before_any_provider_open(tmp_path, monkeypatch):
@@ -41,9 +39,7 @@ def test_dirty_ext_profile_fails_before_any_provider_open(tmp_path, monkeypatch)
         lambda *args, **kwargs: pytest.fail("dirty ext must not use fallback"),
     )
     with pytest.raises(vfs.TskError, match="dirty or requires journal recovery"):
-        vfs.open_image_provider(
-            image_path, offset=0, volume_size=BLOCKS_COUNT * 1024
-        )
+        vfs.open_image_provider(image_path, offset=0, volume_size=BLOCKS_COUNT * 1024)
 
 
 def test_external_journal_device_is_rejected_explicitly(tmp_path):
