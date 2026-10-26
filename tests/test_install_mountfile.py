@@ -88,7 +88,8 @@ def test_minimal_profile_does_not_require_yara():
     """Minimal verification has only base imports and must not probe DFIR yara."""
 
     checks = installer.checks_for_profile(minimal=True, dev=False)
-    assert [name for name, _ in checks] == ["PyQt6", "mountfile", "pytsk3"]
+    assert [name for name, _ in checks] == ["PyQt6", "mountfile"]
+    assert all("pytsk3" not in source for _, source in checks)
     assert all("yara" not in source for _, source in checks)
 
 

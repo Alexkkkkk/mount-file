@@ -1,10 +1,14 @@
 # MF-WE — движок записи (ТЗ MF-WE-TZ-001)
 
 `mountfile/write_engine.py` — транзакционный фасад над RW-бэкендами
-`mountfile/universal_fs_rw.py` (native FAT12/16/32, ext2/3/4 через `debugfs`,
-NTFS через mount-helper, loop mount, rebuild). Собственный нативный движок
-NTFS/ext не реализуется: по ТЗ §15 стоимость и риск такого решения
-несопоставимы с выгодой.
+`mountfile/universal_fs_rw.py` (native FAT12/16/32 и ограниченный clean ext2
+profile; явный library-level legacy ext2/3/4 compatibility backend через
+`debugfs`; NTFS через системный/mount-helper backend). Native ext2 — первая фаза
+собственной записи; GUI и `WriteEngine` не переключают ext3/ext4 автоматически
+на внешний writer до отдельной journal/recovery-aware реализации (issue #182).
+Новый NTFS boot-sector probe и FILE-record parser ниже только проверяют
+метаданные и не переключают существующий backend, не предоставляют полное
+чтение файлов и не разрешают запись.
 
 ## Что гарантирует MF-WE
 
@@ -13,7 +17,7 @@ NTFS/ext не реализуется: по ТЗ §15 стоимость и ри�
 | RO по умолчанию | `WriteEngine(image)` — все мутации бросают `ReadOnlyError`; запись только при `read_only=False` |
 | Backup перед записью | снапшот сессии + снапшот транзакции (ротация `keep_snapshots`, по умолчанию 3) |
 | Транзакции с журналом | `EngineJournal`: JSONL с полями `prev`/`hash`; `verify_journal()` пересчитывает цепочку |
-| Verify после commit | `verify()`: размер образа, структурные проверки BPB/суперблока, внешний чеккер (`fsck.fat`/`e2fsck`) — с фактическими значениями в `detail` |
+| Verify после commit | `verify()`: размер образа, структурные проверки BPB/суперблока; ext2 writer проверяет staged metadata после каждой мутации, независимый `e2fsck` для него не запускается |
 | Откат | `rollback()` возвращает образ к состоянию на старте транзакции побайтово; `restore_from_backup()` — к снапшоту |
 | Dry-run | `dry_run=True`: проверяются пути и предусловия, ни один байт образа не меняется |
 | Запрет записи в повреждённые образы | `damage_report()` + `DamagedImageError`; обход только явным `allow_damaged=True` |
@@ -42,20 +46,28 @@ engine.close()
 
 ## Границы
 
-* FAT12/16/32 — собственный движок (как и раньше).
-* ext2/3/4 — `debugfs -w`; на Windows используется `debugfs.exe` из `PATH` или
-  `debugfs` из WSL, если установлен Linux-дистрибутив с пакетом `e2fsprogs`
-  (например, `sudo apt install e2fsprogs`). MountFile конвертирует host paths
-  для временных файлов, а исходный image extent проходит через существующую
-  проверяемую transactional commit/rollback процедуру. `chmod`/`chown`/`symlink`
-  доступны только на ext.
+* FAT12/16/32 — bounded pure-Python readers `native-fat12-ro`,
+  `native-fat16-ro` и `native-fat32-ro` выбираются через unified VFS без
+  `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
+  кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
+  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only.
+* Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
+  один single-indirect pointer для данных файла) использует собственный Python
+  writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
+  sparse/double/triple indirect. Рост каталогов за пределы direct blocks не
+  поддерживается. Unsupported/dirty/out-of-bounds volumes не получают native RW.
+  Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
+  `debugfs -w` доступен только прямому library caller с
+  `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
+  Он staging-копирует и commit-ит ровно filesystem extent; `chmod`/`chown`/
+  `symlink` остаются за этим compatibility API.
 
 * NTFS — через `ntfs-3g` на Linux или системный файловый драйвер Windows через
   ImDisk. На Windows требуется отдельно установленный ImDisk Virtual Disk
   Driver и запуск MountFile от имени администратора; если одно из условий не
   выполнено, GUI показывает точную причину и не предлагает сохранение в образ.
 
-* exFAT и FAT12/16 — через ImDisk и системный Windows filesystem driver на
+* exFAT — через ImDisk и системный Windows filesystem driver на
   Windows (те же требования установки и прав); на Linux — через `LoopMountRW`,
   если доступны `mount`/`umount` и соответствующий драйвер. HFS+ и другие
   неподдерживаемые Windows filesystem drivers остаются read-only.
@@ -68,10 +80,43 @@ engine.close()
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
   тома, спарс-файлы/сжатие/EFS.
 
+## Ext-профиль и native ext2 read-only VFS
+
+`mountfile.vfs.probe_ext_profile(image_path, offset=0, volume_size=None)` —
+ограниченный pure-Python probe первичного 1024-байтового superblock ext2/3/4.
+Он возвращает feature-derived классификацию, геометрию и флаги состояния,
+наличия журнала и необходимости recovery. Для деталей feature flags и
+superblock state см. [Linux ext4 superblock specification](https://docs.kernel.org/filesystems/ext4/super.html)
+и [JBD2 journal documentation](https://docs.kernel.org/filesystems/ext4/journal.html).
+
+Сам probe не является файловым reader: он не обходит каталоги и не читает
+содержимое файлов. Отдельный `mountfile.vfs.open_native_ext2(image_path,
+offset=0, volume_size=...)` открывает pure-Python `NativeExt2Image` для явного
+чтения ограниченного ext2 subset. Provider проверяет границы раздела, group
+descriptors, inode/block allocation bitmaps, linear directory records и
+direct/single/double/triple-indirect block maps. Он требует явный `volume_size`
+и открывает образ только для чтения. Один вызов чтения ограничен 16 MiB;
+экспорт файлов использует 1 MiB ranged chunks, чтобы не собирать большие файлы
+целиком в памяти.
+
+Native reader принимает только clean ext2 revision 0/1 с 1/2/4 KiB blocks и
+allowlisted features. Dirty/recovery-required volumes, JBD2/ext3, ext4 layout
+features, unknown feature flags, indexed directories, compressed/encrypted/
+extent/inline inodes и symlink traversal отклоняются. `open_image_provider`
+автоматически выбирает этот read-only backend в GUI, CLI и MCP только при наличии
+точного размера раздела (или whole-image ext2 без таблицы разделов); остальные
+профили остаются на pytsk3/существующих fallback путях. Это не разрешение на
+запись и не FUSE export. `phase1_ext2_profile_candidate` по-прежнему означает
+только предварительное соответствие write profile. Writer обязан самостоятельно
+проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
+
 ## Ограничения и риски
 
-* Корректность записи в NTFS/ext равна корректности бэкенда, который её
-  выполняет; MF-WE добавляет транзакционность и аудит, а не новую реализацию ФС.
+* Native ext2 имеет консервативный feature allowlist и проверяет staged image
+  до commit, но не является power-loss-atomic; ext3/ext4 и unsupported ext2
+  профили по умолчанию остаются read-only. Native NTFS metadata browse также
+  fail-closed до отдельной реализации валидации restart area `$LogFile`; boot/MFT
+  probe остаётся доступным только для диагностики.
 
   GUI и `WriteEngine(read_only=False)` используют тот же `UniversalFSRW`,
   поэтому это не только read/extract режим.
@@ -80,3 +125,48 @@ engine.close()
   детерминированные crash/rollback-сценарии в `tests/test_write_engine.py`.
 * Покрытие строк/ветвей из §9.3 (≥85% / ≥75%, транзакционный слой ≥95%) на
   текущем прогоне не подтверждено для всего пакета.
+
+## NTFS boot-sector probe (read-only groundwork)
+
+`mountfile.vfs.probe_ntfs_profile(image_path, offset, volume_size)` вызывает
+pure-Python probe первичного 512-байтового NTFS boot sector. Он требует явную
+внешнюю границу образа/раздела и проверяет OEM/signature, bytes-per-sector,
+sectors-per-cluster, объявленный размер тома, расположение `$MFT`/`$MFTMirr` и
+кодирование размеров MFT/index records. Автопоиск томов использует тот же parser,
+чтобы отвергать NTFS-подобные случайные boot sectors и геометрию вне образа.
+Разметка полей и кодирование размеров сверены с upstream Linux NTFS3 [структурами
+on-disk](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/ntfs.h)
+и [проверками геометрии](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/super.c).
+
+Успешный результат означает только валидную геометрию boot sector. Probe не
+проверяет сам backup boot sector, MFT FILE records и USA fixups, атрибуты и
+runlists, каталоговые индексы, `$Volume` dirty flag либо `$LogFile` recovery.
+Поэтому он не является готовым NTFS reader, clean-volume verdict или разрешением
+на запись. Native VFS routing остаётся выключенным до завершения последующих
+read-only metadata-validation этапов.
+
+## NTFS FILE-record header and USA validation
+
+`mountfile.vfs.parse_ntfs_file_record_header(record)` валидирует заголовок одного
+in-use `FILE` record и Update Sequence Array: требуемый count, границы массива,
+совпадение update sequence number в конце каждого 512-байтового блока и поля
+размера/смещения заголовка. Исправленные trailer words возвращаются в отдельной
+копии только после успешной проверки всех блоков. При несовпадении parser
+отклоняет запись целиком; атрибуты остаются непрочитанными.
+
+Реализация принимает старое и новое расположение USA (`0x2A` и `0x30`) и
+ограничивает запись 1 MiB. Формат заголовка и алгоритм fixup сверены с
+[документацией Microsoft](https://learn.microsoft.com/en-us/windows/win32/devnotes/file-record-segment-header)
+и [реализацией NTFS3](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/fsntfs.c).
+Это низкоуровневый parser, а не чтение `$MFT` с диска: он не проверяет атрибуты,
+родительские ссылки, каталоги, `$Volume`/`$LogFile` и не включает NTFS read/write
+routing.
+
+`mountfile.vfs.probe_ntfs_metadata(image_path, offset, volume_size)` — следующий
+read-only этап. Он требует точную границу тома, повторно проверяет backup boot
+sector, читает `$MFT` и `$MFTMirr` record 0 с bounded reads и проверяет полный
+поток атрибутов: длины, выравнивание, resident/nonresident layout, VCN bounds и
+структуру runlist. Результат является metadata profile и не включает обход
+каталогов, восстановление `$LogFile`, symlink traversal или любые операции
+записи. При несогласованности primary/backup boot, MFT или USA весь профиль
+отклоняется.

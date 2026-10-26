@@ -36,6 +36,8 @@ from __future__ import annotations
 import os
 import struct
 
+from mountfile.ntfs_probe import parse_ntfs_boot_sector
+
 __all__ = [
     "Candidate",
     "auto_select",
@@ -185,36 +187,58 @@ def _fat_geometry(buf):
     return kind, label, total * bps
 
 
-def _validate_at(f, offset):
+def _validate_at(f, offset, extent_size=None):
     """Проверить смещение. Возвращает ``(fstype, label, size_bytes)`` или None."""
     if offset < 0:
         return None
     try:
+        f.seek(0, os.SEEK_END)
+        image_remaining = f.tell() - offset
+        available_size = image_remaining if extent_size is None else int(extent_size)
+        if available_size <= 0 or available_size > image_remaining:
+            return None
         f.seek(offset)
-        head = f.read(0x8006)
-    except OSError:
+        head = f.read(min(0x8006, available_size))
+    except (OSError, ValueError):
         return None
     if len(head) < 512:
         return None
+
+    def bounded(size):
+        return size if size and 0 < size <= available_size else None
 
     # --- FAT / NTFS / exFAT: загрузочный сектор -------------------------
     if head[510:512] == b"\x55\xaa" and head[0] in (0xE9, 0xEB):
         oem = head[3:11]
         if oem == b"NTFS    ":
-            bps = struct.unpack_from("<H", head, 11)[0]
-            spc = head[13]
-            total = struct.unpack_from("<Q", head, 40)[0]
-            if bps in (512, 1024, 2048, 4096) and spc and not spc & (spc - 1) and total:
-                return "NTFS", "", total * bps
+            try:
+                profile = parse_ntfs_boot_sector(
+                    head[:SECTOR_SIZE], volume_size=available_size
+                )
+            except (OSError, ValueError):
+                return None
+            return "NTFS", "", profile.filesystem_size
         elif oem == b"EXFAT   ":
-            shift, spc_shift = head[108], head[109]
-            vol_len = struct.unpack_from("<Q", head, 72)[0]
-            if 9 <= shift <= 12 and spc_shift <= 25 and vol_len:
-                return "exFAT", "", vol_len << shift
+            try:
+                from .exfat_probe import parse_exfat_boot_region
+
+                shift = head[108]
+                region_size = 12 << shift
+                if not 9 <= shift <= 12 or region_size > available_size:
+                    return None
+                f.seek(offset)
+                profile = parse_exfat_boot_region(
+                    f.read(region_size), volume_size=available_size
+                )
+            except (OSError, ValueError):
+                return None
+            return "exFAT", "", profile.volume_length * profile.bytes_per_sector
         else:
             fat = _fat_geometry(head)
             if fat:
                 kind, label, size = fat
+                if not bounded(size):
+                    return None
                 # Первый байт FAT — дескриптор среды 0xF0..0xFF. Случайные
                 # данные его почти никогда не дают, а битый BPB — не даёт.
                 bps = struct.unpack_from("<H", head, 11)[0]
@@ -233,25 +257,30 @@ def _validate_at(f, offset):
         blocks = struct.unpack_from("<I", head, 0x404)[0]
         inodes = struct.unpack_from("<I", head, 0x400)[0]
         if log_bs <= 6 and blocks and inodes:
-            return "ext2/3/4", "", blocks << (log_bs + 10)
+            size = blocks << (log_bs + 10)
+            if bounded(size):
+                return "ext2/3/4", "", size
 
     # --- HFS+ ----------------------------------------------------------
     if len(head) >= 1048 and head[1024:1026] == b"H+":
         block_size = struct.unpack_from("<I", head, 1040)[0]
         total_blocks = struct.unpack_from("<I", head, 1044)[0]
         if block_size and not block_size & (block_size - 1) and total_blocks:
-            return "HFS+", "", block_size * total_blocks
+            size = block_size * total_blocks
+            if bounded(size):
+                return "HFS+", "", size
 
     # --- ISO9660 -------------------------------------------------------
     if len(head) >= 0x8006 and head[0x8000] == 1 and head[0x8001:0x8006] == b"CD001":
         size = struct.unpack_from("<I", head, 0x8050)[0]
-        return "ISO9660", "", size * 2048 if size else None
+        size = size * 2048 if size else None
+        return ("ISO9660", "", size) if bounded(size) else None
 
     # --- raw flash файловые системы ------------------------------------
     if head[0:4] == b"hsqs":
         block_size = struct.unpack_from("<I", head, 12)[0]
         used = struct.unpack_from("<Q", head, 40)[0]
-        if block_size >= 4096 and not block_size & (block_size - 1) and used:
+        if block_size >= 4096 and not block_size & (block_size - 1) and bounded(used):
             return "squashfs", "", used
     if head[0:4] == b"\x31\x18\x10\x06":
         node_type = struct.unpack_from("<I", head, 20)[0]
@@ -266,7 +295,7 @@ def _validate_at(f, offset):
 
 
 # ------------------------------------------------------------------ скан
-def _scan_range(f, start, end):
+def _scan_range(f, start, end, *, extent_end=None):
     """Найти смещения-кандидаты в диапазоне ``[start, end)``."""
     try:
         f.seek(0, 2)
@@ -308,7 +337,8 @@ def _scan_range(f, start, end):
 
     found = []
     for offset in offsets[:MAX_VALIDATE]:
-        info = _validate_at(f, offset)
+        candidate_extent = None if extent_end is None else extent_end - offset
+        info = _validate_at(f, offset, candidate_extent)
         if info:
             found.append((offset, info[0], info[1], info[2]))
     return found
@@ -322,7 +352,15 @@ def _volume_candidates(path, udev=None, scan_limit=DEFAULT_SCAN_LIMIT):
         from .partition import list_partitions
 
         for p in list_partitions(path):
-            out.append(Candidate(p.offset, "raw", source="partition", name=p.name))
+            out.append(
+                Candidate(
+                    p.offset,
+                    "raw",
+                    source="partition",
+                    name=p.name,
+                    size=p.size_bytes,
+                )
+            )
     except Exception:
         pass
 
@@ -379,7 +417,7 @@ def scan_candidates(
 
         # 2. таблица разделов и udev
         for cand in _volume_candidates(path, udev=udev, scan_limit=scan_limit):
-            info = _validate_at(f, cand.offset)
+            info = _validate_at(f, cand.offset, cand.size)
             if info:
                 cand.fstype, cand.label, cand.size = info[0], info[1], info[2]
                 cand.add(12, "ФС подтверждена на смещении раздела")
@@ -393,13 +431,22 @@ def scan_candidates(
         # 3. глубокий поиск внутри разделов без валидной ФС
         if deep and inner_window:
             starts = [
-                (c.offset, c.name or c.source)
+                (c.offset, c.name or c.source, c.size)
                 for c in list(candidates)
                 if c.fstype == "raw" and c.source in ("partition", "udev")
             ]
-            for offset, name in starts:
+            for offset, name, partition_size in starts:
+                partition_end = (
+                    offset + int(partition_size) if partition_size is not None else None
+                )
+                inner_end = offset + inner_window
+                if partition_end is not None:
+                    inner_end = min(inner_end, partition_end)
                 for hit, fstype, label, size in _scan_range(
-                    f, offset + SECTOR_SIZE, offset + inner_window
+                    f,
+                    offset + SECTOR_SIZE,
+                    inner_end,
+                    extent_end=partition_end,
                 ):
                     inner = add(
                         Candidate(
@@ -442,10 +489,25 @@ def _score_alignment(cand, path):
 def verify_mount(path, offset, fstype=None):
     """Реально открыть том. Возвращает ``(backend, entries, error)``.
 
-    ``backend`` — ``"tsk"``, ``"fat32"`` или None. Это единственная проверка,
-    которая ловит ошибки ``FS_Info_Con`` до показа их пользователю.
+    ``backend`` — ``"native-fat12"``, ``"native-fat16"``, ``"native-fat32"``,
+    ``"tsk"`` или None. Это единственная проверка, которая ловит ошибки
+    ``FS_Info_Con`` до показа их пользователю.
     """
     errors = []
+    if str(fstype or "").lower().startswith("fat"):
+        try:
+            from .fat_reader import NativeFatImage
+
+            provider = NativeFatImage(path, offset=offset)
+            try:
+                entries = len(provider.list_dir("/"))
+                return "native-fat%d" % provider.fat_type, entries, None
+            finally:
+                provider.close()
+        except Exception as e:
+            errors.append("native FAT: %s" % e)
+            return None, 0, " | ".join(errors)
+
     try:
         from .vfs import TskImage
 

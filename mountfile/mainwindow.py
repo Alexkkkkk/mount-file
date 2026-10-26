@@ -37,7 +37,12 @@ from .qt_compat import (
     SingleSelection,
     Stretch,
 )
-from .vfs import TskError, TskImage
+from .vfs import (
+    RecognizedFilesystemError,
+    TskError,
+    open_image_provider,
+    volume_size_for_offset,
+)
 
 
 class Node:
@@ -212,6 +217,7 @@ class MainWindow(QMainWindow):
         self.image_path = None
         self.provider = None
         self.backend = None
+        self.volumes = []
         self.writer = None
         self.writer_fh = None
         self.model = None
@@ -331,9 +337,11 @@ class MainWindow(QMainWindow):
         self.cmb_parts.clear()
         self.cmb_parts.addItem("Whole image (offset 0)", 0)
         try:
-            for i, v in enumerate(detect_volumes(path), 1):
+            self.volumes = detect_volumes(path)
+            for i, v in enumerate(self.volumes, 1):
                 self.cmb_parts.addItem("%d. %s" % (i, v.desc), v.offset)
         except Exception as e:
+            self.volumes = []
             self.log_msg("Volume scan failed: %s" % e)
         self.cmb_parts.blockSignals(False)
         # Auto-select the first real volume when the image has a partition
@@ -355,9 +363,36 @@ class MainWindow(QMainWindow):
         # Nothing is writable until a volume is actually mounted and its FAT32
         # header parsed - a failed mount must not leave live buttons behind.
         self._set_write_enabled(False)
+        volume_size = volume_size_for_offset(self.image_path, offset)
         try:
-            self.provider = TskImage(self.image_path, offset=offset)
-            self.backend = "The Sleuth Kit"
+            self.provider = open_image_provider(
+                self.image_path, offset=offset, volume_size=volume_size
+            )
+            backend_names = {
+                "native-ext2": "native ext2 (Python)",
+                "native-fat12-ro": "native FAT12 (Python, read-only)",
+                "native-fat16-ro": "native FAT16 (Python, read-only)",
+                "native-fat32-ro": "native FAT32 (Python, read-only)",
+                "native-ext3-ro": "native ext3 (Python, read-only)",
+                "native-ext4-ro": "native ext4 (Python, read-only)",
+                "native-ntfs-ro": "native NTFS (Python, read-only)",
+                "native-ntfs-metadata-ro": "native NTFS metadata (Python, read-only)",
+                "pytsk3": "The Sleuth Kit",
+                "pytsk3-fallback": "The Sleuth Kit (legacy fallback)",
+            }
+            self.backend = backend_names.get(
+                getattr(self.provider, "backend_name", ""), "read-only provider"
+            )
+        except RecognizedFilesystemError as native_err:
+            self.provider = None
+            QMessageBox.warning(
+                self,
+                "Filesystem is read-only",
+                "The selected filesystem was recognized but its native profile was rejected.\n\n"
+                "%s\n\nA legacy parser is deliberately not used for this volume."
+                % native_err,
+            )
+            return
         except TskError as tsk_err:
             try:
                 self.provider = Fat32Provider(self.image_path, offset=offset)

@@ -78,21 +78,24 @@ python -m mountfile --help
 | Компонент | Статус | Назначение и ограничение |
 |---|---|---|
 | PyQt6 (в `requirements.txt` `>=6.11`) | основной для Win 10/11, Linux, macOS | GUI `main.py` |
-| `pytsk3` | обязательная Python-зависимость; нужен для NTFS/EXT и прочих ФС | сборка/колёса зависят от Python и платформы |
-| `debugfs` из e2fsprogs | нужен для записи в ext2/3/4 через F4/F5 | `debugfs.exe` в `PATH` либо WSL/e2fsprogs; устанавливается через меню компонентов или `install-components.bat` |
+| `pytsk3` | optional extra `legacy-tsk`; fallback для форматов без native reader | сборка/колёса зависят от Python и платформы |
+| `debugfs` из e2fsprogs | явный library-level compatibility backend для ext2 вне native allowlist и ext3/4; не нужен для supported clean ext2 и не включается GUI автоматически | `debugfs.exe` в `PATH` либо WSL/e2fsprogs; устанавливается через меню компонентов или `install-components.bat` |
 | ImDisk Virtual Disk Driver | нужен для записи в NTFS/exFAT/FAT12/16-образы на Windows | устанавливается через меню компонентов; запуск MountFile от имени администратора; [сайт автора](https://ltr-data.se/opencode.html/) |
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |
 | `dosfstools`, `mtools` | только разработка | создание синтетических образов через `make sample` |
 | `fastapi`, `uvicorn` | только DFIR REST-команда | нужны лишь для `mountfile_dfir.py serve` |
 
 `requirements.txt` — полный профиль и включает optional AI/API зависимости.
-Команда `python -m pip install .` устанавливает обязательные PyQt6 и `pytsk3`;
-дополнительные возможности устанавливаются через `.[api]`, `.[ai]` или `.[dfir]`.
+Команда `python -m pip install .` устанавливает PyQt6 и не требует `pytsk3`:
+FAT12/16/32 и поддержанные native ext-профили работают без libtsk. Для legacy
+fallback явно установите `python -m pip install '.[legacy-tsk]'`; дополнительные
+возможности устанавливаются через `.[api]`, `.[ai]` или `.[dfir]`.
 
-Для записи ext2/3/4 на Windows можно использовать WSL: установите дистрибутив
-Linux, откройте его терминал и выполните `sudo apt install e2fsprogs`. MountFile
-автоматически ищет `debugfs` в WSL и использует его для изменения временной копии
-раздела с последующей проверкой и записью в образ. Для NTFS/exFAT/FAT12/16
+Для явно выбранного library-level compatibility режима ext2/3/4 на Windows можно
+использовать WSL: установите дистрибутив Linux, откройте его терминал и выполните
+`sudo apt install e2fsprogs`. Этот режим находит `debugfs` в WSL и изменяет
+временную копию выбранного extent с последующей проверкой и записью в образ;
+обычный GUI и `WriteEngine` его автоматически не выбирают. Для NTFS/exFAT/FAT12/16
 используется ImDisk; это отдельный путь и он требует запуска от имени администратора.
 
 В репозитории сохранены `requirements-win7.txt` и отдельные legacy build

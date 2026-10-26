@@ -3012,7 +3012,12 @@ class MainWindow(QMainWindow):
     def search_files_in_image(self, pattern, *, max_results=2000, max_nodes=30000):
         """Return bounded filename matches from all detected image volumes."""
         from .fat32 import Fat32Error, Fat32Provider
-        from .vfs import TskError, TskImage
+        from .vfs import (
+            RecognizedFilesystemError,
+            TskError,
+            open_image_provider,
+            volume_size_for_offset,
+        )
 
         volumes = self.volumes or [
             _PartitionVolume(
@@ -3045,7 +3050,13 @@ class MainWindow(QMainWindow):
                     provider = current.provider
                 else:
                     try:
-                        provider = TskImage(self.image_path, offset=offset)
+                        provider = open_image_provider(
+                            self.image_path,
+                            offset=offset,
+                            volume_size=volume_size_for_offset(self.image_path, offset),
+                        )
+                    except RecognizedFilesystemError:
+                        raise
                     except TskError:
                         provider = Fat32Provider(self.image_path, offset=offset)
                     owned = True
@@ -3532,55 +3543,61 @@ class MainWindow(QMainWindow):
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
-        from .vfs import TskError, TskImage
+        from .vfs import RecognizedFilesystemError, TskError, open_image_provider
 
         try:
-            panel.provider = TskImage(self.image_path, offset=offset)
+            panel.provider = open_image_provider(
+                self.image_path,
+                offset=offset,
+                volume_size=volume_size,
+            )
+        except RecognizedFilesystemError as recognized_error:
+            panel.provider = None
+            panel.refresh()
+            self.log_msg(
+                "Том @ offset %d распознан, но не поддерживается безопасным "
+                "профилем: %s" % (offset, recognized_error)
+            )
+            QMessageBox.warning(
+                self,
+                "Том открыт только для чтения",
+                "Распознанный формат или профиль не поддерживается безопасным "
+                "native backend. Другой файловый парсер не будет запускаться.\n\n%s"
+                % recognized_error,
+            )
+            return False
         except TskError as tsk_error:
             from .fat32 import Fat32Error, Fat32Provider
 
             try:
                 panel.provider = Fat32Provider(self.image_path, offset=offset)
             except (Fat32Error, OSError, ValueError) as fat_error:
-                try:
-                    from .ext_debugfs_writer import Ext234Provider
-
-                    panel.provider = Ext234Provider(
-                        self.image_path, offset=offset, volume_size=volume_size
-                    )
-                    self.log_msg(
-                        "Том @ offset %d открыт через debugfs (fallback без pytsk3)"
-                        % offset
-                    )
-                except Exception as ext_error:
-                    panel.provider = None
-                    self.log_msg(
-                        "Том @ offset %d не открылся — The Sleuth Kit: %s; "
-                        "FAT32: %s; debugfs: %s"
-                        % (offset, tsk_error, fat_error, ext_error)
-                    )
-                    panel.refresh()
-                    # A partition table (or a udev offset) that does not point at a
-                    # filesystem is the normal case in NAND/eMMC dumps: pick the
-                    # working volume automatically instead of stopping on an error.
-                    if getattr(self, "_autopick_busy", False):
-                        QMessageBox.warning(
-                            self,
-                            "Не удалось смонтировать том",
-                            "The Sleuth Kit: %s\nFAT32: %s\ndebugfs: %s"
-                            % (tsk_error, fat_error, ext_error),
-                        )
-                        return False
-                    if self._auto_pick(panel, quiet=True):
-                        return True
+                panel.provider = None
+                self.log_msg(
+                    "Том @ offset %d не открылся — The Sleuth Kit: %s; FAT32: %s"
+                    % (offset, tsk_error, fat_error)
+                )
+                panel.refresh()
+                # A partition table (or a udev offset) that does not point at a
+                # filesystem is the normal case in NAND/eMMC dumps: pick the
+                # working volume automatically instead of stopping on an error.
+                if getattr(self, "_autopick_busy", False):
                     QMessageBox.warning(
                         self,
                         "Не удалось смонтировать том",
-                        "The Sleuth Kit: %s\nFAT32: %s\ndebugfs: %s\n\n"
-                        "Авто-подбор не нашёл рабочий том — подробности в журнале."
-                        % (tsk_error, fat_error, ext_error),
+                        "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
                     )
                     return False
+                if self._auto_pick(panel, quiet=True):
+                    return True
+                QMessageBox.warning(
+                    self,
+                    "Не удалось смонтировать том",
+                    "The Sleuth Kit: %s\nFAT32: %s\n\n"
+                    "Авто-подбор не нашёл рабочий том — подробности в журнале."
+                    % (tsk_error, fat_error),
+                )
+                return False
 
         panel.mode = "img"
         panel.volume_offset = offset
@@ -3607,13 +3624,9 @@ class MainWindow(QMainWindow):
                 fh.close()
                 fat_error = e
 
-        # FAT32 keeps its native writer. Any other filesystem needs a backend:
-        # ext2/3/4 prefers the transactional debugfs writer (temporary extent,
-        # read-back/SHA-256 verification, rollback snapshot), and the package
-        # facade covers NTFS via ntfs-3g (Linux) or ImDisk (Windows), plus the
-        # platform-specific loop-mount fallback. ImDisk temporarily releases
-        # the pytsk reader handles before opening the image for shared writes.
-        # A failed backend remains read-only.
+        # FAT32 keeps its native writer. The ordinary GUI enables writes only
+        # for MountFile's in-process clean-ext2 profile; legacy debugfs is a
+        # library-only explicit compatibility backend.
         if not fat_writer_ready:
             ext_writer = None
             try:
@@ -3624,15 +3637,32 @@ class MainWindow(QMainWindow):
                 )
             except Exception as ext_error:
                 fat_error = "%s; ext: %s" % (fat_error, ext_error)
-            if ext_writer is not None:
+            if ext_writer is not None and not ext_writer.writable:
+                panel.writer = None
+                panel.writer_fh = None
+                panel.write_reason = (
+                    "Запись заблокирована проверкой безопасности ext2: "
+                    + ext_writer.native_unsafe_error
+                    if ext_writer.native_unsafe_error
+                    else "Запись доступна только для поддерживаемого чистого "
+                    "native-ext2 профиля; legacy debugfs отключён по умолчанию."
+                )
+                self.log_msg(panel.write_reason)
+            elif ext_writer is not None:
                 adapter = _ExtPanelWriter(ext_writer, panel.provider)
                 panel.writer = adapter
                 panel.writer_fh = adapter
                 panel.volume_label = "%s ofs %d" % (ext_writer.fs_type, offset)
-                self.log_msg(
-                    "Том @ offset %d смонтирован — запись %s через debugfs включена"
-                    % (offset, ext_writer.fs_type)
-                )
+                if ext_writer.write_strategy == "native-ext2":
+                    self.log_msg(
+                        "Том @ offset %d открыт — встроенная запись чистого ext2 включена"
+                        % offset
+                    )
+                else:
+                    self.log_msg(
+                        "Том @ offset %d смонтирован — включена запись %s"
+                        % (offset, ext_writer.fs_type)
+                    )
             else:
                 try:
                     from .universal_fs_rw import UniversalFSRW

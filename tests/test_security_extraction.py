@@ -3,12 +3,15 @@
 import io
 import json
 import os
+import posixpath
 import urllib.error
+from types import SimpleNamespace
 
 import pytest
 
+from mountfile import extract as extract_module
 from mountfile.ai.backend import OpenAiCompatBackend
-from mountfile.extract import ExtractError, extract_path
+from mountfile.extract import ExtractError, extract_file, extract_path
 
 
 class TreeProvider:
@@ -23,6 +26,64 @@ class TreeProvider:
 
     def file_size(self, path):
         return len(self.read_file(path))
+
+
+class RangeProvider:
+    def __init__(self, payload, *, fail_at=None):
+        self.payload = payload
+        self.fail_at = fail_at
+        self.calls = []
+
+    def file_size(self, path):
+        assert path == "/large.bin"
+        return len(self.payload)
+
+    def read_file_range(self, path, offset, length):
+        assert path == "/large.bin"
+        self.calls.append((offset, length))
+        if self.fail_at is not None and offset >= self.fail_at:
+            raise ValueError("simulated source read failure")
+        return self.payload[offset : offset + length]
+
+    def read_file(self, path):
+        raise AssertionError("ranged providers must not be read all at once")
+
+
+@pytest.mark.parametrize(
+    "use_dir_fd", sorted({False, bool(extract_module._HAS_DIR_FD)})
+)
+def test_extract_streams_ranged_provider_in_bounded_chunks(
+    tmp_path, monkeypatch, use_dir_fd
+):
+    payload = bytes(range(10))
+    provider = RangeProvider(payload)
+    destination = tmp_path / "large.bin"
+    monkeypatch.setattr(extract_module, "_HAS_DIR_FD", use_dir_fd)
+    monkeypatch.setattr(extract_module, "_COPY_CHUNK_SIZE", 4)
+
+    assert extract_file(provider, "/large.bin", destination) == len(payload)
+
+    assert destination.read_bytes() == payload
+    assert provider.calls == [(0, 4), (4, 4), (8, 2)]
+
+
+@pytest.mark.parametrize(
+    "use_dir_fd", sorted({False, bool(extract_module._HAS_DIR_FD)})
+)
+def test_streaming_failure_preserves_existing_destination_and_cleans_temp(
+    tmp_path, monkeypatch, use_dir_fd
+):
+    provider = RangeProvider(b"abcdefghij", fail_at=4)
+    destination = tmp_path / "large.bin"
+    destination.write_bytes(b"old contents")
+    monkeypatch.setattr(extract_module, "_HAS_DIR_FD", use_dir_fd)
+    monkeypatch.setattr(extract_module, "_COPY_CHUNK_SIZE", 4)
+
+    with pytest.raises(ValueError, match="simulated source read failure"):
+        extract_file(provider, "/large.bin", destination)
+
+    assert destination.read_bytes() == b"old contents"
+    assert list(tmp_path.glob(".mountfile-*.tmp")) == []
 
 
 def test_extract_does_not_follow_destination_symlink(tmp_path):
@@ -41,6 +102,57 @@ def test_extract_does_not_follow_destination_symlink(tmp_path):
 
     assert protected.read_bytes() == b"must remain unchanged"
     assert link.is_symlink()
+
+
+def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    protected = outside / "secret.bin"
+    protected.write_bytes(b"must remain unchanged")
+    destination_root = tmp_path / "output"
+    destination_root.mkdir()
+    try:
+        (destination_root / "nested").symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks unavailable in test environment")
+
+    with pytest.raises(ExtractError, match="symlink|safely"):
+        extract_file(
+            TreeProvider(), "/secret.bin", destination_root / "nested/secret.bin"
+        )
+
+    assert protected.read_bytes() == b"must remain unchanged"
+
+
+def test_system_path_alias_normalization_is_prefix_scoped(monkeypatch):
+    # The behavior under test is specifically the POSIX/macOS alias contract.
+    # Use POSIX path rules even when this test runs on Windows CI.
+    path_module = SimpleNamespace(
+        abspath=posixpath.abspath,
+        islink=lambda path: path == "/var",
+        realpath=lambda path: "/private/var" if path == "/var" else path,
+        join=posixpath.join,
+    )
+    monkeypatch.setattr(
+        extract_module,
+        "os",
+        SimpleNamespace(name="posix", sep="/", path=path_module),
+    )
+
+    assert (
+        extract_module._normalize_system_path_alias("/var/folders/session/output")
+        == "/private/var/folders/session/output"
+    )
+    assert (
+        extract_module._normalize_system_path_alias("/various/folders/output")
+        == "/various/folders/output"
+    )
+    # A symlink later in the path is deliberately not canonicalized here; the
+    # descriptor walk must still reject it instead of following it.
+    assert (
+        extract_module._normalize_system_path_alias("/var/folders/output/nested/link")
+        == "/private/var/folders/output/nested/link"
+    )
 
 
 def test_extract_replaces_hardlink_without_mutating_external_file(tmp_path):

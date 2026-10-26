@@ -69,6 +69,21 @@ def _boot_sector(label=b"NO NAME    "):
     return bytes(bpb)
 
 
+def _ntfs_boot_sector(*, mft_lcn=4):
+    sector = bytearray(BPS)
+    sector[:3] = b"\xeb\x52\x90"
+    sector[3:11] = b"NTFS    "
+    struct.pack_into("<H", sector, 0x0B, BPS)
+    sector[0x0D] = 8
+    struct.pack_into("<Q", sector, 0x28, 2048)
+    struct.pack_into("<Q", sector, 0x30, mft_lcn)
+    struct.pack_into("<Q", sector, 0x38, 8)
+    struct.pack_into("<b", sector, 0x40, -10)
+    struct.pack_into("<b", sector, 0x44, 1)
+    sector[510:512] = b"\x55\xaa"
+    return bytes(sector)
+
+
 def _fat32_at(f, offset):
     """Write a minimal but valid FAT32 volume (BPB + FAT) at `offset`."""
     f.seek(offset)
@@ -120,6 +135,34 @@ class TestValidate:
         assert info[0] == "FAT32"
         assert info[2] == FAT32_BYTES
 
+    def test_valid_ntfs_uses_the_native_bounded_profile_probe(self):
+        path = _image(os.path.join(self.tmp, "ntfs.img"), 0x200000)
+        with open(path, "r+b") as f:
+            f.seek(0x100000)
+            f.write(_ntfs_boot_sector())
+
+        with open(path, "rb") as f:
+            info = autopick._validate_at(f, 0x100000)
+
+        assert info == ("NTFS", "", 2048 * BPS)
+
+    def test_ntfs_with_out_of_volume_mft_is_rejected(self):
+        path = _image(os.path.join(self.tmp, "bad-ntfs.img"), 0x200000)
+        with open(path, "r+b") as f:
+            f.seek(0x100000)
+            f.write(_ntfs_boot_sector(mft_lcn=256))
+
+        with open(path, "rb") as f:
+            assert autopick._validate_at(f, 0x100000) is None
+
+    def test_ntfs_header_cannot_cross_the_selected_partition_extent(self):
+        path = _image(os.path.join(self.tmp, "ntfs-partition.img"), 0x300000)
+        with open(path, "r+b") as f:
+            f.seek(0x100000)
+            f.write(_ntfs_boot_sector())  # declares 1 MiB
+        with open(path, "rb") as f:
+            assert autopick._validate_at(f, 0x100000, 512 * 1024) is None
+
     def test_zeroed_offset_rejected(self):
         path = _image(os.path.join(self.tmp, "fat.img"), 0x400000, 0x100000)
         with open(path, "rb") as f:
@@ -140,7 +183,13 @@ class TestValidate:
             os.path.join(self.tmp, "good.img"), FAT32_BYTES + 0x100000, 0x100000
         )
         backend, entries, error = verify_mount(good, 0x100000)
-        assert backend in ("tsk", "fat32")
+        assert backend in (
+            "tsk",
+            "fat32",
+            "native-fat12",
+            "native-fat16",
+            "native-fat32",
+        )
         assert error is None
 
         bad = _image(os.path.join(self.tmp, "bad.img"), 0x400000, 0x100000)
@@ -165,8 +214,10 @@ class TestScan:
 
     def test_inner_search_inside_partition(self):
         """A partition whose start is not a filesystem is searched inside."""
-        path = _image(os.path.join(self.tmp, "dump.bin"), 0x400000, 0x180000)
-        _put_mbr(path, 0x0B, 2048, 2048)  # partition @ 0x100000, no FS there
+        path = _image(
+            os.path.join(self.tmp, "dump.bin"), FAT32_BYTES + 0x180000, 0x180000
+        )
+        _put_mbr(path, 0x0B, 2048, TOTAL_SECTORS + 1024)  # no FS at partition start
 
         cands = scan_candidates(path, scan_limit=0x100000, inner_window=0x200000)
         assert any(c.offset == 0x180000 and c.source == "inner" for c in cands)
@@ -237,7 +288,13 @@ class TestAutoSelect:
         assert best is not None
         assert best.offset == 0x180000
         assert best.fstype == "FAT32"
-        assert best.backend in ("tsk", "fat32")
+        assert best.backend in (
+            "tsk",
+            "fat32",
+            "native-fat12",
+            "native-fat16",
+            "native-fat32",
+        )
         # every udev offset is present but none of them is a mountable volume
         raw = [c.offset for c in cands if c.fstype == "raw"]
         assert 0x00A5A000 in raw and 0x00E5A000 in raw
