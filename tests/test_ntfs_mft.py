@@ -6,7 +6,11 @@ import struct
 import pytest
 
 from mountfile import vfs
-from mountfile.ntfs_mft import NtfsRecordError, parse_ntfs_file_record_header
+from mountfile.ntfs_mft import (
+    NtfsRecordError,
+    parse_ntfs_file_record_header,
+    validate_ntfs_file_reference,
+)
 
 _SECTOR_SIZE = 512
 
@@ -67,6 +71,14 @@ def test_validates_header_and_restores_all_sector_trailers():
             "<H", parsed.fixed_record, (index + 1) * _SECTOR_SIZE - 2
         )[0]
         assert restored == original
+
+
+def test_validates_file_reference_sequence_and_returns_record_number():
+    raw_record, _originals, _attribute_offset = _file_record()
+    parsed = parse_ntfs_file_record_header(raw_record)
+    assert validate_ntfs_file_reference((7 << 48) | 42, parsed) == 42
+    with pytest.raises(NtfsRecordError, match="sequence"):
+        validate_ntfs_file_reference((8 << 48) | 42, parsed)
 
 
 def test_accepts_legacy_usa_offset_0x2a():
