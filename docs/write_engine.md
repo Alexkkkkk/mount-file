@@ -101,3 +101,20 @@ runlists, каталоговые индексы, `$Volume` dirty flag либо `
 Поэтому он не является готовым NTFS reader, clean-volume verdict или разрешением
 на запись. Native VFS routing остаётся выключенным до завершения последующих
 read-only metadata-validation этапов.
+
+## NTFS FILE-record header and USA validation
+
+`mountfile.vfs.parse_ntfs_file_record_header(record)` валидирует заголовок одного
+in-use `FILE` record и Update Sequence Array: требуемый count, границы массива,
+совпадение update sequence number в конце каждого 512-байтового блока и поля
+размера/смещения заголовка. Исправленные trailer words возвращаются в отдельной
+копии только после успешной проверки всех блоков. При несовпадении parser
+отклоняет запись целиком; атрибуты остаются непрочитанными.
+
+Реализация принимает старое и новое расположение USA (`0x2A` и `0x30`) и
+ограничивает запись 1 MiB. Формат заголовка и алгоритм fixup сверены с
+[документацией Microsoft](https://learn.microsoft.com/en-us/windows/win32/devnotes/file-record-segment-header)
+и [реализацией NTFS3](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/fsntfs.c).
+Это низкоуровневый parser, а не чтение `$MFT` с диска: он не проверяет атрибуты,
+родительские ссылки, каталоги, `$Volume`/`$LogFile` и не включает NTFS read/write
+routing.

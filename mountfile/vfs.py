@@ -66,6 +66,13 @@ def probe_ntfs_profile(image_path, offset=0, volume_size=None):
     return probe_ntfs_boot_sector(image_path, offset=offset, volume_size=volume_size)
 
 
+def parse_ntfs_file_record_header(raw_record):
+    """Validate one NTFS FILE record's header and USA, without reading a volume."""
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header as parse_record
+
+    return parse_record(raw_record)
+
+
 def _fmt_mtime(meta):
     """Modification time of a TSK meta record as 'YYYY-MM-DD HH:MM'."""
     try:
