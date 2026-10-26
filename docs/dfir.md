@@ -152,7 +152,7 @@ print(result.model_dump())
 ```
 
 Замените `FAT_OFFSET` и `PDF_INODE` значениями из первого запуска. Требуются
-`pydantic` и optional `pytsk3` extra (`mountfile[tsk]`).
+`pydantic` и optional `pytsk3` extra (`mountfile[legacy-tsk]`).
 Метод читает inode, не карвит фрагменты и не гарантирует целостность PDF.
 `complete=true` означает равенство переданному `original_size` (или размеру
 мета-записи), а не успешное открытие PDF. Сохраните audit JSONL и отдельно

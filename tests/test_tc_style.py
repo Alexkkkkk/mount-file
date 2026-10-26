@@ -71,6 +71,7 @@ def test_posix_settings_are_private_and_other_preferences_are_saved(
                 "ai_api_key": "secret-api",
                 "ai_github_token": "secret-github",
                 "olma_token": "secret-olma",
+                "ai_consensus": True,
             }
         )
         assert tc_style.save_settings()
@@ -82,6 +83,7 @@ def test_posix_settings_are_private_and_other_preferences_are_saved(
         assert saved["theme"] == "light"
         assert saved["font_size"] == 12
         assert saved["show_log"] is True
+        assert saved["ai_consensus"] is True
         assert saved["ai_backend"] == original["ai_backend"]
     finally:
         tc_style.SETTINGS.clear()
@@ -95,3 +97,19 @@ def test_new_posix_settings_file_uses_private_permissions(tmp_path, monkeypatch)
     monkeypatch.setattr(tc_style, "SETTINGS_PATH", str(path))
     assert tc_style.save_settings()
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_load_settings_restores_and_clamps_ai_read_limit(tmp_path, monkeypatch):
+    path = tmp_path / "ui.json"
+    monkeypatch.setattr(tc_style, "SETTINGS_PATH", str(path))
+    original = dict(tc_style.SETTINGS)
+    try:
+        path.write_text('{"ai_max_bytes": 8192}', encoding="utf-8")
+        assert tc_style.load_settings()["ai_max_bytes"] == 8192
+        path.write_text('{"ai_max_bytes": 1}', encoding="utf-8")
+        assert tc_style.load_settings()["ai_max_bytes"] == 4096
+        path.write_text('{"ai_max_bytes": 1000000000000}', encoding="utf-8")
+        assert tc_style.load_settings()["ai_max_bytes"] == 64 * 1024 * 1024
+    finally:
+        tc_style.SETTINGS.clear()
+        tc_style.SETTINGS.update(original)

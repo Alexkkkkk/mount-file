@@ -1932,6 +1932,11 @@ class SettingsDialog(QDialog):
         )
         self.chk_advise.setChecked(bool(tc_style.SETTINGS.get("ai_format_autohook")))
         lay.addRow("", self.chk_advise)
+        self.chk_consensus = QCheckBox(
+            "AI-гипотезы: включать консенсус второго доступного бэкенда"
+        )
+        self.chk_consensus.setChecked(bool(tc_style.SETTINGS.get("ai_consensus")))
+        lay.addRow("", self.chk_consensus)
         self.ed_advise_repo = QLineEdit(
             str(tc_style.SETTINGS.get("ai_github_repo") or "")
         )
@@ -2675,6 +2680,7 @@ class MainWindow(QMainWindow):
         tc_style.SETTINGS["ai_max_bytes"] = int(dlg.spn_ai_bytes.value()) * 1024
         tc_style.SETTINGS["ai_base_url_openai"] = dlg.ed_ai_url_openai.text().strip()
         tc_style.SETTINGS["ai_format_autohook"] = bool(dlg.chk_advise.isChecked())
+        tc_style.SETTINGS["ai_consensus"] = bool(dlg.chk_consensus.isChecked())
         tc_style.SETTINGS["ai_github_repo"] = dlg.ed_advise_repo.text().strip()
         tc_style.SETTINGS["ai_github_token"] = dlg.ed_advise_token.text().strip()
         tc_style.SETTINGS["olma_watch"] = bool(dlg.chk_olma.isChecked())
@@ -2813,13 +2819,32 @@ class MainWindow(QMainWindow):
                 reader = ai.local_reader(path)
             head, _truncated = ai.collect(reader, max_bytes=4096)
             backend = ai.build_backend(tc_style.SETTINGS)
+            backends = [backend]
+            if tc_style.SETTINGS.get("ai_consensus"):
+                alternate_key = "openai" if backend.name == "ollama" else "ollama"
+                alternate_settings = dict(tc_style.SETTINGS)
+                alternate_settings["ai_backend"] = alternate_key
+                alternate = ai.build_backend(alternate_settings)
+                if alternate.available():
+                    backends.append(alternate)
+            github = None
+            repo = tc_style.SETTINGS.get("ai_github_repo") or ""
+            token = tc_style.SETTINGS.get("ai_github_token") or ""
+            if repo and token:
+                from mountfile.ai_format_advisor_v2 import GitHubReporter
+
+                try:
+                    github = GitHubReporter(repo, token)
+                except ValueError:
+                    github = None
             self.log_msg(
-                "AI-гипотезный анализ: %s — ограниченный слепок, бэкенд %s"
-                % (entry["name"], backend.name)
+                "AI-гипотезный анализ: %s — ограниченный слепок, бэкенды %s"
+                % (entry["name"], ", ".join(item.name for item in backends))
             )
             advise_and_show(
                 path,
-                [backend],
+                backends,
+                github=github,
                 parent=self,
                 head=head,
                 size=int(entry.get("size") or 0),

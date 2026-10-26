@@ -13,6 +13,14 @@ Nothing here imports Qt and nothing talks to the network on import.
 
 from __future__ import annotations
 
+from .agents import (
+    Claim,
+    ExecutionRecord,
+    InvestigationOrchestrator,
+    InvestigationResult,
+    Plan,
+    ToolCall,
+)
 from .backend import (
     BACKENDS,
     DEFAULT_MAX_BYTES,
@@ -31,6 +39,8 @@ from .backend import (
     max_bytes,
     summarize_bytes,
 )
+from .copilot import CopilotSummaryBuilder
+from .rag import DocumentationRetriever, retrieve_documentation
 
 __all__ = [
     "BACKENDS",
@@ -49,4 +59,13 @@ __all__ = [
     "looks_textual",
     "max_bytes",
     "summarize_bytes",
+    "Claim",
+    "ExecutionRecord",
+    "InvestigationOrchestrator",
+    "InvestigationResult",
+    "Plan",
+    "ToolCall",
+    "CopilotSummaryBuilder",
+    "DocumentationRetriever",
+    "retrieve_documentation",
 ]

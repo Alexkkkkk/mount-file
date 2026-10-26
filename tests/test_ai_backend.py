@@ -143,6 +143,32 @@ def test_openai_backend_sends_bearer_and_parses_choice(monkeypatch):
     assert captured["allow_redirects"] is False
 
 
+def test_openai_backend_rejects_remote_http_without_key_before_request(monkeypatch):
+    backend = OpenAiCompatBackend(base_url="http://remote.example", api_key="")
+    called = []
+    monkeypatch.setattr(
+        "mountfile.ai.backend._open_request",
+        lambda *args, **kwargs: called.append(True),
+    )
+    result = backend.analyze("secret.bin", b"SECRET-CONTENT")
+    assert result.ok is False
+    assert "требует" in result.error
+    assert called == []
+
+
+def test_openai_backend_rejects_remote_https_without_key_before_request(monkeypatch):
+    backend = OpenAiCompatBackend(base_url="https://remote.example", api_key="")
+    called = []
+    monkeypatch.setattr(
+        "mountfile.ai.backend._open_request",
+        lambda *args, **kwargs: called.append(True),
+    )
+    result = backend.analyze("secret.bin", b"SECRET-CONTENT")
+    assert result.ok is False
+    assert "требует HTTPS и API-ключ" in result.error
+    assert called == []
+
+
 def test_network_failure_is_reported_not_raised(monkeypatch):
     backend = OllamaBackend()
     import urllib.error

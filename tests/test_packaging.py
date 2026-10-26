@@ -21,6 +21,7 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     shutil.copy2(ROOT / "LICENSE", source / "LICENSE")
     shutil.copytree(ROOT / "mountfile", source / "mountfile")
     for module in (
+        "mountfile_ai.py",
         "mountfile_rw_complete.py",
         "mountfile_rw_v2.py",
         "mountfile_universal_rw.py",
@@ -63,7 +64,9 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
         )
         entry_points = wheel.read(entry_points_name).decode("utf-8")
         assert "mountfile = mountfile.__main__:main" in entry_points
+        assert "mountfile-ai = mountfile_ai:main" in entry_points
         assert "mountfile-install" not in entry_points
+        assert "mountfile_ai.py" in names
         assert (
             wheel.read(resource_name)
             == (ROOT / "scripts/install-windows-components.ps1").read_bytes()
@@ -91,6 +94,8 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     assert install.returncode == 0, install.stdout + install.stderr
 
     smoke_code = """
+import mountfile_ai
+assert callable(mountfile_ai.main)
 from importlib.resources import files
 from mountfile.__main__ import main
 resource = files('mountfile').joinpath('data', 'install-windows-components.ps1')

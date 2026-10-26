@@ -108,6 +108,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Verify installable AI surface
+        run: |
+          python -m pip wheel --no-deps --wheel-dir dist .
+          python -m venv /tmp/mountfile-wheel-smoke
+          /tmp/mountfile-wheel-smoke/bin/pip install --no-deps dist/*.whl
+          /tmp/mountfile-wheel-smoke/bin/python -c "import mountfile.ai, mountfile_ai"
+          /tmp/mountfile-wheel-smoke/bin/mountfile-ai --help
+
   # Keep the legacy protected context while tests run only once in the matrix.
   # It fails closed unless the complete matrix, including Ubuntu/Python 3.12, passes.
   ubuntu-py312-compat:

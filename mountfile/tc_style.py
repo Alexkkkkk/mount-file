@@ -477,6 +477,8 @@ def load_settings():
     ):
         if key in data:
             SETTINGS[key] = str(data[key] or "")
+    if "ai_max_bytes" in data:
+        SETTINGS["ai_max_bytes"] = data["ai_max_bytes"]
     try:
         SETTINGS["ai_max_bytes"] = int(SETTINGS["ai_max_bytes"])
     except (TypeError, ValueError):
