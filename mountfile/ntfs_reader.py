@@ -56,6 +56,15 @@ class NtfsIndexEntry:
 
 
 @dataclass(frozen=True)
+class NtfsVolumeState:
+    flags: int
+
+    @property
+    def clean(self) -> bool:
+        return self.flags == 0
+
+
+@dataclass(frozen=True)
 class NtfsAttributeSummary:
     type_code: int
     length: int
@@ -317,6 +326,20 @@ def parse_ntfs_index_block(
     return parse_ntfs_index_root(bytes(fixed[8:]), parent_reference=parent_reference)
 
 
+def parse_ntfs_volume_state(
+    attributes: tuple[NtfsAttributeSummary, ...],
+) -> NtfsVolumeState:
+    """Parse resident $VOLUME_INFORMATION and reject missing state metadata."""
+    volume = next(
+        (a for a in attributes if a.type_code == 0x70 and not a.name), None
+    )
+    if volume is None or volume.nonresident or volume.resident_value is None:
+        raise NtfsMetadataError("NTFS $Volume has no resident volume information")
+    if len(volume.resident_value) < 12:
+        raise NtfsMetadataError("NTFS $Volume information is truncated")
+    return NtfsVolumeState(struct.unpack_from("<H", volume.resident_value, 10)[0])
+
+
 def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None = None) -> NtfsMetadataProfile:
     """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror."""
     try:
@@ -349,11 +372,13 @@ __all__ = [
     "NtfsAttributeSummary",
     "NtfsIndexEntry",
     "NtfsMetadataError",
+    "NtfsVolumeState",
     "NtfsMetadataProfile",
     "NtfsRun",
     "parse_ntfs_attribute_stream",
     "parse_ntfs_index_root",
     "parse_ntfs_index_block",
+    "parse_ntfs_volume_state",
     "probe_ntfs_metadata",
 ]
 
@@ -381,6 +406,13 @@ class NativeNtfsMetadataImage:
         if self._data is None:
             self.close()
             raise NtfsMetadataError("MFT record 0 has no unnamed DATA stream")
+        volume_record = self.read_mft_record(3)
+        volume_state = parse_ntfs_volume_state(
+            parse_ntfs_attribute_stream(volume_record, cluster_count=self.profile.boot.cluster_count)
+        )
+        if not volume_state.clean:
+            self.close()
+            raise NtfsMetadataError("NTFS volume is dirty or requires repair")
 
     def close(self):
         self._stream.close()
