@@ -64,6 +64,28 @@ def test_native_ext2_file_and_directory_crud_is_consistent(tmp_path):
     _assert_e2fsck_clean(image)
 
 
+@pytest.mark.parametrize("block_size", [1024, 2048, 4096])
+def test_native_ext2_single_indirect_file_roundtrip_and_reclamation(
+    tmp_path, block_size
+):
+    image = tmp_path / "single-indirect.ext2"
+    _make_ext2(image, size=32 * 1024 * 1024, block_size=block_size)
+    writer = NativeExt2ImageWriter(image)
+    payload = bytes(index % 251 for index in range((12 + 7) * block_size + 37))
+
+    writer.write_file("/indirect.bin", payload)
+    assert writer.read_file("/indirect.bin") == payload
+    _assert_e2fsck_clean(image)
+
+    writer.write_file("/indirect.bin", b"smaller replacement")
+    assert writer.read_file("/indirect.bin") == b"smaller replacement"
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/indirect.bin")
+    assert "indirect.bin" not in {item["name"] for item in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
 def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     tmp_path,
 ):
@@ -104,8 +126,9 @@ def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
 
     with pytest.raises(NativeExt2Error, match="traversal"):
         writer.write_file("/../escape", b"bad")
-    with pytest.raises(NativeExt2Error, match="12 blocks"):
-        writer.write_file("/too-large.bin", b"x" * (12 * writer.block_size + 1))
+    max_bytes = (12 + writer.block_size // 4) * writer.block_size
+    with pytest.raises(NativeExt2Error, match="single-indirect"):
+        writer.write_file("/too-large.bin", b"x" * (max_bytes + 1))
     assert image.read_bytes() == before
 
 
@@ -211,8 +234,37 @@ def test_large_file_high_size_is_not_misreported_as_empty(tmp_path):
         )
         == (1 << 32) + 1
     )
-    with pytest.raises(NativeExt2Error, match="12 blocks"):
+    with pytest.raises(NativeExt2Error, match="single-indirect"):
         writer.read_file("/large.bin")
+
+
+def test_native_ext2_rejects_double_indirect_file_blocks(tmp_path):
+    image = tmp_path / "double-indirect.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    writer.write_file("/file.bin", b"direct")
+    inode = next(
+        item["inode"] for item in writer.list_dir("/") if item["name"] == "file.bin"
+    )
+    with image.open("r+b") as stream:
+        stream.seek(1024)
+        superblock = stream.read(1024)
+        block_size = 1024 << int.from_bytes(superblock[24:28], "little")
+        inodes_per_group = int.from_bytes(superblock[40:44], "little")
+        inode_size = int.from_bytes(superblock[88:90], "little")
+        first_data_block = int.from_bytes(superblock[20:24], "little")
+        group = (inode - 1) // inodes_per_group
+        index = (inode - 1) % inodes_per_group
+        gdt = (first_data_block + 1) * block_size
+        stream.seek(gdt + group * 32 + 8)
+        inode_table = int.from_bytes(stream.read(4), "little")
+        inode_offset = inode_table * block_size + index * inode_size
+        stream.seek(inode_offset + 40 + 13 * 4)
+        stream.write((1).to_bytes(4, "little"))
+
+    reader = NativeExt2ImageWriter(image)
+    with pytest.raises(NativeExt2Error, match="double/triple"):
+        reader.read_file("/file.bin")
 
 
 def test_dirty_ext2_is_read_only_even_if_debugfs_is_available(tmp_path, monkeypatch):

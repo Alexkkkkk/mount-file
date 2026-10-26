@@ -43,9 +43,11 @@ engine.close()
 ## Границы
 
 * FAT12/16/32 — собственный движок (как и раньше).
-* Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct
-  pointers) использует собственный Python writer без `debugfs`; в фазе 1 обычный
-  файл ограничен 12 data blocks. Unsupported/dirty/out-of-bounds volumes не
+* Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
+  один single-indirect pointer для данных файла) использует собственный Python
+  writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
+  sparse/double/triple indirect. Рост каталогов за пределы direct blocks не
+  поддерживается. Unsupported/dirty/out-of-bounds volumes не
   получают native RW. Для ext2 вне этого профиля и ext3/ext4 пока сохраняется
   legacy `debugfs -w` fallback: на Windows нужен `debugfs.exe` из `PATH` либо
   WSL/e2fsprogs. `chmod`/`chown`/`symlink` поддерживаются только этим fallback.
