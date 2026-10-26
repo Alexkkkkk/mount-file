@@ -7,6 +7,7 @@ import pytest
 
 from mountfile import vfs
 from mountfile.ntfs_reader import (
+    NativeNtfsMetadataImage,
     NtfsMetadataError,
     _parse_runlist,
     probe_ntfs_metadata,
@@ -119,3 +120,21 @@ def test_decodes_bounded_signed_ntfs_runs():
 def test_rejects_sparse_ntfs_run():
     with pytest.raises(NtfsMetadataError, match="sparse"):
         _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+
+
+def test_mft_record_loader_validates_record_number_and_sequence():
+    from types import SimpleNamespace
+
+    raw = _record()
+    fake = SimpleNamespace(
+        profile=SimpleNamespace(boot=SimpleNamespace(file_record_size=RECORD)),
+        read_file_range=lambda _path, _offset, _length: raw,
+    )
+    parsed = NativeNtfsMetadataImage.read_mft_record(
+        fake, 42, reference=(3 << 48) | 42
+    )
+    assert parsed.sequence_number == 3
+    with pytest.raises(NtfsMetadataError, match="record number"):
+        NativeNtfsMetadataImage.read_mft_record(
+            fake, 41, reference=(3 << 48) | 42
+        )

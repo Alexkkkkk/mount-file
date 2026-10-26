@@ -13,7 +13,12 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from mountfile.ntfs_mft import NtfsFileRecordHeader, NtfsRecordError, parse_ntfs_file_record_header
+from mountfile.ntfs_mft import (
+    NtfsFileRecordHeader,
+    NtfsRecordError,
+    parse_ntfs_file_record_header,
+    validate_ntfs_file_reference,
+)
 from mountfile.ntfs_probe import (
     NtfsBootProfile,
     NtfsProbeError,
@@ -317,6 +322,29 @@ class NativeNtfsMetadataImage:
 
     def read_file(self, path):
         return self.read_file_range(path, 0, self.file_size(path))
+
+    def read_mft_record(self, record_number, *, reference=None):
+        """Load one MFT record only after checked arithmetic and bounds checks."""
+        if not isinstance(record_number, int) or isinstance(record_number, bool):
+            raise NtfsMetadataError("MFT record number must be an integer")
+        if record_number < 0 or record_number >= (1 << 48):
+            raise NtfsMetadataError("MFT record number is outside NTFS bounds")
+        record_size = self.profile.boot.file_record_size
+        start = record_number * record_size
+        if record_number and start // record_size != record_number:
+            raise NtfsMetadataError("MFT record offset overflows")
+        raw = self.read_file_range("/$MFT", start, record_size)
+        if len(raw) != record_size:
+            raise NtfsMetadataError("MFT record is outside the DATA runlist")
+        try:
+            record = parse_ntfs_file_record_header(raw)
+            if reference is not None:
+                referenced_number = validate_ntfs_file_reference(reference, record)
+                if referenced_number != record_number:
+                    raise NtfsMetadataError("MFT reference record number mismatch")
+            return record
+        except NtfsRecordError as exc:
+            raise NtfsMetadataError(str(exc)) from exc
 
 
 __all__.append("NativeNtfsMetadataImage")
