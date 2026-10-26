@@ -106,9 +106,15 @@ def _parse_runlist(raw: bytes, cluster_count: int) -> int:
             raise NtfsMetadataError("NTFS runlist has too many extents")
 
 
-def parse_ntfs_attribute_stream(record: NtfsFileRecordHeader) -> tuple[NtfsAttributeSummary, ...]:
+def parse_ntfs_attribute_stream(
+    record: NtfsFileRecordHeader, *, cluster_count: int | None = None
+) -> tuple[NtfsAttributeSummary, ...]:
     """Validate all attributes in one USA-restored FILE record."""
     raw = record.fixed_record
+    if cluster_count is None:
+        cluster_count = 1 << 62
+    if cluster_count <= 0:
+        raise NtfsMetadataError("NTFS cluster count must be positive")
     pos = record.first_attribute_offset
     limit = record.bytes_in_use
     result: list[NtfsAttributeSummary] = []
@@ -140,7 +146,7 @@ def parse_ntfs_attribute_stream(record: NtfsFileRecordHeader) -> tuple[NtfsAttri
                 raise NtfsMetadataError("invalid NTFS attribute VCN range")
             if run_offset < 64 or run_offset >= length:
                 raise NtfsMetadataError("NTFS runlist offset is outside the attribute")
-            run_count = _parse_runlist(raw[pos + run_offset : pos + length], 1 << 62)
+            run_count = _parse_runlist(raw[pos + run_offset : pos + length], cluster_count)
         else:
             if length < 24:
                 raise NtfsMetadataError("NTFS resident attribute header is truncated")
@@ -173,7 +179,9 @@ def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None 
         mirror_record = parse_ntfs_file_record_header(raw_mirror)
         if mft_record.fixed_record != mirror_record.fixed_record:
             raise NtfsMetadataError("NTFS MFT mirror record does not match primary record")
-        attributes = parse_ntfs_attribute_stream(mft_record)
+        attributes = parse_ntfs_attribute_stream(
+            mft_record, cluster_count=boot.cluster_count
+        )
         return NtfsMetadataProfile(boot, mft_record, mirror_record, attributes)
     except (OSError, NtfsProbeError, NtfsRecordError) as exc:
         raise NtfsMetadataError(str(exc)) from exc
