@@ -25,13 +25,21 @@ class NtfsRecordError(ValueError):
     """An NTFS FILE record is malformed, inconsistent, or unsupported."""
 
 
-def validate_ntfs_file_reference(reference: int, record: NtfsFileRecordHeader) -> int:
-    """Validate an NTFS file reference against a USA-restored FILE record."""
+def decode_ntfs_file_reference(reference: int) -> tuple[int, int]:
+    """Return ``(record_number, sequence)`` for a valid NTFS reference."""
     if not isinstance(reference, int) or reference < 0 or reference >= (1 << 64):
         raise NtfsRecordError("NTFS file reference is outside uint64")
     record_number = reference & ((1 << 48) - 1)
     sequence = reference >> 48
-    if sequence == 0 or sequence != record.sequence_number:
+    if sequence == 0:
+        raise NtfsRecordError("NTFS file reference has a zero sequence")
+    return record_number, sequence
+
+
+def validate_ntfs_file_reference(reference: int, record: NtfsFileRecordHeader) -> int:
+    """Validate an NTFS file reference against a USA-restored FILE record."""
+    record_number, sequence = decode_ntfs_file_reference(reference)
+    if sequence != record.sequence_number:
         raise NtfsRecordError("NTFS file reference sequence does not match record")
     return record_number
 
@@ -166,6 +174,7 @@ def parse_ntfs_file_record_header(raw_record) -> NtfsFileRecordHeader:
 __all__ = [
     "NtfsFileRecordHeader",
     "NtfsRecordError",
+    "decode_ntfs_file_reference",
     "parse_ntfs_file_record_header",
     "validate_ntfs_file_reference",
 ]

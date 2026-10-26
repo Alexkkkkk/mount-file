@@ -8,6 +8,7 @@ import pytest
 from mountfile import vfs
 from mountfile.ntfs_mft import (
     NtfsRecordError,
+    decode_ntfs_file_reference,
     parse_ntfs_file_record_header,
     validate_ntfs_file_reference,
 )
@@ -79,6 +80,9 @@ def test_validates_file_reference_sequence_and_returns_record_number():
     assert validate_ntfs_file_reference((7 << 48) | 42, parsed) == 42
     with pytest.raises(NtfsRecordError, match="sequence"):
         validate_ntfs_file_reference((8 << 48) | 42, parsed)
+    assert decode_ntfs_file_reference((7 << 48) | 42) == (42, 7)
+    with pytest.raises(NtfsRecordError, match="zero sequence"):
+        decode_ntfs_file_reference(42)
 
 
 def test_accepts_legacy_usa_offset_0x2a():

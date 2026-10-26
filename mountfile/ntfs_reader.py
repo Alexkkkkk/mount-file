@@ -16,6 +16,7 @@ from pathlib import Path
 from mountfile.ntfs_mft import (
     NtfsFileRecordHeader,
     NtfsRecordError,
+    decode_ntfs_file_reference,
     parse_ntfs_file_record_header,
     validate_ntfs_file_reference,
 )
@@ -254,6 +255,10 @@ def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
             if key_length:
                 raise NtfsMetadataError("NTFS index end entry contains a key")
             return tuple(result)
+        try:
+            decode_ntfs_file_reference(reference)
+        except NtfsRecordError as exc:
+            raise NtfsMetadataError(str(exc)) from exc
         if key_length < 66 or 16 + key_length > entry_length:
             raise NtfsMetadataError("NTFS FILE_NAME key is truncated")
         key = value[pos + 16 : pos + 16 + key_length]
