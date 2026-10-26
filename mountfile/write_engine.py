@@ -788,11 +788,21 @@ class WriteEngine:
         )
         structural = self._probe()
         checks.extend(structural["checks"])
+        fs_check = self._run_fs_check()
+        if self._fs.info().write_strategy == "native-ext2":
+            fs_check_detail = (
+                "external e2fsck not run; native ext2 validates staged metadata "
+                "after each mutation"
+            )
+        else:
+            fs_check_detail = (
+                "external checker result (None = tool/dependency unavailable)"
+            )
         checks.append(
             {
                 "name": "filesystem checker",
-                "ok": self._run_fs_check(),
-                "detail": "external checker result (None = tool/dependency unavailable)",
+                "ok": fs_check,
+                "detail": fs_check_detail,
             }
         )
         problems = [
@@ -811,6 +821,8 @@ class WriteEngine:
         }
 
     def _run_fs_check(self) -> Optional[bool]:
+        if self._fs.info().write_strategy == "native-ext2":
+            return None
         fs_type = fs_family((self.damage or {}).get("fs_type"))
         if fs_type == "fat" and shutil.which("fsck.fat"):
             proc = _run([shutil.which("fsck.fat"), "-n", str(self.image)])
