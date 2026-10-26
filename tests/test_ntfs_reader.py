@@ -8,10 +8,12 @@ import pytest
 from mountfile import vfs
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
+    NtfsAttributeSummary,
     NtfsMetadataError,
     _parse_runlist,
     parse_ntfs_index_block,
     parse_ntfs_index_root,
+    parse_ntfs_volume_state,
     probe_ntfs_metadata,
 )
 
@@ -180,3 +182,14 @@ def test_validates_indx_usa_before_parsing_entries():
     block[1022] ^= 1
     with pytest.raises(NtfsMetadataError, match="USA mismatch"):
         parse_ntfs_index_block(bytes(block))
+
+
+def test_parses_ntfs_volume_flags_and_rejects_missing_information():
+    value = bytearray(12)
+    clean = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
+    assert parse_ntfs_volume_state((clean,)).clean
+    struct.pack_into("<H", value, 10, 0x0021)
+    dirty = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
+    assert not parse_ntfs_volume_state((dirty,)).clean
+    with pytest.raises(NtfsMetadataError, match="no resident"):
+        parse_ntfs_volume_state(())
