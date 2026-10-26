@@ -9,7 +9,6 @@ from dataclasses import dataclass, replace
 
 _SIGNATURE = b"EXFAT   "
 _BOOT_REGION_SECTORS = 12
-_MAX_SECTOR_SIZE = 4096
 _MAX_CLUSTER_SIZE = 32 * 1024 * 1024
 
 
@@ -36,9 +35,11 @@ class ExfatBootProfile:
     boot_checksum: int
 
 
-def exfat_boot_checksum(boot_region: bytes | bytearray) -> int:
+def exfat_boot_checksum(boot_region: bytes | bytearray, *, sector_size: int = 512) -> int:
     """Compute the exFAT rotating checksum for sectors 0..10."""
-    if len(boot_region) != 11 * 512:
+    if sector_size not in (512, 1024, 2048, 4096):
+        raise ExfatProbeError("unsupported exFAT sector size")
+    if len(boot_region) != 11 * sector_size:
         raise ExfatProbeError("exFAT boot region must contain exactly 11 sectors")
     checksum = 0
     for index, value in enumerate(boot_region):
@@ -52,7 +53,7 @@ def exfat_boot_checksum(boot_region: bytes | bytearray) -> int:
 def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProfile:
     if not isinstance(volume_size, int) or isinstance(volume_size, bool) or volume_size <= 0:
         raise ExfatProbeError("a positive integer volume_size is required")
-    if len(region) < 12 * 512:
+    if len(region) < 512:
         raise ExfatProbeError("truncated exFAT boot region")
     boot = region[:512]
     if boot[3:11] != _SIGNATURE:
@@ -73,6 +74,8 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     if sectors_shift > 25:
         raise ExfatProbeError("exFAT sectors-per-cluster shift is invalid")
     bytes_per_sector = 1 << bytes_shift
+    if len(region) < 12 * bytes_per_sector:
+        raise ExfatProbeError("truncated exFAT boot region for declared sector size")
     sectors_per_cluster = 1 << sectors_shift
     cluster_size = bytes_per_sector * sectors_per_cluster
     if cluster_size > _MAX_CLUSTER_SIZE:
@@ -91,8 +94,13 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     percent = boot[0x70]
     if percent > 100:
         raise ExfatProbeError("exFAT percent-in-use is invalid")
-    calculated = exfat_boot_checksum(region[: 11 * 512])
-    stored_words = [struct.unpack_from("<I", region, 11 * 512 + n)[0] for n in range(0, 512, 4)]
+    boot_region_size = 11 * bytes_per_sector
+    checksum_sector = boot_region_size
+    calculated = exfat_boot_checksum(region[:boot_region_size], sector_size=bytes_per_sector)
+    stored_words = [
+        struct.unpack_from("<I", region, checksum_sector + n)[0]
+        for n in range(0, bytes_per_sector, 4)
+    ]
     if not stored_words or any(word != calculated for word in stored_words):
         raise ExfatProbeError("exFAT boot-region checksum mismatch")
     return ExfatBootProfile(
@@ -125,7 +133,17 @@ def probe_exfat_boot_region(image_path, *, offset: int = 0, volume_size: int | N
             if offset + volume_size > image_size:
                 raise ExfatProbeError("selected volume extent exceeds image bounds")
             stream.seek(offset)
-            region = stream.read(12 * 512)
+            first_sector = stream.read(512)
+            if len(first_sector) < 512:
+                raise ExfatProbeError("truncated exFAT boot sector")
+            if first_sector[3:11] != _SIGNATURE:
+                raise ExfatProbeError("exFAT signature is missing")
+            bytes_shift = first_sector[0x6C]
+            if not 9 <= bytes_shift <= 12:
+                raise ExfatProbeError("unsupported exFAT bytes-per-sector shift")
+            sector_size = 1 << bytes_shift
+            stream.seek(offset)
+            region = stream.read(12 * sector_size)
     except OSError as exc:
         raise ExfatProbeError(f"cannot read exFAT boot region: {exc}") from exc
     profile = parse_exfat_boot_region(region, volume_size=volume_size)
