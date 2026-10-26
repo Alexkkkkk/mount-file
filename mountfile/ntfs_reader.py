@@ -240,6 +240,8 @@ def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
     if start < 16 or end > len(value) or start > end:
         raise NtfsMetadataError("NTFS INDEX_ROOT entries exceed the attribute")
     result: list[NtfsIndexEntry] = []
+    previous_name = ""
+    names: set[str] = set()
     pos = start
     while pos < end:
         if pos + 16 > end:
@@ -268,10 +270,17 @@ def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
         name_end = 0x42 + name_length * 2
         if name_end > len(key):
             raise NtfsMetadataError("NTFS FILE_NAME name exceeds index entry")
+        if name_length == 0 or key[0x41] > 3:
+            raise NtfsMetadataError("invalid NTFS FILE_NAME namespace")
         try:
             name = key[0x42:name_end].decode("utf-16le")
         except UnicodeDecodeError as exc:
             raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
+        folded = name.casefold()
+        if folded in names or (previous_name and folded < previous_name):
+            raise NtfsMetadataError("NTFS index names are duplicate or unsorted")
+        names.add(folded)
+        previous_name = folded
         result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
         pos += entry_length
     raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
