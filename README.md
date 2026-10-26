@@ -481,10 +481,11 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 | `Ctrl+I` | AI: добавить файл для анализа |
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
-FAT32 имеет встроенный writer; ext2/3/4 требует `debugfs` (на Windows —
-`debugfs.exe` в `PATH` либо WSL с установленным `e2fsprogs`); NTFS использует
-`ntfs-3g` на Linux или ImDisk и системный драйвер Windows при запуске от
-администратора. На Windows ImDisk также даёт запись в exFAT и FAT12/16.
+FAT32 и ограниченный профиль чистого ext2 имеют встроенную запись (native ext2
+в фазе 1: allowlisted features и максимум 12 data blocks на файл); ext2 вне
+этого профиля и ext3/4 используют legacy `debugfs` (`debugfs.exe`/WSL на Windows).
+NTFS использует `ntfs-3g` на Linux или ImDisk и системный драйвер Windows при
+запуске от администратора. На Windows ImDisk также даёт запись в exFAT и FAT12/16.
 Перед изменением образа создаётся отдельная резервная копия; если её нельзя
 создать, запись отменяется. Файловые системы без доступного writer остаются
 только для чтения.
@@ -792,16 +793,18 @@ mount-file/
 
 ## Ограничения
 
-- **Запись зависит от файловой системы и системного backend.** FAT32 имеет
-  встроенный writer; ext2/3/4 требует `debugfs` (на Windows доступен через WSL
-  с `e2fsprogs`); NTFS — `ntfs-3g` на Linux или
+- **Запись зависит от файловой системы и системного backend.** FAT32 и
+  allowlisted clean ext2 имеют встроенные writers; ext2 вне native-профиля и
+  ext3/4 требуют legacy `debugfs` (на Windows доступен через WSL с `e2fsprogs`);
+  NTFS — `ntfs-3g` на Linux или
   ImDisk и права администратора на Windows. На Windows ImDisk поддерживает
   NTFS, exFAT и FAT12/16 через системный драйвер. Остальные ФС доступны только
   для просмотра/извлечения, если их поддерживает установленная `libtsk`.
-- **Без `pytsk3`** доступен только встроенный движок FAT32; чтение NTFS/EXT
-  недоступно.
-- RW-слой требует внешних утилит (`debugfs`, `ntfs-3g`), WSL/e2fsprogs для ext
-  на Windows или ImDisk для NTFS/exFAT/FAT12/16.
+- **Без `pytsk3`** доступны собственные readers FAT32 и supported clean ext2;
+  чтение других ФС зависит от внешнего reader/backend.
+- Native FAT32 и supported ext2 subset не требуют внешних CLI. Legacy ext2/3/4
+  fallback использует `debugfs`; NTFS/exFAT/FAT12/16 на Windows требуют ImDisk,
+  а NTFS на Linux — `ntfs-3g`.
   Если требуемый backend отсутствует, приложение явно отказывает в записи, а
   не сообщает об успехе после открытия тома только для чтения.
 - Для неатомарных writer-ов `debugfs` и `ntfs-3g` перед каждой операцией записи
