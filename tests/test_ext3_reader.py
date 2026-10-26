@@ -2,11 +2,13 @@
 """Regression tests for conservative ext3/ext4 read-only routing."""
 
 import shutil
+import struct
 import subprocess
 
 import pytest
 
 from mountfile import vfs
+from mountfile.ext2_reader import _Inode
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
@@ -47,6 +49,27 @@ def test_external_journal_device_is_rejected_explicitly(tmp_path):
     _make_image(image_path, compat=0x000C, incompat=0x000A)
     with pytest.raises(Ext3ReadError, match="external JBD2"):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)
+    # logical block 2 maps to the final filesystem block, but the extent has
+    # length 2 and therefore its second physical block is out of range.
+    struct.pack_into("<IHHI", root, 12, 2, 2, 0, BLOCKS_COUNT - 1)
+    inode = _Inode(
+        number=12,
+        mode=0x8000,
+        size=4 * 1024,
+        flags=0x00080000,
+        mtime=0,
+        block_pointers=struct.unpack("<15I", root),
+    )
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.blocks_count = BLOCKS_COUNT
+
+    with pytest.raises(Ext3ReadError, match="extent physical range is out of bounds"):
+        reader._extent_map(inode, 2)
 
 
 def test_extent_profile_reads_a_real_clean_ext4_image(tmp_path):

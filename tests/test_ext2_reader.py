@@ -261,7 +261,12 @@ def test_vfs_native_provider_does_not_require_pytsk3(tmp_path, monkeypatch):
         assert provider.read_file("/hello.txt") == b"hello ext2!"
     finally:
         provider.close()
-    with pytest.raises(vfs.TskError, match="pytsk3 is not installed"):
+    monkeypatch.setattr(
+        vfs,
+        "TskImage",
+        lambda *args, **kwargs: pytest.fail("unbounded ext2 reached pytsk3"),
+    )
+    with pytest.raises(vfs.RecognizedFilesystemError, match="explicit bounded extent"):
         vfs.open_image_provider(image_path, offset=0)
 
 

@@ -101,6 +101,19 @@ def test_vfs_does_not_silently_fallback_for_ntfs(tmp_path, monkeypatch):
         vfs.open_image_provider(_image(tmp_path), volume_size=VOLUME_SIZE)
 
 
+def test_ntfs_without_explicit_extent_does_not_fall_back_to_pytsk3(
+    tmp_path, monkeypatch
+):
+    image_path = _image(tmp_path)
+    monkeypatch.setattr(
+        vfs,
+        "TskImage",
+        lambda *args, **kwargs: pytest.fail("unbounded NTFS reached pytsk3"),
+    )
+    with pytest.raises(vfs.RecognizedFilesystemError, match="explicit bounded extent"):
+        vfs.open_image_provider(image_path)
+
+
 def test_rejects_backup_geometry_mismatch(tmp_path):
     image = bytearray(_image(tmp_path).read_bytes())
     struct.pack_into("<Q", image, VOLUME_SIZE - 512 + 0x28, TOTAL - 1)
