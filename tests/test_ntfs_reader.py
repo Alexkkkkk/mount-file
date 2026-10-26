@@ -10,6 +10,7 @@ from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsMetadataError,
     _parse_runlist,
+    parse_ntfs_index_block,
     parse_ntfs_index_root,
     probe_ntfs_metadata,
 )
@@ -155,3 +156,25 @@ def test_parses_bounded_index_root_file_name_entry():
     entries = parse_ntfs_index_root(bytes(value))
     assert entries[0].name == "note"
     assert entries[0].reference == (3 << 48) | 9
+
+
+def test_validates_indx_usa_before_parsing_entries():
+    block = bytearray(4096)
+    block[:4] = b"INDX"
+    struct.pack_into("<HH", block, 4, 0x28, 9)
+    struct.pack_into("<H", block, 0x28, 0xA55A)
+    for index in range(8):
+        struct.pack_into("<H", block, 0x2A + index * 2, 0x1000 + index)
+        struct.pack_into("<H", block, (index + 1) * 512 - 2, 0xA55A)
+    struct.pack_into("<IIII", block, 24, 24, 136, 136, 0)
+    key = bytearray(74)
+    struct.pack_into("<Q", key, 0, (3 << 48) | 9)
+    key[0x40] = 4
+    key[0x42:0x4A] = "file".encode("utf-16le")
+    struct.pack_into("<QHHI", block, 48, (3 << 48) | 9, 96, 74, 0)
+    block[64:138] = key
+    struct.pack_into("<QHHI", block, 144, 0, 16, 0, 1)
+    assert parse_ntfs_index_block(bytes(block))[0].name == "file"
+    block[1022] ^= 1
+    with pytest.raises(NtfsMetadataError, match="USA mismatch"):
+        parse_ntfs_index_block(bytes(block))
