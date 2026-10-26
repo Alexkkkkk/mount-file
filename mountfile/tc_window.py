@@ -3012,7 +3012,12 @@ class MainWindow(QMainWindow):
     def search_files_in_image(self, pattern, *, max_results=2000, max_nodes=30000):
         """Return bounded filename matches from all detected image volumes."""
         from .fat32 import Fat32Error, Fat32Provider
-        from .vfs import TskError, open_image_provider, volume_size_for_offset
+        from .vfs import (
+            RecognizedFilesystemError,
+            TskError,
+            open_image_provider,
+            volume_size_for_offset,
+        )
 
         volumes = self.volumes or [
             _PartitionVolume(
@@ -3050,6 +3055,8 @@ class MainWindow(QMainWindow):
                             offset=offset,
                             volume_size=volume_size_for_offset(self.image_path, offset),
                         )
+                    except RecognizedFilesystemError:
+                        raise
                     except TskError:
                         provider = Fat32Provider(self.image_path, offset=offset)
                     owned = True
@@ -3536,7 +3543,7 @@ class MainWindow(QMainWindow):
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
-        from .vfs import TskError, open_image_provider
+        from .vfs import RecognizedFilesystemError, TskError, open_image_provider
 
         try:
             panel.provider = open_image_provider(
@@ -3544,6 +3551,21 @@ class MainWindow(QMainWindow):
                 offset=offset,
                 volume_size=volume_size,
             )
+        except RecognizedFilesystemError as recognized_error:
+            panel.provider = None
+            panel.refresh()
+            self.log_msg(
+                "Том @ offset %d распознан, но не поддерживается безопасным "
+                "профилем: %s" % (offset, recognized_error)
+            )
+            QMessageBox.warning(
+                self,
+                "Том открыт только для чтения",
+                "Распознанный формат или профиль не поддерживается безопасным "
+                "native backend. Другой файловый парсер не будет запускаться.\n\n%s"
+                % recognized_error,
+            )
+            return False
         except TskError as tsk_error:
             from .fat32 import Fat32Error, Fat32Provider
 

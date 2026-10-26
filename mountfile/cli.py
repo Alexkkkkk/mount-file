@@ -49,7 +49,13 @@ from .timeline import (
     query_timeline,
 )
 from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
-from .vfs import Ext2ReadError, TskError, open_image_provider, volume_size_for_offset
+from .vfs import (
+    Ext2ReadError,
+    RecognizedFilesystemError,
+    TskError,
+    open_image_provider,
+    volume_size_for_offset,
+)
 from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
@@ -165,6 +171,8 @@ def _provider(image, offset):
     try:
         provider = open_image_provider(image, offset=offset, volume_size=volume_size)
         return provider, getattr(provider, "backend_name", "read-only")
+    except RecognizedFilesystemError:
+        raise
     except TskError:
         return Fat32Provider(image, offset=offset), "fat32"
 

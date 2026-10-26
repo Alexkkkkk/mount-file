@@ -79,6 +79,10 @@ class TskError(Exception):
     pass
 
 
+class RecognizedFilesystemError(TskError):
+    """A recognized filesystem was rejected and must not use another format parser."""
+
+
 def open_native_ext2(image_path, offset=0, volume_size=None):
     """Open the bounded pure-Python ext2 read-only provider.
 
@@ -295,21 +299,29 @@ def open_image_provider(image_path, offset=0, volume_size=None):
                 image_path, offset=offset, volume_size=volume_size
             )
         except ExtProbeError as exc:
-            raise TskError(f"invalid ext filesystem profile: {exc}") from exc
-        if profile.fs_type == "ext2" and profile.clean_unmounted:
+            raise RecognizedFilesystemError(
+                f"invalid ext filesystem profile: {exc}"
+            ) from exc
+        if profile.fs_type == "ext2":
+            if not profile.clean_unmounted or profile.journal_recovery_needed:
+                raise RecognizedFilesystemError(
+                    "ext2 volume is dirty or requires journal recovery"
+                )
             try:
                 return open_native_ext2(image_path, offset, volume_size)
             except Ext2ReadError as exc:
-                raise TskError(
+                raise RecognizedFilesystemError(
                     f"native ext2 reader declined the ext profile: {exc}"
                 ) from exc
         if profile.fs_type in ("ext3", "ext4"):
             if not profile.clean_unmounted or profile.journal_recovery_needed:
-                raise TskError("ext volume is dirty or requires journal recovery")
+                raise RecognizedFilesystemError(
+                    "ext volume is dirty or requires journal recovery"
+                )
             try:
                 return open_native_ext3(image_path, offset, volume_size)
             except Ext3ReadError as exc:
-                raise TskError(
+                raise RecognizedFilesystemError(
                     f"native ext3/ext4 reader declined the ext profile: {exc}"
                 ) from exc
 
@@ -317,7 +329,7 @@ def open_image_provider(image_path, offset=0, volume_size=None):
         try:
             return open_native_ntfs_metadata(image_path, offset, volume_size)
         except Exception as exc:
-            raise TskError(
+            raise RecognizedFilesystemError(
                 f"native NTFS reader declined the NTFS profile: {exc}"
             ) from exc
 
