@@ -14,11 +14,18 @@ from mountfile.ext2_reader import (
     _COMPAT_EXT_ATTR,
     _COMPAT_HAS_JOURNAL,
     _COMPAT_RESIZE_INODE,
+    _EXT4_EA_INODE_FL,
+    _EXT4_ENCRYPT_FL,
+    _EXT4_EXTENTS_FL,
+    _EXT4_INLINE_DATA_FL,
+    _EXT4_VERITY_FL,
     _INCOMPAT_FILETYPE,
     _RO_COMPAT_LARGE_FILE,
     _RO_COMPAT_SPARSE_SUPER,
+    _S_IFREG,
     Ext2ReadError,
     NativeExt2Image,
+    _Inode,
 )
 
 _JBD2_MAGIC = 0xC03B3998
@@ -60,18 +67,21 @@ class NativeExt3Image(NativeExt2Image):
         compat_allowed = _COMPAT_EXT_ATTR | _COMPAT_RESIZE_INODE | _COMPAT_HAS_JOURNAL
         if profile.feature_compat & ~compat_allowed:
             raise Ext3ReadError("unsupported compatible ext feature")
-        if profile.feature_incompat & ~_INCOMPAT_FILETYPE:
+        incompat_allowed = _INCOMPAT_FILETYPE
+        if profile.fs_type == "ext4":
+            incompat_allowed |= 0x0040  # EXTENTS
+        if profile.feature_incompat & ~incompat_allowed:
             raise Ext3ReadError("unsupported incompatible ext feature")
         ro_allowed = _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE
         if profile.fs_type == "ext4":
-            ro_allowed |= _RO_COMPAT_EXTRA_ISIZE
+            ro_allowed |= _RO_COMPAT_EXTRA_ISIZE | 0x0020  # DIR_NLINK
         if profile.feature_ro_compat & ~ro_allowed:
             raise Ext3ReadError("unsupported read-only-compatible ext feature")
         if profile.fs_type == "ext3" and not profile.has_journal:
             raise Ext3ReadError("ext3 profile has no journal")
         if profile.feature_compat & _COMPAT_HAS_JOURNAL and not profile.has_journal:
             raise Ext3ReadError("journal feature is inconsistent")
-        if profile.feature_incompat & 0x0040:  # EXTENTS
+        if profile.feature_incompat & 0x0040 and profile.fs_type != "ext4":  # EXTENTS
             raise Ext3ReadError("extent layout is not enabled in classic profile")
         if profile.feature_incompat & 0x0080:  # 64BIT
             raise Ext3ReadError("64-bit group layout is not enabled in classic profile")
@@ -139,6 +149,160 @@ class NativeExt3Image(NativeExt2Image):
 
 
 class NativeExt4Image(NativeExt3Image):
-    """Classic-layout ext4 read-only profile with an explicit backend name."""
+    """Classic or extent-tree ext4 read-only profile with strict bounds."""
 
     backend_name = "native-ext4-ro"
+
+    @staticmethod
+    def _validate_profile(profile) -> None:
+        if profile.fs_type != "ext4":
+            raise Ext3ReadError("native ext4 reader requires an ext4 profile")
+        NativeExt3Image._validate_profile(profile)
+
+    def _read_inode(self, number: int) -> _Inode:
+        """Read an inode while permitting only the explicitly parsed extents flag."""
+        if not 1 <= number <= self.inodes_count:
+            raise Ext3ReadError("inode number is outside filesystem bounds")
+        cached = self._inode_cache.get(number)
+        if cached is not None:
+            return cached
+        group = (number - 1) // self.inodes_per_group
+        index = (number - 1) % self.inodes_per_group
+        descriptor = self._group_descriptor(group)
+        if not self._inode_is_allocated(number, group, index):
+            raise Ext3ReadError("inode is not allocated")
+        raw = self._read_at(
+            descriptor.inode_table * self.block_size + index * self.inode_size,
+            self.inode_size,
+        )
+        mode = struct.unpack_from("<H", raw, 0)[0]
+        if mode == 0:
+            raise Ext3ReadError("allocated inode has no valid file mode")
+        flags = struct.unpack_from("<I", raw, 32)[0]
+        unsupported_flags = (
+            _EXT4_EA_INODE_FL
+            | _EXT4_ENCRYPT_FL
+            | _EXT4_VERITY_FL
+            | _EXT4_INLINE_DATA_FL
+        )
+        if flags & unsupported_flags:
+            raise Ext3ReadError("inode uses an unsupported ext4 data layout")
+        if flags & _EXT4_EXTENTS_FL:
+            if self.profile.feature_incompat & 0x0040 == 0:
+                raise Ext3ReadError("inode extent flag lacks EXTENTS feature")
+        elif mode & 0xF000 == _S_IFREG and self.profile.feature_incompat & 0x0040:
+            raise Ext3ReadError("ext4 EXTENTS profile contains a pointer-layout inode")
+        size_low = struct.unpack_from("<I", raw, 4)[0]
+        size_high = struct.unpack_from("<I", raw, 108)[0]
+        if mode & 0xF000 == _S_IFREG:
+            if size_high and not (self.feature_ro_compat & _RO_COMPAT_LARGE_FILE):
+                raise Ext3ReadError("large regular-file size lacks LARGE_FILE feature")
+            size = size_low | (
+                size_high << 32 if self.feature_ro_compat & _RO_COMPAT_LARGE_FILE else 0
+            )
+        else:
+            size = size_low
+        pointers = struct.unpack_from("<15I", raw, 40)
+        inode = _Inode(
+            number=number,
+            mode=mode,
+            size=size,
+            flags=flags,
+            mtime=struct.unpack_from("<I", raw, 16)[0],
+            block_pointers=pointers,
+        )
+        if len(self._inode_cache) >= 4096:
+            self._inode_cache.clear()
+        self._inode_cache[number] = inode
+        return inode
+
+    def _extent_block(self, block: int) -> bytes:
+        if not 0 < block < self.blocks_count:
+            raise Ext3ReadError("extent tree block is outside filesystem bounds")
+        return self._read_block(block)
+
+    def _extent_map(self, inode: _Inode, logical: int) -> tuple[int, bool]:
+        """Return (physical block, unwritten) or (0, False) for a hole."""
+        if not inode.flags & _EXT4_EXTENTS_FL:
+            return super()._logical_block(inode, logical), False
+        if logical < 0:
+            raise Ext3ReadError("negative logical extent index")
+        node = struct.pack("<15I", *inode.block_pointers)
+        visited: set[int] = set()
+        expected_depth = None
+        for _depth in range(6):
+            if len(node) < 12:
+                raise Ext3ReadError("short extent header")
+            magic, entries, maximum, node_depth = struct.unpack_from("<HHHH", node, 0)
+            if magic != 0xF30A or entries > maximum or maximum > (len(node) - 12) // 12:
+                raise Ext3ReadError("invalid extent header bounds")
+            if node_depth < 0 or (expected_depth is not None and node_depth != expected_depth):
+                raise Ext3ReadError("invalid extent tree depth")
+            if node_depth == 0:
+                previous_end = -1
+                for pos in range(entries):
+                    off = 12 + pos * 12
+                    start, length, start_hi, start_lo = struct.unpack_from("<IHHI", node, off)
+                    unwritten = bool(length & 0x8000)
+                    length &= 0x7FFF
+                    if length == 0 or start < previous_end:
+                        raise Ext3ReadError("empty or overlapping extent")
+                    end = start + length
+                    if end < start:
+                        raise Ext3ReadError("extent logical range overflow")
+                    previous_end = end
+                    if start <= logical < end:
+                        physical = ((start_hi << 32) | start_lo) + (logical - start)
+                        if physical >= self.blocks_count:
+                            raise Ext3ReadError("extent physical block is out of bounds")
+                        return physical, unwritten
+                return 0, False
+            expected_depth = node_depth - 1
+            previous_key = -1
+            selected = None
+            for pos in range(entries):
+                off = 12 + pos * 12
+                logical_start, child_lo, child_hi = struct.unpack_from("<IIH", node, off)
+                if logical_start < previous_key:
+                    raise Ext3ReadError("extent index keys are not sorted")
+                previous_key = logical_start
+                if logical >= logical_start:
+                    selected = (logical_start, child_lo | (child_hi << 32))
+            if selected is None or selected[1] in visited:
+                return 0, False
+            visited.add(selected[1])
+            node = self._extent_block(selected[1])
+        raise Ext3ReadError("extent tree exceeds conservative depth limit")
+
+    def _logical_block(self, inode: _Inode, logical: int) -> int:
+        return self._extent_map(inode, logical)[0]
+
+    def read_file_range(self, path, offset=0, length=1 << 20) -> bytes:
+        """Read extents while preserving inherited hole and range semantics."""
+        if not isinstance(offset, int) or not isinstance(length, int):
+            raise Ext3ReadError("read offset and length must be integers")
+        if offset < 0 or length < 0:
+            raise Ext3ReadError("negative file read range")
+        inode = self._resolve(path)
+        if not inode.is_regular:
+            raise Ext3ReadError("only regular files can be read as file content")
+        if offset >= inode.size or length == 0:
+            return b""
+        remaining = min(length, inode.size - offset)
+        if remaining > 16 * 1024 * 1024:
+            raise Ext3ReadError("requested file range exceeds native read limit")
+        position = offset
+        output = bytearray()
+        while remaining:
+            logical = position // self.block_size
+            in_block = position % self.block_size
+            amount = min(remaining, self.block_size - in_block)
+            physical, unwritten = self._extent_map(inode, logical)
+            if physical == 0 or unwritten:
+                output.extend(b"\x00" * amount)
+            else:
+                data = self._read_block(physical)
+                output.extend(data[in_block : in_block + amount])
+            position += amount
+            remaining -= amount
+        return bytes(output)
