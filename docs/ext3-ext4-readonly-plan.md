@@ -113,3 +113,8 @@ Read-only phase complete only when every accepted feature maps to a tested capab
 [3]: https://man7.org/linux/man-pages/man5/ext4.5.html "ext4 filesystem features manual"
 [4]: https://github.com/Alexkkkkk/mount-file/pull/186 "MountFile native filesystem VFS integration PR"
 [5]: https://github.com/Alexkkkkk/mount-file/issues/182 "MountFile issue 182"
+
+
+### Реализованный milestone
+
+Добавлен bounded ext4 extent-tree profile: проверяются magic, entry limits, depth consistency, sorted index keys, cycle avoidance, logical/physical bounds, holes и unwritten extents. `64BIT`, metadata checksums, htree, fast commit и journal replay остаются fail-closed.
