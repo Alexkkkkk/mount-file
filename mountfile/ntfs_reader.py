@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass
+from pathlib import Path
 
 from mountfile.ntfs_mft import NtfsFileRecordHeader, NtfsRecordError, parse_ntfs_file_record_header
 from mountfile.ntfs_probe import (
@@ -52,6 +53,7 @@ class NtfsAttributeSummary:
     run_count: int = 0
     runs: tuple[NtfsRun, ...] = ()
     resident_value: bytes | None = None
+    data_size: int = 0
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,7 @@ def parse_ntfs_attribute_stream(
         run_count = 0
         runs: tuple[NtfsRun, ...] = ()
         resident_value = None
+        data_size = 0
         flags = struct.unpack_from("<H", raw, pos + 12)[0]
         if nonresident:
             if length < 64:
@@ -183,6 +186,9 @@ def parse_ntfs_attribute_stream(
                 raise NtfsMetadataError("compressed, encrypted or sparse NTFS attributes are unsupported")
             runs = _parse_runlist(raw[pos + run_offset : pos + length], cluster_count)
             run_count = len(runs)
+            data_size = struct.unpack_from("<Q", raw, pos + 48)[0]
+            if data_size > (1 << 63):
+                raise NtfsMetadataError("NTFS nonresident data size overflows")
         else:
             if length < 24:
                 raise NtfsMetadataError("NTFS resident attribute header is truncated")
@@ -202,6 +208,7 @@ def parse_ntfs_attribute_stream(
                 run_count,
                 runs,
                 resident_value,
+                data_size,
             )
         )
         pos += length
@@ -244,3 +251,72 @@ __all__ = [
     "parse_ntfs_attribute_stream",
     "probe_ntfs_metadata",
 ]
+
+
+class NativeNtfsMetadataImage:
+    """Read-only access to validated unnamed DATA of MFT record 0 only."""
+
+    backend_name = "native-ntfs-metadata-ro"
+
+    def __init__(self, image_path, offset=0, volume_size=None):
+        if volume_size is None:
+            raise NtfsMetadataError("an explicit NTFS volume_size is required")
+        self.image_path = str(image_path)
+        self.offset = int(offset)
+        self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
+        self._image_size = os.fstat(self._stream.fileno()).st_size
+        self.profile = probe_ntfs_metadata(
+            self.image_path, offset=self.offset, volume_size=volume_size
+        )
+        self._end = self.offset + self.profile.boot.filesystem_size
+        self._data = next(
+            (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
+            None,
+        )
+        if self._data is None:
+            self.close()
+            raise NtfsMetadataError("MFT record 0 has no unnamed DATA stream")
+
+    def close(self):
+        self._stream.close()
+
+    def reopen(self):
+        if self._stream.closed:
+            self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
+
+    def list_dir(self, path="/"):
+        if path != "/":
+            raise NtfsMetadataError("NTFS index browsing is not implemented")
+        return [{"name": "$MFT", "is_dir": False, "size": self._data.data_size, "date": ""}]
+
+    def file_size(self, path):
+        if path != "/$MFT":
+            raise NtfsMetadataError("only validated MFT metadata is exposed")
+        return self._data.data_size
+
+    def read_file_range(self, path, offset=0, length=1 << 20):
+        if path != "/$MFT" or not isinstance(offset, int) or not isinstance(length, int):
+            raise NtfsMetadataError("invalid NTFS metadata read request")
+        if offset < 0 or length < 0 or offset >= self._data.data_size or not length:
+            return b""
+        length = min(length, self._data.data_size - offset, 1 << 20)
+        output = bytearray()
+        for run in self._data.runs:
+            start = run.vcn * self.profile.boot.cluster_size
+            end = start + run.length * self.profile.boot.cluster_size
+            wanted_end = offset + length
+            if offset >= end or wanted_end <= start:
+                continue
+            take_start = max(offset, start)
+            take_end = min(wanted_end, end)
+            absolute = self.offset + run.lcn * self.profile.boot.cluster_size + take_start - start
+            output.extend(_read_exact(self._stream, absolute, take_end - take_start, self._image_size, self._end))
+        if len(output) != length:
+            raise NtfsMetadataError("NTFS MFT DATA runlist does not cover requested range")
+        return bytes(output)
+
+    def read_file(self, path):
+        return self.read_file_range(path, 0, self.file_size(path))
+
+
+__all__.append("NativeNtfsMetadataImage")

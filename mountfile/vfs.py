@@ -136,6 +136,13 @@ def probe_ntfs_metadata(image_path, offset=0, volume_size=None):
     return probe_metadata(image_path, offset=offset, volume_size=volume_size)
 
 
+def open_native_ntfs_metadata(image_path, offset=0, volume_size=None):
+    """Open only the validated MFT DATA metadata view; never auto-fallback."""
+    from mountfile.ntfs_reader import NativeNtfsMetadataImage
+
+    return NativeNtfsMetadataImage(image_path, offset=offset, volume_size=volume_size)
+
+
 def probe_exfat_profile(image_path, offset=0, volume_size=None):
     """Validate a bounded exFAT boot region without mounting or writing."""
     from mountfile.exfat_probe import probe_exfat_boot_region
