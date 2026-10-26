@@ -10,6 +10,7 @@ from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsMetadataError,
     _parse_runlist,
+    parse_ntfs_index_root,
     probe_ntfs_metadata,
 )
 
@@ -138,3 +139,19 @@ def test_mft_record_loader_validates_record_number_and_sequence():
         NativeNtfsMetadataImage.read_mft_record(
             fake, 41, reference=(3 << 48) | 42
         )
+
+
+def test_parses_bounded_index_root_file_name_entry():
+    value = bytearray(144)
+    struct.pack_into("<III", value, 16, 16, 128, 128)
+    entry = 32
+    key = bytearray(74)
+    struct.pack_into("<Q", key, 0, (3 << 48) | 9)
+    key[0x40] = 4
+    key[0x42:0x4A] = "note".encode("utf-16le")
+    struct.pack_into("<QHHI", value, entry, (3 << 48) | 9, 96, len(key), 0)
+    value[entry + 16 : entry + 16 + len(key)] = key
+    struct.pack_into("<QHHI", value, entry + 96, 0, 16, 0, 1)
+    entries = parse_ntfs_index_root(bytes(value))
+    assert entries[0].name == "note"
+    assert entries[0].reference == (3 << 48) | 9
