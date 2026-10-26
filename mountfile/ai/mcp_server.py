@@ -211,9 +211,12 @@ class DefaultBackend:
     def _provider(image: Path, offset: int) -> Any:
         errors = []
         try:
-            from mountfile.vfs import TskImage
+            from mountfile.vfs import open_image_provider, volume_size_for_offset
 
-            return TskImage(str(image), offset=offset)
+            volume_size = volume_size_for_offset(str(image), offset)
+            return open_image_provider(
+                str(image), offset=offset, volume_size=volume_size
+            )
         except Exception as exc:
             errors.append(exc)
         try:

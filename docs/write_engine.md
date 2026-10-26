@@ -68,7 +68,7 @@ engine.close()
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
   тома, спарс-файлы/сжатие/EFS.
 
-## Предварительная проверка ext-профиля
+## Ext-профиль и native ext2 read-only VFS
 
 `mountfile.vfs.probe_ext_profile(image_path, offset=0, volume_size=None)` —
 ограниченный pure-Python probe первичного 1024-байтового superblock ext2/3/4.
@@ -77,12 +77,26 @@ engine.close()
 superblock state см. [Linux ext4 superblock specification](https://docs.kernel.org/filesystems/ext4/super.html)
 и [JBD2 journal documentation](https://docs.kernel.org/filesystems/ext4/journal.html).
 
-Это не файловый reader: probe не обходит каталоги, не читает содержимое файлов
-и не воспроизводит JBD2. `phase1_ext2_profile_candidate` означает только, что
-superblock предварительно соответствует ограниченному набору признаков Phase 1;
-это не разрешение на запись. Реальный writer обязан заново проверить все
-затрагиваемые группы, bitmaps, inode metadata и границы раздела. Dirty state,
-журнал/recovery и неподдерживаемые features остаются read-only.
+Сам probe не является файловым reader: он не обходит каталоги и не читает
+содержимое файлов. Отдельный `mountfile.vfs.open_native_ext2(image_path,
+offset=0, volume_size=...)` открывает pure-Python `NativeExt2Image` для явного
+чтения ограниченного ext2 subset. Provider проверяет границы раздела, group
+descriptors, inode/block allocation bitmaps, linear directory records и
+direct/single/double/triple-indirect block maps. Он требует явный `volume_size`
+и открывает образ только для чтения. Один вызов чтения ограничен 16 MiB;
+экспорт файлов использует 1 MiB ranged chunks, чтобы не собирать большие файлы
+целиком в памяти.
+
+Native reader принимает только clean ext2 revision 0/1 с 1/2/4 KiB blocks и
+allowlisted features. Dirty/recovery-required volumes, JBD2/ext3, ext4 layout
+features, unknown feature flags, indexed directories, compressed/encrypted/
+extent/inline inodes и symlink traversal отклоняются. `open_image_provider`
+автоматически выбирает этот read-only backend в GUI, CLI и MCP только при наличии
+точного размера раздела (или whole-image ext2 без таблицы разделов); остальные
+профили остаются на pytsk3/существующих fallback путях. Это не разрешение на
+запись и не FUSE export. `phase1_ext2_profile_candidate` по-прежнему означает
+только предварительное соответствие write profile. Writer обязан самостоятельно
+проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
 
 ## Ограничения и риски
 

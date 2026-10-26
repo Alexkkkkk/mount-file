@@ -3012,7 +3012,7 @@ class MainWindow(QMainWindow):
     def search_files_in_image(self, pattern, *, max_results=2000, max_nodes=30000):
         """Return bounded filename matches from all detected image volumes."""
         from .fat32 import Fat32Error, Fat32Provider
-        from .vfs import TskError, TskImage
+        from .vfs import TskError, open_image_provider, volume_size_for_offset
 
         volumes = self.volumes or [
             _PartitionVolume(
@@ -3045,7 +3045,11 @@ class MainWindow(QMainWindow):
                     provider = current.provider
                 else:
                     try:
-                        provider = TskImage(self.image_path, offset=offset)
+                        provider = open_image_provider(
+                            self.image_path,
+                            offset=offset,
+                            volume_size=volume_size_for_offset(self.image_path, offset),
+                        )
                     except TskError:
                         provider = Fat32Provider(self.image_path, offset=offset)
                     owned = True
@@ -3532,10 +3536,14 @@ class MainWindow(QMainWindow):
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
-        from .vfs import TskError, TskImage
+        from .vfs import TskError, open_image_provider, volume_size_for_offset
 
         try:
-            panel.provider = TskImage(self.image_path, offset=offset)
+            panel.provider = open_image_provider(
+                self.image_path,
+                offset=offset,
+                volume_size=volume_size_for_offset(self.image_path, offset),
+            )
         except TskError as tsk_error:
             from .fat32 import Fat32Error, Fat32Provider
 

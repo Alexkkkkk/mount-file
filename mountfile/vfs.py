@@ -2,20 +2,24 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Read-only filesystem access via The Sleuth Kit (pytsk3).
+"""Read-only filesystem providers for raw images.
 
-Supports FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 and more
-(depending on the libtsk build). Used for browsing and extracting files.
+``TskImage`` uses The Sleuth Kit (pytsk3) for supported formats. The separate
+``NativeExt2Image`` provider reads a strict, clean ext2 subset in pure Python.
+Legacy format coverage still depends on the installed libtsk build.
 
-The module also exports a dependency-free ext superblock profile probe. That
-probe reports format features and geometry only; it does not browse files.
+The module also exports a dependency-free ext superblock probe. The probe
+reports format features and geometry only; it does not browse files or authorize
+writes.
 """
 
 from __future__ import annotations
 
+import os
 import time
 
-from mountfile.ext_probe import probe_ext_superblock
+from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
+from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
@@ -72,6 +76,35 @@ class TskError(Exception):
     pass
 
 
+def open_native_ext2(image_path, offset=0, volume_size=None):
+    """Open the bounded pure-Python ext2 read-only provider.
+
+    The caller must provide the selected partition size; the provider refuses
+    to infer bounds from the remainder of a disk image.
+    """
+    return NativeExt2Image(image_path, offset=offset, volume_size=volume_size)
+
+
+def volume_size_for_offset(image_path, offset):
+    """Return an exact partition size, or whole-image size for an unpartitioned offset 0."""
+    offset = int(offset)
+    try:
+        from mountfile.partition import list_partitions
+
+        partitions = list_partitions(image_path)
+    except Exception:
+        return None
+    for partition in partitions:
+        if partition.offset == offset:
+            return partition.size_bytes
+    if offset == 0 and not partitions:
+        try:
+            return os.path.getsize(image_path)
+        except OSError:
+            return None
+    return None
+
+
 def _fmt_mtime(meta):
     """Modification time of a TSK meta record as 'YYYY-MM-DD HH:MM'."""
     try:
@@ -91,6 +124,7 @@ class TskImage:
             raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
         self.image_path = str(image_path)
         self.offset = int(offset)
+        self.backend_name = "pytsk3"
         try:
             self._open_image()
         except Exception as e:
@@ -172,3 +206,62 @@ class TskImage:
 
     def read_file(self, path):
         return self.read_file_range(path, 0, self.file_size(path))
+
+
+def _has_ext_superblock_magic(image_path, offset, volume_size):
+    if volume_size is None:
+        return False
+    try:
+        offset = int(offset)
+        volume_size = int(volume_size)
+        if offset < 0 or volume_size < 0:
+            raise TskError("negative filesystem offset or volume size")
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset + volume_size > image_size:
+                raise TskError("selected filesystem extent exceeds image bounds")
+            if volume_size < 2048:
+                return False
+            stream.seek(offset + 1024 + 0x38)
+            return stream.read(2) == b"\x53\xef"
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for native ext2: {exc}") from exc
+
+
+def open_image_provider(image_path, offset=0, volume_size=None):
+    """Open a read-only provider, preferring native ext2 when safely bounded.
+
+    Clean ext2 profiles are offered to the pure-Python provider. Profiles not
+    supported by that strict subset retain the existing pytsk3 read fallback;
+    without an explicit volume size, native ext2 is never selected.
+    """
+    fallback_reason = None
+    if _has_ext_superblock_magic(image_path, offset, volume_size):
+        try:
+            profile = probe_ext_superblock(
+                image_path, offset=offset, volume_size=volume_size
+            )
+        except ExtProbeError as exc:
+            raise TskError(f"invalid ext filesystem profile: {exc}") from exc
+        if profile.fs_type == "ext2" and profile.clean_unmounted:
+            try:
+                return open_native_ext2(image_path, offset, volume_size)
+            except Ext2ReadError as exc:
+                fallback_reason = f"native ext2 reader declined the profile: {exc}"
+        elif not profile.clean_unmounted or profile.journal_recovery_needed:
+            fallback_reason = (
+                "ext volume is dirty or requires recovery; using read-only fallback"
+            )
+        else:
+            fallback_reason = "native ext3/ext4 reading is not implemented yet"
+
+    try:
+        provider = TskImage(image_path, offset=offset)
+    except TskError as exc:
+        if fallback_reason:
+            raise TskError(f"{fallback_reason}; {exc}") from exc
+        raise
+    if fallback_reason:
+        provider.backend_name = "pytsk3-fallback"
+        provider.native_fallback_reason = fallback_reason
+    return provider
