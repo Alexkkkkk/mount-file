@@ -48,6 +48,13 @@ class NtfsRun:
 
 
 @dataclass(frozen=True)
+class NtfsIndexEntry:
+    reference: int
+    name: str
+    is_directory: bool
+
+
+@dataclass(frozen=True)
 class NtfsAttributeSummary:
     type_code: int
     length: int
@@ -220,6 +227,51 @@ def parse_ntfs_attribute_stream(
     raise NtfsMetadataError("NTFS FILE record has no attribute end marker")
 
 
+def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
+    """Parse a resident INDEX_ROOT value containing FILE_NAME keys."""
+    if len(value) < 32:
+        raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
+    entry_offset, total_size, allocated_size = struct.unpack_from("<III", value, 16)
+    if allocated_size < total_size or entry_offset < 16:
+        raise NtfsMetadataError("invalid NTFS INDEX_ROOT header bounds")
+    start = 16 + entry_offset
+    end = 16 + total_size
+    if start < 16 or end > len(value) or start > end:
+        raise NtfsMetadataError("NTFS INDEX_ROOT entries exceed the attribute")
+    result: list[NtfsIndexEntry] = []
+    pos = start
+    while pos < end:
+        if pos + 16 > end:
+            raise NtfsMetadataError("truncated NTFS index entry header")
+        reference = struct.unpack_from("<Q", value, pos)[0]
+        entry_length, key_length = struct.unpack_from("<HH", value, pos + 8)
+        flags = struct.unpack_from("<I", value, pos + 12)[0]
+        if entry_length < 16 or entry_length & 7 or pos + entry_length > end:
+            raise NtfsMetadataError("invalid NTFS index entry length")
+        if flags & ~0x00000003:
+            raise NtfsMetadataError("unsupported NTFS index entry flags")
+        if flags & 1:
+            if key_length:
+                raise NtfsMetadataError("NTFS index end entry contains a key")
+            return tuple(result)
+        if key_length < 66 or 16 + key_length > entry_length:
+            raise NtfsMetadataError("NTFS FILE_NAME key is truncated")
+        key = value[pos + 16 : pos + 16 + key_length]
+        if key[0x00] == 0:
+            raise NtfsMetadataError("NTFS FILE_NAME parent reference is null")
+        name_length = key[0x40]
+        name_end = 0x42 + name_length * 2
+        if name_end > len(key):
+            raise NtfsMetadataError("NTFS FILE_NAME name exceeds index entry")
+        try:
+            name = key[0x42:name_end].decode("utf-16le")
+        except UnicodeDecodeError as exc:
+            raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
+        result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
+        pos += entry_length
+    raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
+
+
 def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None = None) -> NtfsMetadataProfile:
     """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror."""
     try:
@@ -250,10 +302,12 @@ def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None 
 
 __all__ = [
     "NtfsAttributeSummary",
+    "NtfsIndexEntry",
     "NtfsMetadataError",
     "NtfsMetadataProfile",
     "NtfsRun",
     "parse_ntfs_attribute_stream",
+    "parse_ntfs_index_root",
     "probe_ntfs_metadata",
 ]
 
