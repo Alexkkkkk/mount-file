@@ -3,7 +3,9 @@
 import io
 import json
 import os
+import posixpath
 import urllib.error
+from types import SimpleNamespace
 
 import pytest
 
@@ -123,12 +125,18 @@ def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path)
 
 
 def test_system_path_alias_normalization_is_prefix_scoped(monkeypatch):
-    realpath = os.path.realpath
-    monkeypatch.setattr(os.path, "islink", lambda path: path == "/var")
+    # The behavior under test is specifically the POSIX/macOS alias contract.
+    # Use POSIX path rules even when this test runs on Windows CI.
+    path_module = SimpleNamespace(
+        abspath=posixpath.abspath,
+        islink=lambda path: path == "/var",
+        realpath=lambda path: "/private/var" if path == "/var" else path,
+        join=posixpath.join,
+    )
     monkeypatch.setattr(
-        os.path,
-        "realpath",
-        lambda path: "/private/var" if path == "/var" else realpath(path),
+        extract_module,
+        "os",
+        SimpleNamespace(name="posix", sep="/", path=path_module),
     )
 
     assert (
