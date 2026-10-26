@@ -399,11 +399,11 @@ class NativeNtfsMetadataImage:
             self.image_path, offset=self.offset, volume_size=volume_size
         )
         self._end = self.offset + self.profile.boot.filesystem_size
-        self._data = next(
+        self._mft_data = next(
             (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
             None,
         )
-        if self._data is None:
+        if self._mft_data is None:
             self.close()
             raise NtfsMetadataError("MFT record 0 has no unnamed DATA stream")
         volume_record = self.read_mft_record(3)
@@ -422,26 +422,93 @@ class NativeNtfsMetadataImage:
             self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
 
     def list_dir(self, path="/"):
-        if path != "/":
-            raise NtfsMetadataError("NTFS index browsing is not implemented")
-        return [{"name": "$MFT", "is_dir": False, "size": self._data.data_size, "date": ""}]
+        record_number, record = self._resolve(path)
+        if not record.is_directory:
+            raise NtfsMetadataError("NTFS path is not a directory")
+        attrs = parse_ntfs_attribute_stream(
+            record, cluster_count=self.profile.boot.cluster_count
+        )
+        root = next((a for a in attrs if a.type_code == 0x90 and not a.name), None)
+        if root is None or root.nonresident or root.resident_value is None:
+            raise NtfsMetadataError("NTFS directory has no resident INDEX_ROOT")
+        entries = parse_ntfs_index_root(
+            root.resident_value, parent_reference=(record_number | (record.sequence_number << 48))
+        )
+        result = []
+        for entry in entries:
+            child_number = entry.reference & ((1 << 48) - 1)
+            child = self.read_mft_record(child_number, reference=entry.reference)
+            if child.is_directory != entry.is_directory:
+                raise NtfsMetadataError("NTFS index directory flag disagrees with MFT")
+            child_attrs = parse_ntfs_attribute_stream(
+                child, cluster_count=self.profile.boot.cluster_count
+            )
+            data = next((a for a in child_attrs if a.type_code == 0x80 and not a.name), None)
+            result.append(
+                {
+                    "name": entry.name,
+                    "is_dir": child.is_directory,
+                    "size": 0
+                    if child.is_directory or data is None
+                    else (len(data.resident_value) if data.resident_value is not None else data.data_size),
+                    "date": "",
+                    "inode": child_number,
+                }
+            )
+        result.sort(key=lambda item: (not item["is_dir"], item["name"].casefold()))
+        return result
 
     def file_size(self, path):
-        if path != "/$MFT":
-            raise NtfsMetadataError("only validated MFT metadata is exposed")
-        return self._data.data_size
+        if path == "/$MFT":
+            return self._mft_data.data_size
+        _number, record = self._resolve(path)
+        if record.is_directory:
+            return 0
+        data = next(
+            (a for a in parse_ntfs_attribute_stream(
+                record, cluster_count=self.profile.boot.cluster_count
+            ) if a.type_code == 0x80 and not a.name),
+            None,
+        )
+        if data is None:
+            raise NtfsMetadataError("NTFS file has no unnamed DATA attribute")
+        return len(data.resident_value) if data.resident_value is not None else data.data_size
 
     def read_file_range(self, path, offset=0, length=1 << 20):
-        if path != "/$MFT" or not isinstance(offset, int) or not isinstance(length, int):
+        if not isinstance(offset, int) or not isinstance(length, int):
             raise NtfsMetadataError("invalid NTFS metadata read request")
-        if offset < 0 or length < 0 or offset >= self._data.data_size or not length:
+        if path == "/$MFT":
+            data = self._mft_data
+            if offset < 0 or length < 0 or offset >= data.data_size or not length:
+                return b""
+            length = min(length, data.data_size - offset, 1 << 20)
+            return self._read_runs(data.runs, offset, length)
+        _number, record = self._resolve(path)
+        if record.is_directory:
+            raise NtfsMetadataError("cannot read directory content as a file")
+        data = next(
+            (a for a in parse_ntfs_attribute_stream(
+                record, cluster_count=self.profile.boot.cluster_count
+            ) if a.type_code == 0x80 and not a.name),
+            None,
+        )
+        if data is None:
+            raise NtfsMetadataError("NTFS file has no unnamed DATA attribute")
+        if data.resident_value is not None:
+            if offset < 0 or length < 0 or offset >= len(data.resident_value) or not length:
+                return b""
+            return data.resident_value[offset : offset + min(length, 1 << 20)]
+        if offset < 0 or length < 0 or offset >= data.data_size or not length:
             return b""
-        length = min(length, self._data.data_size - offset, 1 << 20)
+        length = min(length, data.data_size - offset, 1 << 20)
+        return self._read_runs(data.runs, offset, length)
+
+    def _read_runs(self, runs, offset, length):
         output = bytearray()
-        for run in self._data.runs:
+        wanted_end = offset + length
+        for run in runs:
             start = run.vcn * self.profile.boot.cluster_size
             end = start + run.length * self.profile.boot.cluster_size
-            wanted_end = offset + length
             if offset >= end or wanted_end <= start:
                 continue
             take_start = max(offset, start)
@@ -449,8 +516,40 @@ class NativeNtfsMetadataImage:
             absolute = self.offset + run.lcn * self.profile.boot.cluster_size + take_start - start
             output.extend(_read_exact(self._stream, absolute, take_end - take_start, self._image_size, self._end))
         if len(output) != length:
-            raise NtfsMetadataError("NTFS MFT DATA runlist does not cover requested range")
+            raise NtfsMetadataError("NTFS DATA runlist does not cover requested range")
         return bytes(output)
+
+    def _resolve(self, path):
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise NtfsMetadataError("NTFS path must be absolute")
+        parts = [part for part in path.split("/") if part]
+        number = 5
+        record = self.read_mft_record(number)
+        for part in parts:
+            match = next(
+                (
+                    item
+                    for item in self.list_dir_by_record(number, record)
+                    if item.name.casefold() == part.casefold()
+                ),
+                None,
+            )
+            if match is None:
+                raise NtfsMetadataError(f"NTFS path component not found: {part}")
+            number = match.reference & ((1 << 48) - 1)
+            record = self.read_mft_record(number, reference=match.reference)
+        return number, record
+
+    def list_dir_by_record(self, record_number, record):
+        attrs = parse_ntfs_attribute_stream(record, cluster_count=self.profile.boot.cluster_count)
+        root = next((a for a in attrs if a.type_code == 0x90 and not a.name), None)
+        if root is None or root.nonresident or root.resident_value is None:
+            raise NtfsMetadataError("NTFS directory has no resident INDEX_ROOT")
+        entries = parse_ntfs_index_root(
+            root.resident_value,
+            parent_reference=record_number | (record.sequence_number << 48),
+        )
+        return entries
 
     def read_file(self, path):
         return self.read_file_range(path, 0, self.file_size(path))

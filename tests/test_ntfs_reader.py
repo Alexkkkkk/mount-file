@@ -95,6 +95,12 @@ def test_vfs_exposes_bounded_ntfs_metadata_probe_without_pytsk3(tmp_path, monkey
     assert profile.boot.mft_offset == MFT
 
 
+def test_vfs_does_not_silently_fallback_for_ntfs(tmp_path, monkeypatch):
+    monkeypatch.setattr(vfs, "pytsk3", None)
+    with pytest.raises(vfs.TskError, match="native NTFS reader declined"):
+        vfs.open_image_provider(_image(tmp_path), volume_size=VOLUME_SIZE)
+
+
 def test_rejects_backup_geometry_mismatch(tmp_path):
     image = bytearray(_image(tmp_path).read_bytes())
     struct.pack_into("<Q", image, VOLUME_SIZE - 512 + 0x28, TOTAL - 1)
