@@ -16,7 +16,6 @@ description = "GUI-инструмент для работы с raw-образа�
 readme = "README.md"
 dependencies = [
     "PyQt6>=6.11.0",
-    "pytsk3>=20260715",
 ]
 
 requires-python = ">=3.10"
@@ -44,6 +43,9 @@ Issues = "https://github.com/Alexkkkkk/mount-file/issues"
 
 
 [project.optional-dependencies]
+legacy-tsk = [
+    "pytsk3>=20260715",
+]
 dev = [
     "pytest>=7",
     "pytest-cov>=4",
@@ -69,7 +71,7 @@ ai = [
     "regex>=2024.0.0",
 ]
 rw = [
-    "pytsk3>=20260715",   # RO-чтение через MountFileBridge
+    "pytsk3>=20260715",   # legacy RO fallback через MountFileBridge
 ]
 rw-ext = [
     "mountfile[rw]",

@@ -11,9 +11,9 @@
     python -m mountfile mv  dump.img /docs/old.txt new.txt --yes
     python -m mountfile rm  dump.img /docs/old.txt --yes
 
-Read commands prefer the bounded pure-Python ext2 provider, then use The Sleuth
-Kit when available and fall back to the built-in FAT32 engine. Write commands
-always use the built-in FAT32 engine. Commands that modify the image (put,
+Read commands prefer bounded pure-Python FAT12/16/32 and ext profiles, then use
+The Sleuth Kit when the explicit optional legacy backend is installed. Write
+commands use the built-in FAT32 engine. Commands that modify the image (put,
 mkdir, mv, rm) refuse to run without --yes.
 """
 

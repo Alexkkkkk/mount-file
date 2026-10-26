@@ -238,16 +238,19 @@ def test_launcher_is_importable_and_compiles():
     assert r.returncode == 0, r.stderr
 
 
-def test_qt_and_pytsk3_are_required_project_dependencies():
+def test_qt_is_base_dependency_and_pytsk3_is_explicit_legacy_extra():
     with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as stream:
         project = stream.read()
     required = project.split("[project.optional-dependencies]", maxsplit=1)[0]
     assert '"PyQt6>=6.11.0"' in required
-    assert '"pytsk3>=20260715"' in required
+    assert '"pytsk3>=20260715"' not in required
+    assert "legacy-tsk = [" in project
+    assert '"pytsk3>=20260715"' in project
 
     with open(os.path.join(ROOT, "install_mountfile.py"), encoding="utf-8") as stream:
         installer = stream.read()
-    assert 'BASE_DEPS = ["PyQt6>=6.11.0", "pytsk3>=20260715"]' in installer
+    assert 'BASE_DEPS = ["PyQt6>=6.11.0"]' in installer
+    assert '"legacy-tsk"' in installer
 
 
 def test_launcher_help_exits_zero():

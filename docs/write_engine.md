@@ -46,7 +46,11 @@ engine.close()
 
 ## Границы
 
-* FAT12/16/32 — собственный движок (как и раньше).
+* FAT12/16/32 — bounded pure-Python readers `native-fat12-ro`,
+  `native-fat16-ro` и `native-fat32-ro` выбираются через unified VFS без
+  `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
+  кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
+  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only.
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
   один single-indirect pointer для данных файла) использует собственный Python
   writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
@@ -63,7 +67,7 @@ engine.close()
   Driver и запуск MountFile от имени администратора; если одно из условий не
   выполнено, GUI показывает точную причину и не предлагает сохранение в образ.
 
-* exFAT и FAT12/16 — через ImDisk и системный Windows filesystem driver на
+* exFAT — через ImDisk и системный Windows filesystem driver на
   Windows (те же требования установки и прав); на Linux — через `LoopMountRW`,
   если доступны `mount`/`umount` и соответствующий драйвер. HFS+ и другие
   неподдерживаемые Windows filesystem drivers остаются read-only.
