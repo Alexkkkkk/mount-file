@@ -7,9 +7,9 @@ import struct
 
 import pytest
 
-from mountfile.fat_reader import FatReadError, NativeFatImage
 from mountfile import vfs
 from mountfile.fat32 import Fat32
+from mountfile.fat_reader import FatReadError, NativeFatImage
 from tests.test_fat32 import make_fat32_image
 
 
