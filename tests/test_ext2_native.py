@@ -37,6 +37,22 @@ def _make_ext2(path, size=16 * 1024 * 1024, block_size=4096):
     )
 
 
+def _set_inode_flags(path, inode_number, flags):
+    with open(path, "r+b") as stream:
+        stream.seek(1024)
+        superblock = stream.read(1024)
+        block_size = 1024 << int.from_bytes(superblock[24:28], "little")
+        first_data_block = int.from_bytes(superblock[20:24], "little")
+        inodes_per_group = int.from_bytes(superblock[40:44], "little")
+        inode_size = int.from_bytes(superblock[88:90], "little")
+        group, index = divmod(inode_number - 1, inodes_per_group)
+        gdt = (first_data_block + 1) * block_size
+        stream.seek(gdt + group * 32 + 8)
+        inode_table = int.from_bytes(stream.read(4), "little")
+        stream.seek(inode_table * block_size + index * inode_size + 32)
+        stream.write(flags.to_bytes(4, "little"))
+
+
 def _assert_e2fsck_clean(path):
     if not E2FSCK:
         pytest.skip("e2fsck is required for independent fixture validation")
@@ -158,6 +174,29 @@ def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
     max_bytes = (12 + writer.block_size // 4) * writer.block_size
     with pytest.raises(NativeExt2Error, match="single-indirect"):
         writer.write_file("/too-large.bin", b"x" * (max_bytes + 1))
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_refuses_mutation_inside_flagged_directories(tmp_path):
+    image = tmp_path / "flagged-directory.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    writer.mkdir("/locked")
+    locked_inode = next(
+        entry["inode"] for entry in writer.list_dir("/") if entry["name"] == "locked"
+    )
+
+    _set_inode_flags(image, 2, 0x10)  # EXT2_IMMUTABLE_FL on the root directory.
+    before = image.read_bytes()
+    with pytest.raises(NativeExt2Error, match="flagged ext2 directories"):
+        writer.write_file("/blocked-at-root", b"must not be committed")
+    assert image.read_bytes() == before
+
+    _set_inode_flags(image, 2, 0)
+    _set_inode_flags(image, locked_inode, 0x10)
+    before = image.read_bytes()
+    with pytest.raises(NativeExt2Error, match="flagged ext2 directories"):
+        writer.write_file("/locked/blocked", b"must not be committed")
     assert image.read_bytes() == before
 
 

@@ -19,6 +19,7 @@ import struct
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -44,6 +45,53 @@ _INODE_INDEX = 0x00001000
 _INODE_UNSUPPORTED_FLAGS = _INODE_EXTENTS | _INODE_INDEX | 0x00000024 | 0x00000800
 _DIRECT_BLOCKS = 12
 _CHUNK = 1024 * 1024
+
+
+@contextmanager
+def _image_process_lock(image_path):
+    """Hold an advisory exclusive lock on the image for one mutation lifecycle.
+
+    The lock is taken on the image itself, so it creates no sidecar files and
+    coordinates native writers in separate MountFile processes. It is advisory:
+    tools that do not participate in this locking protocol are still detected
+    where possible by the existing source-hash checks.
+    """
+    stream = open(image_path, "r+b")
+    acquired = False
+    try:
+        if os.name == "nt":
+            import errno
+            import msvcrt
+
+            while not acquired:
+                stream.seek(0)
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    acquired = True
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == "nt":
+                    import msvcrt
+
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
 
 
 class _Ext2FS:
@@ -652,7 +700,7 @@ class _Ext2FS:
         if stat.S_IFMT(mode) != stat.S_IFDIR:
             raise NotADirectoryError("ext2 path component is not a directory")
         flags = self._u32(raw, 32)
-        if flags & _INODE_UNSUPPORTED_FLAGS:
+        if flags:
             raise NativeExt2Error("indexed or flagged ext2 directories are unsupported")
         if self._u32(raw, 104):
             # Keep support simple: directory ACL blocks are preserved, but
@@ -1235,7 +1283,7 @@ class NativeExt2ImageWriter:
                 raise
 
     def _mutate(self, method: str, *args, **kwargs):
-        with self._lock:
+        with self._lock, _image_process_lock(self.image_path):
             current = _Ext2FS(self.image_path, self.offset, self.volume_size)
             if current.filesystem_size != self.filesystem_size:
                 raise NativeExt2Error(

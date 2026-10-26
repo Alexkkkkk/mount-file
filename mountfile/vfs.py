@@ -185,9 +185,12 @@ class TskImage:
         self.image_path = str(image_path)
         self.offset = int(offset)
         self.backend_name = "pytsk3"
+        self.img = None
+        self.fs = None
         try:
             self._open_image()
         except Exception as e:
+            self.close()
             raise TskError(str(e)) from e
         self.root_name = image_path
 
