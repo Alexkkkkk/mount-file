@@ -166,6 +166,9 @@ def test_parses_bounded_index_root_file_name_entry():
     assert entries[0].reference == (3 << 48) | 9
     with pytest.raises(NtfsMetadataError, match="parent reference mismatch"):
         parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 10)
+    struct.pack_into("<I", value, 28, 1)
+    with pytest.raises(NtfsMetadataError, match="INDEX_ALLOCATION"):
+        parse_ntfs_index_root(bytes(value))
 
 
 def test_validates_indx_usa_before_parsing_entries():
