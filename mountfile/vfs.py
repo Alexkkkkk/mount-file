@@ -6,11 +6,16 @@
 
 Supports FAT12/16/32, exFAT, NTFS, EXT2/3/4, HFS+, ISO9660 and more
 (depending on the libtsk build). Used for browsing and extracting files.
+
+The module also exports a dependency-free ext superblock profile probe. That
+probe reports format features and geometry only; it does not browse files.
 """
 
 from __future__ import annotations
 
 import time
+
+from mountfile.ext_probe import probe_ext_superblock
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
@@ -44,6 +49,16 @@ def safe_read_exact(fh, offset, size):
             return None
     d = safe_read(fh, offset, size)
     return d if len(d) == size else None
+
+
+def probe_ext_profile(image_path, offset=0, volume_size=None):
+    """Inspect an ext superblock without requiring pytsk3.
+
+    This reports a preliminary profile only. It does not browse files or
+    authorize writes; the selected filesystem backend remains responsible for
+    complete metadata validation.
+    """
+    return probe_ext_superblock(image_path, offset=offset, volume_size=volume_size)
 
 
 # --- /MOUNTFILE_FIX --------------------------------------------------------

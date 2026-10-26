@@ -68,6 +68,22 @@ engine.close()
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
   тома, спарс-файлы/сжатие/EFS.
 
+## Предварительная проверка ext-профиля
+
+`mountfile.vfs.probe_ext_profile(image_path, offset=0, volume_size=None)` —
+ограниченный pure-Python probe первичного 1024-байтового superblock ext2/3/4.
+Он возвращает feature-derived классификацию, геометрию и флаги состояния,
+наличия журнала и необходимости recovery. Для деталей feature flags и
+superblock state см. [Linux ext4 superblock specification](https://docs.kernel.org/filesystems/ext4/super.html)
+и [JBD2 journal documentation](https://docs.kernel.org/filesystems/ext4/journal.html).
+
+Это не файловый reader: probe не обходит каталоги, не читает содержимое файлов
+и не воспроизводит JBD2. `phase1_ext2_profile_candidate` означает только, что
+superblock предварительно соответствует ограниченному набору признаков Phase 1;
+это не разрешение на запись. Реальный writer обязан заново проверить все
+затрагиваемые группы, bitmaps, inode metadata и границы раздела. Dirty state,
+журнал/recovery и неподдерживаемые features остаются read-only.
+
 ## Ограничения и риски
 
 * Корректность записи в NTFS/ext равна корректности бэкенда, который её
