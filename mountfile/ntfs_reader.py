@@ -272,6 +272,28 @@ def parse_ntfs_index_root(value: bytes) -> tuple[NtfsIndexEntry, ...]:
     raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
 
 
+def parse_ntfs_index_block(raw_block: bytes) -> tuple[NtfsIndexEntry, ...]:
+    """Validate an INDX block's USA and parse its bounded index entries."""
+    if len(raw_block) < 512 or len(raw_block) % 512:
+        raise NtfsMetadataError("NTFS INDX block size is invalid")
+    if raw_block[:4] != b"INDX":
+        raise NtfsMetadataError("NTFS INDX signature is invalid")
+    fixup_offset, fixup_count = struct.unpack_from("<HH", raw_block, 4)
+    if fixup_offset not in (0x28, 0x2A) or fixup_count != len(raw_block) // 512 + 1:
+        raise NtfsMetadataError("NTFS INDX USA geometry is invalid")
+    if fixup_offset + fixup_count * 2 > 512:
+        raise NtfsMetadataError("NTFS INDX USA exceeds its first sector")
+    sequence = struct.unpack_from("<H", raw_block, fixup_offset)[0]
+    fixed = bytearray(raw_block)
+    for index in range(len(raw_block) // 512):
+        trailer = (index + 1) * 512 - 2
+        if struct.unpack_from("<H", raw_block, trailer)[0] != sequence:
+            raise NtfsMetadataError("NTFS INDX USA mismatch")
+        replacement = struct.unpack_from("<H", raw_block, fixup_offset + 2 + index * 2)[0]
+        struct.pack_into("<H", fixed, trailer, replacement)
+    return parse_ntfs_index_root(bytes(fixed[8:]))
+
+
 def probe_ntfs_metadata(image_path, *, offset: int = 0, volume_size: int | None = None) -> NtfsMetadataProfile:
     """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror."""
     try:
@@ -308,6 +330,7 @@ __all__ = [
     "NtfsRun",
     "parse_ntfs_attribute_stream",
     "parse_ntfs_index_root",
+    "parse_ntfs_index_block",
     "probe_ntfs_metadata",
 ]
 
