@@ -16,7 +16,7 @@ VOLUME_SIZE = 2 * 1024 * 1024
 
 
 def _region(sector_size=512):
-    region = bytearray(12 * sector_size)
+    region = bytearray(24 * sector_size)
     boot = memoryview(region)[:sector_size]
     boot[3:11] = b"EXFAT   "
     struct.pack_into("<Q", boot, 0x40, 0)
@@ -33,11 +33,14 @@ def _region(sector_size=512):
     boot[0x6E] = 1
     boot[0x70] = 10
     boot[510:512] = b"\x55\xaa"
-    checksum = exfat_boot_checksum(
-        bytes(region[: 11 * sector_size]), sector_size=sector_size
-    )
-    for offset in range(0, sector_size, 4):
-        struct.pack_into("<I", region, 11 * sector_size + offset, checksum)
+    region[12 * sector_size : 23 * sector_size] = region[: 11 * sector_size]
+    for start in (0, 12 * sector_size):
+        checksum = exfat_boot_checksum(
+            bytes(region[start : start + 11 * sector_size]),
+            sector_size=sector_size,
+        )
+        for offset in range(0, sector_size, 4):
+            struct.pack_into("<I", region, start + 11 * sector_size + offset, checksum)
     return bytes(region)
 
 
@@ -78,6 +81,23 @@ def test_rejects_corrupt_or_unsafe_boot_region(mutate):
         struct.pack_into("<I", region, 0x58, 10)
     with pytest.raises(ExfatProbeError):
         parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
+
+
+def test_rejects_corrupt_exfat_backup_boot_checksum():
+    region = bytearray(_region())
+    region[23 * 512] ^= 1
+    with pytest.raises(ExfatProbeError, match="backup boot-region checksum"):
+        parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
+
+
+def test_backup_boot_flags_and_percent_in_use_may_be_stale():
+    region = bytearray(_region())
+    backup = 12 * 512
+    struct.pack_into("<H", region, backup + 0x6A, 3)
+    region[backup + 0x70] = 70
+    profile = parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
+    assert profile.volume_flags == 0
+    assert profile.percent_in_use == 10
 
 
 @pytest.mark.parametrize("mutate", ["volume_length", "fat_count", "fat_size"])

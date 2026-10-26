@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 
 _SIGNATURE = b"EXFAT   "
 _BOOT_REGION_SECTORS = 12
+_BOOT_REGIONS = 2
 _MAX_CLUSTER_SIZE = 32 * 1024 * 1024
 
 
@@ -81,8 +82,9 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     if sectors_shift > 25:
         raise ExfatProbeError("exFAT sectors-per-cluster shift is invalid")
     bytes_per_sector = 1 << bytes_shift
-    if len(region) < 12 * bytes_per_sector:
-        raise ExfatProbeError("truncated exFAT boot region for declared sector size")
+    full_boot_regions_size = _BOOT_REGIONS * _BOOT_REGION_SECTORS * bytes_per_sector
+    if len(region) < full_boot_regions_size:
+        raise ExfatProbeError("truncated exFAT main or backup boot region")
     sectors_per_cluster = 1 << sectors_shift
     cluster_size = bytes_per_sector * sectors_per_cluster
     if cluster_size > _MAX_CLUSTER_SIZE:
@@ -129,6 +131,34 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     ]
     if not stored_words or any(word != calculated for word in stored_words):
         raise ExfatProbeError("exFAT boot-region checksum mismatch")
+    backup_start = _BOOT_REGION_SECTORS * bytes_per_sector
+    backup = region[backup_start : backup_start + 12 * bytes_per_sector]
+    backup_checksum = exfat_boot_checksum(
+        backup[: 11 * bytes_per_sector], sector_size=bytes_per_sector
+    )
+    backup_words = [
+        struct.unpack_from("<I", backup, 11 * bytes_per_sector + n)[0]
+        for n in range(0, bytes_per_sector, 4)
+    ]
+    if not backup_words or any(word != backup_checksum for word in backup_words):
+        raise ExfatProbeError("exFAT backup boot-region checksum mismatch")
+    backup_boot = backup[:bytes_per_sector]
+    # VolumeFlags and PercentInUse may legitimately be stale in the backup.
+    geometry_offsets = (
+        (0x40, 8),
+        (0x48, 8),
+        (0x50, 4),
+        (0x54, 4),
+        (0x58, 4),
+        (0x5C, 4),
+        (0x60, 4),
+        (0x6C, 4),
+    )
+    if any(
+        boot[start : start + size] != backup_boot[start : start + size]
+        for start, size in geometry_offsets
+    ):
+        raise ExfatProbeError("exFAT backup boot-sector geometry mismatch")
     return ExfatBootProfile(
         0,
         volume_size,
@@ -176,7 +206,7 @@ def probe_exfat_boot_region(
                 raise ExfatProbeError("unsupported exFAT bytes-per-sector shift")
             sector_size = 1 << bytes_shift
             stream.seek(offset)
-            region = stream.read(12 * sector_size)
+            region = stream.read(_BOOT_REGIONS * _BOOT_REGION_SECTORS * sector_size)
     except OSError as exc:
         raise ExfatProbeError(f"cannot read exFAT boot region: {exc}") from exc
     profile = parse_exfat_boot_region(region, volume_size=volume_size)
