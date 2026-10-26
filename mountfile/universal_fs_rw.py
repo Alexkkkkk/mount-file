@@ -3,11 +3,11 @@
 mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 =======================================================================
 
-Расширяет UniversalFS полноценной записью через 5 стратегий:
+Расширяет UniversalFS записью через стратегии с явными ограничениями:
 
   1. NativeFat32Writer  — FAT12/16/32, прямая правка FAT + LFN + каталогов
-  2. NativeExt2Writer   — ext2 (без журнала), bitmap + прямой write
-  3. ExtDebugfsWriter   — ext2/3/4 через `debugfs -w`
+  2. NativeExt2Writer   — ограниченный clean ext2 profile, in-process Python
+  3. ExtDebugfsWriter   — legacy ext2/3/4 fallback через `debugfs -w`
   4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
   5. LoopMountWriter    — Linux loop-mount или Windows ImDisk для NTFS/FAT/exFAT
   6. RebuildWriter      — fallback: unpack → mkfs → repack
@@ -22,7 +22,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
         fs.restore_from_backup()  # откат
 
 Зависимости (опциональные):
-    pytsk3, ntfs-3g, ImDisk Virtual Disk Driver, e2fsprogs (debugfs, e2fsck), util-linux,
+    pytsk3, ntfs-3g, ImDisk Virtual Disk Driver, e2fsprogs (legacy debugfs/checker), util-linux,
     dosfstools (mkfs.vfat, fsck.fat)
 """
 
@@ -1208,18 +1208,39 @@ class Fat32RW(RWBackend):
 
 
 # =============================================================================
-# 5. NATIVE EXT2 (read+write через debugfs — простой subprocess-путь)
+# 5. EXT2/3/4 (native ext2 phase 1; debugfs legacy fallback)
 # =============================================================================
 class Ext234RW(RWBackend):
     """
-    ext2/3/4 — чтение через debugfs `ls/dump`, запись через `debugfs -w`.
-    Требует e2fsprogs.
+    ext2 uses MountFile's bounded in-process writer when its clean feature
+    profile is supported; ext3/ext4 retain the e2fsprogs debugfs fallback.
     """
 
-    def __init__(self, image: Path, offset: int = 0):
+    def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
         super().__init__(image, offset)
+        self.volume_size = int(volume_size) if volume_size is not None else None
+        self._native = None
+        from .ext2_native import NativeExt2ImageWriter, NativeExt2UnsafeError
+
+        try:
+            self._native = NativeExt2ImageWriter(
+                self.image,
+                offset=self.offset,
+                volume_size=self.volume_size,
+            )
+        except NativeExt2UnsafeError:
+            # Do not let debugfs or a generic loop mount bypass failed native
+            # geometry/clean-state checks for an ext2 image.
+            raise
+        except Exception:
+            # ext3/ext4 and ext2 volumes outside the explicitly supported
+            # profile continue through the pre-existing external backend.
+            self._native = None
         self._check_ext()
-        self._require_debugfs()
+        if self._native is None:
+            self._require_debugfs()
+        else:
+            self._tmp = None
 
     def _check_ext(self) -> None:
         sb = self._read_at(1024, 1024)
@@ -1230,6 +1251,17 @@ class Ext234RW(RWBackend):
         self.label = sb[120:136].rstrip(b"\x00").decode("utf-8", "replace")
         self.blocks_count = struct.unpack("<I", sb[4:8])[0]
         self.block_size = 1024 << struct.unpack("<I", sb[24:28])[0]
+        if self.feature_incompat & 0x80:
+            self.blocks_count |= struct.unpack("<I", sb[0x150:0x154])[0] << 32
+        self.filesystem_size = self.blocks_count * self.block_size
+        from .ext2_native import NativeExt2UnsafeError
+
+        if self.volume_size is not None and self.filesystem_size > self.volume_size:
+            raise NativeExt2UnsafeError(
+                "ext filesystem extent exceeds selected partition bounds"
+            )
+        if self.offset + self.filesystem_size > self.image.stat().st_size:
+            raise NativeExt2UnsafeError("ext filesystem extent exceeds image bounds")
         self.is_ext4 = bool(
             self.feature_incompat & 0x40 or self.feature_incompat & 0x80
         )
@@ -1274,6 +1306,16 @@ class Ext234RW(RWBackend):
 
     # ---- public API -------------------------------------------------------
     def info(self) -> FSInfo:
+        if self._native is not None:
+            return FSInfo(
+                fs_type="ext2",
+                offset=self.offset,
+                backend="native-ext2",
+                label=self.label,
+                total_size=self._native.filesystem_size,
+                writable=True,
+                write_strategy="native-ext2",
+            )
         name = "ext4" if self.is_ext4 else "ext3" if self.is_ext3 else "ext2"
         return FSInfo(
             fs_type=name,
@@ -1286,6 +1328,18 @@ class Ext234RW(RWBackend):
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
+        if self._native is not None:
+            base = str(path or "/").rstrip("/") or "/"
+            return [
+                FSEntry(
+                    name=item["name"],
+                    path=(base.rstrip("/") + "/" + item["name"]),
+                    size=item["size"],
+                    is_dir=item["is_dir"],
+                    inode=item.get("inode", 0),
+                )
+                for item in self._native.list_dir(path)
+            ]
         out = self._debugfs(f"ls -l {path}")
         entries: list[FSEntry] = []
         for line in out.splitlines():
@@ -1326,6 +1380,8 @@ class Ext234RW(RWBackend):
         return entries
 
     def read(self, path: str) -> bytes:
+        if self._native is not None:
+            return self._native.read_file(path)
         with tempfile.NamedTemporaryFile(delete=False) as tf:
             tmp = Path(tf.name)
         try:
@@ -1335,6 +1391,8 @@ class Ext234RW(RWBackend):
             tmp.unlink(missing_ok=True)
 
     def write_file(self, path: str, data: bytes) -> None:
+        if self._native is not None:
+            return self._native.write_file(path, data)
         with tempfile.NamedTemporaryFile(delete=False) as tf:
             tf.write(data)
             tmp = Path(tf.name)
@@ -1347,10 +1405,14 @@ class Ext234RW(RWBackend):
             tmp.unlink(missing_ok=True)
 
     def mkdir(self, path: str) -> None:
+        if self._native is not None:
+            return self._native.mkdir(path)
         self._debugfs(f"mkdir {path}", write=True)
         self._flush_tmp()
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        if self._native is not None:
+            return self._native.delete(path, recursive=recursive)
         if recursive:
             self._debugfs(f"rmdir {path}")
         else:
@@ -1358,6 +1420,8 @@ class Ext234RW(RWBackend):
             self._flush_tmp()
 
     def rename(self, src: str, dst: str) -> None:
+        if self._native is not None:
+            return self._native.rename(src, dst)
         # debugfs has no ``rename`` command.  Use a bounded dump/write/unlink
         # sequence for regular files, preserving the source until the new
         # directory entry has been created successfully.  Directory rename is
@@ -1826,11 +1890,15 @@ class UniversalFSRW:
         # read-only and avoiding a misleading universal backend claim.
         from .firmware import detect_volumes, probe_filesystem
 
+        volumes = detect_volumes(self.image)
+        image_size = self.image.stat().st_size
         if self.offset is not None:
-            fs_type = probe_filesystem(self.image, self.offset) or "unknown"
-            off = self.offset
+            off = int(self.offset)
+            fs_type = probe_filesystem(self.image, off) or "unknown"
+            candidate = next(
+                (volume for volume in volumes if volume.offset == off), None
+            )
         else:
-            volumes = detect_volumes(self.image)
             candidate = next((v for v in volumes if v.fstype != "raw"), None)
             if candidate is None:
                 # detect_volumes only sees signatures inside the scan window;
@@ -1843,6 +1911,12 @@ class UniversalFSRW:
             else:
                 fs_type, off = candidate.fstype, candidate.offset
             self.offset = off
+        next_offsets = [int(volume.offset) for volume in volumes if volume.offset > off]
+        boundary = min(next_offsets) if next_offsets else image_size
+        if candidate is not None and candidate.size:
+            boundary = min(boundary, off + int(candidate.size))
+        volume_size = max(0, min(image_size, boundary) - off)
+        self.volume_size = volume_size
         # ``probe_filesystem`` returns display names such as ``FAT32`` or
         # ``NTFS`` while the backend table is lowercase, so the match below
         # must be case-insensitive.
@@ -1854,10 +1928,20 @@ class UniversalFSRW:
         ]:
             if fs_type_lower.startswith(types):
                 try:
-                    self.backend = cls(self.image, off)
+                    if cls is Ext234RW:
+                        self.backend = cls(self.image, off, volume_size=volume_size)
+                    else:
+                        self.backend = cls(self.image, off)
                     return
                 except Exception as e:
                     log.warning("%s failed: %s", cls.__name__, e)
+                    if cls is Ext234RW:
+                        from .ext2_native import NativeExt2UnsafeError
+
+                        if isinstance(e, NativeExt2UnsafeError):
+                            raise RuntimeError(
+                                "refusing unsafe ext2 geometry/state: %s" % e
+                            ) from e
         # Last resort remains opt-in through an actually detected filesystem.
         try:
             self.backend = LoopMountRW(self.image, off, fs_type)
@@ -1922,7 +2006,11 @@ class UniversalFSRW:
         info = self.info()
         fs_type = info.fs_type
         offset = self.offset if self.offset is not None else info.offset
-        if fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
+        if getattr(info, "write_strategy", "") == "native-ext2":
+            result["fsck"] = {
+                "skipped": "native ext2 metadata was validated after each staged mutation; no external repair tool was run"
+            }
+        elif fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
             command = ["e2fsck"]
             if offset:
                 # e2fsck's documented offset extended option confines repair
