@@ -36,6 +36,8 @@ from __future__ import annotations
 import os
 import struct
 
+from mountfile.ntfs_probe import parse_ntfs_boot_sector
+
 __all__ = [
     "Candidate",
     "auto_select",
@@ -201,11 +203,15 @@ def _validate_at(f, offset):
     if head[510:512] == b"\x55\xaa" and head[0] in (0xE9, 0xEB):
         oem = head[3:11]
         if oem == b"NTFS    ":
-            bps = struct.unpack_from("<H", head, 11)[0]
-            spc = head[13]
-            total = struct.unpack_from("<Q", head, 40)[0]
-            if bps in (512, 1024, 2048, 4096) and spc and not spc & (spc - 1) and total:
-                return "NTFS", "", total * bps
+            try:
+                f.seek(0, os.SEEK_END)
+                available_size = f.tell() - offset
+                profile = parse_ntfs_boot_sector(
+                    head[:SECTOR_SIZE], volume_size=available_size
+                )
+            except (OSError, ValueError):
+                return None
+            return "NTFS", "", profile.filesystem_size
         elif oem == b"EXFAT   ":
             shift, spc_shift = head[108], head[109]
             vol_len = struct.unpack_from("<Q", head, 72)[0]

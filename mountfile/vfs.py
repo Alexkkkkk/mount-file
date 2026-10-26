@@ -11,6 +11,8 @@ Legacy format coverage still depends on the installed libtsk build.
 The module also exports a dependency-free ext superblock probe. The probe
 reports format features and geometry only; it does not browse files or authorize
 writes.
+The pure-Python NTFS probe validates boot-sector geometry and FILE-record USA
+fixups only; it does not replace the pytsk3 reader or enable NTFS writes.
 """
 
 from __future__ import annotations
@@ -103,6 +105,20 @@ def volume_size_for_offset(image_path, offset):
         except OSError:
             return None
     return None
+
+
+def probe_ntfs_profile(image_path, offset=0, volume_size=None):
+    """Validate NTFS boot-sector geometry without opening pytsk3 or mounting."""
+    from mountfile.ntfs_probe import probe_ntfs_boot_sector
+
+    return probe_ntfs_boot_sector(image_path, offset=offset, volume_size=volume_size)
+
+
+def parse_ntfs_file_record_header(raw_record):
+    """Validate one NTFS FILE record's header and USA, without reading a volume."""
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header as parse_record
+
+    return parse_record(raw_record)
 
 
 def _fmt_mtime(meta):

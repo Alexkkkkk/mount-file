@@ -69,6 +69,21 @@ def _boot_sector(label=b"NO NAME    "):
     return bytes(bpb)
 
 
+def _ntfs_boot_sector(*, mft_lcn=4):
+    sector = bytearray(BPS)
+    sector[:3] = b"\xeb\x52\x90"
+    sector[3:11] = b"NTFS    "
+    struct.pack_into("<H", sector, 0x0B, BPS)
+    sector[0x0D] = 8
+    struct.pack_into("<Q", sector, 0x28, 2048)
+    struct.pack_into("<Q", sector, 0x30, mft_lcn)
+    struct.pack_into("<Q", sector, 0x38, 8)
+    struct.pack_into("<b", sector, 0x40, -10)
+    struct.pack_into("<b", sector, 0x44, 1)
+    sector[510:512] = b"\x55\xaa"
+    return bytes(sector)
+
+
 def _fat32_at(f, offset):
     """Write a minimal but valid FAT32 volume (BPB + FAT) at `offset`."""
     f.seek(offset)
@@ -119,6 +134,26 @@ class TestValidate:
         assert info is not None
         assert info[0] == "FAT32"
         assert info[2] == FAT32_BYTES
+
+    def test_valid_ntfs_uses_the_native_bounded_profile_probe(self):
+        path = _image(os.path.join(self.tmp, "ntfs.img"), 0x200000)
+        with open(path, "r+b") as f:
+            f.seek(0x100000)
+            f.write(_ntfs_boot_sector())
+
+        with open(path, "rb") as f:
+            info = autopick._validate_at(f, 0x100000)
+
+        assert info == ("NTFS", "", 2048 * BPS)
+
+    def test_ntfs_with_out_of_volume_mft_is_rejected(self):
+        path = _image(os.path.join(self.tmp, "bad-ntfs.img"), 0x200000)
+        with open(path, "r+b") as f:
+            f.seek(0x100000)
+            f.write(_ntfs_boot_sector(mft_lcn=256))
+
+        with open(path, "rb") as f:
+            assert autopick._validate_at(f, 0x100000) is None
 
     def test_zeroed_offset_rejected(self):
         path = _image(os.path.join(self.tmp, "fat.img"), 0x400000, 0x100000)
