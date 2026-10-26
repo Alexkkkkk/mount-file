@@ -481,9 +481,11 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 | `Ctrl+I` | AI: добавить файл для анализа |
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
-FAT32 и ограниченный профиль чистого ext2 имеют встроенную запись (native ext2
-в фазе 1: allowlisted features и максимум 12 data blocks на файл); ext2 вне
-этого профиля и ext3/4 используют legacy `debugfs` (`debugfs.exe`/WSL на Windows).
+FAT32 и ограниченный профиль чистого ext2 имеют встроенную запись. В фазе 1
+native ext2 использует allowlisted features и один single-indirect block
+(до `12 + block_size/4` data blocks на файл); sparse/double/triple-indirect
+не поддерживаются. ext2 вне этого профиля и ext3/4 используют legacy `debugfs`
+(`debugfs.exe`/WSL на Windows).
 NTFS использует `ntfs-3g` на Linux или ImDisk и системный драйвер Windows при
 запуске от администратора. На Windows ImDisk также даёт запись в exFAT и FAT12/16.
 Перед изменением образа создаётся отдельная резервная копия; если её нельзя

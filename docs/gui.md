@@ -119,8 +119,10 @@ carver или chain-of-custody система.
 `xml`, `csv`, `yaml`, `md`) и сохраняет исходную UTF-8 или CP1251 кодировку и
 переводы строк. FAT32 и ограниченный профиль чистого ext2 поддерживаются
 встроенно. Native ext2 не требует `debugfs`, но в фазе 1 ограничен allowlisted
-features, 1/2/4 KiB blocks и файлами до 12 data blocks; неподдерживаемый или
-нечистый том не получает native RW. Для иных ext2 features и ext3/ext4 пока
+features, 1/2/4 KiB blocks и одним single-indirect pointer для данных файла
+(`12 + block_size/4` blocks; без sparse/double/triple indirect и роста каталогов);
+неподдерживаемый или нечистый том не получает native RW. Для иных ext2 features
+и ext3/ext4 пока
 используется legacy `debugfs` из `PATH`; на Windows также поддерживается
 `debugfs.exe` или WSL/e2fsprogs. Перед записью приложение создаёт резервную копию
 образа рядом с ним; отказ от копии отменяет запись. Native ext2 сначала
