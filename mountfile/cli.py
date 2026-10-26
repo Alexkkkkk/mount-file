@@ -11,9 +11,10 @@
     python -m mountfile mv  dump.img /docs/old.txt new.txt --yes
     python -m mountfile rm  dump.img /docs/old.txt --yes
 
-Read commands use The Sleuth Kit when available and fall back to the built-in
-FAT32 engine; write commands always use the built-in FAT32 engine. Commands
-that modify the image (put, mkdir, mv, rm) refuse to run without --yes.
+Read commands prefer the bounded pure-Python ext2 provider, then use The Sleuth
+Kit when available and fall back to the built-in FAT32 engine. Write commands
+always use the built-in FAT32 engine. Commands that modify the image (put,
+mkdir, mv, rm) refuse to run without --yes.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from .timeline import (
     query_timeline,
 )
 from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
-from .vfs import TskError, TskImage
+from .vfs import Ext2ReadError, TskError, open_image_provider, volume_size_for_offset
 from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
@@ -159,9 +160,11 @@ def _select(image, args):
 
 
 def _provider(image, offset):
-    """Read-only provider: The Sleuth Kit if installed, else the FAT32 engine."""
+    """Open the best available bounded read-only provider for a volume."""
+    volume_size = volume_size_for_offset(image, offset)
     try:
-        return TskImage(image, offset=offset), "tsk"
+        provider = open_image_provider(image, offset=offset, volume_size=volume_size)
+        return provider, getattr(provider, "backend_name", "read-only")
     except TskError:
         return Fat32Provider(image, offset=offset), "fat32"
 
@@ -225,7 +228,7 @@ def cmd_ls(args):
     provider, backend = _provider(args.image, offset)
     try:
         items = provider.list_dir(_abs_path(args.path))
-    except (Fat32Error, TskError) as e:
+    except (Fat32Error, TskError, Ext2ReadError) as e:
         # A missing directory is an expected, user-level error: report it as a
         # one-line message (exit code 1) instead of a raw TSK backtrace.
         print(
