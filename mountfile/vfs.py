@@ -21,6 +21,7 @@ import os
 import time
 
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
+from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
@@ -85,6 +86,13 @@ def open_native_ext2(image_path, offset=0, volume_size=None):
     to infer bounds from the remainder of a disk image.
     """
     return NativeExt2Image(image_path, offset=offset, volume_size=volume_size)
+
+
+def open_native_ext3(image_path, offset=0, volume_size=None):
+    """Open the conservative classic-layout ext3/ext4 read-only provider."""
+    profile = probe_ext_superblock(image_path, offset=offset, volume_size=volume_size)
+    provider_type = NativeExt4Image if profile.fs_type == "ext4" else NativeExt3Image
+    return provider_type(image_path, offset=offset, volume_size=volume_size)
 
 
 def volume_size_for_offset(image_path, offset):
@@ -259,13 +267,7 @@ def _has_ext_superblock_magic(image_path, offset, volume_size):
 
 
 def open_image_provider(image_path, offset=0, volume_size=None):
-    """Open a read-only provider, preferring native ext2 when safely bounded.
-
-    Clean ext2 profiles are offered to the pure-Python provider. Profiles not
-    supported by that strict subset retain the existing pytsk3 read fallback;
-    without an explicit volume size, native ext2 is never selected.
-    """
-    fallback_reason = None
+    """Open a read-only provider with fail-closed routing for recognized ext."""
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         try:
             profile = probe_ext_superblock(
@@ -277,21 +279,15 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             try:
                 return open_native_ext2(image_path, offset, volume_size)
             except Ext2ReadError as exc:
-                fallback_reason = f"native ext2 reader declined the profile: {exc}"
-        elif not profile.clean_unmounted or profile.journal_recovery_needed:
-            fallback_reason = (
-                "ext volume is dirty or requires recovery; using read-only fallback"
-            )
-        else:
-            fallback_reason = "native ext3/ext4 reading is not implemented yet"
+                raise TskError(f"native ext2 reader declined the ext profile: {exc}") from exc
+        if profile.fs_type in ("ext3", "ext4"):
+            if not profile.clean_unmounted or profile.journal_recovery_needed:
+                raise TskError("ext volume is dirty or requires journal recovery")
+            try:
+                return open_native_ext3(image_path, offset, volume_size)
+            except Ext3ReadError as exc:
+                raise TskError(
+                    f"native ext3/ext4 reader declined the ext profile: {exc}"
+                ) from exc
 
-    try:
-        provider = TskImage(image_path, offset=offset)
-    except TskError as exc:
-        if fallback_reason:
-            raise TskError(f"{fallback_reason}; {exc}") from exc
-        raise
-    if fallback_reason:
-        provider.backend_name = "pytsk3-fallback"
-        provider.native_fallback_reason = fallback_reason
-    return provider
+    return TskImage(image_path, offset=offset)
