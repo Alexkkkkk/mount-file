@@ -128,6 +128,13 @@ def probe_ntfs_metadata(image_path, offset=0, volume_size=None):
     return probe_metadata(image_path, offset=offset, volume_size=volume_size)
 
 
+def probe_exfat_profile(image_path, offset=0, volume_size=None):
+    """Validate a bounded exFAT boot region without mounting or writing."""
+    from mountfile.exfat_probe import probe_exfat_boot_region
+
+    return probe_exfat_boot_region(image_path, offset=offset, volume_size=volume_size)
+
+
 def _fmt_mtime(meta):
     """Modification time of a TSK meta record as 'YYYY-MM-DD HH:MM'."""
     try:
