@@ -482,6 +482,9 @@ class DownloadWorker(QThread):
             if not self.url:
                 self.failed.emit("не указан адрес сборки")
                 return
+            if not looks_like_sha256(self.sha256):
+                self.failed.emit("отсутствует или некорректна доверенная SHA256-сумма")
+                return
             dest_dir = self.dest_dir or tempfile.mkdtemp(prefix="mountfile-update-")
             os.makedirs(dest_dir, exist_ok=True)
             name = (
@@ -551,15 +554,14 @@ class DownloadWorker(QThread):
 
             self.progress.emit(100, float(got), float(speed), 0.0)
 
-            if self.sha256:
-                self.stage.emit("Проверка SHA-256…")
-                actual = digest.hexdigest()
-                if actual != self.sha256:
-                    self._discard(dest)
-                    self.failed.emit(
-                        "контрольная сумма не совпала (файл повреждён или подменён)"
-                    )
-                    return
+            self.stage.emit("Проверка SHA-256…")
+            actual = digest.hexdigest()
+            if actual != self.sha256:
+                self._discard(dest)
+                self.failed.emit(
+                    "контрольная сумма не совпала (файл повреждён или подменён)"
+                )
+                return
 
             if self._cancel:
                 self._discard(dest)

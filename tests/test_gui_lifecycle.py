@@ -150,3 +150,21 @@ def test_window_keeps_editor_copy_until_external_editor_closes(
         if win.isVisible():
             active["value"] = False
             win.close()
+
+
+def test_closed_window_ignores_late_update_notification(app, monkeypatch):
+    monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
+    monkeypatch.setattr(tc_style, "save_settings", lambda: True)
+    win = MainWindow()
+
+    def unexpected_dialog(*_args, **_kwargs):
+        raise AssertionError("closed window must not show an update dialog")
+
+    monkeypatch.setattr(QMessageBox, "information", unexpected_dialog)
+    monkeypatch.setattr(QMessageBox, "question", unexpected_dialog)
+    assert win.close()
+    assert win._closing
+
+    win._on_update_available(
+        {"version": "1.55.0", "url": "https://example.invalid/release"}
+    )

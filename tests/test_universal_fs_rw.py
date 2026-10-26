@@ -25,6 +25,50 @@ def test_image_paths_use_posix_semantics_independent_of_host_os():
     assert _image_path_parent_name(r"\DIR\CHILD.BIN") == ("/DIR", "CHILD.BIN")
 
 
+@pytest.mark.parametrize(
+    ("fs_type", "offset", "checker", "arguments"),
+    [
+        ("ext4", 4096, "e2fsck", ["-E", "offset=4096", "-f", "-y"]),
+        ("ext4", 0, "e2fsck", ["-f", "-y"]),
+        ("fat32", 4096, "fsck.fat", None),
+        ("fat32", 0, "fsck.fat", ["-a"]),
+    ],
+)
+def test_flush_checker_is_partition_aware(
+    tmp_path, monkeypatch, fs_type, offset, checker, arguments
+):
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+    calls = []
+    fs = UniversalFSRW.__new__(UniversalFSRW)
+    fs.image = image
+    fs.offset = offset
+    fs.info = lambda: type("Info", (), {"fs_type": fs_type, "offset": offset})()
+    monkeypatch.setattr(
+        universal_fs_rw.shutil,
+        "which",
+        lambda name: "/usr/bin/" + name if name == checker else None,
+    )
+    monkeypatch.setattr(
+        universal_fs_rw.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command)
+        or type("Result", (), {"returncode": 0, "stdout": "ok"})(),
+    )
+    monkeypatch.setattr(universal_fs_rw.os, "sync", lambda: None, raising=False)
+
+    result = fs.flush()
+
+    if arguments is None:
+        assert calls == []
+        assert result["fsck"] == {
+            "skipped": "fsck.fat does not support filesystem offsets"
+        }
+    else:
+        assert len(calls) == 1
+        assert calls[0] == [checker, *arguments, str(image)]
+
+
 def test_mounted_paths_reject_traversal_and_links(tmp_path):
     mount = tmp_path / "mount"
     outside = tmp_path / "outside"

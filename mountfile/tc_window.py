@@ -2009,6 +2009,7 @@ class MainWindow(QMainWindow):
 
         self.active_side = "L"
         self.updater = None
+        self._closing = False
         #: Каталог временных копий текстовых файлов из образов (см.
         #: :meth:`open_text_file`); создаётся при первом обращении.
         self._text_tmp = None
@@ -2113,6 +2114,8 @@ class MainWindow(QMainWindow):
         self.updater.start()
 
     def _on_update_available(self, info):
+        if getattr(self, "_closing", False):
+            return
         version = info.get("version") or "?"
         asset = info.get("asset")
         if not asset:
@@ -4453,16 +4456,22 @@ class MainWindow(QMainWindow):
             )
             if ret != MB_Yes or not self._backup_before_write(p):
                 return
+            deleted = 0
+            failed = 0
             for entry in entries:
                 try:
                     p.writer.delete(
                         p.join(entry["name"]), recursive=bool(entry["is_dir"])
                     )
+                    deleted += 1
                 except Exception as exc:
+                    failed += 1
                     self.log_msg("Удаление не удалось (%s): %s" % (entry["name"], exc))
             p.marked.clear()
             p.refresh()
-            self.log_msg("Удалено объектов из образа: %d" % len(entries))
+            self.log_msg(
+                "Удалено объектов из образа: %d; не удалось: %d" % (deleted, failed)
+            )
             return
         names = "\n".join("  %s" % p.join(e["name"]) for e in entries[:8])
         if len(entries) > 8:
@@ -4477,17 +4486,21 @@ class MainWindow(QMainWindow):
         )
         if ret != MB_Yes:
             return
+        deleted = 0
+        failed = 0
         for e in entries:
             try:
                 if e["is_dir"]:
                     shutil.rmtree(p.join(e["name"]))
                 else:
                     os.remove(p.join(e["name"]))
+                deleted += 1
             except OSError as exc:
+                failed += 1
                 self.log_msg("Удаление не удалось (%s): %s" % (e["name"], exc))
         p.marked.clear()
         p.refresh()
-        self.log_msg("Удалено объектов: %d" % len(entries))
+        self.log_msg("Удалено объектов: %d; не удалось: %d" % (deleted, failed))
 
     def f9_menu(self, checked=None):
         mb = self.menuBar()
@@ -4527,6 +4540,7 @@ class MainWindow(QMainWindow):
             )
             e.ignore()
             return
+        self._closing = True
         self._close_writer()
         self._cleanup_text_temp()
         tc_style.save_settings()

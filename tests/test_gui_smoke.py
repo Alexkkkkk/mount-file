@@ -25,6 +25,12 @@ qt_compat = pytest.importorskip(
 from mountfile.mainwindow import ImageModel, MainWindow
 from mountfile.qt_compat import MB_Yes, QApplication, QMessageBox, QModelIndex
 
+
+@pytest.fixture(autouse=True)
+def disable_startup_updates(monkeypatch):
+    monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
+
+
 TREE = {
     "/": [("boot", True), ("empty", True), ("README.TXT", False), ("data.bin", False)],
     "/boot": [("kernel.img", False)],

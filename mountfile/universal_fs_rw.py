@@ -1919,21 +1919,34 @@ class UniversalFSRW:
     def flush(self) -> dict:
         """fsck + sync. Возвращает статус."""
         result = {"fsck": None, "sync": None}
-        fs_type = self.info().fs_type
+        info = self.info()
+        fs_type = info.fs_type
+        offset = self.offset if self.offset is not None else info.offset
         if fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
+            command = ["e2fsck"]
+            if offset:
+                # e2fsck's documented offset extended option confines repair
+                # to the filesystem embedded at this byte offset.
+                command.extend(["-E", "offset=%d" % offset])
+            command.extend(["-f", "-y", str(self.image)])
             r = subprocess.run(
-                ["e2fsck", "-f", "-y", str(self.image)],
+                command,
                 capture_output=True,
                 text=True,
             )
             result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
         elif fs_type.startswith("fat") and shutil.which("fsck.fat"):
-            r = subprocess.run(
-                ["fsck.fat", "-a", str(self.image)],
-                capture_output=True,
-                text=True,
-            )
-            result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
+            if offset:
+                result["fsck"] = {
+                    "skipped": "fsck.fat does not support filesystem offsets"
+                }
+            else:
+                r = subprocess.run(
+                    ["fsck.fat", "-a", str(self.image)],
+                    capture_output=True,
+                    text=True,
+                )
+                result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
         if hasattr(os, "sync"):
             os.sync()
             result["sync"] = "ok"

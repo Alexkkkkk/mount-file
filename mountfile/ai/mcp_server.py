@@ -22,8 +22,14 @@ import dataclasses
 import hashlib
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Mapping, Optional, Protocol, Union
+
+try:
+    import regex as _timeout_regex
+except ImportError:  # fail closed if the safe optional engine is unavailable
+    _timeout_regex = None
 
 try:  # Optional by design.  No MCP import should be required by mountfile.
     from mcp.server.fastmcp import FastMCP
@@ -116,6 +122,14 @@ TOOL_DESCRIPTIONS = {
 
 _SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$")
 _MAX_SIGNATURE_SCAN = 64 * 1024 * 1024
+_MAX_SEARCH_PATTERN = 256
+_MAX_SEARCH_VISITS = 10_000
+_MAX_SEARCH_RESULTS = 1_000
+_MAX_SEARCH_SECONDS = 10.0
+_SEARCH_REGEX_TIMEOUT = 0.05
+_RISKY_REGEX = re.compile(
+    r"\([^)]*[+*{|][^)]*\)[+*{]|(?:\.\*|\.\+){2}|(?:\+|\*|\{\d+(?:,\d*)?\})\s*(?:\+|\*|\{)"
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -247,23 +261,61 @@ class DefaultBackend:
     def search_files(
         self, image: Path, offset: int, pattern: str, start: str, include_deleted: bool
     ) -> Any:
+        if len(pattern) > _MAX_SEARCH_PATTERN:
+            raise ValueError(
+                "search pattern exceeds %d characters" % _MAX_SEARCH_PATTERN
+            )
+        if _RISKY_REGEX.search(pattern):
+            raise ValueError(
+                "search pattern uses a potentially catastrophic regex form"
+            )
+        if _timeout_regex is None:
+            raise ValueError(
+                "safe regex search is unavailable; install the MountFile AI dependencies"
+            )
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
-        except re.error as exc:
+            regex = _timeout_regex.compile(pattern, _timeout_regex.IGNORECASE)
+        except _timeout_regex.error as exc:
             raise ValueError("invalid search pattern: %s" % exc) from exc
         matches = []
         stack = [start]
         seen = set()
+        inspected = 0
+        deadline = time.monotonic() + _MAX_SEARCH_SECONDS
         while stack:
             current = stack.pop()
             if current in seen:
                 continue
             seen.add(current)
+            if len(seen) > _MAX_SEARCH_VISITS:
+                raise ValueError(
+                    "search exceeded directory visit limit (%d)" % _MAX_SEARCH_VISITS
+                )
             for item in self.list_directory(image, offset, current):
+                if time.monotonic() >= deadline:
+                    raise ValueError(
+                        "search exceeded time limit (%.1f seconds)"
+                        % _MAX_SEARCH_SECONDS
+                    )
+                inspected += 1
+                if inspected > _MAX_SEARCH_VISITS:
+                    raise ValueError(
+                        "search exceeded entry visit limit (%d)" % _MAX_SEARCH_VISITS
+                    )
                 deleted = bool(item.get("deleted", False))
                 if deleted and not include_deleted:
                     continue
-                if regex.search(str(item.get("name", ""))):
+                try:
+                    matched = regex.search(
+                        str(item.get("name", "")), timeout=_SEARCH_REGEX_TIMEOUT
+                    )
+                except TimeoutError as exc:
+                    raise ValueError("search exceeded regex time limit") from exc
+                if matched:
+                    if len(matches) >= _MAX_SEARCH_RESULTS:
+                        raise ValueError(
+                            "search exceeded result limit (%d)" % _MAX_SEARCH_RESULTS
+                        )
                     matches.append(item)
                 if item.get("is_dir") and not deleted:
                     stack.append(str(item.get("path", "/")))
@@ -526,6 +578,14 @@ class MountFileMcpServer:
         offset = _require_integer(offset, "offset")
         if not isinstance(pattern, str) or not pattern:
             raise ValueError("pattern must be a non-empty regular expression")
+        if len(pattern) > _MAX_SEARCH_PATTERN:
+            raise ValueError(
+                "search pattern exceeds %d characters" % _MAX_SEARCH_PATTERN
+            )
+        if _RISKY_REGEX.search(pattern):
+            raise ValueError(
+                "search pattern uses a potentially catastrophic regex form"
+            )
         try:
             re.compile(pattern)
         except re.error as exc:

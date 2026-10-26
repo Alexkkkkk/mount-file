@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 MAX_LIMIT = 1000
 MAX_VIRTUAL_PATH = 4096
 MAX_AUTH_TOKEN_LENGTH = 4096
+DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
 class APIUnavailableError(RuntimeError):
@@ -73,7 +74,13 @@ class ServiceRegistry(Protocol):
 
     def filesystem_ls(self, image: str, path: str, offset: int = 0) -> Any: ...
 
-    def filesystem_read(self, image: str, path: str, offset: int = 0) -> Any: ...
+    def filesystem_read(
+        self,
+        image: str,
+        path: str,
+        offset: int = 0,
+        length: int = DEFAULT_MAX_RESPONSE_BYTES,
+    ) -> Any: ...
 
     def timeline(
         self, image: Optional[str] = None, limit: int = 100, path: Optional[str] = None
@@ -97,6 +104,7 @@ _PARAMETER_ALIASES = {
     "image": {"image", "image_path", "image_file", "source", "source_image"},
     "path": {"path", "virtual_path", "filesystem_path", "fs_path", "file_path"},
     "offset": {"offset", "partition_offset", "fs_offset"},
+    "length": {"length", "max_bytes", "byte_length", "read_length"},
     "limit": {"limit", "max_items", "count"},
     "query": {"query", "path_like", "filter", "pattern"},
 }
@@ -286,7 +294,7 @@ def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> A
     kwargs: dict[str, Any] = {}
     positional: list[Any] = []
     positional_index = 0
-    ordered_keys = ("image", "path", "offset", "limit", "query")
+    ordered_keys = ("image", "path", "offset", "length", "limit", "query")
 
     for parameter in parameters:
         if parameter.kind in (
@@ -444,6 +452,7 @@ def create_app(
     auth_token: Optional[str] = None,
     token: Optional[str] = None,
     title: str = "mount-file API",
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> Any:
     """Create the optional FastAPI application.
 
@@ -462,6 +471,12 @@ def create_app(
     service_registry = service_registry if service_registry is not None else registry
     if service_registry is None:
         raise APIConfigurationError("an injected service registry is required")
+    if (
+        isinstance(max_response_bytes, bool)
+        or not isinstance(max_response_bytes, int)
+        or max_response_bytes <= 0
+    ):
+        raise APIConfigurationError("max_response_bytes must be a positive integer")
     if image_roots is not None and image_root is not None:
         raise APIConfigurationError("provide only one image_roots or image_root")
     if image_roots is None:
@@ -571,7 +586,7 @@ def create_app(
         except Exception as exc:
             raise _http_error(exc)
 
-    def _read_impl(image: Optional[str], path: str, offset: int) -> Any:
+    def _read_impl(image: Optional[str], path: str, offset: int, length: int) -> Any:
         try:
             image_path, virtual_path, partition_offset = _filesystem_context(
                 image, path, offset
@@ -583,12 +598,42 @@ def create_app(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="a file path is required",
             )
+        if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="length must be a positive integer",
+            )
+        if length > max_response_bytes:
+            raise HTTPException(
+                status_code=413, detail="requested read exceeds max_response_bytes"
+            )
         operation = _find_operation(service_registry, "read")
         if operation is None:
             raise _http_error(
                 ServiceUnavailableError("filesystem reading is unavailable")
             )
-        values = {"image": image_path, "path": virtual_path, "offset": partition_offset}
+        # A post-read size check cannot prevent an oversized allocation. Require
+        # adapters to accept the bound and reject legacy unbounded readers.
+        try:
+            signature = inspect.signature(operation)
+            bounded = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                or _canonical_parameter(parameter.name) == "length"
+                for parameter in signature.parameters.values()
+            )
+        except (TypeError, ValueError):
+            bounded = False
+        if not bounded:
+            raise HTTPException(
+                status_code=501,
+                detail="filesystem reader does not support bounded reads",
+            )
+        values = {
+            "image": image_path,
+            "path": virtual_path,
+            "offset": partition_offset,
+            "length": length,
+        }
         try:
             value = _invoke(operation, values, "read")
         except Exception as exc:
@@ -618,16 +663,18 @@ def create_app(
         image: Optional[str] = Query(default=None),
         path: str = Query(...),
         offset: int = Query(default=0),
+        length: int = Query(default=max_response_bytes),
     ) -> Any:
-        return _read_impl(image, path, offset)
+        return _read_impl(image, path, offset, length)
 
     @app.get("/fs/read", include_in_schema=False, dependencies=[_dependency()])
     def fs_read(
         image: Optional[str] = Query(default=None),
         path: str = Query(...),
         offset: int = Query(default=0),
+        length: int = Query(default=max_response_bytes),
     ) -> Any:
-        return _read_impl(image, path, offset)
+        return _read_impl(image, path, offset, length)
 
     # Path-style routes are kept as compatibility aliases for clients that use
     # an image id in the URL.  The id is still resolved through the exact same
@@ -647,8 +694,9 @@ def create_app(
         image_id: str,
         path: str = Query(...),
         offset: int = Query(default=0),
+        length: int = Query(default=max_response_bytes),
     ) -> Any:
-        return _read_impl(image_id, path, offset)
+        return _read_impl(image_id, path, offset, length)
 
     def _timeline_impl(
         image: Optional[str],
