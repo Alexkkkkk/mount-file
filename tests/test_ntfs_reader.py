@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: MIT
+"""Synthetic tests for bounded NTFS metadata validation."""
+
+import struct
+
+import pytest
+
+from mountfile import vfs
+from mountfile.ntfs_reader import NtfsMetadataError, probe_ntfs_metadata
+
+BPS = 512
+SPC = 8
+TOTAL = 2048
+VOLUME_SIZE = BPS * TOTAL
+CLUSTER = BPS * SPC
+MFT = 4 * CLUSTER
+MIRROR = 8 * CLUSTER
+RECORD = 1024
+
+
+def _boot():
+    raw = bytearray(512)
+    raw[3:11] = b"NTFS    "
+    struct.pack_into("<H", raw, 0x0B, BPS)
+    raw[0x0D] = SPC
+    struct.pack_into("<Q", raw, 0x28, TOTAL)
+    struct.pack_into("<Q", raw, 0x30, 4)
+    struct.pack_into("<Q", raw, 0x38, 8)
+    struct.pack_into("<b", raw, 0x40, -10)
+    struct.pack_into("<b", raw, 0x44, 1)
+    raw[510:512] = b"\x55\xaa"
+    return bytes(raw)
+
+
+def _record(*, attr_type=0xFFFFFFFF, nonresident=False):
+    raw = bytearray(RECORD)
+    raw[:4] = b"FILE"
+    usa = 0x30
+    struct.pack_into("<HH", raw, 4, usa, 3)
+    struct.pack_into("<H", raw, 0x10, 3)
+    struct.pack_into("<H", raw, 0x14, 0x38)
+    struct.pack_into("<H", raw, 0x16, 1)
+    struct.pack_into("<I", raw, 0x18, 0x3C)
+    struct.pack_into("<I", raw, 0x1C, RECORD)
+    struct.pack_into("<H", raw, usa, 0xA55A)
+    for index in range(2):
+        struct.pack_into("<H", raw, usa + 2 + index * 2, 0x1100 + index)
+        struct.pack_into("<H", raw, (index + 1) * 512 - 2, 0xA55A)
+    struct.pack_into("<I", raw, 0x38, attr_type)
+    if attr_type != 0xFFFFFFFF:
+        struct.pack_into("<I", raw, 0x3C, 64 if nonresident else 24)
+        raw[0x40] = 1 if nonresident else 0
+        if nonresident:
+            struct.pack_into("<qQ", raw, 0x48, 0, 0)
+            struct.pack_into("<H", raw, 0x58, 64)
+            raw[0x78] = 0
+        else:
+            struct.pack_into("<I", raw, 0x48, 0)
+            struct.pack_into("<H", raw, 0x4C, 24)
+        struct.pack_into("<I", raw, 0x3C + (64 if nonresident else 24), 0xFFFFFFFF)
+    return bytes(raw)
+
+
+def _image(tmp_path, record=None):
+    image = bytearray(VOLUME_SIZE)
+    image[:512] = _boot()
+    image[-512:] = _boot()
+    record = record or _record()
+    image[MFT : MFT + RECORD] = record
+    image[MIRROR : MIRROR + RECORD] = record
+    path = tmp_path / "ntfs.img"
+    path.write_bytes(image)
+    return path
+
+
+def test_validates_backup_mft_mirror_and_attribute_end_marker(tmp_path):
+    profile = probe_ntfs_metadata(_image(tmp_path), volume_size=VOLUME_SIZE)
+    assert profile.mirror_matches_mft is True
+    assert profile.attributes == ()
+    assert profile.mft_record.sequence_number == 3
+
+
+def test_vfs_exposes_bounded_ntfs_metadata_probe_without_pytsk3(tmp_path, monkeypatch):
+    monkeypatch.setattr(vfs, "pytsk3", None)
+    profile = vfs.probe_ntfs_metadata(_image(tmp_path), volume_size=VOLUME_SIZE)
+    assert profile.boot.mft_offset == MFT
+
+
+def test_rejects_backup_geometry_mismatch(tmp_path):
+    image = bytearray(_image(tmp_path).read_bytes())
+    struct.pack_into("<Q", image, VOLUME_SIZE - 512 + 0x28, TOTAL - 1)
+    path = tmp_path / "bad-backup.img"
+    path.write_bytes(image)
+    with pytest.raises(NtfsMetadataError, match="backup boot geometry"):
+        probe_ntfs_metadata(path, volume_size=VOLUME_SIZE)
+
+
+def test_rejects_mismatched_mft_mirror(tmp_path):
+    image = bytearray(_image(tmp_path).read_bytes())
+    image[MIRROR + 0x10] ^= 1
+    path = tmp_path / "bad-mirror.img"
+    path.write_bytes(image)
+    with pytest.raises(NtfsMetadataError, match="MFT mirror"):
+        probe_ntfs_metadata(path, volume_size=VOLUME_SIZE)
