@@ -392,28 +392,21 @@ def parse_ntfs_attribute_stream(
     raise NtfsMetadataError("NTFS FILE record has no attribute end marker")
 
 
-def parse_ntfs_index_root(
+def _parse_ntfs_index_entries(
     value: bytes,
     *,
+    start: int,
+    end: int,
     parent_reference: int | None = None,
-    allow_index_allocation: bool = False,
-) -> tuple[NtfsIndexEntry, ...]:
-    """Parse a resident INDEX_ROOT value containing FILE_NAME keys."""
+    allow_children: bool = False,
+) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
+    """Parse bounded FILE_NAME index entries and return child VCNs."""
+    if start < 0 or end < start or end > len(value):
+        raise NtfsMetadataError("NTFS index entries exceed the attribute")
     if len(value) < 32:
-        raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
-    entry_offset, total_size, allocated_size = struct.unpack_from("<III", value, 16)
-    index_flags = struct.unpack_from("<I", value, 28)[0]
-    if index_flags & ~1:
-        raise NtfsMetadataError("unsupported NTFS INDEX_ROOT flags")
-    if index_flags & 1 and not allow_index_allocation:
-        raise NtfsMetadataError("NTFS directory requires INDEX_ALLOCATION traversal")
-    if allocated_size < total_size or entry_offset < 16:
-        raise NtfsMetadataError("invalid NTFS INDEX_ROOT header bounds")
-    start = 16 + entry_offset
-    end = 16 + total_size
-    if start < 16 or end > len(value) or start > end:
-        raise NtfsMetadataError("NTFS INDEX_ROOT entries exceed the attribute")
+        raise NtfsMetadataError("NTFS index value is truncated")
     result: list[NtfsIndexEntry] = []
+    children: list[int] = []
     previous_name = ""
     names: set[str] = set()
     pos = start
@@ -427,16 +420,20 @@ def parse_ntfs_index_root(
             raise NtfsMetadataError("invalid NTFS index entry length")
         if flags & ~0x00000003:
             raise NtfsMetadataError("unsupported NTFS index entry flags")
+        if flags & 1 and not allow_children:
+            raise NtfsMetadataError(
+                "NTFS directory requires INDEX_ALLOCATION traversal"
+            )
         if flags & 0x00000002:
             if key_length:
                 raise NtfsMetadataError("NTFS index end entry contains a key")
             if pos + entry_length != end:
                 raise NtfsMetadataError("NTFS index end entry is not terminal")
-            return tuple(result)
-        if flags & 0x00000001:
-            raise NtfsMetadataError(
-                "NTFS directory requires INDEX_ALLOCATION traversal"
-            )
+            if flags & 1:
+                if entry_length < 24:
+                    raise NtfsMetadataError("NTFS index child pointer is truncated")
+                children.append(struct.unpack_from("<Q", value, pos + entry_length - 8)[0])
+            return tuple(result), tuple(children)
         try:
             decode_ntfs_file_reference(reference)
         except NtfsRecordError as exc:
@@ -477,12 +474,45 @@ def parse_ntfs_index_root(
         names.add(folded)
         previous_name = folded
         result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
+        if flags & 1:
+            if not allow_children or entry_length < 24 + key_length:
+                raise NtfsMetadataError(
+                    "NTFS directory requires INDEX_ALLOCATION traversal"
+                )
+            children.append(struct.unpack_from("<Q", value, pos + entry_length - 8)[0])
         pos += entry_length
     raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
 
 
+def parse_ntfs_index_root(
+    value: bytes,
+    *,
+    parent_reference: int | None = None,
+    allow_index_allocation: bool = False,
+) -> tuple[NtfsIndexEntry, ...]:
+    """Parse a resident INDEX_ROOT value containing bounded FILE_NAME keys."""
+    if len(value) < 32:
+        raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
+    entry_offset, total_size, allocated_size = struct.unpack_from("<III", value, 16)
+    index_flags = struct.unpack_from("<I", value, 28)[0]
+    if index_flags & ~1:
+        raise NtfsMetadataError("unsupported NTFS INDEX_ROOT flags")
+    if index_flags & 1 and not allow_index_allocation:
+        raise NtfsMetadataError("NTFS directory requires INDEX_ALLOCATION traversal")
+    if allocated_size < total_size or entry_offset < 16:
+        raise NtfsMetadataError("invalid NTFS INDEX_ROOT header bounds")
+    start = 16 + entry_offset
+    end = 16 + total_size
+    entries, _children = _parse_ntfs_index_entries(
+        value, start=start, end=end, parent_reference=parent_reference,
+        allow_children=allow_index_allocation,
+    )
+    return entries
+
+
 def parse_ntfs_index_block(
-    raw_block: bytes, *, parent_reference: int | None = None
+    raw_block: bytes, *, parent_reference: int | None = None,
+    expected_vcn: int | None = None,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Validate an INDX block's USA and parse its bounded index entries."""
     if len(raw_block) < 512 or len(raw_block) % 512:
@@ -504,7 +534,21 @@ def parse_ntfs_index_block(
             0
         ]
         struct.pack_into("<H", fixed, trailer, replacement)
-    return parse_ntfs_index_root(bytes(fixed[8:]), parent_reference=parent_reference)
+    if expected_vcn is not None and struct.unpack_from("<q", fixed, 16)[0] != expected_vcn:
+        raise NtfsMetadataError("NTFS INDX VCN does not match requested block")
+    entry_offset, total_size, allocated_size = struct.unpack_from("<III", fixed, 24)
+    flags = struct.unpack_from("<I", fixed, 36)[0]
+    if flags & ~1 or allocated_size < total_size or entry_offset < 16:
+        raise NtfsMetadataError("invalid NTFS INDX header bounds")
+    start = 24 + entry_offset
+    end = 24 + total_size
+    entries, children = _parse_ntfs_index_entries(
+        bytes(fixed), start=start, end=end, parent_reference=parent_reference,
+        allow_children=False,
+    )
+    if children:
+        raise NtfsMetadataError("NTFS INDX child pointers are unsupported")
+    return entries
 
 
 def parse_ntfs_volume_state(
@@ -883,6 +927,7 @@ class NativeNtfsMetadataImage:
             raise NtfsMetadataError("NTFS path is outside the native ASCII profile")
         number = 5
         record = self.read_mft_record(number)
+        visited = {number}
         for part in parts:
             match = next(
                 (
@@ -895,6 +940,9 @@ class NativeNtfsMetadataImage:
             if match is None:
                 raise NtfsMetadataError(f"NTFS path component not found: {part}")
             number = match.reference & ((1 << 48) - 1)
+            if number in visited:
+                raise NtfsMetadataError("NTFS directory tree contains a cycle")
+            visited.add(number)
             record = self.read_mft_record(number, reference=match.reference)
         return number, record
 
@@ -909,13 +957,52 @@ class NativeNtfsMetadataImage:
             )
         root = roots[0]
         root_value = root.resident_value
-        entries = parse_ntfs_index_root(
+        parent_reference = record_number | (record.sequence_number << 48)
+        entry_offset, total_size, allocated_size = struct.unpack_from("<III", root_value, 16)
+        index_flags = struct.unpack_from("<I", root_value, 28)[0]
+        if index_flags & ~1 or allocated_size < total_size or entry_offset < 16:
+            raise NtfsMetadataError("invalid NTFS INDEX_ROOT header bounds")
+        root_entries, child_vcns = _parse_ntfs_index_entries(
             root_value,
-            parent_reference=record_number | (record.sequence_number << 48),
+            start=16 + entry_offset,
+            end=16 + total_size,
+            parent_reference=parent_reference,
+            allow_children=bool(index_flags & 1),
         )
-        unique = {}
+        entries = list(root_entries)
+        if index_flags & 1:
+            allocations = [a for a in attrs if a.type_code == 0xA0 and a.name == "$I30"]
+            if len(allocations) != 1:
+                raise NtfsMetadataError("NTFS directory has no unique $I30 INDEX_ALLOCATION")
+            allocation = allocations[0]
+            _validate_nonresident_data_stream(
+                allocation, self.profile.boot.cluster_size, name="$I30"
+            )
+            block_size = self.profile.boot.index_record_size
+            if block_size < 512 or allocation.data_size % block_size:
+                raise NtfsMetadataError("NTFS $I30 INDEX_ALLOCATION has invalid block bounds")
+            pending = list(child_vcns)
+            visited_vcns: set[int] = set()
+            while pending:
+                vcn = pending.pop()
+                if vcn in visited_vcns:
+                    raise NtfsMetadataError("NTFS $I30 index contains a cycle")
+                if vcn < 0 or vcn * block_size >= allocation.data_size:
+                    raise NtfsMetadataError("NTFS $I30 child VCN is outside allocation")
+                visited_vcns.add(vcn)
+                block = self._read_runs(allocation.runs, vcn * block_size, block_size)
+                block_entries = parse_ntfs_index_block(
+                    block, parent_reference=parent_reference, expected_vcn=vcn
+                )
+                entries.extend(block_entries)
+        unique: dict[tuple[str, int], NtfsIndexEntry] = {}
+        names: set[str] = set()
         for entry in entries:
-            unique[(entry.name.lower(), entry.reference)] = entry
+            folded = entry.name.casefold()
+            if folded in names:
+                raise NtfsMetadataError("NTFS directory index contains duplicate names")
+            names.add(folded)
+            unique[(folded, entry.reference)] = entry
         return tuple(sorted(unique.values(), key=lambda item: item.name.lower()))
 
     def read_file(self, path):

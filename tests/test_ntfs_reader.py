@@ -221,6 +221,22 @@ def test_validates_indx_usa_before_parsing_entries():
         parse_ntfs_index_block(bytes(block))
 
 
+def test_validates_indx_vcn_against_requested_allocation_block():
+    block = bytearray(4096)
+    block[:4] = b"INDX"
+    struct.pack_into("<HH", block, 4, 0x28, 9)
+    struct.pack_into("<q", block, 16, 3)
+    struct.pack_into("<H", block, 0x28, 0xA55A)
+    for index in range(8):
+        struct.pack_into("<H", block, 0x2A + index * 2, 0x1000 + index)
+        struct.pack_into("<H", block, (index + 1) * 512 - 2, 0xA55A)
+    struct.pack_into("<IIII", block, 24, 24, 40, 40, 0)
+    struct.pack_into("<QHHI", block, 48, 0, 16, 0, 2)
+    assert parse_ntfs_index_block(bytes(block), expected_vcn=3) == ()
+    with pytest.raises(NtfsMetadataError, match="VCN"):
+        parse_ntfs_index_block(bytes(block), expected_vcn=4)
+
+
 def test_parses_ntfs_volume_flags_and_rejects_missing_information():
     value = bytearray(12)
     value[8:10] = b"\x03\x01"
