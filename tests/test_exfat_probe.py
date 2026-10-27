@@ -70,15 +70,44 @@ def test_vfs_probe_uses_partition_offset(tmp_path):
     assert profile.partition_offset == len(prefix)
 
 
-def test_vfs_refuses_to_hide_exfat_probe_only_profile_behind_pytsk3(tmp_path):
+def test_vfs_opens_validated_exfat_with_native_provider(tmp_path):
     region = _region()
     path = tmp_path / "exfat.img"
     path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
-    with pytest.raises(
-        vfs.RecognizedFilesystemError,
-        match="native exFAT tree reader is not enabled",
-    ):
-        vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    assert provider.backend_name == "native-exfat-ro"
+    provider.close()
+
+
+def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
+    region = bytearray(VOLUME_SIZE)
+    region[: 24 * 512] = _region()
+    cluster_heap = 32 * 512
+    fat = 24 * 512
+    struct.pack_into("<I", region, fat + 2 * 4, 0xFFFFFFFF)
+    struct.pack_into("<I", region, fat + 3 * 4, 0xFFFFFFFF)
+    root = bytearray(512)
+    root[0] = 0x85
+    root[1] = 2
+    struct.pack_into("<H", root, 4, 0)
+    root[32] = 0xC0
+    root[35] = 9
+    struct.pack_into("<I", root, 32 + 20, 3)
+    payload = b"hello exFAT"
+    struct.pack_into("<Q", root, 32 + 24, len(payload))
+    root[64] = 0xC1
+    root[66 : 66 + 18] = "HELLO.TXT".encode("utf-16le")
+    region[cluster_heap : cluster_heap + 512] = root
+    region[cluster_heap + 512 : cluster_heap + 1024] = payload
+    path = tmp_path / "exfat-tree.img"
+    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.list_dir("/")[0]["name"] == "HELLO.TXT"
+        assert provider.file_size("/HELLO.TXT") == len(payload)
+        assert provider.read_file_range("/HELLO.TXT", 2, 5) == payload[2:7]
+    finally:
+        provider.close()
 
 
 @pytest.mark.parametrize("mutate", ["signature", "checksum", "heap"])

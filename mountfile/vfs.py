@@ -24,6 +24,7 @@ import time
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.fat_reader import FatReadError, NativeFatImage
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
@@ -406,9 +407,12 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             raise RecognizedFilesystemError(
                 f"invalid exFAT boot profile: {exc}"
             ) from exc
-        raise RecognizedFilesystemError(
-            "native exFAT tree reader is not enabled; only bounded boot probing is supported"
-        )
+        try:
+            return NativeExfatImage(image_path, offset=offset, volume_size=volume_size)
+        except ExfatReadError as exc:
+            raise RecognizedFilesystemError(
+                f"native exFAT reader declined the exFAT profile: {exc}"
+            ) from exc
 
     if _has_ntfs_boot_magic(image_path, offset, volume_size):
         if volume_size is None:
