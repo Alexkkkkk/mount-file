@@ -6,6 +6,7 @@ Extent trees, 64-bit group descriptors, metadata checksums, fast commits and
 other layouts are rejected until their complete validators exist. Journal
 replay is never performed; a journal that is not provably empty is rejected.
 """
+
 from __future__ import annotations
 
 import struct
