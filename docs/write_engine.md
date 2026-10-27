@@ -173,6 +173,11 @@ Native exFAT writer сериализует мутации через скрыт�
 резервной копией. Отдельный lock нужен потому, что успешный commit атомарно заменяет
 сам файл образа; блокировка только этого файла не сохраняет идентичность lock-а
 после замены и на Windows мешает staged-копированию.
+В текущем bounded-профиле при нехватке места writer добавляет один cluster в root
+или вложенный directory chain, обновляет allocation bitmap и FAT, а для вложенного
+каталога также синхронно меняет `ValidDataLength`/`DataLength` в родительской записи
+и пересчитывает checksum. Ограничения объёма и ошибки выделения остаются fail-closed.
+Семантика полей соответствует [Microsoft exFAT specification](https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification).
 
 ## NTFS boot-sector probe (read-only groundwork)
 

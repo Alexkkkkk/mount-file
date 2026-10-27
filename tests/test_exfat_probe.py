@@ -11,7 +11,7 @@ from mountfile.exfat_probe import (
     exfat_boot_checksum,
     parse_exfat_boot_region,
 )
-from mountfile.exfat_reader import ExfatReadError
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
 from mountfile.universal_fs_rw import NativeExfatRW
 
@@ -149,11 +149,12 @@ def _tree_image(path):
     struct.pack_into("<Q", root, 56, 512)
     root[64] = 0x85
     root[65] = 2
+    payload = b"hello exFAT"
     root[96] = 0xC0
     root[99] = 9
     struct.pack_into("<H", root, 100, _name_hash("HELLO.TXT"))
+    struct.pack_into("<Q", root, 104, len(payload))
     struct.pack_into("<I", root, 116, 3)
-    payload = b"hello exFAT"
     struct.pack_into("<Q", root, 120, len(payload))
     root[128] = 0xC1
     root[130:148] = "HELLO.TXT".encode("utf-16le")
@@ -211,6 +212,119 @@ def test_native_exfat_writer_creates_mkdirs_and_deletes_empty_entries(tmp_path):
         assert [item["name"] for item in provider.list_dir("/")] == ["HELLO.TXT"]
     finally:
         provider.close()
+
+
+def test_native_exfat_writer_grows_full_root_directory_by_one_cluster(tmp_path):
+    path = tmp_path / "exfat-root-growth.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    for name in ("A.TXT", "B.TXT", "C.TXT"):
+        writer.write_file("/" + name, b"")
+    writer.write_file("/GROWN.TXT", b"after root growth")
+
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        root_chain = reader._chain(reader.profile.root_cluster, no_fat_chain=False)
+        assert len(root_chain) == 2
+        reader.system_metadata()
+        names = {entry.name for entry in reader._directory(reader.profile.root_cluster)}
+        assert {"HELLO.TXT", "A.TXT", "B.TXT", "C.TXT", "GROWN.TXT"} <= names
+        assert reader.read_file("/GROWN.TXT") == b"after root growth"
+    finally:
+        reader.close()
+
+
+def test_native_exfat_mutates_entries_in_fragmented_root_directory(tmp_path):
+    path = tmp_path / "exfat-fragmented-root-mutations.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    for name in ("A.TXT", "B.TXT", "C.TXT"):
+        writer.write_file("/" + name, b"")
+    writer.write_file("/GROWN.TXT", b"initial")
+    writer.write_file("/GROWN.TXT", b"updated")
+    writer.rename("/GROWN.TXT", "/MOVED.TXT")
+    writer.write_file("/MOVED.TXT", b"")
+    writer.delete("/MOVED.TXT")
+
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert len(reader._chain(reader.profile.root_cluster)) == 2
+        reader.system_metadata()
+        names = {entry.name for entry in reader._directory(reader.profile.root_cluster)}
+        assert {"HELLO.TXT", "A.TXT", "B.TXT", "C.TXT"} <= names
+        assert "GROWN.TXT" not in names
+        assert "MOVED.TXT" not in names
+    finally:
+        reader.close()
+
+
+def test_native_exfat_mkdir_grows_full_root_directory(tmp_path):
+    path = tmp_path / "exfat-root-mkdir-growth.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    for name in ("A.TXT", "B.TXT", "C.TXT"):
+        writer.write_file("/" + name, b"")
+    writer.mkdir("/GROWN")
+
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert len(reader._chain(reader.profile.root_cluster)) == 2
+        reader.system_metadata()
+        assert next(item for item in reader.list_dir("/") if item["name"] == "GROWN")[
+            "is_dir"
+        ]
+    finally:
+        reader.close()
+
+
+@pytest.mark.parametrize("create_directory", [False, True])
+def test_native_exfat_nested_directory_growth_updates_stream_lengths(
+    tmp_path, create_directory
+):
+    path = tmp_path / "exfat-nested-growth.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.mkdir("/NESTED")
+    for index in range(5):
+        writer.write_file(f"/NESTED/{index}.TXT", b"")
+    if create_directory:
+        writer.mkdir("/NESTED/OVERFLOW")
+    else:
+        writer.write_file("/NESTED/OVERFLOW.TXT", b"nested growth")
+
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        nested = reader._find("/NESTED")
+        assert nested.size == 2 * reader.profile.cluster_size
+        assert len(reader._chain(nested.first_cluster)) == 2
+        record = next(
+            item
+            for item in writer._directory_records(reader, reader.profile.root_cluster)
+            if item[0] == "NESTED"
+        )
+        assert struct.unpack_from("<Q", record[3], 8)[0] == nested.size
+        reader.system_metadata()
+        names = {item.name for item in reader._directory(nested.first_cluster)}
+        assert "OVERFLOW" in names if create_directory else "OVERFLOW.TXT" in names
+        if not create_directory:
+            assert reader.read_file("/NESTED/OVERFLOW.TXT") == b"nested growth"
+    finally:
+        reader.close()
+
+    if not create_directory:
+        writer.write_file("/NESTED/OVERFLOW.TXT", b"updated")
+        writer.rename("/NESTED/OVERFLOW.TXT", "/NESTED/MOVED.TXT")
+        writer.write_file("/NESTED/MOVED.TXT", b"")
+        writer.delete("/NESTED/MOVED.TXT")
+        reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+        try:
+            nested = reader._find("/NESTED")
+            assert nested.size == 2 * reader.profile.cluster_size
+            reader.system_metadata()
+            names = {item.name for item in reader._directory(nested.first_cluster)}
+            assert "MOVED.TXT" not in names
+        finally:
+            reader.close()
 
 
 def test_universal_rw_exposes_limited_exfat_strategy(tmp_path):

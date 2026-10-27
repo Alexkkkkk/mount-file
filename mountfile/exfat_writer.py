@@ -27,6 +27,10 @@ class ExfatWriteError(RuntimeError):
     """The bounded native exFAT write profile rejected the operation."""
 
 
+class _NoFreeDirectorySlot(ExfatWriteError):
+    """No contiguous free entry-set range exists in the current directory."""
+
+
 _EOC = 0xFFFFFFFF
 
 
@@ -225,6 +229,15 @@ class NativeExfatWriter:
             current = entry.first_cluster
         raise FileNotFoundError(path)
 
+    def _entry_offset(self, reader, directory_cluster, logical_offset):
+        chain = reader._chain(directory_cluster, no_fat_chain=False)
+        cluster_index, cluster_offset = divmod(
+            logical_offset, reader.profile.cluster_size
+        )
+        if cluster_index >= len(chain):
+            raise ExfatWriteError("directory entry offset exceeds its cluster chain")
+        return reader._cluster_offset(chain[cluster_index]) + cluster_offset
+
     def _parent(self, reader, path):
         parts = self._parts(path)
         if not parts:
@@ -338,19 +351,90 @@ class NativeExfatWriter:
             raise ExfatWriteError(
                 "directory entry set is too large for bounded profile"
             )
-        raw = b"".join(
-            reader._read_rel(reader._cluster_offset(c), reader.profile.cluster_size)
-            for c in reader._chain(directory_cluster, no_fat_chain=False)
-        )
-        for pos in range(0, len(raw) - required * 32 + 1, 32):
+        for cluster in reader._chain(directory_cluster, no_fat_chain=False):
+            raw = reader._read_rel(
+                reader._cluster_offset(cluster), reader.profile.cluster_size
+            )
+            for pos in range(0, len(raw) - required * 32 + 1, 32):
+                if all(raw[pos + n * 32] in (0, 0x05) for n in range(required)):
+                    return cluster, pos
+        raise _NoFreeDirectorySlot("no existing contiguous free directory entry set")
+
+    def _append_directory_cluster(
+        self, reader, stream, bitmap, directory_cluster, directory_path
+    ):
+        chain = reader._chain(directory_cluster, no_fat_chain=False)
+        if not chain or len(chain) >= reader.profile.cluster_count:
+            raise ExfatWriteError("exFAT directory has reached cluster capacity")
+        cluster_size = reader.profile.cluster_size
+        current_size = len(chain) * cluster_size
+        parent_cluster = None
+        parent_record = None
+        if directory_path == "/":
+            if directory_cluster != reader.profile.root_cluster:
+                raise ExfatWriteError("root directory cluster identity mismatch")
+        else:
+            parent_cluster, parent_record = self._locate(reader, directory_path)
+            entry = reader._find(directory_path)
+            valid_data_length = struct.unpack_from("<Q", parent_record[3], 8)[0]
             if (
-                pos % reader.profile.cluster_size + required * 32
-                > reader.profile.cluster_size
+                not entry.is_dir
+                or entry.first_cluster != directory_cluster
+                or entry.size != current_size
+                or valid_data_length != current_size
             ):
-                continue
-            if all(raw[pos + n * 32] in (0, 0x05) for n in range(required)):
-                return pos
-        raise ExfatWriteError("no existing contiguous free directory entry set")
+                raise ExfatWriteError(
+                    "exFAT directory stream length disagrees with its cluster chain"
+                )
+        terminator = None
+        for index, existing_cluster in enumerate(chain):
+            raw = reader._read_rel(
+                reader._cluster_offset(existing_cluster), cluster_size
+            )
+            terminator_offset = next(
+                (offset for offset in range(0, len(raw), 32) if raw[offset] == 0),
+                None,
+            )
+            if terminator_offset is not None:
+                terminator = (index, terminator_offset)
+                break
+        if terminator is not None:
+            start_index, start_offset = terminator
+            for index in range(start_index, len(chain)):
+                first_offset = start_offset if index == start_index else 0
+                for offset in range(first_offset, cluster_size, 32):
+                    self._write_rel(
+                        stream,
+                        reader._cluster_offset(chain[index]) + offset,
+                        b"\x05",
+                    )
+        cluster = self._free_clusters(bitmap, reader, 1, stream)[0]
+        self._fat_write(stream, reader, chain[-1], cluster)
+        self._fat_write(stream, reader, cluster, _EOC)
+        self._set_allocated(bitmap, cluster, True)
+        self._write_rel(
+            stream,
+            reader._cluster_offset(cluster),
+            b"\0" * cluster_size,
+        )
+        if parent_record is not None:
+            entry_offset = self._entry_offset(reader, parent_cluster, parent_record[1])
+            new_size = current_size + cluster_size
+            self._write_rel(stream, entry_offset + 32 + 8, struct.pack("<Q", new_size))
+            self._write_rel(stream, entry_offset + 32 + 24, struct.pack("<Q", new_size))
+            self._rewrite_checksum(stream, entry_offset, parent_record[2])
+        return cluster
+
+    def _directory_slot(
+        self, reader, stream, bitmap, directory_cluster, directory_path, required
+    ):
+        try:
+            return self._free_slot(reader, directory_cluster, required)
+        except _NoFreeDirectorySlot:
+            cluster = self._append_directory_cluster(
+                reader, stream, bitmap, directory_cluster, directory_path
+            )
+            return cluster, 0
 
     def _make_entry_set(self, name, *, is_dir, first_cluster, size, no_fat_chain=False):
         encoded = name.encode("utf-16le")
@@ -364,6 +448,7 @@ class NativeExfatWriter:
         result[32] = 0xC0
         result[33] = 0x02 if no_fat_chain else 0
         result[35] = len(encoded) // 2
+        struct.pack_into("<Q", result, 40, size)
         struct.pack_into("<H", result, 36, self._name_hash(name))
         struct.pack_into("<I", result, 52, first_cluster if size or is_dir else 0)
         struct.pack_into("<Q", result, 56, size)
@@ -406,6 +491,11 @@ class NativeExfatWriter:
                     validate(reader, stage)
                 finally:
                     reader.close()
+                verified = self._reader(stage)
+                try:
+                    self._metadata(verified)
+                finally:
+                    verified.close()
                 self._commit_stage(stage)
             except Exception:
                 stage.unlink(missing_ok=True)
@@ -422,6 +512,7 @@ class NativeExfatWriter:
             except FileNotFoundError:
                 pass
             parts = self._parts(path)
+            directory_path = "/" + "/".join(parts[:-1])
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
                 if existing is None:
@@ -462,9 +553,18 @@ class NativeExfatWriter:
                         first_cluster=clusters[0] if clusters else 0,
                         size=len(payload),
                     )
-                    pos = self._free_slot(reader, directory, len(entry_set) // 32)
+                    slot_cluster, slot_offset = self._directory_slot(
+                        reader,
+                        stream,
+                        bitmap,
+                        directory,
+                        directory_path,
+                        len(entry_set) // 32,
+                    )
                     self._write_rel(
-                        stream, reader._cluster_offset(directory) + pos, entry_set
+                        stream,
+                        reader._cluster_offset(slot_cluster) + slot_offset,
+                        entry_set,
                     )
                     self._write_bitmap(stream, reader, meta, bitmap)
                 else:
@@ -520,7 +620,7 @@ class NativeExfatWriter:
                             reader._cluster_offset(cluster),
                             chunk.ljust(reader.profile.cluster_size, b"\0"),
                         )
-                    relative = reader._cluster_offset(directory) + record[1] + 32
+                    relative = self._entry_offset(reader, directory, record[1]) + 32
                     self._write_rel(
                         stream, relative + 1, bytes([0x02 if no_fat else 0])
                     )
@@ -536,7 +636,9 @@ class NativeExfatWriter:
                         stream, relative + 24, struct.pack("<Q", len(payload))
                     )
                     self._rewrite_checksum(
-                        stream, reader._cluster_offset(directory) + record[1], record[2]
+                        stream,
+                        self._entry_offset(reader, directory, record[1]),
+                        record[2],
                     )
                     self._write_bitmap(stream, reader, meta, bitmap)
                 stream.flush()
@@ -568,7 +670,7 @@ class NativeExfatWriter:
             encoded = new_name.encode("utf-16le")
             if len(encoded) > slots * 30:
                 raise ExfatWriteError("rename exceeds allocated name entries")
-            relative = reader._cluster_offset(directory) + record[1]
+            relative = self._entry_offset(reader, directory, record[1])
             with stage.open("r+b") as stream:
                 self._write_rel(stream, relative + 32 + 3, bytes([len(encoded) // 2]))
                 self._write_rel(
@@ -604,6 +706,8 @@ class NativeExfatWriter:
                 pass
             else:
                 raise FileExistsError(path)
+            parts = self._parts(path)
+            directory_path = "/" + "/".join(parts[:-1])
             directory, name = self._parent(reader, path)
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
@@ -616,11 +720,23 @@ class NativeExfatWriter:
                     b"\0" * reader.profile.cluster_size,
                 )
                 entry_set = self._make_entry_set(
-                    name, is_dir=True, first_cluster=cluster, size=0
+                    name,
+                    is_dir=True,
+                    first_cluster=cluster,
+                    size=reader.profile.cluster_size,
                 )
-                pos = self._free_slot(reader, directory, len(entry_set) // 32)
+                slot_cluster, slot_offset = self._directory_slot(
+                    reader,
+                    stream,
+                    bitmap,
+                    directory,
+                    directory_path,
+                    len(entry_set) // 32,
+                )
                 self._write_rel(
-                    stream, reader._cluster_offset(directory) + pos, entry_set
+                    stream,
+                    reader._cluster_offset(slot_cluster) + slot_offset,
+                    entry_set,
                 )
                 self._write_bitmap(stream, reader, meta, bitmap)
                 stream.flush()
@@ -664,7 +780,7 @@ class NativeExfatWriter:
                 # slots intact: zeroing the whole set would create a 0x00
                 # terminator and make valid entries after it unreachable.
                 self._write_rel(
-                    stream, reader._cluster_offset(directory) + record[1], b"\x05"
+                    stream, self._entry_offset(reader, directory, record[1]), b"\x05"
                 )
                 self._write_bitmap(stream, reader, meta, bitmap)
                 stream.flush()
