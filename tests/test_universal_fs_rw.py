@@ -172,9 +172,7 @@ def test_nonzero_signature_offset_requires_explicit_extent(tmp_path, monkeypatch
     monkeypatch.setattr(
         "mountfile.firmware.detect_volumes",
         lambda _image: [
-            SimpleNamespace(
-                fstype="FAT32", offset=4096, size=None, source="signature"
-            )
+            SimpleNamespace(fstype="FAT32", offset=4096, size=None, source="signature")
         ],
     )
     monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
