@@ -240,6 +240,19 @@ def test_native_exfat_reader_rejects_entry_set_checksum_corruption(tmp_path):
         provider.close()
 
 
+def test_native_exfat_writer_rejects_entry_checksum_before_mutation(tmp_path):
+    path = tmp_path / "exfat-writer-entry-checksum.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    raw[32 * 512 + 130] ^= 0x01
+    path.write_bytes(raw)
+    before = path.read_bytes()
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    with pytest.raises(ExfatWriteError, match="entry-set checksum"):
+        writer.write_file("/HELLO.TXT", b"must not commit")
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     ("relative", "value", "message"),
     [

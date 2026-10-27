@@ -156,10 +156,18 @@ class NativeExfatWriter:
             total = (secondary_count + 1) * 32
             if secondary_count < 2 or pos + total > len(raw):
                 raise ExfatWriteError("truncated exFAT directory entry set")
+            entry_set = raw[pos : pos + total]
+            stored_checksum = struct.unpack_from("<H", entry_set, 2)[0]
+            if stored_checksum != NativeExfatImage._entry_set_checksum(entry_set):
+                raise ExfatWriteError("exFAT file entry-set checksum mismatch")
             stream = raw[pos + 32 : pos + 64]
             if stream[0] != 0xC0:
                 raise ExfatWriteError("invalid exFAT stream extension")
+            if stream[1] & ~0x03:
+                raise ExfatWriteError("exFAT stream extension has reserved flags")
             name_len = stream[3]
+            if name_len == 0 or name_len > 15 * (secondary_count - 1):
+                raise ExfatWriteError("exFAT filename length exceeds entry set")
             name_raw = bytearray()
             for index in range(2, secondary_count + 1):
                 item = raw[pos + index * 32 : pos + (index + 1) * 32]
