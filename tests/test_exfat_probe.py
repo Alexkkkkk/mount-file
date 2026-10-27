@@ -172,12 +172,61 @@ def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):
     _tree_image(path)
     writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
     writer.write_file("/HELLO.TXT", b"updated")
+    with pytest.raises(ExfatWriteError, match="root directory"):
+        writer.rename("/HELLO.TXT", "/")
     writer.rename("/HELLO.TXT", "/RENAMED.TXT")
     provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
     try:
         assert provider.read_file("/RENAMED.TXT") == b"updated"
     finally:
         provider.close()
+
+
+def test_native_exfat_move_grows_destination_directory(tmp_path):
+    path = tmp_path / "exfat-cross-directory-move.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.mkdir("/SRC")
+    writer.mkdir("/DST")
+    for index in range(5):
+        writer.write_file(f"/DST/{index}.TXT", b"")
+    writer.write_file("/SRC/FILE.TXT", b"moved file contents")
+    writer.rename("/SRC/FILE.TXT", "/DST/RENAMED.TXT")
+
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        destination = reader._find("/DST")
+        assert destination.size == 2 * reader.profile.cluster_size
+        assert len(reader._chain(destination.first_cluster)) == 2
+        reader.system_metadata()
+        assert reader.read_file("/DST/RENAMED.TXT") == b"moved file contents"
+        with pytest.raises(FileNotFoundError):
+            reader._find("/SRC/FILE.TXT")
+    finally:
+        reader.close()
+
+
+def test_native_exfat_moves_directories_and_rejects_cycles(tmp_path):
+    path = tmp_path / "exfat-directory-move.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.mkdir("/PARENT")
+    writer.mkdir("/PARENT/CHILD")
+    writer.write_file("/PARENT/CHILD/ITEM.TXT", b"nested contents")
+    writer.mkdir("/OUT")
+    with pytest.raises(ExfatWriteError, match="into itself"):
+        writer.rename("/PARENT", "/PARENT/CHILD/CYCLE")
+    writer.rename("/PARENT/CHILD", "/OUT/MOVED")
+
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        reader.system_metadata()
+        assert reader._find("/OUT/MOVED").is_dir
+        assert reader.read_file("/OUT/MOVED/ITEM.TXT") == b"nested contents"
+        with pytest.raises(FileNotFoundError):
+            reader._find("/PARENT/CHILD")
+    finally:
+        reader.close()
 
 
 def test_native_exfat_writer_deletes_nonempty_files(tmp_path):
@@ -223,6 +272,34 @@ def test_native_exfat_writer_recursively_deletes_directory_tree(tmp_path):
             reader._find("/DIR")
     finally:
         reader.close()
+
+
+def test_native_exfat_delete_refuses_cross_linked_cluster(tmp_path):
+    path = tmp_path / "exfat-cross-linked-delete.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.write_file("/OTHER.TXT", b"separate allocation")
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    record = next(
+        item
+        for item in writer._directory_records(reader, reader.profile.root_cluster)
+        if item[0] == "OTHER.TXT"
+    )
+    relative = writer._entry_offset(reader, reader.profile.root_cluster, record[1])
+    reader.close()
+
+    entry_set = bytearray(record[4])
+    struct.pack_into("<I", entry_set, 52, 3)
+    struct.pack_into("<H", entry_set, 2, 0)
+    struct.pack_into("<H", entry_set, 2, writer._entry_checksum(entry_set))
+    with path.open("r+b") as stream:
+        stream.seek(relative)
+        stream.write(entry_set)
+    before = path.read_bytes()
+
+    with pytest.raises(ExfatWriteError, match="shared by"):
+        writer.delete("/OTHER.TXT")
+    assert path.read_bytes() == before
 
 
 def test_native_exfat_writer_creates_mkdirs_and_deletes_empty_entries(tmp_path):

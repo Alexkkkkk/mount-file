@@ -33,23 +33,21 @@ partition extent is supplied. The bounded provider supports directory listing,
 file sizes, range reads and extraction through the common read API. It validates
 the main and backup boot regions, FAT geometry, cluster chains, allocation
 bitmap/FAT consistency and checksummed file-entry sets, but never writes the
-image. `put`, `mkdir`, rename and delete remain
-unsupported until allocation bitmap, upcase table and transactional metadata
-updates have independent validation and rollback coverage.
+image. Mutations are provided separately through the explicitly bounded
+`NativeExfatRW` writer described below.
 
 ### Native exFAT phase-one writes
 
 `UniversalFSRW` exposes `native-exfat-phase1` only for an explicitly bounded
-volume. It can replace an existing regular file without growing its allocated
-cluster chain and rename an existing entry within the same directory. Each
-operation copies the complete image to a staging file, validates the staged
-image through the native reader, checks the source extent hash under an
-exclusive image lock, and commits with an atomic replacement. A changed source,
-short write or failed read-back leaves the original image untouched.
-
-`mkdir`, `delete`, file growth and allocation are rejected deliberately. The
-remaining exFAT writer work requires allocation-bitmap updates, complete
-directory-set transactions and independent crash/rollback tests.
+volume. It supports file creation and replacement, directory creation and
+growth, same- and cross-directory rename, and file or recursive directory
+deletion. Before freeing clusters it scans allocation ownership and rejects
+cross-linked or inconsistent streams. Each operation copies the complete image
+to a staging file, validates the staged image through the native reader, checks
+the source extent hash under an exclusive image lock, and commits with an
+atomic replacement. A changed source, short write or failed read-back leaves
+the original image untouched; unsupported or ambiguous metadata still fails
+closed.
 
 ## Использование
 

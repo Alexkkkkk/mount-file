@@ -748,44 +748,116 @@ class NativeExfatWriter:
 
     def rename(self, src, dst):
         src_parts, dst_parts = self._parts(src), self._parts(dst)
-        if src_parts[:-1] != dst_parts[:-1]:
-            raise ExfatWriteError("bounded exFAT rename supports one directory only")
+        if not src_parts or not dst_parts:
+            raise ExfatWriteError("root directory cannot be renamed")
+        src_path = "/" + "/".join(src_parts)
+        dst_path = "/" + "/".join(dst_parts)
+        src_parent_path = "/" + "/".join(src_parts[:-1])
+        dst_parent_path = "/" + "/".join(dst_parts[:-1])
         new_name = dst_parts[-1]
 
         def action(reader, stage):
-            self._metadata(reader)
-            directory, record = self._locate(reader, src)
+            meta = self._metadata(reader)
+            if src_path == dst_path:
+                return
+            directory, record = self._locate(reader, src_path)
+            destination = reader._find(dst_parent_path)
+            if not destination.is_dir:
+                raise NotADirectoryError(dst_parent_path)
+            destination_directory, _ = self._parent(reader, dst_path)
+            source_entry = reader._find(src_path)
+            same_directory = src_parent_path == dst_parent_path
+            if source_entry.is_dir and (
+                dst_parent_path == src_path
+                or dst_parent_path.startswith(src_path.rstrip("/") + "/")
+            ):
+                raise ExfatWriteError("cannot move an exFAT directory into itself")
             if any(
                 item[0] == new_name
-                for item in self._directory_records(reader, directory)
+                for item in self._directory_records(reader, destination_directory)
+                if not (same_directory and item[1] == record[1])
             ):
                 raise FileExistsError(dst)
             slots = (record[2] // 32) - 2
             encoded = new_name.encode("utf-16le")
             if len(encoded) > slots * 30:
                 raise ExfatWriteError("rename exceeds allocated name entries")
-            relative = self._entry_offset(reader, directory, record[1])
             with stage.open("r+b") as stream:
-                self._write_rel(stream, relative + 32 + 3, bytes([len(encoded) // 2]))
-                self._write_rel(
-                    stream,
-                    relative + 32 + 4,
-                    struct.pack("<H", self._name_hash(new_name)),
-                )
-                padded = encoded.ljust(slots * 30, b"\xff")
-                for index in range(slots):
+                if same_directory:
+                    relative = self._entry_offset(reader, directory, record[1])
+                    self._write_rel(
+                        stream, relative + 32 + 3, bytes([len(encoded) // 2])
+                    )
                     self._write_rel(
                         stream,
-                        relative + 64 + index * 32 + 2,
-                        padded[index * 30 : (index + 1) * 30],
+                        relative + 32 + 4,
+                        struct.pack("<H", self._name_hash(new_name)),
                     )
-                self._rewrite_checksum(stream, relative, record[2])
+                    padded = encoded.ljust(slots * 30, b"\xff")
+                    for index in range(slots):
+                        self._write_rel(
+                            stream,
+                            relative + 64 + index * 32 + 2,
+                            padded[index * 30 : (index + 1) * 30],
+                        )
+                    self._rewrite_checksum(stream, relative, record[2])
+                else:
+                    entry_set = bytearray(record[4])
+                    entry_set[32 + 3] = len(encoded) // 2
+                    struct.pack_into("<H", entry_set, 32 + 4, self._name_hash(new_name))
+                    padded = encoded.ljust(slots * 30, b"\xff")
+                    for index in range(slots):
+                        base = 64 + index * 32
+                        entry_set[base + 2 : base + 32] = padded[
+                            index * 30 : (index + 1) * 30
+                        ]
+                    struct.pack_into("<H", entry_set, 2, 0)
+                    struct.pack_into(
+                        "<H", entry_set, 2, self._entry_checksum(entry_set)
+                    )
+                    bitmap = self._bitmap(stream, reader, meta)
+                    slot_cluster, slot_offset = self._directory_slot(
+                        reader,
+                        stream,
+                        bitmap,
+                        destination_directory,
+                        dst_parent_path,
+                        len(entry_set) // 32,
+                    )
+                    destination_offset = (
+                        reader._cluster_offset(slot_cluster) + slot_offset
+                    )
+                    self._write_rel(stream, destination_offset, entry_set)
+                    source_offset = self._entry_offset(reader, directory, record[1])
+                    for offset in range(0, record[2], 32):
+                        entry_type = record[4][offset]
+                        self._write_rel(
+                            stream,
+                            source_offset + offset,
+                            bytes([entry_type & 0x7F]),
+                        )
+                    self._write_bitmap(stream, reader, meta, bitmap)
                 stream.flush()
                 os.fsync(stream.fileno())
             validated = self._reader(stage)
             try:
-                if validated._find("/" + "/".join(dst_parts)).name != new_name:
+                moved_entry = validated._find(dst_path)
+                if (
+                    moved_entry.name != new_name
+                    or moved_entry.is_dir != source_entry.is_dir
+                    or moved_entry.first_cluster != source_entry.first_cluster
+                    or moved_entry.size != source_entry.size
+                ):
                     raise ExfatWriteError("exFAT rename read-back validation failed")
+                if not same_directory:
+                    try:
+                        validated._find(src_path)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise ExfatWriteError(
+                            "exFAT move left the source directory entry active"
+                        )
             finally:
                 validated.close()
 
