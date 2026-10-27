@@ -254,6 +254,7 @@ class NativeExt3Image(NativeExt2Image):
                 start=start,
                 max_length=max_length,
                 journal_blocks=journal_blocks,
+                expected_sequence=sequence,
             )
             self.journal_replayed = True
             return
@@ -276,7 +277,9 @@ class NativeExt3Image(NativeExt2Image):
                 + 1
             )
 
-    def _replay_journal(self, inode, *, start, max_length, journal_blocks):
+    def _replay_journal(
+        self, inode, *, start, max_length, journal_blocks, expected_sequence
+    ):
         """Replay classic committed JBD2 records into a read-only overlay.
 
         Only the old descriptor/data/commit layout is accepted. No revoke or
@@ -292,6 +295,10 @@ class NativeExt3Image(NativeExt2Image):
             magic, record_type, sequence = self._jbd2_header(descriptor)
             if magic != _JBD2_MAGIC or record_type != _JBD2_DESCRIPTOR:
                 raise Ext3ReadError("invalid JBD2 replay descriptor")
+            if sequence != expected_sequence:
+                raise Ext3ReadError(
+                    "JBD2 replay descriptor sequence disagrees with superblock"
+                )
             cursor = 12
             targets = []
             last = False
@@ -335,6 +342,7 @@ class NativeExt3Image(NativeExt2Image):
             transactions += 1
             if transactions > _MAX_JOURNAL_BLOCKS:
                 raise Ext3ReadError("JBD2 replay transaction count is excessive")
+            expected_sequence = (expected_sequence + 1) & 0xFFFFFFFF
             logical = commit_logical + 1
 
     def _read_at(self, relative_offset: int, size: int) -> bytes:

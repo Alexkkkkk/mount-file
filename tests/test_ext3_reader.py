@@ -14,7 +14,9 @@ from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Imag
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
 
-def _make_clean_journal_image(path, *, commit_sequence=7, truncate_commit=False):
+def _make_clean_journal_image(
+    path, *, descriptor_sequence=7, commit_sequence=7, truncate_commit=False
+):
     _make_image(path, compat=0x000C)
     image = bytearray(path.read_bytes())
     sb = memoryview(image)[1024:2048]
@@ -32,7 +34,7 @@ def _make_clean_journal_image(path, *, commit_sequence=7, truncate_commit=False)
     struct.pack_into(">II", journal, 20, 1, 0)
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
-    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, 7)
+    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
     struct.pack_into(">II", journal, 1036, 21, 0x0000000A)  # LAST|SAME_UUID
     struct.pack_into(">III", journal, 3072, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
@@ -101,6 +103,21 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
         assert image_path.read_bytes()[21 * 1024 : 22 * 1024] != payload
     finally:
         provider.close()
+
+
+def test_journal_replay_rejects_sequence_not_advertised_by_superblock(tmp_path):
+    image_path = tmp_path / "stale-replay-sequence.img"
+    _make_clean_journal_image(image_path, descriptor_sequence=99, commit_sequence=99)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="sequence disagrees with superblock"):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=True,
+        )
 
 
 def test_journal_with_unknown_feature_bits_fails_closed(tmp_path):
