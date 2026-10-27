@@ -156,16 +156,38 @@ def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):
         provider.close()
 
 
-def test_native_exfat_writer_rejects_growth_and_allocation_mutations(tmp_path):
+def test_native_exfat_writer_supports_bounded_growth_and_rejects_recursive_delete(
+    tmp_path,
+):
     path = tmp_path / "exfat-writer-limits.img"
     _tree_image(path)
     writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
-    with pytest.raises(ExfatWriteError, match="stream growth"):
-        writer.write_file("/HELLO.TXT", b"x" * 513)
-    with pytest.raises(ExfatWriteError, match="does not allocate"):
-        writer.mkdir("/NEW")
-    with pytest.raises(ExfatWriteError, match="allocation bitmap"):
+    writer.write_file("/HELLO.TXT", b"x" * 513)
+    writer.write_file("/HELLO.TXT", b"shrunk")
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/HELLO.TXT") == b"shrunk"
+    finally:
+        provider.close()
+    with pytest.raises(ExfatWriteError, match="non-empty file"):
         writer.delete("/HELLO.TXT")
+    with pytest.raises(ExfatWriteError, match="recursive"):
+        writer.delete("/HELLO.TXT", recursive=True)
+
+
+def test_native_exfat_writer_creates_mkdirs_and_deletes_empty_entries(tmp_path):
+    path = tmp_path / "exfat-writer-allocation.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.write_file("/NEW.TXT", b"")
+    writer.mkdir("/EMPTY")
+    writer.delete("/NEW.TXT")
+    writer.delete("/EMPTY")
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        assert [item["name"] for item in provider.list_dir("/")] == ["HELLO.TXT"]
+    finally:
+        provider.close()
 
 
 def test_universal_rw_exposes_limited_exfat_strategy(tmp_path):
