@@ -190,11 +190,35 @@ def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
     assert writer._fs._u32(raw, 28) == 15 * (writer.block_size // 512)
     assert writer.read_file("/grown/" + names[-1]) == b""
 
-    for name in names:
-        writer.delete("/grown/" + name)
-    writer.delete("/grown")
-    assert writer.free_space() == original_free_space
+    writer.mkdir("/right")
+    writer.rename("/grown", "/right/moved")
     assert "grown" not in {entry["name"] for entry in writer.list_dir("/")}
+    moved_entries = writer.list_dir("/right/moved")
+    assert {entry["name"] for entry in moved_entries} == set(names)
+    right_inode = next(
+        entry["inode"] for entry in writer.list_dir("/") if entry["name"] == "right"
+    )
+    moved_inode = next(
+        entry["inode"]
+        for entry in writer.list_dir("/right")
+        if entry["name"] == "moved"
+    )
+    dotdot = writer._fs._lookup_child(moved_inode, b"..")
+    assert dotdot is not None and dotdot["inode"] == right_inode
+    assert writer.read_file("/right/moved/" + names[-1]) == b""
+    with image.open("rb") as stream:
+        stream.seek(len(prefix))
+        moved_extent = stream.read(partition.stat().st_size)
+    moved_check_image = tmp_path / "partition-after-directory-move.ext2"
+    moved_check_image.write_bytes(moved_extent)
+    _assert_e2fsck_clean(moved_check_image)
+
+    for name in names:
+        writer.delete("/right/moved/" + name)
+    writer.delete("/right/moved")
+    writer.delete("/right")
+    assert writer.free_space() == original_free_space
+    assert "right" not in {entry["name"] for entry in writer.list_dir("/")}
     with image.open("rb") as stream:
         assert stream.read(len(prefix)) == prefix
         stream.seek(len(prefix) + partition.stat().st_size)
