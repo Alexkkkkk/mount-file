@@ -2,6 +2,7 @@
 """Synthetic tests for the bounded exFAT boot-region probe."""
 
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,6 +132,33 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
         assert provider.read_file_range("/HELLO.TXT", 2, 5) == payload[2:7]
     finally:
         provider.close()
+
+
+@pytest.mark.parametrize("directory_reader", ["_directory", "system_metadata"])
+def test_directory_limit_is_checked_before_reading_next_cluster(
+    monkeypatch, directory_reader
+):
+    import mountfile.exfat_reader as exfat_reader
+
+    monkeypatch.setattr(exfat_reader, "_MAX_DIR_BYTES", 512)
+    reader = NativeExfatImage.__new__(NativeExfatImage)
+    reader.profile = SimpleNamespace(cluster_size=512, root_cluster=2)
+    reader._iter_chain = lambda *_args, **_kwargs: iter((2, 3))
+    reader._cluster_offset = lambda cluster: cluster * 512
+    reads = []
+
+    def read_relative(relative, size):
+        reads.append((relative, size))
+        return bytes(size)
+
+    reader._read_rel = read_relative
+    with pytest.raises(ExfatReadError, match="directory exceeds reader limit"):
+        if directory_reader == "_directory":
+            reader._directory(2)
+        else:
+            reader.system_metadata()
+
+    assert reads == [(1024, 512)]
 
 
 def _tree_image(path):

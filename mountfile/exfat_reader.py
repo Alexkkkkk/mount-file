@@ -109,7 +109,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             + (cluster - 2) * self.profile.cluster_size
         )
 
-    def _chain(self, start, size=0, *, no_fat_chain=False):
+    def _iter_chain(self, start, size=0, *, no_fat_chain=False):
         if not 2 <= start <= self.profile.cluster_count + 1:
             raise ExfatReadError("exFAT chain starts outside the data heap")
         required = (size + self.profile.cluster_size - 1) // self.profile.cluster_size
@@ -119,30 +119,45 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 or start + required > self.profile.cluster_count + 2
             ):
                 raise ExfatReadError("contiguous exFAT stream exceeds cluster capacity")
-            return list(range(start, start + required))
-        result = []
+            yield from range(start, start + required)
+            return
         seen = set()
         current = start
+        count = 0
         while True:
-            if current in seen or len(result) >= _MAX_CHAIN:
+            if current in seen or count >= _MAX_CHAIN:
                 raise ExfatReadError(
                     "exFAT cluster chain contains a cycle or is too long"
                 )
             if not 2 <= current <= self.profile.cluster_count + 1:
                 raise ExfatReadError("exFAT chain references an invalid cluster")
             seen.add(current)
-            result.append(current)
-            if len(result) > self.profile.cluster_count:
+            count += 1
+            if count > self.profile.cluster_count:
                 raise ExfatReadError("exFAT chain exceeds volume capacity")
+            yield current
             nxt = self._fat_entry(current)
             if nxt >= _EOC:
                 break
             if nxt in (0, 1) or nxt > self.profile.cluster_count + 1:
                 raise ExfatReadError("exFAT chain contains a free or invalid link")
             current = nxt
-        if required and len(result) < required:
+        if required and count < required:
             raise ExfatReadError("exFAT chain is shorter than the stream size")
-        return result
+
+    def _chain(self, start, size=0, *, no_fat_chain=False):
+        return list(self._iter_chain(start, size, no_fat_chain=no_fat_chain))
+
+    def _read_directory_bytes(self, cluster):
+        """Read a directory only while its cumulative size stays bounded."""
+        raw = bytearray()
+        for item in self._iter_chain(cluster, no_fat_chain=False):
+            if self.profile.cluster_size > _MAX_DIR_BYTES - len(raw):
+                raise ExfatReadError("exFAT directory exceeds reader limit")
+            raw.extend(
+                self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
+            )
+        return bytes(raw)
 
     def _read_stream(self, first_cluster, size, no_fat_chain=False):
         if size < 0 or size > self.profile.cluster_count * self.profile.cluster_size:
@@ -189,12 +204,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         return checksum
 
     def _directory(self, cluster):
-        raw = b"".join(
-            self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
-            for item in self._chain(cluster, no_fat_chain=False)
-        )
-        if len(raw) > _MAX_DIR_BYTES:
-            raise ExfatReadError("exFAT directory exceeds reader limit")
+        raw = self._read_directory_bytes(cluster)
         entries = []
         pos = 0
         while pos + 32 <= len(raw):
@@ -247,10 +257,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
 
     def system_metadata(self):
         """Return and validate the mandatory allocation bitmap/upcase entries."""
-        raw = b"".join(
-            self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
-            for item in self._chain(self.profile.root_cluster, no_fat_chain=False)
-        )
+        raw = self._read_directory_bytes(self.profile.root_cluster)
         bitmap = None
         upcase = None
         for pos in range(0, len(raw) - 31, 32):
