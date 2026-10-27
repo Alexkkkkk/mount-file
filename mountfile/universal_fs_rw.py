@@ -28,6 +28,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import hashlib
 import logging
@@ -53,6 +54,61 @@ except ImportError:
     pytsk3 = None
 
 log = logging.getLogger("mountfile.universal_fs_rw")
+
+
+@contextlib.contextmanager
+def _exclusive_image_lock(image: Path):
+    """Serialize cooperating writers with a stable sidecar lock file."""
+    lock_path = Path(str(image.resolve()) + ".mountfile.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("r+b") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
 
 # These formats can be inspected/carved, but they do not have a writable
 # filesystem semantics that a loop mount can safely provide.  Refusing a
@@ -541,6 +597,9 @@ class Fat32RW(RWBackend):
         ):
             raise ValueError("FAT extent exceeds image bounds")
         self.volume_size = volume_size
+        self._selected_volume_size = volume_size
+        self._in_staged_mutation = False
+        self._quarantine_marker = Path(str(self.image) + ".mountfile-quarantined")
         self._parse_bpb()
 
     def _read_at(self, offset: int, length: int) -> bytes:
@@ -561,6 +620,143 @@ class Fat32RW(RWBackend):
         ):
             raise ValueError("FAT write exceeds selected volume bounds")
         super()._write_at(offset, data)
+
+    def _temporary_sibling(self, suffix: str) -> Path:
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{self.image.name}.",
+            suffix=suffix,
+            dir=str(self.image.parent),
+        )
+        os.close(descriptor)
+        return Path(name)
+
+    def _verify_staged_mutation(
+        self, image: Path, operation: str, arguments: tuple
+    ) -> None:
+        verifier = Fat32RW(
+            image,
+            offset=self.offset,
+            volume_size=self._selected_volume_size,
+        )
+        try:
+            if operation == "write_file":
+                path, expected = arguments
+                actual = verifier.read(path)
+                if actual != expected:
+                    raise OSError("staged FAT read-back did not match written data")
+            elif operation == "mkdir":
+                (path,) = arguments
+                entry = verifier.stat(path)
+                if entry is None or not entry.is_dir:
+                    raise OSError("staged FAT read-back did not find created directory")
+            elif operation == "delete":
+                path, _recursive = arguments
+                if verifier.stat(path) is not None:
+                    raise OSError("staged FAT read-back found deleted entry")
+            elif operation == "rename":
+                source, destination = arguments
+                if source.casefold() == destination.casefold():
+                    if verifier.stat(destination) is None:
+                        raise OSError("staged FAT read-back lost renamed entry")
+                elif (
+                    verifier.stat(source) is not None
+                    or verifier.stat(destination) is None
+                ):
+                    raise OSError("staged FAT read-back did not confirm rename")
+            else:
+                raise RuntimeError(f"unknown staged FAT operation: {operation}")
+        finally:
+            verifier.close()
+
+    def _mutate_staged(self, operation: str, *arguments):
+        inplace = getattr(self, f"_{operation}_inplace")
+        if self._in_staged_mutation:
+            return inplace(*arguments)
+        if self._quarantine_marker.exists():
+            raise RuntimeError(
+                "FAT image is quarantined after a failed rollback; inspect "
+                f"{self._quarantine_marker} before writing"
+            )
+        if self.image.is_symlink():
+            raise ValueError("refusing staged FAT writes through a symlink")
+
+        original = self.image
+        parent = original.parent.resolve()
+        with _exclusive_image_lock(original):
+            metadata = original.stat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("staged FAT writes require a regular image file")
+            if metadata.st_nlink != 1:
+                raise ValueError("staged FAT writes refuse multiply-linked images")
+            original_hash = _sha256_file(original)
+            image_size = metadata.st_size
+            if shutil.disk_usage(parent).free < image_size * 2:
+                raise OSError(
+                    "insufficient free space for staged FAT image and rollback copy"
+                )
+
+            staged = self._temporary_sibling(".mountfile-stage")
+            rollback: Path | None = None
+            keep_rollback = False
+            try:
+                rollback = self._temporary_sibling(".mountfile-rollback")
+                shutil.copy2(original, staged)
+                shutil.copy2(original, rollback)
+                self.image = staged
+                self._in_staged_mutation = True
+                try:
+                    result = inplace(*arguments)
+                finally:
+                    self.image = original
+                    self._in_staged_mutation = False
+
+                _fsync_file(staged)
+                self._verify_staged_mutation(staged, operation, arguments)
+                if _sha256_file(original) != original_hash:
+                    raise RuntimeError(
+                        "source image changed during staged FAT mutation; "
+                        "staged changes were discarded"
+                    )
+
+                committed = False
+                try:
+                    os.replace(staged, original)
+                    committed = True
+                    _fsync_directory(parent)
+                    self._verify_staged_mutation(original, operation, arguments)
+                except BaseException as commit_error:
+                    if not committed:
+                        raise
+                    try:
+                        assert rollback is not None
+                        os.replace(rollback, original)
+                        _fsync_directory(parent)
+                        if _sha256_file(original) != original_hash:
+                            raise OSError("restored image hash does not match snapshot")
+                    except BaseException as rollback_error:
+                        keep_rollback = True
+                        self._quarantine_marker.write_text(
+                            f"rollback={rollback}\n"
+                            f"commit_error={commit_error!r}\n"
+                            f"rollback_error={rollback_error!r}\n",
+                            encoding="utf-8",
+                        )
+                        raise RuntimeError(
+                            "FAT commit and rollback both failed; image is "
+                            f"quarantined and rollback copy retained at {rollback}"
+                        ) from rollback_error
+                    raise
+                return result
+            finally:
+                self.image = original
+                self._in_staged_mutation = False
+                for temporary in (staged, rollback):
+                    if (
+                        temporary is not None
+                        and temporary.exists()
+                        and not (temporary == rollback and keep_rollback)
+                    ):
+                        temporary.unlink()
 
     def _parse_bpb(self) -> None:
         bs = self._read_at(0, 512)
@@ -1102,6 +1298,9 @@ class Fat32RW(RWBackend):
         return self._read_chain(entry.inode, entry.size)
 
     def write_file(self, path: str, data: bytes) -> None:
+        self._mutate_staged("write_file", path, data)
+
+    def _write_file_inplace(self, path: str, data: bytes) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
@@ -1210,6 +1409,9 @@ class Fat32RW(RWBackend):
         return None
 
     def mkdir(self, path: str) -> None:
+        self._mutate_staged("mkdir", path)
+
+    def _mkdir_inplace(self, path: str) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
@@ -1251,6 +1453,9 @@ class Fat32RW(RWBackend):
         self.sync_fsinfo()
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        self._mutate_staged("delete", path, recursive)
+
+    def _delete_inplace(self, path: str, recursive: bool = False) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
@@ -1287,6 +1492,9 @@ class Fat32RW(RWBackend):
         return bytes(updated)
 
     def rename(self, src: str, dst: str) -> None:
+        self._mutate_staged("rename", src, dst)
+
+    def _rename_inplace(self, src: str, dst: str) -> None:
         """Rename a same-directory 8.3 entry without changing its cluster chain.
 
         Long-filename and cross-directory renames are deliberately rejected

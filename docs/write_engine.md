@@ -147,11 +147,15 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 
 ## Ограничения и риски
 
-* Native FAT writes now enforce the selected extent but still mutate the working
-  image in place; they are not crash-atomic. Use a disposable working copy, not
-  an original evidence image. Native ext2 writes remain limited to the clean
-  allowlisted profile and are not power-loss-atomic; ext3/ext4 and unsupported
-  ext2 profiles remain read-only.
+* Native FAT mutations enforce the selected extent and use a same-directory
+  full-image staging copy, sidecar writer lock, source-hash guard, independent
+  read-back, atomic replace, and rollback copy. A failed rollback quarantines
+  the image and retains the rollback file for manual recovery. Staging requires
+  free space for two additional image copies. The commit is atomic at file
+  replacement, not a guarantee against storage hardware failure; use a
+  disposable working copy, never an original evidence image. Native ext2 writes
+  remain limited to the clean allowlisted profile and are not power-loss-atomic;
+  ext3/ext4 and unsupported ext2 profiles remain read-only.
   Native NTFS metadata browsing requires its bounded boot/MFT/USA, volume-state,
   restart-area and directory-index validations. It remains read-only: log replay,
   attribute-list streams, unsupported runlists and NTFS mutations are not enabled.

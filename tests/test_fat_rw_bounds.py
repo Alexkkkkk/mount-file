@@ -63,3 +63,51 @@ def test_native_fat_requires_explicit_extent_at_nonzero_offset(tmp_path):
 
     with pytest.raises(ValueError, match="explicit FAT volume_size"):
         Fat32RW(image, offset=4096)
+
+
+def test_staged_fat_mutation_preserves_bytes_outside_selected_partition(tmp_path):
+    partition = tmp_path / "fat32-volume.img"
+    make_fat32_image(partition)
+    volume = partition.read_bytes()
+    prefix = b"PRECEDING-PARTITION".ljust(4096, b"P")
+    suffix = b"FOLLOWING-PARTITION".ljust(4096, b"S")
+    image = tmp_path / "disk.img"
+    image.write_bytes(prefix + volume + suffix)
+
+    backend = Fat32RW(image, offset=len(prefix), volume_size=len(volume))
+    try:
+        backend.write_file("/STAGED.TXT", b"transactional payload")
+    finally:
+        backend.close()
+
+    updated = image.read_bytes()
+    assert updated[: len(prefix)] == prefix
+    assert updated[len(prefix) + len(volume) :] == suffix
+    reopened = Fat32RW(image, offset=len(prefix), volume_size=len(volume))
+    try:
+        assert reopened.read("/STAGED.TXT") == b"transactional payload"
+    finally:
+        reopened.close()
+
+
+def test_staged_fat_readback_failure_restores_original_image(tmp_path, monkeypatch):
+    image = tmp_path / "fat32.img"
+    make_fat32_image(image)
+    before = image.read_bytes()
+    backend = Fat32RW(image)
+    verify = backend._verify_staged_mutation
+
+    def fail_after_atomic_replace(target, operation, arguments):
+        if Path(target) == image:
+            raise OSError("simulated post-commit read-back failure")
+        return verify(target, operation, arguments)
+
+    monkeypatch.setattr(backend, "_verify_staged_mutation", fail_after_atomic_replace)
+    try:
+        with pytest.raises(OSError, match="post-commit read-back failure"):
+            backend.write_file("/ROLLBACK.TXT", b"must not persist")
+        assert image.read_bytes() == before
+        with pytest.raises(FileNotFoundError):
+            backend.read("/ROLLBACK.TXT")
+    finally:
+        backend.close()
