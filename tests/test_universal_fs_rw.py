@@ -101,7 +101,7 @@ def test_fat_api_accepts_backslash_image_paths(tmp_path):
 def _open_fat_rw(tmp_path):
     image = tmp_path / "fat32.img"
     make_fat32_image(image)
-    return image, Fat32RW(image)
+    return image, Fat32RW(image, volume_size=image.stat().st_size)
 
 
 def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):

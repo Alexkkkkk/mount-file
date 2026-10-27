@@ -519,9 +519,46 @@ class Fat32RW(RWBackend):
     ATTR_LFN = 0x0F
     ATTR_VOL = 0x08
 
-    def __init__(self, image: Path, offset: int = 0):
+    def __init__(
+        self, image: Path, offset: int = 0, volume_size: int | None = None
+    ):
         super().__init__(image, offset)
+        if offset < 0:
+            raise ValueError("negative FAT volume offset")
+        image_size = self.image.stat().st_size
+        if volume_size is None:
+            if offset != 0:
+                raise ValueError("an explicit FAT volume_size is required at nonzero offsets")
+            volume_size = image_size
+        if (
+            not isinstance(volume_size, int)
+            or isinstance(volume_size, bool)
+            or volume_size <= 0
+            or offset + volume_size < offset
+            or offset + volume_size > image_size
+        ):
+            raise ValueError("FAT extent exceeds image bounds")
+        self.volume_size = volume_size
         self._parse_bpb()
+
+    def _read_at(self, offset: int, length: int) -> bytes:
+        if (
+            offset < 0
+            or length < 0
+            or offset + length < offset
+            or offset + length > self.volume_size
+        ):
+            raise ValueError("FAT read exceeds selected volume bounds")
+        return super()._read_at(offset, length)
+
+    def _write_at(self, offset: int, data: bytes) -> None:
+        if (
+            offset < 0
+            or offset + len(data) < offset
+            or offset + len(data) > self.volume_size
+        ):
+            raise ValueError("FAT write exceeds selected volume bounds")
+        super()._write_at(offset, data)
 
     def _parse_bpb(self) -> None:
         bs = self._read_at(0, 512)
@@ -538,6 +575,16 @@ class Fat32RW(RWBackend):
         self.fat_size = (
             struct.unpack("<H", bs[22:24])[0] or struct.unpack("<I", bs[36:40])[0]
         )
+        if (
+            self.bytes_per_sector not in (512, 1024, 2048, 4096)
+            or self.sectors_per_cluster == 0
+            or self.sectors_per_cluster & (self.sectors_per_cluster - 1)
+            or self.reserved_sectors == 0
+            or self.num_fats not in (1, 2)
+            or self.fat_size == 0
+            or self.total_sectors == 0
+        ):
+            raise ValueError("invalid FAT geometry")
 
         root_secs = (
             self.root_entries * 32 + self.bytes_per_sector - 1
@@ -548,6 +595,8 @@ class Fat32RW(RWBackend):
             - self.num_fats * self.fat_size
             - root_secs
         )
+        if data_secs <= 0:
+            raise ValueError("invalid FAT layout: no data sectors remain")
         self.cluster_count = max(0, data_secs // self.sectors_per_cluster)
 
         if self.cluster_count < 4085:
@@ -563,6 +612,9 @@ class Fat32RW(RWBackend):
             self.reserved_sectors + self.num_fats * self.fat_size
         ) * self.bytes_per_sector
         self.data_start = self.root_dir_offset + root_secs * self.bytes_per_sector
+        declared_bytes = self.total_sectors * self.bytes_per_sector
+        if declared_bytes > self.volume_size:
+            raise ValueError("FAT BPB exceeds the selected volume extent")
 
         if self.fat_type == 32:
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
@@ -2066,6 +2118,8 @@ class UniversalFSRW:
             if fs_type_lower.startswith(types):
                 try:
                     if cls in (Ext234RW, NativeExfatRW):
+                        self.backend = cls(self.image, off, volume_size=volume_size)
+                    elif cls is Fat32RW:
                         self.backend = cls(self.image, off, volume_size=volume_size)
                     else:
                         self.backend = cls(self.image, off)
