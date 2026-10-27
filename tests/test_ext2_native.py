@@ -379,6 +379,34 @@ def test_native_ext2_staging_failure_does_not_modify_original(tmp_path, monkeypa
     assert image.read_bytes() == before
 
 
+def test_native_ext2_rejects_concurrent_change_before_commit(tmp_path, monkeypatch):
+    image = tmp_path / "concurrent-change.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    original_copy_extent = writer._copy_extent
+    calls = 0
+
+    def mutate_after_staging(destination):
+        nonlocal calls
+        digest = original_copy_extent(destination)
+        calls += 1
+        if calls == 1:
+            with image.open("r+b") as stream:
+                stream.seek(512)
+                value = stream.read(1)
+                stream.seek(512)
+                stream.write(bytes([value[0] ^ 0x01]))
+        return digest
+
+    monkeypatch.setattr(writer, "_copy_extent", mutate_after_staging)
+    with pytest.raises(NativeExt2Error, match="changed concurrently"):
+        writer.write_file("/not-committed.txt", b"must not be committed")
+    assert calls == 1
+    assert not any(
+        entry["name"] == "not-committed.txt" for entry in writer.list_dir("/")
+    )
+
+
 def test_large_file_high_size_is_not_misreported_as_empty(tmp_path):
     image = tmp_path / "filesystem.ext2"
     _make_ext2(image)
