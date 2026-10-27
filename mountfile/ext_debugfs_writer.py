@@ -614,7 +614,7 @@ class Ext234Provider:
     """Explicit compatibility provider backed by debugfs, never GUI fallback."""
 
     def __init__(
-        self, image_path, offset=0, volume_size=None, *, allow_legacy_debugfs=True
+        self, image_path, offset=0, volume_size=None, *, allow_legacy_debugfs=False
     ):
         self.backend = Ext234ImageWriter(
             image_path,

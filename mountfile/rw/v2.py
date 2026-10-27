@@ -178,12 +178,13 @@ def create_verified(
 class MountFileBridge:
     """
     Обёртка над существующим Mount File для чтения (RO).
-    Приоритет: публичный Python API; fallback: subprocess CLI;
-    финальный fallback: pytsk3.
+    Приоритет: публичный Python API и native reader. Compatibility fallback
+    к pytsk3 не включается автоматически.
     """
 
-    def __init__(self, image_path: Path):
+    def __init__(self, image_path: Path, *, allow_legacy_tsk: bool = False):
         self.image_path = image_path
+        self.allow_legacy_tsk = bool(allow_legacy_tsk)
         self._api = self._load_api()
 
     def _load_api(self):
@@ -220,8 +221,12 @@ class MountFileBridge:
                 for e in fs.list_dir(fs.find_dir(path))
             ]
         except ImportError:
+            if not self.allow_legacy_tsk:
+                raise
             return self._tsk_list(path)
         except Exception:
+            if not self.allow_legacy_tsk:
+                raise
             return self._tsk_list(path)
 
     def extract_file(self, path: str, dst: Path) -> None:
@@ -232,8 +237,12 @@ class MountFileBridge:
             Path(dst).write_bytes(self._native().read_file(path))
             return
         except ImportError:
+            if not self.allow_legacy_tsk:
+                raise
             self._tsk_extract(path, dst)
         except Exception:
+            if not self.allow_legacy_tsk:
+                raise
             self._tsk_extract(path, dst)
 
     def stat(self, path: str) -> dict:
@@ -243,6 +252,8 @@ class MountFileBridge:
             _, entry = self._native().entry(path)
             return {"size": entry.size, "is_dir": entry.is_dir}
         except ImportError:
+            if not self.allow_legacy_tsk:
+                raise
             return self._tsk_stat(path)
         except Exception as exc:
             raise RWError(f"stat failed: {exc}")

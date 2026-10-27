@@ -173,7 +173,7 @@ def test_f4_saves_existing_ext4_ini_through_real_backend(monkeypatch, tmp_path, 
         path = "/config"
 
         def __init__(self):
-            self.provider = Ext234Provider(str(image))
+            self.provider = Ext234Provider(str(image), allow_legacy_debugfs=True)
             self.writer = tc_window._ExtPanelWriter(backend)
             self.refreshed = False
 
