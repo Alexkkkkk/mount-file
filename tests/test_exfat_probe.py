@@ -458,14 +458,30 @@ def test_native_exfat_nested_directory_growth_updates_stream_lengths(
             reader.close()
 
 
-def test_universal_rw_exposes_limited_exfat_strategy(tmp_path):
+def test_universal_rw_exposes_limited_exfat_strategy(tmp_path, monkeypatch):
     path = tmp_path / "exfat-rw.img"
     _tree_image(path)
     backend = NativeExfatRW(path, volume_size=VOLUME_SIZE)
     try:
         assert backend.info().write_strategy == "native-exfat-phase1"
+
+        import mountfile.exfat_writer as exfat_writer
+
+        replace = exfat_writer.os.replace
+
+        def replace_with_closed_source(src, dst):
+            assert backend._reader._stream is None
+            return replace(src, dst)
+
+        monkeypatch.setattr(exfat_writer.os, "replace", replace_with_closed_source)
         backend.write_file("/HELLO.TXT", b"adapter")
         assert backend.read("/HELLO.TXT") == b"adapter"
+        backend.mkdir("/NEW")
+        assert "NEW" in {entry.name for entry in backend.list("/")}
+        backend.rename("/NEW", "/RENAMED")
+        assert "RENAMED" in {entry.name for entry in backend.list("/")}
+        backend.delete("/RENAMED")
+        assert "RENAMED" not in {entry.name for entry in backend.list("/")}
     finally:
         backend.close()
 

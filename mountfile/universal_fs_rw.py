@@ -551,29 +551,31 @@ class NativeExfatRW(RWBackend):
     def read(self, path: str) -> bytes:
         return self._reader.read_file(path)
 
-    def write_file(self, path: str, data: bytes) -> None:
-        self._writer.write_file(path, data)
+    def _mutate(self, operation: str, *args, **kwargs) -> None:
+        """Release the source handle for Windows replace, then refresh the reader."""
         self._reader.close()
-        from mountfile.exfat_reader import NativeExfatImage
+        try:
+            getattr(self._writer, operation)(*args, **kwargs)
+        except BaseException as mutation_error:
+            try:
+                self._reader.reopen()
+            except Exception as reopen_error:
+                raise mutation_error from reopen_error
+            raise
+        else:
+            self._reader.reopen()
 
-        self._reader = NativeExfatImage(
-            self.image, offset=self.offset, volume_size=self.volume_size
-        )
+    def write_file(self, path: str, data: bytes) -> None:
+        self._mutate("write_file", path, data)
 
     def mkdir(self, path: str) -> None:
-        self._writer.mkdir(path)
+        self._mutate("mkdir", path)
 
     def delete(self, path: str, recursive: bool = False) -> None:
-        self._writer.delete(path, recursive=recursive)
+        self._mutate("delete", path, recursive=recursive)
 
     def rename(self, src: str, dst: str) -> None:
-        self._writer.rename(src, dst)
-        self._reader.close()
-        from mountfile.exfat_reader import NativeExfatImage
-
-        self._reader = NativeExfatImage(
-            self.image, offset=self.offset, volume_size=self.volume_size
-        )
+        self._mutate("rename", src, dst)
 
 
 # =============================================================================
