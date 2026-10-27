@@ -98,6 +98,7 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             self._max_cluster = self.cluster_count + 1
             self.root_name = self.image_path
             self.backend_name = f"native-fat{self.fat_type}-ro"
+            self._validate_metadata_copies()
         except (OSError, struct.error) as exc:
             self.close()
             raise FatReadError(str(exc)) from exc
@@ -131,6 +132,7 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
 
     def _parse_profile(self, selected_size) -> FatProfile:
         raw = self._read_absolute(self.offset, 512, image_only=True)
+        self._boot_sector = raw
         if not self.looks_like_boot_sector(raw):
             raise FatReadError("no valid FAT boot sector at the selected offset")
         bps = struct.unpack_from("<H", raw, 11)[0]
@@ -226,6 +228,30 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             self._stream = Path(self.image_path).open("rb")
             self._image_size = os.fstat(self._stream.fileno()).st_size
             self.profile = self._parse_profile(self.volume_size)
+            self._validate_metadata_copies()
+
+    def _validate_metadata_copies(self) -> None:
+        """Reject inconsistent mirrored FAT metadata before any read access."""
+        if self.profile.fat_count > 1:
+            primary = self._read_at(
+                self.profile.reserved_sectors * self.block_size, self.fat_size
+            )
+            for index in range(1, self.profile.fat_count):
+                replica = self._read_at(
+                    self.profile.reserved_sectors * self.block_size
+                    + index * self.fat_size,
+                    self.fat_size,
+                )
+                if replica != primary:
+                    raise FatReadError("mirrored FAT copies are inconsistent")
+        if self.fat_type != 32:
+            return
+        backup_sector = struct.unpack_from("<H", self._boot_sector, 50)[0]
+        if not backup_sector:
+            return
+        backup = self._read_at(backup_sector * self.block_size, self.block_size)
+        if backup != self._boot_sector:
+            raise FatReadError("FAT32 backup boot sector is inconsistent")
 
     def _read_absolute(self, absolute: int, size: int, *, image_only=False) -> bytes:
         if self._stream is None:

@@ -71,6 +71,26 @@ def test_truncated_journal_record_fails_closed(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
+def test_journal_with_nonzero_start_is_recovery_required(tmp_path):
+    image_path = tmp_path / "active-journal.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+    with pytest.raises(Ext3ReadError, match="uncheckpointed transaction"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_journal_with_unknown_feature_bits_fails_closed(tmp_path):
+    image_path = tmp_path / "unsupported-journal-feature.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 0x24, 1)
+    image_path.write_bytes(image)
+    with pytest.raises(Ext3ReadError, match="unsupported or unchecked JBD2"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
 def test_vfs_does_not_downgrade_rejected_ext3_profile(tmp_path, monkeypatch):
     image_path = tmp_path / "journaled-routing.img"
     _make_image(image_path, compat=0x000C)

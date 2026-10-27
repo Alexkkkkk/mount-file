@@ -170,6 +170,24 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             raise ExfatReadError("invalid exFAT filename")
         return name
 
+    @staticmethod
+    def _entry_set_checksum(raw):
+        checksum = 0
+        for index, value in enumerate(raw):
+            if index in (2, 3):
+                value = 0
+            checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
+            checksum = (checksum + value) & 0xFFFF
+        return checksum
+
+    @staticmethod
+    def _name_hash(name):
+        checksum = 0
+        for value in name.encode("utf-16le"):
+            checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
+            checksum = (checksum + value) & 0xFFFF
+        return checksum
+
     def _directory(self, cluster):
         raw = b"".join(
             self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
@@ -190,10 +208,18 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             total = (secondary_count + 1) * 32
             if secondary_count < 2 or pos + total > len(raw):
                 raise ExfatReadError("truncated exFAT file entry set")
+            entry_set = raw[pos : pos + total]
+            stored_checksum = struct.unpack_from("<H", entry_set, 2)[0]
+            if stored_checksum != self._entry_set_checksum(entry_set):
+                raise ExfatReadError("exFAT file entry-set checksum mismatch")
             stream = raw[pos + 32 : pos + 64]
             if stream[0] != 0xC0:
                 raise ExfatReadError("exFAT file entry lacks stream extension")
+            if stream[1] & ~0x03:
+                raise ExfatReadError("exFAT stream extension has reserved flags")
             name_length = stream[3]
+            if name_length == 0 or name_length > 15 * (secondary_count - 1):
+                raise ExfatReadError("exFAT filename length exceeds entry set")
             first_cluster = struct.unpack_from("<I", stream, 20)[0]
             size = struct.unpack_from("<Q", stream, 24)[0]
             no_fat_chain = bool(stream[1] & 0x02)
@@ -204,6 +230,9 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                     raise ExfatReadError("exFAT file entry has invalid name entry")
                 name_raw.extend(item[2:32])
             name = self._decode_name(bytes(name_raw[: name_length * 2]))
+            stored_name_hash = struct.unpack_from("<H", stream, 4)[0]
+            if stored_name_hash != self._name_hash(name):
+                raise ExfatReadError("exFAT filename hash mismatch")
             entries.append(
                 _Entry(
                     name,
@@ -247,7 +276,14 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         bitmap_flags, bitmap_cluster, bitmap_size = bitmap
         if bitmap_flags & 0xFE or bitmap_size < (self.profile.cluster_count + 7) // 8:
             raise ExfatReadError("exFAT allocation bitmap geometry is invalid")
-        self._read_stream(bitmap_cluster, bitmap_size, False)
+        bitmap_data = self._read_stream(bitmap_cluster, bitmap_size, False)
+        for cluster in range(2, self.profile.cluster_count + 2):
+            bit = bool(bitmap_data[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7)))
+            fat_value = self._fat_entry(cluster)
+            if bit != (fat_value != 0):
+                raise ExfatReadError(
+                    "exFAT allocation bitmap/FAT metadata is inconsistent"
+                )
         upcase_checksum, upcase_cluster, upcase_size = upcase
         if (
             upcase_size == 0

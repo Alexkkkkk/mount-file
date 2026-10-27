@@ -133,6 +133,9 @@ class Fat32:
             raise Fat32Error("invalid sectors-per-cluster")
         self.reserved = struct.unpack_from("<H", bpb, 14)[0]
         self.nfats = bpb[16]
+        self.ext_flags = struct.unpack_from("<H", bpb, 40)[0]
+        if self.ext_flags & 0x0080:
+            raise Fat32Error("non-mirrored FAT32 mode is unsupported")
         spf32 = struct.unpack_from("<I", bpb, 36)[0]
         if spf32 == 0:
             raise Fat32Error("FAT12/16 not supported by this module")
@@ -164,6 +167,8 @@ class Fat32:
         if self.offset + total_sectors * self.bps > physical_size:
             raise Fat32Error("FAT32 BPB volume extends beyond image EOF")
         self.volume_end = self.offset + total_sectors * self.bps
+        self._validate_backup_boot_sector()
+        self._validate_fat_copies()
         cluster_count = data_sectors // self.spc
         if cluster_count < 65525:
             raise Fat32Error("not FAT32 (cluster count %d)" % cluster_count)
@@ -173,6 +178,29 @@ class Fat32:
             raise Fat32Error("invalid FAT32 root cluster")
         self.cluster_count = cluster_count
         self._alloc_hint = 2
+
+    def _validate_fat_copies(self):
+        """Require identical mirrored FATs before exposing mutation APIs."""
+        if self.nfats <= 1:
+            return
+        primary = self._read(self.fat_start, self.fat_size)
+        for index in range(1, self.nfats):
+            replica = self._read(
+                self.fat_start + index * self.fat_size,
+                self.fat_size,
+            )
+            if replica != primary:
+                raise Fat32Error("mirrored FAT32 copies are inconsistent")
+
+    def _validate_backup_boot_sector(self):
+        """Require a declared FAT32 backup boot sector to match the primary."""
+        if not self.backup_boot_sector:
+            return
+        backup_offset = self.offset + self.backup_boot_sector * self.bps
+        primary = self._read(self.offset, self.bps)
+        backup = self._read(backup_offset, self.bps)
+        if backup != primary:
+            raise Fat32Error("FAT32 backup boot sector is inconsistent")
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):

@@ -77,10 +77,18 @@ _KNOWN_INCOMPAT = (
 )
 
 _KNOWN_RO_COMPAT = (
-    _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE | _RO_COMPAT_HUGE_FILE
-    | _RO_COMPAT_GDT_CSUM | _RO_COMPAT_DIR_NLINK | _RO_COMPAT_EXTRA_ISIZE
-    | _RO_COMPAT_BIGALLOC | _RO_COMPAT_METADATA_CSUM | _RO_COMPAT_READONLY
-    | _RO_COMPAT_PROJECT | _RO_COMPAT_SHARED_BLOCKS | _RO_COMPAT_VERITY
+    _RO_COMPAT_SPARSE_SUPER
+    | _RO_COMPAT_LARGE_FILE
+    | _RO_COMPAT_HUGE_FILE
+    | _RO_COMPAT_GDT_CSUM
+    | _RO_COMPAT_DIR_NLINK
+    | _RO_COMPAT_EXTRA_ISIZE
+    | _RO_COMPAT_BIGALLOC
+    | _RO_COMPAT_METADATA_CSUM
+    | _RO_COMPAT_READONLY
+    | _RO_COMPAT_PROJECT
+    | _RO_COMPAT_SHARED_BLOCKS
+    | _RO_COMPAT_VERITY
     | _RO_COMPAT_ORPHAN_PRESENT
 )
 
@@ -357,12 +365,15 @@ def _probe_stream(
         filesystem_size,
         "group descriptor table size exceeds filesystem bounds",
     )
-    if _checked_add(
-        gdt_offset,
-        gdt_bytes,
-        filesystem_size,
-        "group descriptor table exceeds filesystem bounds",
-    ) > filesystem_size:
+    if (
+        _checked_add(
+            gdt_offset,
+            gdt_bytes,
+            filesystem_size,
+            "group descriptor table exceeds filesystem bounds",
+        )
+        > filesystem_size
+    ):
         reasons.append("group descriptor table exceeds filesystem bounds")
     if block_size not in (1024, 2048, 4096):
         reasons.append("Phase-1 ext2 writer supports only 1, 2 or 4 KiB blocks")

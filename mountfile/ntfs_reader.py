@@ -929,6 +929,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         return self._read_runs(data.runs, offset, length)
 
     def _read_runs(self, runs, offset, length):
+        self.reopen()
         output = bytearray()
         wanted_end = offset + length
         for run in runs:

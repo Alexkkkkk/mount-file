@@ -31,24 +31,23 @@ profile; явный library-level legacy ext2/3/4 compatibility backend чере
 VFS can browse a validated exFAT image without `pytsk3` when an explicit
 partition extent is supplied. The bounded provider supports directory listing,
 file sizes, range reads and extraction through the common read API. It validates
-the main and backup boot regions, FAT geometry, cluster chains and file-entry
-sets, but never writes the image. `put`, `mkdir`, rename and delete remain
-unsupported until allocation bitmap, upcase table and transactional metadata
-updates have independent validation and rollback coverage.
+the main and backup boot regions, FAT geometry, cluster chains, allocation
+bitmap/FAT consistency and checksummed file-entry sets, but never writes the
+image. Mutations are provided separately through the explicitly bounded
+`NativeExfatRW` writer described below.
 
 ### Native exFAT phase-one writes
 
 `UniversalFSRW` exposes `native-exfat-phase1` only for an explicitly bounded
-volume. It can replace an existing regular file without growing its allocated
-cluster chain and rename an existing entry within the same directory. Each
-operation copies the complete image to a staging file, validates the staged
-image through the native reader, checks the source extent hash under an
-exclusive image lock, and commits with an atomic replacement. A changed source,
-short write or failed read-back leaves the original image untouched.
-
-`mkdir`, `delete`, file growth and allocation are rejected deliberately. The
-remaining exFAT writer work requires allocation-bitmap updates, complete
-directory-set transactions and independent crash/rollback tests.
+volume. It supports file creation and replacement, directory creation and
+growth, same- and cross-directory rename, and file or recursive directory
+deletion. Before freeing clusters it scans allocation ownership and rejects
+cross-linked or inconsistent streams. Each operation copies the complete image
+to a staging file, validates the staged image through the native reader, checks
+the source extent hash under an exclusive image lock, and commits with an
+atomic replacement. A changed source, short write or failed read-back leaves
+the original image untouched; unsupported or ambiguous metadata still fails
+closed.
 
 ## Использование
 
@@ -74,12 +73,21 @@ engine.close()
   `native-fat16-ro` и `native-fat32-ro` выбираются через unified VFS без
   `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
   кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
-  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only.
+  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only. Native
+  reader также отклоняет рассинхронные mirrored FAT copies и повреждённую
+  backup BPB FAT32 до чтения файлов.
+  Writer принимает только mirrored FAT32 mode с идентичными FAT copies.
+  Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
+  текущий writer обновляет все FAT copies одновременно и не поддерживает
+  active-FAT semantics.
+  Если BPB объявляет backup boot sector, он должен быть байт-в-байт идентичен
+  primary boot sector; повреждённая резервная BPB отклоняется до записи.
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
-  один single-indirect pointer для данных файла) использует собственный Python
-  writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
-  sparse/double/triple indirect. Рост каталогов за пределы direct blocks не
-  поддерживается. Unsupported/dirty/out-of-bounds volumes не получают native RW.
+  один single-indirect pointer для данных файла и каталогов) использует
+  собственный Python writer без `debugfs`; предел файла и каталога —
+  `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
+  расширении каталога pointer block, bitmap/counters и directory map проходят
+  read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с
   `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
@@ -96,9 +104,13 @@ engine.close()
   если доступны `mount`/`umount` и соответствующий драйвер. HFS+ и другие
   неподдерживаемые Windows filesystem drivers остаются read-only.
   Имена детектора (`FAT16`, `FAT32`, `HFS+`) нормализуются для mount-helper.
-* ISO9660, SquashFS, JFFS2 и UBIFS объявлены `read-only-format`: чтение и
-  извлечение доступны, но мутации отклоняются до монтирования. Эти форматы
-  нельзя честно сделать обычными RW-ФС без пересборки образа по их спецификации.
+* ISO9660, SquashFS, JFFS2, UBIFS, HFS+ и APFS объявлены
+  `read-only-format` в универсальном RW-фасаде: чтение и извлечение доступны,
+  но мутации отклоняются до монтирования. HFS+ и APFS имеют отдельные
+  read-only adapters; эти форматы нельзя честно сделать обычными RW-ФС без
+  специализированной реализации каталогов, allocation metadata и recovery.
+  Generic VFS не делает молчаливый fallback для этих signatures: вызывающий
+  код получает явную ошибку и должен выбрать соответствующий macOS adapter.
 * Если backend, драйвер или права отсутствуют, операция завершается явной
   ошибкой; фасад не сообщает об успешной записи после молчаливого RO-mount.
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
@@ -149,6 +161,24 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
   детерминированные crash/rollback-сценарии в `tests/test_write_engine.py`.
 * Покрытие строк/ветвей из §9.3 (≥85% / ≥75%, транзакционный слой ≥95%) на
   текущем прогоне не подтверждено для всего пакета.
+
+## Блокировка staged exFAT-записей
+
+Native exFAT writer сериализует мутации через скрытый lock-файл рядом с образом.
+Он намеренно остаётся после завершения операции: удаление lock-файла при ожидающем
+процессе может разделить процессы между разными файловыми объектами и допустить
+параллельную запись. Файл блокировки не содержит данных образа и не является
+резервной копией. Отдельный lock нужен потому, что успешный commit атомарно заменяет
+сам файл образа; блокировка только этого файла не сохраняет идентичность lock-а
+после замены и на Windows мешает staged-копированию.
+В текущем bounded-профиле при нехватке места writer добавляет один cluster в root
+или вложенный directory chain, обновляет allocation bitmap и FAT, а для вложенного
+каталога также синхронно меняет `ValidDataLength`/`DataLength` в родительской записи
+и пересчитывает checksum. Ограничения объёма и ошибки выделения остаются fail-closed.
+Семантика полей соответствует [Microsoft exFAT specification](https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification).
+Удаление файлов освобождает их allocation chains; непустой каталог удаляется только
+с `recursive=True`. Перед освобождением writer проверяет владельцев кластеров по
+дереву и отклоняет общие или противоречивые allocation chains.
 
 ## NTFS boot-sector probe (read-only groundwork)
 
