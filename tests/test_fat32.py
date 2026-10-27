@@ -122,11 +122,24 @@ def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
     make_fat32_image(path)
     image = bytearray(path.read_bytes())
     image[16] = 2
+    image[BACKUP_BOOT_SECTOR * BPS + 16] = 2
     second_fat = (RESERVED + SPF) * BPS
     image[second_fat + 8] ^= 0x01
     path.write_bytes(image)
 
     with pytest.raises(Fat32Error, match="mirrored FAT32 copies"):
+        with path.open("r+b") as handle:
+            Fat32(handle)
+
+
+def test_rejects_inconsistent_backup_boot_sector(tmp_path):
+    path = tmp_path / "mismatched-backup-boot.img"
+    make_fat32_image(path)
+    image = bytearray(path.read_bytes())
+    image[BACKUP_BOOT_SECTOR * BPS + 3] ^= 0x01
+    path.write_bytes(image)
+
+    with pytest.raises(Fat32Error, match="backup boot sector"):
         with path.open("r+b") as handle:
             Fat32(handle)
 

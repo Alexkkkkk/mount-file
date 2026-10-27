@@ -80,6 +80,8 @@ engine.close()
   Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
   текущий writer обновляет все FAT copies одновременно и не поддерживает
   active-FAT semantics.
+  Если BPB объявляет backup boot sector, он должен быть байт-в-байт идентичен
+  primary boot sector; повреждённая резервная BPB отклоняется до записи.
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
   один single-indirect pointer для данных файла и каталогов) использует
   собственный Python writer без `debugfs`; предел файла и каталога —

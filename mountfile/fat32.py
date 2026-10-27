@@ -167,6 +167,7 @@ class Fat32:
         if self.offset + total_sectors * self.bps > physical_size:
             raise Fat32Error("FAT32 BPB volume extends beyond image EOF")
         self.volume_end = self.offset + total_sectors * self.bps
+        self._validate_backup_boot_sector()
         self._validate_fat_copies()
         cluster_count = data_sectors // self.spc
         if cluster_count < 65525:
@@ -190,6 +191,16 @@ class Fat32:
             )
             if replica != primary:
                 raise Fat32Error("mirrored FAT32 copies are inconsistent")
+
+    def _validate_backup_boot_sector(self):
+        """Require a declared FAT32 backup boot sector to match the primary."""
+        if not self.backup_boot_sector:
+            return
+        backup_offset = self.offset + self.backup_boot_sector * self.bps
+        primary = self._read(self.offset, self.bps)
+        backup = self._read(backup_offset, self.bps)
+        if backup != primary:
+            raise Fat32Error("FAT32 backup boot sector is inconsistent")
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):
