@@ -519,16 +519,16 @@ class Fat32RW(RWBackend):
     ATTR_LFN = 0x0F
     ATTR_VOL = 0x08
 
-    def __init__(
-        self, image: Path, offset: int = 0, volume_size: int | None = None
-    ):
+    def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
         super().__init__(image, offset)
         if offset < 0:
             raise ValueError("negative FAT volume offset")
         image_size = self.image.stat().st_size
         if volume_size is None:
             if offset != 0:
-                raise ValueError("an explicit FAT volume_size is required at nonzero offsets")
+                raise ValueError(
+                    "an explicit FAT volume_size is required at nonzero offsets"
+                )
             volume_size = image_size
         if (
             not isinstance(volume_size, int)
