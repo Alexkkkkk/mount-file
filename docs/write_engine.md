@@ -147,8 +147,11 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 
 ## Ограничения и риски
 
-* Native ext2 writes remain limited to the clean allowlisted profile and are not
-  power-loss-atomic; ext3/ext4 and unsupported ext2 profiles remain read-only.
+* Native FAT writes now enforce the selected extent but still mutate the working
+  image in place; they are not crash-atomic. Use a disposable working copy, not
+  an original evidence image. Native ext2 writes remain limited to the clean
+  allowlisted profile and are not power-loss-atomic; ext3/ext4 and unsupported
+  ext2 profiles remain read-only.
   Native NTFS metadata browsing requires its bounded boot/MFT/USA, volume-state,
   restart-area and directory-index validations. It remains read-only: log replay,
   attribute-list streams, unsupported runlists and NTFS mutations are not enabled.
