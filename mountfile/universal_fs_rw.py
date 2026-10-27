@@ -525,6 +525,7 @@ class Fat32RW(RWBackend):
             raise ValueError("negative FAT volume offset")
         image_size = self.image.stat().st_size
         inferred_whole_image = volume_size is None
+        self._inferred_whole_image = inferred_whole_image
         if volume_size is None:
             if offset != 0:
                 raise ValueError(
@@ -616,7 +617,7 @@ class Fat32RW(RWBackend):
         declared_bytes = self.total_sectors * self.bytes_per_sector
         if declared_bytes > self.volume_size:
             raise ValueError("FAT BPB exceeds the selected volume extent")
-        if inferred_whole_image and declared_bytes != self.volume_size:
+        if self._inferred_whole_image and declared_bytes != self.volume_size:
             raise ValueError(
                 "FAT BPB must cover the whole image when volume_size is omitted"
             )
