@@ -75,7 +75,9 @@ engine.close()
   `native-fat16-ro` и `native-fat32-ro` выбираются через unified VFS без
   `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
   кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
-  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only.
+  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only. Native
+  reader также отклоняет рассинхронные mirrored FAT copies и повреждённую
+  backup BPB FAT32 до чтения файлов.
   Writer принимает только mirrored FAT32 mode с идентичными FAT copies.
   Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
   текущий writer обновляет все FAT copies одновременно и не поддерживает
