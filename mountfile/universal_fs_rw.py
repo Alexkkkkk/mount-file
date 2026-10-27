@@ -2389,6 +2389,11 @@ class UniversalFSRW:
         if off + volume_size > image_size:
             raise ValueError("selected volume extent exceeds image bounds")
         self.volume_size = volume_size
+        inferred_whole_image_fat = (
+            self._requested_volume_size is None
+            and off == 0
+            and (candidate is None or not candidate.size)
+        )
         # ``probe_filesystem`` returns display names such as ``FAT32`` or
         # ``NTFS`` while the backend table is lowercase, so the match below
         # must be case-insensitive.
@@ -2406,7 +2411,16 @@ class UniversalFSRW:
                     if cls in (Ext234RW, NativeExfatRW):
                         self.backend = cls(self.image, off, volume_size=volume_size)
                     elif cls is Fat32RW:
-                        self.backend = cls(self.image, off, volume_size=volume_size)
+                        backend = cls(self.image, off, volume_size=volume_size)
+                        if (
+                            inferred_whole_image_fat
+                            and backend.volume_size != volume_size
+                        ):
+                            backend.close()
+                            raise ValueError(
+                                "FAT BPB must cover the inferred whole-image extent"
+                            )
+                        self.backend = backend
                     else:
                         self.backend = cls(self.image, off)
                     return

@@ -166,6 +166,31 @@ def test_backup_boot_signature_is_not_used_as_partition_boundary(tmp_path):
         fs.close()
 
 
+def test_inferred_whole_image_fat_requires_exact_bpb_length(tmp_path, monkeypatch):
+    image = tmp_path / "fat32-with-trailing-data.img"
+    make_fat32_image(image)
+    declared_size = image.stat().st_size
+    with image.open("ab") as stream:
+        stream.write(b"unassigned trailing bytes")
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype="FAT32", offset=0, size=None, source="signature")
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
+
+    with pytest.raises(RuntimeError, match="selected native profile was declined"):
+        UniversalFSRW(image, auto_backup=False)
+
+    fs = UniversalFSRW(image, auto_backup=False, volume_size=declared_size)
+    try:
+        assert fs.volume_size == declared_size
+        assert fs.info().fs_type == "fat32"
+    finally:
+        fs.close()
+
+
 def test_nonzero_signature_offset_requires_explicit_extent(tmp_path, monkeypatch):
     image = tmp_path / "partitionless.img"
     image.write_bytes(b"X" * 8192)
