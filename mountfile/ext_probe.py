@@ -56,7 +56,6 @@ _RO_COMPAT_PROJECT = 0x2000
 _RO_COMPAT_SHARED_BLOCKS = 0x4000
 _RO_COMPAT_VERITY = 0x8000
 _RO_COMPAT_ORPHAN_PRESENT = 0x10000
-_RO_COMPAT_METADATA_CSUM = 0x0400
 
 _KNOWN_INCOMPAT = (
     0x0001
@@ -75,6 +74,14 @@ _KNOWN_INCOMPAT = (
     | _INCOMPAT_INLINE_DATA
     | _INCOMPAT_ENCRYPT
     | _INCOMPAT_CASEFOLD
+)
+
+_KNOWN_RO_COMPAT = (
+    _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE | _RO_COMPAT_HUGE_FILE
+    | _RO_COMPAT_GDT_CSUM | _RO_COMPAT_DIR_NLINK | _RO_COMPAT_EXTRA_ISIZE
+    | _RO_COMPAT_BIGALLOC | _RO_COMPAT_METADATA_CSUM | _RO_COMPAT_READONLY
+    | _RO_COMPAT_PROJECT | _RO_COMPAT_SHARED_BLOCKS | _RO_COMPAT_VERITY
+    | _RO_COMPAT_ORPHAN_PRESENT
 )
 
 # These mirrors the strict Phase-1 ext2 writer profile; they are only a
@@ -137,6 +144,7 @@ class ExtSuperblockProfile:
     has_journal: bool
     journal_recovery_needed: bool
     unknown_incompat_features: int
+    unknown_ro_compat_features: int
     phase1_ext2_profile_candidate: bool
     write_gate_reasons: tuple[str, ...]
 
@@ -266,6 +274,7 @@ def _probe_stream(
     fs_type = "ext4" if ext4_markers else "ext3" if has_journal else "ext2"
     state_clean = state == 0x0001
     unknown_incompat = feature_incompat & ~_KNOWN_INCOMPAT
+    unknown_ro_compat = feature_ro_compat & ~_KNOWN_RO_COMPAT
 
     reasons = []
     if fs_type != "ext2":
@@ -280,6 +289,10 @@ def _probe_stream(
         reasons.append("superblock state is not exactly cleanly unmounted")
     if unknown_incompat:
         reasons.append(f"unknown incompatible feature flags 0x{unknown_incompat:08x}")
+    if unknown_ro_compat:
+        reasons.append(
+            f"unknown read-only-compatible feature flags 0x{unknown_ro_compat:08x}"
+        )
     if revision > 1:
         reasons.append("unsupported ext superblock revision")
     if blocks_per_group > block_size * 8 and not (
@@ -288,6 +301,18 @@ def _probe_stream(
         reasons.append("block-group size exceeds the ext block bitmap capacity")
     if inodes_per_group > block_size * 8:
         reasons.append("inode-group size exceeds the ext inode bitmap capacity")
+    group_count = (
+        blocks_count - first_data_block + blocks_per_group - 1
+    ) // blocks_per_group
+    inode_group_count = (inodes_count + inodes_per_group - 1) // inodes_per_group
+    if not 1 <= group_count <= 1_000_000:
+        reasons.append("ext block-group count is outside the bounded reader limit")
+    if inode_group_count > group_count:
+        reasons.append("inode groups exceed ext block groups")
+    gdt_offset = (first_data_block + 1) * block_size
+    gdt_bytes = group_count * group_descriptor_size
+    if gdt_offset < 0 or gdt_bytes < 0 or gdt_offset + gdt_bytes > filesystem_size:
+        reasons.append("group descriptor table exceeds filesystem bounds")
     if block_size not in (1024, 2048, 4096):
         reasons.append("Phase-1 ext2 writer supports only 1, 2 or 4 KiB blocks")
     if feature_compat & ~_PHASE1_COMPAT:
@@ -324,6 +349,7 @@ def _probe_stream(
         has_journal=has_journal,
         journal_recovery_needed=recovery_needed,
         unknown_incompat_features=unknown_incompat,
+        unknown_ro_compat_features=unknown_ro_compat,
         phase1_ext2_profile_candidate=candidate,
         write_gate_reasons=tuple(reasons),
     )

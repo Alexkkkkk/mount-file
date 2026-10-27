@@ -28,6 +28,15 @@ from mountfile.ext2_reader import (
     _GroupDescriptor,
     _Inode,
 )
+from mountfile.ext_probe import (
+    _COMPAT_FAST_COMMIT,
+    _COMPAT_ORPHAN_FILE,
+    _COMPAT_SPARSE_SUPER2,
+    _INCOMPAT_64BIT,
+    _INCOMPAT_FLEX_BG,
+    _RO_COMPAT_BIGALLOC,
+    _RO_COMPAT_METADATA_CSUM,
+)
 
 _JBD2_MAGIC = 0xC03B3998
 _JBD2_DESCRIPTOR = 1
@@ -245,7 +254,12 @@ class NativeExt3Image(NativeExt2Image):
 
 
 class NativeExt4Image(NativeExt3Image):
-    """Classic or extent-tree ext4 read-only profile with strict bounds."""
+    """Bounded classic-layout/extent-tree ext4 read-only profile.
+
+    Alternate group layouts and metadata integrity schemes are deliberately
+    rejected. Extent ``i_block`` data is never passed through the classic
+    block-pointer mapper.
+    """
 
     backend_name = "native-ext4-ro"
 
@@ -253,6 +267,32 @@ class NativeExt4Image(NativeExt3Image):
     def _validate_profile(profile) -> None:
         if profile.fs_type != "ext4":
             raise Ext3ReadError("native ext4 reader requires an ext4 profile")
+        if profile.unknown_incompat_features:
+            raise Ext3ReadError(
+                "unknown incompatible ext4 feature flags "
+                f"0x{profile.unknown_incompat_features:08x}"
+            )
+        if profile.unknown_ro_compat_features:
+            raise Ext3ReadError(
+                "unknown read-only-compatible ext4 feature flags "
+                f"0x{profile.unknown_ro_compat_features:08x}"
+            )
+        if profile.feature_incompat & _INCOMPAT_64BIT:
+            raise Ext3ReadError(
+                "ext4 64-bit/group-descriptor layout is not supported by native reader"
+            )
+        if profile.feature_incompat & _INCOMPAT_FLEX_BG:
+            raise Ext3ReadError("ext4 flex_bg group layout is not supported")
+        if profile.feature_ro_compat & _RO_COMPAT_BIGALLOC:
+            raise Ext3ReadError("ext4 bigalloc cluster layout is not supported")
+        if profile.feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
+            raise Ext3ReadError("ext4 metadata checksums are not supported")
+        if profile.feature_compat & (
+            _COMPAT_FAST_COMMIT | _COMPAT_ORPHAN_FILE | _COMPAT_SPARSE_SUPER2
+        ):
+            raise Ext3ReadError(
+                "ext4 fast-commit/orphan/sparse-super2 features are not supported"
+            )
         NativeExt3Image._validate_profile(profile)
 
     def _read_inode(self, number: int) -> _Inode:
@@ -313,8 +353,8 @@ class NativeExt4Image(NativeExt3Image):
         return inode
 
     def _group_descriptor(self, group: int) -> _GroupDescriptor:
-        """Read high descriptor words for the explicitly gated 64-bit profile."""
-        if not self.feature_incompat & 0x0080:
+        """Defensively decode high descriptor words if a future profile enables them."""
+        if not self.feature_incompat & _INCOMPAT_64BIT:
             return super()._group_descriptor(group)
         cached = self._group_cache.get(group)
         if cached is not None and cached.block_bitmap >= (1 << 32):

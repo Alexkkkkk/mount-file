@@ -4,6 +4,7 @@
 import shutil
 import struct
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -99,6 +100,28 @@ def test_external_journal_device_is_rejected_explicitly(tmp_path):
     _make_image(image_path, compat=0x000C, incompat=0x000A)
     with pytest.raises(Ext3ReadError, match="external JBD2"):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+@pytest.mark.parametrize(
+    ("field", "bit", "reason"),
+    [
+        ("feature_incompat", 0x0080, "64-bit/group-descriptor"),
+        ("feature_incompat", 0x0200, "flex_bg"),
+        ("feature_ro_compat", 0x0200, "bigalloc"),
+        ("feature_ro_compat", 0x0400, "metadata checksums"),
+    ],
+)
+def test_ext4_unsupported_layout_profiles_fail_closed(field, bit, reason):
+    profile = SimpleNamespace(
+        fs_type="ext4",
+        unknown_incompat_features=0,
+        unknown_ro_compat_features=0,
+        feature_incompat=0x0040 if field != "feature_incompat" else bit,
+        feature_ro_compat=0x0003 if field != "feature_ro_compat" else 0x0003 | bit,
+        feature_compat=0,
+    )
+    with pytest.raises(Ext3ReadError, match=reason):
+        NativeExt4Image._validate_profile(profile)
 
 
 def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():

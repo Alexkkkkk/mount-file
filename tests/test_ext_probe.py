@@ -111,6 +111,17 @@ def test_dirty_state_and_unknown_incompat_flags_fail_closed():
     )
 
 
+def test_unknown_read_only_compatible_flags_are_reported():
+    profile = probe_ext_superblock(io.BytesIO(_image(ro_compat=0x80000003)))
+
+    assert profile.unknown_ro_compat_features == 0x80000000
+    assert not profile.phase1_ext2_profile_candidate
+    assert any(
+        "unknown read-only-compatible" in reason
+        for reason in profile.write_gate_reasons
+    )
+
+
 def test_64bit_block_count_is_used_for_extent_bounds():
     image = _image(incompat=0x0002 | 0x0080, blocks_high=1)
 
