@@ -124,6 +124,19 @@ def test_ext4_unsupported_layout_profiles_fail_closed(field, bit, reason):
         NativeExt4Image._validate_profile(profile)
 
 
+def test_ext4_metadata_csum_rejection_names_unvalidated_structures():
+    profile = SimpleNamespace(
+        fs_type="ext4",
+        unknown_incompat_features=0,
+        unknown_ro_compat_features=0,
+        feature_incompat=0x0040,
+        feature_ro_compat=0x0003 | 0x0400,
+        feature_compat=0,
+    )
+    with pytest.raises(Ext3ReadError, match="UUID-seeded.*group-descriptor.*extent"):
+        NativeExt4Image._validate_profile(profile)
+
+
 def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
     root = bytearray(60)
     struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)

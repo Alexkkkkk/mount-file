@@ -160,6 +160,18 @@ def _u32(buf: bytes, offset: int) -> int:
     return struct.unpack_from("<I", buf, offset)[0]
 
 
+def _checked_add(left: int, right: int, limit: int, message: str) -> int:
+    if left < 0 or right < 0 or left > limit - right:
+        raise ExtProbeError(message)
+    return left + right
+
+
+def _checked_mul(left: int, right: int, limit: int, message: str) -> int:
+    if left < 0 or right < 0 or (left and right > limit // left):
+        raise ExtProbeError(message)
+    return left * right
+
+
 def _validate_superblock_checksum(
     superblock: bytes, feature_incompat: int, feature_ro_compat: int
 ) -> None:
@@ -196,8 +208,12 @@ def _probe_stream(
     if offset > image_size:
         raise ExtProbeError("filesystem offset is outside the image")
     extent_size = image_size - offset if volume_size is None else int(volume_size)
-    if extent_size < 0 or offset + extent_size > image_size:
-        raise ExtProbeError("selected filesystem extent is outside the image")
+    _checked_add(
+        offset,
+        extent_size,
+        image_size,
+        "selected filesystem extent is outside the image",
+    )
     if extent_size < 2048:
         raise ExtProbeError("selected extent is too small for an ext superblock")
 
@@ -246,7 +262,12 @@ def _probe_stream(
         raise ExtProbeError("invalid ext block-group geometry")
     if inode_size < 128 or inode_size > block_size or inode_size % 4:
         raise ExtProbeError("invalid ext inode size")
-    filesystem_size = blocks_count * block_size
+    filesystem_size = _checked_mul(
+        blocks_count,
+        block_size,
+        extent_size,
+        "ext filesystem exceeds selected partition bounds",
+    )
     if filesystem_size > extent_size:
         raise ExtProbeError("ext filesystem exceeds selected partition bounds")
     if offset + filesystem_size > image_size:
@@ -301,17 +322,47 @@ def _probe_stream(
         reasons.append("block-group size exceeds the ext block bitmap capacity")
     if inodes_per_group > block_size * 8:
         reasons.append("inode-group size exceeds the ext inode bitmap capacity")
-    group_count = (
-        blocks_count - first_data_block + blocks_per_group - 1
-    ) // blocks_per_group
-    inode_group_count = (inodes_count + inodes_per_group - 1) // inodes_per_group
+    group_numerator = _checked_add(
+        blocks_count - first_data_block,
+        blocks_per_group - 1,
+        blocks_count + blocks_per_group,
+        "ext block-group geometry arithmetic overflow",
+    )
+    inode_numerator = _checked_add(
+        inodes_count,
+        inodes_per_group - 1,
+        inodes_count + inodes_per_group,
+        "ext inode-group geometry arithmetic overflow",
+    )
+    group_count = group_numerator // blocks_per_group
+    inode_group_count = inode_numerator // inodes_per_group
     if not 1 <= group_count <= 1_000_000:
         reasons.append("ext block-group count is outside the bounded reader limit")
     if inode_group_count > group_count:
         reasons.append("inode groups exceed ext block groups")
-    gdt_offset = (first_data_block + 1) * block_size
-    gdt_bytes = group_count * group_descriptor_size
-    if gdt_offset < 0 or gdt_bytes < 0 or gdt_offset + gdt_bytes > filesystem_size:
+    gdt_offset = _checked_mul(
+        _checked_add(
+            first_data_block,
+            1,
+            blocks_count + 1,
+            "group descriptor offset arithmetic overflow",
+        ),
+        block_size,
+        filesystem_size,
+        "group descriptor offset exceeds filesystem bounds",
+    )
+    gdt_bytes = _checked_mul(
+        group_count,
+        group_descriptor_size,
+        filesystem_size,
+        "group descriptor table size exceeds filesystem bounds",
+    )
+    if _checked_add(
+        gdt_offset,
+        gdt_bytes,
+        filesystem_size,
+        "group descriptor table exceeds filesystem bounds",
+    ) > filesystem_size:
         reasons.append("group descriptor table exceeds filesystem bounds")
     if block_size not in (1024, 2048, 4096):
         reasons.append("Phase-1 ext2 writer supports only 1, 2 or 4 KiB blocks")

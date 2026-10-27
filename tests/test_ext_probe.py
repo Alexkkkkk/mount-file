@@ -98,6 +98,24 @@ def test_metadata_checksum_profile_requires_a_valid_superblock_crc32c():
         probe_ext_superblock(io.BytesIO(image))
 
 
+def test_metadata_checksum_profile_exposes_no_write_eligibility_for_unknown_layout():
+    image = bytearray(_image(ro_compat=0x0403))
+    superblock = memoryview(image)[1024:2048]
+    superblock[0x175] = 1
+    struct.pack_into("<I", superblock, 0x3FC, ext4_superblock_checksum(bytes(superblock)))
+
+    profile = probe_ext_superblock(io.BytesIO(image))
+    assert not profile.phase1_ext2_profile_candidate
+    assert any("ext4-featured" in reason for reason in profile.write_gate_reasons)
+
+
+def test_probe_rejects_checked_filesystem_size_arithmetic():
+    image = bytearray(_image())
+    struct.pack_into("<I", memoryview(image)[1024:2048], 0x04, 0xFFFFFFFF)
+    with pytest.raises(ExtProbeError, match="partition bounds"):
+        probe_ext_superblock(io.BytesIO(image))
+
+
 def test_dirty_state_and_unknown_incompat_flags_fail_closed():
     profile = probe_ext_superblock(
         io.BytesIO(_image(state=0x0003, incompat=0x40000002))

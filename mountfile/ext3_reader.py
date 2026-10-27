@@ -106,7 +106,10 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("64-bit group layout is not enabled in classic profile")
         if profile.feature_ro_compat & 0x0400:  # METADATA_CSUM
             raise Ext3ReadError(
-                "metadata checksums are not implemented in this profile"
+                "metadata checksums (metadata_csum) are fail-closed: superblock "
+                "CRC32C is validated, "
+                "but UUID-seeded group-descriptor, inode/bitmap, extent and "
+                "checksummed-JBD2 structures are not validated"
             )
 
     def __init__(self, image_path, offset=0, volume_size=None):
@@ -292,7 +295,12 @@ class NativeExt4Image(NativeExt3Image):
             profile.feature_ro_compat & _RO_COMPAT_METADATA_CSUM
             and not _EXT4_METADATA_CSUM_SUPPORTED
         ):
-            raise Ext3ReadError("ext4 metadata checksums are not supported")
+            raise Ext3ReadError(
+                "metadata checksums (metadata_csum) are fail-closed: superblock "
+                "CRC32C is validated, "
+                "but UUID-seeded group-descriptor, inode/bitmap, extent and "
+                "checksummed-JBD2 structures are not validated"
+            )
         if profile.feature_compat & (
             _COMPAT_FAST_COMMIT | _COMPAT_ORPHAN_FILE | _COMPAT_SPARSE_SUPER2
         ):
