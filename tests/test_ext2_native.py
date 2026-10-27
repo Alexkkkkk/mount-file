@@ -206,6 +206,40 @@ def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
     _assert_e2fsck_clean(check_image)
 
 
+@pytest.mark.parametrize("corruption", ["double", "unused-slot"])
+def test_native_ext2_rejects_corrupt_single_indirect_directory_map(
+    tmp_path, corruption
+):
+    image = tmp_path / "corrupt-directory.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024, block_size=1024)
+    writer = NativeExt2ImageWriter(image)
+    writer.mkdir("/grown")
+    entry_size = (8 + 255 + 3) & ~3
+    entries_per_block = (writer.block_size - 24) // entry_size
+    for index in range(12 * entries_per_block + 1):
+        writer.write_file(
+            "/grown/%04d-" % index + "x" * 250,
+            b"",
+        )
+
+    directory_inode = next(
+        item["inode"] for item in writer.list_dir("/") if item["name"] == "grown"
+    )
+    raw = writer._fs._read_inode(directory_inode)
+    indirect_block = writer._fs._u32(raw, 40 + 12 * 4)
+    with image.open("r+b") as stream:
+        if corruption == "double":
+            stream.seek(writer._fs._block_offset(indirect_block))
+            stream.write((indirect_block).to_bytes(4, "little"))
+        else:
+            stream.seek(writer._fs._block_offset(indirect_block) + 8)
+            stream.write((writer._fs._u32(raw, 40)).to_bytes(4, "little"))
+
+    reopened = NativeExt2ImageWriter(image)
+    with pytest.raises(NativeExt2Error, match="indirect (pointer )?block|duplicate"):
+        reopened.list_dir("/grown")
+
+
 def test_native_ext2_requires_explicit_extent_for_nonzero_offset(tmp_path):
     partition = tmp_path / "partition.ext2"
     _make_ext2(partition, size=8 * 1024 * 1024)
