@@ -10,6 +10,7 @@ from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsAttributeSummary,
     NtfsMetadataError,
+    NtfsRun,
     _parse_runlist,
     parse_ntfs_file_name,
     parse_ntfs_index_block,
@@ -171,6 +172,24 @@ def test_mft_record_loader_validates_record_number_and_sequence():
     assert parsed.sequence_number == 3
     with pytest.raises(NtfsMetadataError, match="record number"):
         NativeNtfsMetadataImage.read_mft_record(fake, 41, reference=(3 << 48) | 42)
+
+
+def test_native_ntfs_reopens_stream_before_reading_validated_runs(tmp_path):
+    from types import SimpleNamespace
+
+    image = tmp_path / "ntfs-runs.img"
+    image.write_bytes(bytes(range(256)) * 16)
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.image_path = str(image)
+    reader.offset = 0
+    reader._image_size = image.stat().st_size
+    reader._end = reader._image_size
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_size=256))
+    reader._stream = image.open("rb")
+    reader._stream.close()
+
+    assert reader._read_runs((NtfsRun(1, 2, 2),), 256, 512) == bytes(range(256)) * 2
+    reader.close()
 
 
 def test_parses_bounded_index_root_file_name_entry():

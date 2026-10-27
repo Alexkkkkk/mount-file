@@ -105,6 +105,32 @@ def make_fat32_image(path):
         f.write(label_entry)
 
 
+def test_rejects_non_mirrored_fat32_mode(tmp_path):
+    path = tmp_path / "non-mirrored.img"
+    make_fat32_image(path)
+    image = bytearray(path.read_bytes())
+    struct.pack_into("<H", image, 40, 0x0080)
+    path.write_bytes(image)
+
+    with pytest.raises(Fat32Error, match="non-mirrored"):
+        with path.open("r+b") as handle:
+            Fat32(handle)
+
+
+def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
+    path = tmp_path / "mismatched-fat.img"
+    make_fat32_image(path)
+    image = bytearray(path.read_bytes())
+    image[16] = 2
+    second_fat = (RESERVED + SPF) * BPS
+    image[second_fat + 8] ^= 0x01
+    path.write_bytes(image)
+
+    with pytest.raises(Fat32Error, match="mirrored FAT32 copies"):
+        with path.open("r+b") as handle:
+            Fat32(handle)
+
+
 class TestFat32:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()

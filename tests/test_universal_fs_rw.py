@@ -129,7 +129,10 @@ def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):
         rw.close()
 
 
-@pytest.mark.parametrize("fs_type", ["iso9660", "squashfs", "jffs2", "ubifs"])
+@pytest.mark.parametrize(
+    "fs_type",
+    ["iso9660", "squashfs", "jffs2", "ubifs", "hfsplus", "HFS+", "apfs"],
+)
 def test_inherently_read_only_formats_fail_closed_before_mount(tmp_path, fs_type):
     image = tmp_path / "image.bin"
     image.write_bytes(b"read-only format placeholder")

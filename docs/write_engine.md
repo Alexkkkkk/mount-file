@@ -76,6 +76,10 @@ engine.close()
   `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
   кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
   `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only.
+  Writer принимает только mirrored FAT32 mode с идентичными FAT copies.
+  Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
+  текущий writer обновляет все FAT copies одновременно и не поддерживает
+  active-FAT semantics.
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
   один single-indirect pointer для данных файла и каталогов) использует
   собственный Python writer без `debugfs`; предел файла и каталога —
@@ -98,9 +102,11 @@ engine.close()
   если доступны `mount`/`umount` и соответствующий драйвер. HFS+ и другие
   неподдерживаемые Windows filesystem drivers остаются read-only.
   Имена детектора (`FAT16`, `FAT32`, `HFS+`) нормализуются для mount-helper.
-* ISO9660, SquashFS, JFFS2 и UBIFS объявлены `read-only-format`: чтение и
-  извлечение доступны, но мутации отклоняются до монтирования. Эти форматы
-  нельзя честно сделать обычными RW-ФС без пересборки образа по их спецификации.
+* ISO9660, SquashFS, JFFS2, UBIFS, HFS+ и APFS объявлены
+  `read-only-format` в универсальном RW-фасаде: чтение и извлечение доступны,
+  но мутации отклоняются до монтирования. HFS+ и APFS имеют отдельные
+  read-only adapters; эти форматы нельзя честно сделать обычными RW-ФС без
+  специализированной реализации каталогов, allocation metadata и recovery.
 * Если backend, драйвер или права отсутствуют, операция завершается явной
   ошибкой; фасад не сообщает об успешной записи после молчаливого RO-mount.
 * Вне области действия: физические устройства, таблицы разделов, шифрованные

@@ -58,7 +58,18 @@ log = logging.getLogger("mountfile.universal_fs_rw")
 # filesystem semantics that a loop mount can safely provide.  Refusing a
 # mutation is preferable to mounting them with a misleading ``rw`` option and
 # reporting success after the kernel silently kept the image read-only.
-INHERENTLY_READ_ONLY_FS = frozenset({"iso9660", "iso", "squashfs", "jffs2", "ubifs"})
+INHERENTLY_READ_ONLY_FS = frozenset(
+    {
+        "iso9660",
+        "iso",
+        "squashfs",
+        "jffs2",
+        "ubifs",
+        "hfs",
+        "hfsplus",
+        "apfs",
+    }
+)
 
 
 def _normalise_mount_fs(fs_type: str) -> str:
