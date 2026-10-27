@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import mountfile.macos as macos
+from mountfile import vfs
 
 
 def _volume(tmp_path: Path, marker: bytes, offset: int = 0) -> Path:
@@ -36,6 +37,22 @@ def test_detection_honors_filesystem_offset(tmp_path):
 
     assert macos.detect_macos_filesystem(image, offset=4096) == "HFS+"
     assert macos.detect_macos_filesystem(image) is None
+
+
+@pytest.mark.parametrize(
+    ("marker", "filesystem"),
+    [
+        (macos.HFS_PLUS_SIGNATURE, "HFS+"),
+        (macos.APFS_CONTAINER_SIGNATURE, "APFS"),
+    ],
+)
+def test_vfs_does_not_silently_fallback_for_macos_filesystems(
+    tmp_path, marker, filesystem
+):
+    image = _volume(tmp_path, marker)
+
+    with pytest.raises(vfs.RecognizedFilesystemError, match=filesystem):
+        vfs.open_image_provider(image, volume_size=image.stat().st_size)
 
 
 def test_hfs_requires_optional_pytsk3(monkeypatch, tmp_path):

@@ -358,6 +358,34 @@ def _has_exfat_boot_magic(image_path, offset, volume_size):
         raise TskError(f"cannot inspect image for native exFAT: {exc}") from exc
 
 
+def _detect_macos_filesystem(image_path, offset, volume_size):
+    """Return an explicit macOS filesystem name without opening a backend."""
+    try:
+        offset = int(offset)
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
+            if volume_size <= 0 or offset + volume_size > os.path.getsize(image_path):
+                raise TskError("selected filesystem extent exceeds image bounds")
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset + 1026 > image_size:
+                return None
+            if volume_size is not None and volume_size < 1026:
+                return None
+            stream.seek(offset + 1024)
+            marker = stream.read(2)
+            if marker in (b"H+", b"HX"):
+                return "HFS+"
+            stream.seek(offset + 0x20)
+            if stream.read(4) in (b"NXSB", b"APSB"):
+                return "APFS"
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for macOS filesystem: {exc}") from exc
+    return None
+
+
 def open_image_provider(image_path, offset=0, volume_size=None):
     """Open a read-only provider with fail-closed routing for recognized formats."""
     if _has_ext_superblock_magic(image_path, offset, volume_size):
@@ -433,5 +461,11 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             raise RecognizedFilesystemError(
                 f"native FAT reader declined the FAT profile: {exc}"
             ) from exc
+
+    macos_filesystem = _detect_macos_filesystem(image_path, offset, volume_size)
+    if macos_filesystem:
+        raise RecognizedFilesystemError(
+            f"recognized {macos_filesystem} image requires its explicit read-only adapter"
+        )
 
     return TskImage(image_path, offset=offset)
