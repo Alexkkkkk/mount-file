@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 """Conservative read-only ext3/ext4 profiles.
 
-This module intentionally supports only the classic ext block-pointer layout.
-Extent trees, 64-bit group descriptors, metadata checksums, fast commits and
-other layouts are rejected until their complete validators exist. Journal
-replay is never performed; a journal that is not provably empty is rejected.
+This module intentionally supports only the classic ext block-pointer layout
+plus the bounded ext4 extent profile. 64-bit group descriptors, metadata
+checksums, fast commits and other layouts are rejected until their complete
+validators exist. Journal replay is never written back: it is rejected by
+default and can only be enabled as an explicit in-memory read-only overlay.
 """
 
 from __future__ import annotations
@@ -113,12 +114,14 @@ class NativeExt3Image(NativeExt2Image):
                 "checksummed-JBD2 structures are not validated"
             )
 
-    def __init__(self, image_path, offset=0, volume_size=None):
+    def __init__(self, image_path, offset=0, volume_size=None, *, replay_journal=False):
+        self._journal_overlay: dict[int, bytes] = {}
+        self.journal_replayed = False
         super().__init__(image_path, offset=offset, volume_size=volume_size)
         try:
             self.has_journal = bool(self.feature_compat & _COMPAT_HAS_JOURNAL)
             if self.has_journal:
-                self._validate_empty_journal()
+                self._validate_empty_journal(replay_journal=replay_journal)
         except Ext2ReadError as exc:
             self.close()
             raise Ext3ReadError(f"journal inode/JBD2 validation failed: {exc}") from exc
@@ -205,7 +208,7 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 commit record sequence/type mismatch")
         return commit_logical
 
-    def _validate_empty_journal(self) -> None:
+    def _validate_empty_journal(self, *, replay_journal=False) -> None:
         journal = self._read_inode(8)
         if not journal.is_regular:
             raise Ext3ReadError("journal inode is not a regular file")
@@ -237,12 +240,23 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 ring geometry exceeds journal inode")
         if start != 0 and not first <= start < max_length:
             raise Ext3ReadError("JBD2 start is outside journal ring")
-        # A nonzero start means an uncheckpointed transaction and is never
-        # eligible for read-only browsing.  With start == 0, stale records may
-        # remain in the ring, but only a fully bounded descriptor/data/commit
-        # chain with matching sequence is accepted; no data is replayed.
+        # A nonzero start means an uncheckpointed transaction.  The default
+        # route remains fail-closed; an explicit read-only replay can expose a
+        # bounded in-memory overlay without changing the source image.
         if start != 0:
-            raise Ext3ReadError("JBD2 journal contains an uncheckpointed transaction")
+            if not replay_journal:
+                raise Ext3ReadError(
+                    "JBD2 journal contains an uncheckpointed transaction; "
+                    "pass replay_journal=True for read-only overlay replay"
+                )
+            self._replay_journal(
+                journal,
+                start=start,
+                max_length=max_length,
+                journal_blocks=journal_blocks,
+            )
+            self.journal_replayed = True
+            return
         logical = first
         while logical < max_length:
             block = self._journal_logical_block(journal, logical, journal_blocks)
@@ -261,6 +275,89 @@ class NativeExt3Image(NativeExt2Image):
                 )
                 + 1
             )
+
+    def _replay_journal(self, inode, *, start, max_length, journal_blocks):
+        """Replay classic committed JBD2 records into a read-only overlay.
+
+        Only the old descriptor/data/commit layout is accepted. No revoke or
+        checksum record is interpreted, and the image is never opened for
+        writing. Unsupported records fail closed instead of being guessed.
+        """
+        logical = start
+        transactions = 0
+        while logical < max_length:
+            descriptor = self._journal_logical_block(inode, logical, journal_blocks)
+            if not descriptor.strip(b"\x00"):
+                break
+            magic, record_type, sequence = self._jbd2_header(descriptor)
+            if magic != _JBD2_MAGIC or record_type != _JBD2_DESCRIPTOR:
+                raise Ext3ReadError("invalid JBD2 replay descriptor")
+            cursor = 12
+            targets = []
+            last = False
+            while cursor + 8 <= self.block_size:
+                target, flags = struct.unpack_from(">II", descriptor, cursor)
+                cursor += 8
+                if target == 0 or target >= self.blocks_count:
+                    raise Ext3ReadError("JBD2 replay target is outside filesystem")
+                if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+                    raise Ext3ReadError("unsupported JBD2 replay tag flags")
+                if not flags & _JBD2_TAG_SAME_UUID:
+                    if cursor + 16 > self.block_size:
+                        raise Ext3ReadError("truncated JBD2 replay descriptor UUID")
+                    if descriptor[cursor : cursor + 16] != self.profile.filesystem_uuid:
+                        raise Ext3ReadError("JBD2 replay descriptor UUID mismatch")
+                    cursor += 16
+                targets.append(target)
+                if flags & _JBD2_TAG_LAST:
+                    last = True
+                    break
+            if not targets or not last:
+                raise Ext3ReadError("unterminated JBD2 replay descriptor")
+            data_start = logical + 1
+            commit_logical = data_start + len(targets)
+            if commit_logical >= max_length:
+                raise Ext3ReadError("JBD2 replay transaction exceeds journal bounds")
+            data_blocks = [
+                self._journal_logical_block(inode, data_start + index, journal_blocks)
+                for index in range(len(targets))
+            ]
+            commit = self._journal_logical_block(inode, commit_logical, journal_blocks)
+            commit_magic, commit_type, commit_sequence = self._jbd2_header(commit)
+            if (
+                commit_magic != _JBD2_MAGIC
+                or commit_type != _JBD2_COMMIT
+                or commit_sequence != sequence
+            ):
+                raise Ext3ReadError("JBD2 replay commit does not match descriptor")
+            for target, data in zip(targets, data_blocks):
+                self._journal_overlay[target] = data
+            transactions += 1
+            if transactions > _MAX_JOURNAL_BLOCKS:
+                raise Ext3ReadError("JBD2 replay transaction count is excessive")
+            logical = commit_logical + 1
+
+    def _read_at(self, relative_offset: int, size: int) -> bytes:
+        """Read the image and overlay only committed journal blocks."""
+        data = bytearray(super()._read_at(relative_offset, size))
+        if not self._journal_overlay or not data:
+            return bytes(data)
+        first_block = relative_offset // self.block_size
+        last_block = (relative_offset + size - 1) // self.block_size
+        for block in range(first_block, last_block + 1):
+            replacement = self._journal_overlay.get(block)
+            if replacement is None:
+                continue
+            block_start = block * self.block_size
+            overlap_start = max(relative_offset, block_start)
+            overlap_end = min(relative_offset + size, block_start + self.block_size)
+            source_start = overlap_start - block_start
+            target_start = overlap_start - relative_offset
+            amount = overlap_end - overlap_start
+            data[target_start : target_start + amount] = replacement[
+                source_start : source_start + amount
+            ]
+        return bytes(data)
 
 
 class NativeExt4Image(NativeExt3Image):

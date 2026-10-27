@@ -93,11 +93,20 @@ def open_native_ext2(image_path, offset=0, volume_size=None):
     return NativeExt2Image(image_path, offset=offset, volume_size=volume_size)
 
 
-def open_native_ext3(image_path, offset=0, volume_size=None):
-    """Open the conservative classic-layout ext3/ext4 read-only provider."""
+def open_native_ext3(image_path, offset=0, volume_size=None, *, replay_journal=False):
+    """Open bounded ext3/ext4 read-only access with optional journal overlay.
+
+    ``replay_journal`` is explicit and in-memory only. Automatic VFS routing
+    leaves it disabled, so active journals remain fail-closed by default.
+    """
     profile = probe_ext_superblock(image_path, offset=offset, volume_size=volume_size)
     provider_type = NativeExt4Image if profile.fs_type == "ext4" else NativeExt3Image
-    return provider_type(image_path, offset=offset, volume_size=volume_size)
+    return provider_type(
+        image_path,
+        offset=offset,
+        volume_size=volume_size,
+        replay_journal=replay_journal,
+    )
 
 
 def volume_size_for_offset(image_path, offset):

@@ -44,7 +44,11 @@ reader-ом case-insensitive lookup; для ext namespace он остаётся 
 записи. Пустой `write_capabilities` означает именно read-only native profile,
 а не скрытый переход на `debugfs`, `ntfs-3g` или системный mount.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
-другим parser-ом. Чтение не разрешает запись или replay/recovery.
+другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
+проверенного classic JBD2 существует только явный `open_native_ext3(...,
+replay_journal=True)`: он строит bounded in-memory overlay из committed
+descriptor/data/commit records, не изменяет исходный образ и отклоняет revoke,
+checksum, неизвестные feature flags, повреждённые или неполные транзакции.
 
 `pytsk3` остаётся optional compatibility fallback только для форматов, которые
 native routing не распознал. Установка базового MountFile не требует `pytsk3`.

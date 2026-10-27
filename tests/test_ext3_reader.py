@@ -81,6 +81,28 @@ def test_journal_with_nonzero_start_is_recovery_required(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
+def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
+    image_path = tmp_path / "replay-journal.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    payload = bytes([0xA7]) * 1024
+    image[40 * 1024 + 2 * 1024 : 40 * 1024 + 3 * 1024] = payload
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+
+    provider = NativeExt3Image(
+        image_path,
+        volume_size=BLOCKS_COUNT * 1024,
+        replay_journal=True,
+    )
+    try:
+        assert provider.journal_replayed is True
+        assert provider._read_at(21 * 1024, 1024) == payload
+        assert image_path.read_bytes()[21 * 1024 : 22 * 1024] != payload
+    finally:
+        provider.close()
+
+
 def test_journal_with_unknown_feature_bits_fails_closed(tmp_path):
     image_path = tmp_path / "unsupported-journal-feature.img"
     _make_clean_journal_image(image_path)
