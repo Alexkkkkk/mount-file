@@ -217,6 +217,10 @@ class NativeExfatWriter:
             stage = self._copy_stage()
             try:
                 reader = self._reader(stage)
+                try:
+                    reader.system_metadata()
+                except ExfatReadError as exc:
+                    raise ExfatWriteError(str(exc)) from exc
                 _cluster, (_name, entry_pos, _total, stream_entry, _raw) = self._locate(
                     reader, path
                 )
@@ -297,6 +301,10 @@ class NativeExfatWriter:
             stage = self._copy_stage()
             try:
                 reader = self._reader(stage)
+                try:
+                    reader.system_metadata()
+                except ExfatReadError as exc:
+                    raise ExfatWriteError(str(exc)) from exc
                 _cluster, record = self._locate(reader, src)
                 if any(
                     item[0] == new_name

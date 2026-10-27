@@ -117,18 +117,28 @@ def _tree_image(path):
     region[: 24 * 512] = _region()
     struct.pack_into("<I", region, 24 * 512 + 2 * 4, 0xFFFFFFFF)
     struct.pack_into("<I", region, 24 * 512 + 3 * 4, 0xFFFFFFFF)
+    struct.pack_into("<I", region, 24 * 512 + 4 * 4, 0xFFFFFFFF)
+    struct.pack_into("<I", region, 24 * 512 + 5 * 4, 0xFFFFFFFF)
     root = bytearray(512)
-    root[0] = 0x85
-    root[1] = 2
-    root[32] = 0xC0
-    root[35] = 9
-    struct.pack_into("<I", root, 52, 3)
+    root[0] = 0x81
+    struct.pack_into("<I", root, 20, 4)
+    struct.pack_into("<Q", root, 24, 512)
+    root[32] = 0x82
+    struct.pack_into("<I", root, 52, 5)
+    struct.pack_into("<Q", root, 56, 512)
+    root[64] = 0x85
+    root[65] = 2
+    root[96] = 0xC0
+    root[99] = 9
+    struct.pack_into("<I", root, 116, 3)
     payload = b"hello exFAT"
-    struct.pack_into("<Q", root, 56, len(payload))
-    root[64] = 0xC1
-    root[66:84] = "HELLO.TXT".encode("utf-16le")
+    struct.pack_into("<Q", root, 120, len(payload))
+    root[128] = 0xC1
+    root[130:148] = "HELLO.TXT".encode("utf-16le")
     region[32 * 512 : 33 * 512] = root
     region[33 * 512 : 33 * 512 + len(payload)] = payload
+    region[34 * 512 : 35 * 512] = b"\x0f" + bytes(511)
+    region[35 * 512 : 36 * 512] = bytes(512)
     path.write_bytes(region)
     return payload
 
@@ -168,6 +178,17 @@ def test_universal_rw_exposes_limited_exfat_strategy(tmp_path):
         assert backend.read("/HELLO.TXT") == b"adapter"
     finally:
         backend.close()
+
+
+def test_exfat_writer_fails_closed_without_system_metadata(tmp_path):
+    path = tmp_path / "exfat-no-metadata.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    raw[32 * 512] = 0
+    path.write_bytes(raw)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    with pytest.raises(ExfatWriteError, match="allocation bitmap entry is missing"):
+        writer.write_file("/HELLO.TXT", b"blocked")
 
 
 @pytest.mark.parametrize("mutate", ["signature", "checksum", "heap"])

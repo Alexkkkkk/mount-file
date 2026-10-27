@@ -215,6 +215,58 @@ class NativeExfatImage:
             pos += total
         return entries
 
+    def system_metadata(self):
+        """Return and validate the mandatory allocation bitmap/upcase entries."""
+        raw = b"".join(
+            self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
+            for item in self._chain(self.profile.root_cluster, no_fat_chain=False)
+        )
+        bitmap = None
+        upcase = None
+        for pos in range(0, len(raw) - 31, 32):
+            kind = raw[pos]
+            if kind == 0:
+                break
+            if kind == 0x81 and bitmap is None:
+                bitmap = (
+                    raw[pos + 1],
+                    struct.unpack_from("<I", raw, pos + 20)[0],
+                    struct.unpack_from("<Q", raw, pos + 24)[0],
+                )
+            elif kind == 0x82 and upcase is None:
+                upcase = (
+                    struct.unpack_from("<I", raw, pos + 4)[0],
+                    struct.unpack_from("<I", raw, pos + 20)[0],
+                    struct.unpack_from("<Q", raw, pos + 24)[0],
+                )
+        if bitmap is None:
+            raise ExfatReadError("exFAT allocation bitmap entry is missing")
+        if upcase is None:
+            raise ExfatReadError("exFAT upcase table entry is missing")
+        bitmap_flags, bitmap_cluster, bitmap_size = bitmap
+        if bitmap_flags & 0xFE or bitmap_size < (self.profile.cluster_count + 7) // 8:
+            raise ExfatReadError("exFAT allocation bitmap geometry is invalid")
+        self._read_stream(bitmap_cluster, bitmap_size, False)
+        upcase_checksum, upcase_cluster, upcase_size = upcase
+        if (
+            upcase_size == 0
+            or upcase_size > self.profile.cluster_count * self.profile.cluster_size
+        ):
+            raise ExfatReadError("exFAT upcase table size is invalid")
+        upcase_data = self._read_stream(upcase_cluster, upcase_size, False)
+        checksum = 0
+        for value in upcase_data:
+            checksum = ((checksum >> 1) | ((checksum & 1) << 31)) & 0xFFFFFFFF
+            checksum = (checksum + value) & 0xFFFFFFFF
+        if checksum != upcase_checksum:
+            raise ExfatReadError("exFAT upcase table checksum mismatch")
+        return {
+            "bitmap_cluster": bitmap_cluster,
+            "bitmap_size": bitmap_size,
+            "upcase_cluster": upcase_cluster,
+            "upcase_size": upcase_size,
+        }
+
     @staticmethod
     def _parts(path):
         if not isinstance(path, str) or not path.startswith("/"):
