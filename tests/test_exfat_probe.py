@@ -180,9 +180,7 @@ def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):
         provider.close()
 
 
-def test_native_exfat_writer_supports_bounded_growth_and_rejects_recursive_delete(
-    tmp_path,
-):
+def test_native_exfat_writer_deletes_nonempty_files(tmp_path):
     path = tmp_path / "exfat-writer-limits.img"
     _tree_image(path)
     writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
@@ -193,10 +191,38 @@ def test_native_exfat_writer_supports_bounded_growth_and_rejects_recursive_delet
         assert provider.read_file("/HELLO.TXT") == b"shrunk"
     finally:
         provider.close()
-    with pytest.raises(ExfatWriteError, match="non-empty file"):
-        writer.delete("/HELLO.TXT")
-    with pytest.raises(ExfatWriteError, match="recursive"):
-        writer.delete("/HELLO.TXT", recursive=True)
+    writer.delete("/HELLO.TXT")
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        reader.system_metadata()
+        assert reader.list_dir("/") == []
+    finally:
+        reader.close()
+
+
+def test_native_exfat_writer_recursively_deletes_directory_tree(tmp_path):
+    path = tmp_path / "exfat-recursive-delete.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.mkdir("/DIR")
+    writer.write_file("/DIR/FILE.TXT", b"x" * 700)
+    writer.mkdir("/DIR/SUB")
+    writer.write_file("/DIR/SUB/DEEP.TXT", b"nested data")
+    before = path.read_bytes()
+
+    with pytest.raises(ExfatWriteError, match="non-empty directory"):
+        writer.delete("/DIR")
+    assert path.read_bytes() == before
+
+    writer.delete("/DIR", recursive=True)
+    reader = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        reader.system_metadata()
+        assert [item["name"] for item in reader.list_dir("/")] == ["HELLO.TXT"]
+        with pytest.raises(FileNotFoundError):
+            reader._find("/DIR")
+    finally:
+        reader.close()
 
 
 def test_native_exfat_writer_creates_mkdirs_and_deletes_empty_entries(tmp_path):

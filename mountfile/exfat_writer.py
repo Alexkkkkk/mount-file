@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Transactional, bounded staged exFAT writer.
 
-The writer intentionally supports only operations that fit in an existing
- directory-chain and have fully known allocation metadata.  Every mutation is
-made on a complete image copy, read-back validated, and committed only after a
-source extent hash check.  Directory growth, recursive deletion and unknown
-metadata fail closed.
+The writer intentionally supports only operations with fully known allocation
+metadata. Every mutation is made on a complete image copy, read-back validated,
+and committed only after a source extent hash check. Unsupported profiles fail
+closed.
 """
 
 from __future__ import annotations
@@ -274,6 +273,101 @@ class NativeExfatWriter:
         if meta["bitmap_size"] < (reader.profile.cluster_count + 7) // 8:
             raise ExfatWriteError("exFAT allocation bitmap is too small")
         return meta
+
+    def _allocation_owners(self, reader, meta):
+        owners = {}
+
+        def claim(chain, owner):
+            for cluster in chain:
+                previous = owners.get(cluster)
+                if previous is not None:
+                    raise ExfatWriteError(
+                        f"exFAT cluster {cluster} is shared by {previous} and {owner}"
+                    )
+                owners[cluster] = owner
+
+        def checked_chain(first_cluster, size, no_fat_chain):
+            try:
+                return reader._chain(first_cluster, size, no_fat_chain=no_fat_chain)
+            except ExfatReadError as exc:
+                raise ExfatWriteError(str(exc)) from exc
+
+        claim(checked_chain(reader.profile.root_cluster, 0, False), "root directory")
+        claim(
+            checked_chain(meta["bitmap_cluster"], meta["bitmap_size"], False),
+            "allocation bitmap",
+        )
+        claim(
+            checked_chain(meta["upcase_cluster"], meta["upcase_size"], False),
+            "up-case table",
+        )
+
+        pending = [("/", reader.profile.root_cluster, 0)]
+        visited_directories = {reader.profile.root_cluster}
+        scanned_entries = 0
+        cluster_size = reader.profile.cluster_size
+        while pending:
+            directory_path, directory_cluster, depth = pending.pop()
+            if depth > 128:
+                raise ExfatWriteError("exFAT directory tree exceeds depth limit")
+            try:
+                records = self._directory_records(reader, directory_cluster)
+            except ExfatReadError as exc:
+                raise ExfatWriteError(str(exc)) from exc
+            names = set()
+            for record in records:
+                scanned_entries += 1
+                if scanned_entries > 100_000:
+                    raise ExfatWriteError("exFAT allocation scan exceeds entry limit")
+                name, _position, _total, stream, entry_set = record
+                if name in names or name in (".", ".."):
+                    raise ExfatWriteError(
+                        "exFAT directory has an unsafe duplicate name"
+                    )
+                names.add(name)
+                if "/" in name or "\\" in name:
+                    raise ExfatWriteError("exFAT directory has an unsafe filename")
+                path = (
+                    directory_path.rstrip("/") + "/" + name
+                    if directory_path != "/"
+                    else "/" + name
+                )
+                attributes = struct.unpack_from("<H", entry_set, 4)[0]
+                is_directory = bool(attributes & 0x10)
+                no_fat_chain = bool(stream[1] & 0x02)
+                valid_data_length = struct.unpack_from("<Q", stream, 8)[0]
+                first_cluster = struct.unpack_from("<I", stream, 20)[0]
+                size = struct.unpack_from("<Q", stream, 24)[0]
+                if valid_data_length > size:
+                    raise ExfatWriteError("exFAT ValidDataLength exceeds DataLength")
+                if is_directory:
+                    if (
+                        not first_cluster
+                        or not size
+                        or size % cluster_size
+                        or valid_data_length != size
+                    ):
+                        raise ExfatWriteError(
+                            "exFAT directory stream lengths are inconsistent"
+                        )
+                    chain = checked_chain(first_cluster, size, no_fat_chain)
+                    if len(chain) * cluster_size != size:
+                        raise ExfatWriteError(
+                            "exFAT directory length disagrees with its cluster chain"
+                        )
+                    claim(chain, path)
+                    if first_cluster in visited_directories:
+                        raise ExfatWriteError("exFAT directory tree contains a cycle")
+                    visited_directories.add(first_cluster)
+                    pending.append((path, first_cluster, depth + 1))
+                elif size:
+                    chain = checked_chain(first_cluster, size, no_fat_chain)
+                    claim(chain, path)
+                elif first_cluster or valid_data_length:
+                    raise ExfatWriteError(
+                        "empty exFAT file has a non-empty stream allocation"
+                    )
+        return owners
 
     def _bitmap(self, stream, reader, meta):
         return bytearray(
@@ -751,44 +845,88 @@ class NativeExfatWriter:
         self._mutate("mkdir", action)
 
     def delete(self, path, recursive=False):
-        if recursive:
-            raise ExfatWriteError("bounded exFAT delete refuses recursive removal")
+        parts = self._parts(path)
+        canonical_path = "/" + "/".join(parts)
 
         def action(reader, stage):
             meta = self._metadata(reader)
-            directory, record = self._locate(reader, path)
-            entry = reader._find(path)
-            if entry.is_dir and self._directory_records(reader, entry.first_cluster):
-                raise ExfatWriteError(
-                    "bounded exFAT delete refuses non-empty directory"
-                )
-            if not entry.is_dir and entry.size:
-                raise ExfatWriteError("bounded exFAT delete refuses non-empty file")
+            owners = self._allocation_owners(reader, meta)
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
-                chain = []
-                if entry.first_cluster:
-                    chain = reader._chain(
-                        entry.first_cluster,
-                        reader.profile.cluster_size if entry.is_dir else entry.size,
-                        no_fat_chain=entry.no_fat_chain,
-                    )
-                for cluster in chain:
-                    self._set_allocated(bitmap, cluster, False)
-                    self._fat_write(stream, reader, cluster, 0)
-                # 0x05 marks the primary entry deleted.  Keep the secondary
-                # slots intact: zeroing the whole set would create a 0x00
-                # terminator and make valid entries after it unreachable.
-                self._write_rel(
-                    stream, self._entry_offset(reader, directory, record[1]), b"\x05"
-                )
+
+                def remove_entry(target, depth=0):
+                    if depth > 128:
+                        raise ExfatWriteError(
+                            "recursive exFAT delete exceeds depth limit"
+                        )
+                    directory, record = self._locate(reader, target)
+                    entry = reader._find(target)
+                    if entry.is_dir:
+                        children = self._directory_records(reader, entry.first_cluster)
+                        if children and not recursive:
+                            raise ExfatWriteError(
+                                "bounded exFAT delete refuses non-empty directory"
+                            )
+                        valid_data_length = struct.unpack_from("<Q", record[3], 8)[0]
+                        chain = reader._chain(
+                            entry.first_cluster,
+                            entry.size,
+                            no_fat_chain=entry.no_fat_chain,
+                        )
+                        if (
+                            not entry.size
+                            or entry.size % reader.profile.cluster_size
+                            or valid_data_length != entry.size
+                            or len(chain) * reader.profile.cluster_size != entry.size
+                        ):
+                            raise ExfatWriteError(
+                                "exFAT directory stream lengths are inconsistent"
+                            )
+                        for child in children:
+                            child_path = target.rstrip("/") + "/" + child[0]
+                            remove_entry(child_path, depth + 1)
+                    elif entry.size:
+                        chain = reader._chain(
+                            entry.first_cluster,
+                            entry.size,
+                            no_fat_chain=entry.no_fat_chain,
+                        )
+                    else:
+                        if entry.first_cluster:
+                            raise ExfatWriteError(
+                                "empty exFAT file has a cluster allocation"
+                            )
+                        chain = []
+
+                    for cluster in chain:
+                        if owners.get(cluster) != target:
+                            raise ExfatWriteError(
+                                "refusing to free an unowned exFAT cluster"
+                            )
+                        self._set_allocated(bitmap, cluster, False)
+                        self._fat_write(stream, reader, cluster, 0)
+
+                    relative = self._entry_offset(reader, directory, record[1])
+                    for offset in range(0, record[2], 32):
+                        entry_type = record[4][offset]
+                        if not entry_type & 0x80:
+                            raise ExfatWriteError(
+                                "exFAT entry set contains an inactive secondary"
+                            )
+                        self._write_rel(
+                            stream,
+                            relative + offset,
+                            bytes([entry_type & 0x7F]),
+                        )
+
+                remove_entry(canonical_path)
                 self._write_bitmap(stream, reader, meta, bitmap)
                 stream.flush()
                 os.fsync(stream.fileno())
             validated = self._reader(stage)
             try:
                 try:
-                    validated._find(path)
+                    validated._find(canonical_path)
                 except FileNotFoundError:
                     pass
                 else:

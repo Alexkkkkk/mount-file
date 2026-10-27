@@ -178,6 +178,9 @@ Native exFAT writer сериализует мутации через скрыт�
 каталога также синхронно меняет `ValidDataLength`/`DataLength` в родительской записи
 и пересчитывает checksum. Ограничения объёма и ошибки выделения остаются fail-closed.
 Семантика полей соответствует [Microsoft exFAT specification](https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification).
+Удаление файлов освобождает их allocation chains; непустой каталог удаляется только
+с `recursive=True`. Перед освобождением writer проверяет владельцев кластеров по
+дереву и отклоняет общие или противоречивые allocation chains.
 
 ## NTFS boot-sector probe (read-only groundwork)
 
