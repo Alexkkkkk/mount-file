@@ -2126,8 +2126,10 @@ class UniversalFSRW:
                 or off + volume_size > image_size
             ):
                 raise ValueError("explicit volume_size exceeds image bounds")
-            if candidate is not None and candidate.size and volume_size > int(
-                candidate.size
+            if (
+                candidate is not None
+                and candidate.size
+                and volume_size > int(candidate.size)
             ):
                 raise ValueError("explicit volume_size exceeds detected extent")
         elif candidate is not None and candidate.size:
