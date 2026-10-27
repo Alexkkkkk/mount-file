@@ -206,7 +206,11 @@ class NativeExfatImage:
             stream = raw[pos + 32 : pos + 64]
             if stream[0] != 0xC0:
                 raise ExfatReadError("exFAT file entry lacks stream extension")
+            if stream[1] & ~0x03:
+                raise ExfatReadError("exFAT stream extension has reserved flags")
             name_length = stream[3]
+            if name_length == 0 or name_length > 15 * (secondary_count - 1):
+                raise ExfatReadError("exFAT filename length exceeds entry set")
             first_cluster = struct.unpack_from("<I", stream, 20)[0]
             size = struct.unpack_from("<Q", stream, 24)[0]
             no_fat_chain = bool(stream[1] & 0x02)

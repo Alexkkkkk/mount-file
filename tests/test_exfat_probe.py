@@ -240,6 +240,33 @@ def test_native_exfat_reader_rejects_entry_set_checksum_corruption(tmp_path):
         provider.close()
 
 
+@pytest.mark.parametrize(
+    ("relative", "value", "message"),
+    [
+        (1, 0x80, "reserved flags"),
+        (3, 16, "filename length"),
+    ],
+)
+def test_native_exfat_reader_rejects_malformed_stream_extension(
+    tmp_path, relative, value, message
+):
+    path = tmp_path / "exfat-malformed-stream.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    raw[32 * 512 + 96 + relative] = value
+    entry_start = 32 * 512 + 64
+    entry_set = bytearray(raw[entry_start : entry_start + 96])
+    struct.pack_into("<H", entry_set, 2, _entry_set_checksum(entry_set))
+    raw[entry_start : entry_start + 96] = entry_set
+    path.write_bytes(raw)
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match=message):
+            provider.list_dir("/")
+    finally:
+        provider.close()
+
+
 def test_native_exfat_writer_rejects_bitmap_fat_mismatch(tmp_path):
     path = tmp_path / "exfat-bitmap-fat-mismatch.img"
     _tree_image(path)
