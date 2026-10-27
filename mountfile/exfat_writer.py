@@ -18,8 +18,8 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 
 
 class ExfatWriteError(RuntimeError):

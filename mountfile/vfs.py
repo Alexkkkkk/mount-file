@@ -21,10 +21,10 @@ from __future__ import annotations
 import os
 import time
 
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
-from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.fat_reader import FatReadError, NativeFatImage
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
