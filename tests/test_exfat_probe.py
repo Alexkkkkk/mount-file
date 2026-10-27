@@ -70,6 +70,17 @@ def test_vfs_probe_uses_partition_offset(tmp_path):
     assert profile.partition_offset == len(prefix)
 
 
+def test_vfs_refuses_to_hide_exfat_probe_only_profile_behind_pytsk3(tmp_path):
+    region = _region()
+    path = tmp_path / "exfat.img"
+    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+    with pytest.raises(
+        vfs.RecognizedFilesystemError,
+        match="native exFAT tree reader is not enabled",
+    ):
+        vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+
+
 @pytest.mark.parametrize("mutate", ["signature", "checksum", "heap"])
 def test_rejects_corrupt_or_unsafe_boot_region(mutate):
     region = bytearray(_region())
