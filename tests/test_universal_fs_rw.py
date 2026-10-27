@@ -1,6 +1,7 @@
 import io
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +110,44 @@ def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):
     image.write_bytes(b"not a filesystem")
     with pytest.raises(RuntimeError, match="no filesystem detected"):
         UniversalFSRW(image, auto_backup=False)
+
+
+def test_recognized_fat_profile_does_not_fall_through_to_mount_writer(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "malformed-fat.img"
+    image.write_bytes(b"not a valid FAT volume".ljust(512, b"\x00"))
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [SimpleNamespace(fstype="FAT32", offset=0, size=512)],
+    )
+    monkeypatch.setattr(
+        universal_fs_rw,
+        "LoopMountRW",
+        lambda *_args, **_kwargs: pytest.fail("unexpected system mount fallback"),
+    )
+
+    with pytest.raises(RuntimeError, match="selected native profile was declined"):
+        UniversalFSRW(image, auto_backup=False)
+
+
+def test_legacy_mount_fallback_requires_explicit_opt_in(tmp_path, monkeypatch):
+    image = tmp_path / "legacy.img"
+    image.write_bytes(b"legacy volume".ljust(512, b"\x00"))
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [SimpleNamespace(fstype="hfs+", offset=0, size=512)],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "hfs+")
+
+    with pytest.raises(RuntimeError, match="legacy mount fallback is disabled"):
+        UniversalFSRW(image, auto_backup=False)
+
+    fs = UniversalFSRW(image, auto_backup=False, allow_legacy_mount=True)
+    try:
+        assert isinstance(fs.backend, LoopMountRW)
+    finally:
+        fs.close()
 
 
 def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):

@@ -2061,7 +2061,11 @@ class UniversalFSRW:
     """
 
     def __init__(
-        self, image: Path, offset: int | None = None, auto_backup: bool = True
+        self,
+        image: Path,
+        offset: int | None = None,
+        auto_backup: bool = True,
+        allow_legacy_mount: bool = False,
     ):
         self.image = Path(image)
         self.offset = offset
@@ -2069,6 +2073,7 @@ class UniversalFSRW:
         self.journal = RWJournal(self.image)
         self.backup = ImageBackup(self.image)
         self._auto_backup = auto_backup
+        self.allow_legacy_mount = bool(allow_legacy_mount)
         self._backup_path: Path | None = None
         self._open()
 
@@ -2109,12 +2114,14 @@ class UniversalFSRW:
         # ``NTFS`` while the backend table is lowercase, so the match below
         # must be case-insensitive.
         fs_type_lower = str(fs_type).lower()
-        for cls, types in [
+        writer_types = [
             (NativeExfatRW, ("exfat",)),
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
-            (NtfsRW, ("ntfs",)),
-        ]:
+        ]
+        if self.allow_legacy_mount:
+            writer_types.append((NtfsRW, ("ntfs",)))
+        for cls, types in writer_types:
             if fs_type_lower.startswith(types):
                 try:
                     if cls in (Ext234RW, NativeExfatRW):
@@ -2137,6 +2144,20 @@ class UniversalFSRW:
                             "refusing unsupported ext profile without an explicit "
                             "legacy compatibility backend: %s" % e
                         ) from e
+                    raise RuntimeError(
+                        "refusing filesystem write because the selected native "
+                        "profile was declined: %s" % e
+                    ) from e
+        if fs_type_lower.startswith("ntfs") and not self.allow_legacy_mount:
+            raise RuntimeError(
+                "native NTFS writes are not implemented; pass "
+                "allow_legacy_mount=True only for the explicit compatibility backend"
+            )
+        if not self.allow_legacy_mount:
+            raise RuntimeError(
+                "no native write profile for %s; legacy mount fallback is disabled"
+                % fs_type
+            )
         # Last resort remains opt-in through an actually detected filesystem.
         try:
             self.backend = LoopMountRW(self.image, off, fs_type)

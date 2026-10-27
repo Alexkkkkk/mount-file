@@ -86,10 +86,11 @@ engine.close()
   Он staging-копирует и commit-ит ровно filesystem extent; `chmod`/`chown`/
   `symlink` остаются за этим compatibility API.
 
-* NTFS — через `ntfs-3g` на Linux или системный файловый драйвер Windows через
-  ImDisk. На Windows требуется отдельно установленный ImDisk Virtual Disk
-  Driver и запуск MountFile от имени администратора; если одно из условий не
-  выполнено, GUI показывает точную причину и не предлагает сохранение в образ.
+* NTFS — native bounded reader is available through the VFS, but native NTFS
+  writes are not implemented. The `UniversalFSRW` facade refuses NTFS writes by
+  default; the old `ntfs-3g`/ImDisk compatibility backend is reachable only with
+  the explicit `allow_legacy_mount=True` option. This compatibility path is not
+  the issue #182 native writer and retains its driver/privilege requirements.
 
 * exFAT — через ImDisk и системный Windows filesystem driver на
   Windows (те же требования установки и прав); на Linux — через `LoopMountRW`,
@@ -99,6 +100,14 @@ engine.close()
 * ISO9660, SquashFS, JFFS2 и UBIFS объявлены `read-only-format`: чтение и
   извлечение доступны, но мутации отклоняются до монтирования. Эти форматы
   нельзя честно сделать обычными RW-ФС без пересборки образа по их спецификации.
+* `Fat32RW` receives and enforces the selected volume extent. It rejects a BPB
+  whose declared size exceeds that extent and checks every relative read/write
+  against the selected boundary. At nonzero offsets a caller must supply an
+  explicit `volume_size`.
+* `UniversalFSRW` is default-deny for unsupported profiles. System/mount-based
+  fallback is disabled unless a caller explicitly opts into
+  `allow_legacy_mount=True`; a recognized filesystem declined by its native
+  provider is never silently redirected to a different writer.
 * Если backend, драйвер или права отсутствуют, операция завершается явной
   ошибкой; фасад не сообщает об успешной записи после молчаливого RO-mount.
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
