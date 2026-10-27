@@ -3,9 +3,11 @@
 
 Phase 1 supports clean, unjournaled ext2 filesystems using block bitmaps,
 32-byte group descriptors, the FILETYPE directory-entry format, direct and
-single-indirect file data pointers, and no indexed directories. Mutations are
-staged against a copy of the selected filesystem extent and are committed only
-after structural read-back validation. This module does not claim ext3/ext4 support.
+single-indirect data pointers for files and directories, and no indexed
+directories. Sparse and double/triple-indirect objects remain unsupported.
+Mutations are staged against a copy of the selected filesystem extent and are
+committed only after structural read-back validation. This module does not
+claim ext3/ext4 support.
 """
 
 from __future__ import annotations
@@ -711,7 +713,7 @@ class _Ext2FS:
         size = self._u32(raw, 4)
         if size % self.block_size:
             raise NativeExt2Error("ext2 directory size is not block-aligned")
-        blocks = self._inode_blocks(raw)
+        blocks = self._inode_blocks(raw, allow_indirect=True)
         if len(blocks) * self.block_size != size:
             raise NativeExt2Error("ext2 directory size/pointer count mismatch")
         found = []
@@ -879,20 +881,42 @@ class _Ext2FS:
                     return
                 cursor += rec_len
         current_blocks = len(blocks)
-        if current_blocks >= _DIRECT_BLOCKS:
-            raise NativeExt2Error(
-                "ext2 directory needs indirect blocks; unsupported in phase 1"
-            )
+        if current_blocks >= self._max_file_blocks():
+            raise NativeExt2Error("ext2 directory exceeds single-indirect capacity")
         preferred = (parent - 1) // self.inodes_per_group
+        indirect_block = self._u32(parent_raw, 40 + _DIRECT_BLOCKS * 4)
+        new_indirect = False
+        pointer_table = None
+        if current_blocks >= _DIRECT_BLOCKS:
+            if indirect_block:
+                pointer_table = bytearray(self._read_block(indirect_block))
+            else:
+                indirect_block = self._allocate_block(preferred)
+                new_indirect = True
+                pointer_table = bytearray(self.block_size)
+            pointer_index = current_blocks - _DIRECT_BLOCKS
+            pointer_offset = pointer_index * 4
+            if pointer_offset + 4 > self.block_size:
+                raise NativeExt2Error("ext2 directory single-indirect table is full")
+            if self._u32(pointer_table, pointer_offset):
+                raise NativeExt2UnsafeError(
+                    "ext2 directory indirect table has a nonzero unused pointer"
+                )
         new_block = self._allocate_block(preferred)
         buf = self._make_dirent(inode, self.block_size, name, file_type)
         self._write_block(new_block, buf)
-        struct.pack_into("<I", parent_raw, 40 + current_blocks * 4, new_block)
+        if current_blocks < _DIRECT_BLOCKS:
+            struct.pack_into("<I", parent_raw, 40 + current_blocks * 4, new_block)
+        else:
+            struct.pack_into("<I", pointer_table, pointer_offset, new_block)
+            self._write_block(indirect_block, bytes(pointer_table))
+            struct.pack_into("<I", parent_raw, 40 + _DIRECT_BLOCKS * 4, indirect_block)
         self._put32(parent_raw, 4, self._u32(parent_raw, 4) + self.block_size)
         self._put32(
             parent_raw,
             28,
-            self._u32(parent_raw, 28) + self.block_size // 512,
+            self._u32(parent_raw, 28)
+            + (self.block_size // 512) * (2 if new_indirect else 1),
         )
         self._touch_inode(parent_raw)
         self._write_inode(parent, parent_raw)
@@ -1061,8 +1085,8 @@ class _Ext2FS:
         else:
             if self._u16(raw, 26) != 1:
                 raise NativeExt2Error("hard-linked files are not deleted in phase 1")
-        blocks = self._inode_blocks(raw, allow_indirect=not is_dir)
-        indirect_block = self._u32(raw, 40 + _DIRECT_BLOCKS * 4) if not is_dir else 0
+        blocks = self._inode_blocks(raw, allow_indirect=True)
+        indirect_block = self._u32(raw, 40 + _DIRECT_BLOCKS * 4)
         self._remove_entry(parent, entry)
         for block in blocks:
             self._free_block(block)

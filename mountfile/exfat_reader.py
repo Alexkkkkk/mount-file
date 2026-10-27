@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
 class ExfatReadError(ValueError):
@@ -35,7 +36,7 @@ class _Entry:
     no_fat_chain: bool
 
 
-class NativeExfatImage:
+class NativeExfatImage(ReadOnlyVFSStatMixin):
     """Read-only exFAT provider for a validated bounded volume."""
 
     backend_name = "native-exfat-ro"

@@ -17,6 +17,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
+
 
 class FatReadError(ValueError):
     """The selected FAT profile or requested read is invalid or unsupported."""
@@ -63,8 +65,10 @@ class _Entry:
     date: str
 
 
-class NativeFatImage:
+class NativeFatImage(ReadOnlyVFSStatMixin):
     """Read-only VFS provider for one bounded FAT12/16/32 filesystem."""
+
+    case_insensitive_paths = True
 
     def __init__(self, image_path, offset=0, volume_size=None):
         self.image_path = str(image_path)

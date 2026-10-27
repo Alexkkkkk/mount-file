@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
-"""Conservative, bounded NTFS metadata validation.
+"""Conservative, bounded, read-only NTFS metadata and tree provider.
 
-This module is deliberately read-only. It validates enough of the boot region,
-MFT mirror and FILE-record attribute stream to establish a safe metadata profile,
-but it does not expose a filesystem tree and never authorizes writes.
+The accepted profile validates the boot region, MFT records and fixups,
+attributes/runlists, directory indexes, volume state and bounded $LogFile
+restart metadata before allowing list/stat/read-range operations. Recovery,
+log replay and every native NTFS write operation remain disabled.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from mountfile.ntfs_probe import (
     parse_ntfs_boot_sector,
     probe_ntfs_boot_sector,
 )
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 _ATTRIBUTE_END = 0xFFFFFFFF
 _ATTRIBUTE_LIST = 0x20
@@ -160,7 +162,12 @@ def parse_ntfs_logfile_restart_area(raw_page: bytes) -> NtfsLogFileRestartArea:
     system_page, log_page = struct.unpack_from("<II", fixed, 0x10)
     restart_offset = struct.unpack_from("<H", fixed, 0x18)[0]
     minor, major = struct.unpack_from("<hh", fixed, 0x1A)
-    if system_page != _LOGFILE_PAGE_SIZE or log_page < 512 or log_page > (1 << 20) or log_page & (log_page - 1):
+    if (
+        system_page != _LOGFILE_PAGE_SIZE
+        or log_page < 512
+        or log_page > (1 << 20)
+        or log_page & (log_page - 1)
+    ):
         raise NtfsMetadataError("NTFS $LogFile restart page geometry is unsupported")
     if major < 1 or major > 2 or (major == 1 and minor == 0):
         raise NtfsMetadataError("NTFS $LogFile restart page version is unsupported")
@@ -177,11 +184,23 @@ def parse_ntfs_logfile_restart_area(raw_page: bytes) -> NtfsLogFileRestartArea:
     revision = struct.unpack_from("<I", fixed, area + 0x28)[0]
     if clients > 1 or flags & ~_LOGFILE_KNOWN_FLAGS:
         raise NtfsMetadataError("NTFS $LogFile restart area has unknown state")
-    if client_offset < 0x30 or client_offset & 7 or client_offset + clients * 0xA0 > restart_length:
+    if (
+        client_offset < 0x30
+        or client_offset & 7
+        or client_offset + clients * 0xA0 > restart_length
+    ):
         raise NtfsMetadataError("NTFS $LogFile client array bounds are invalid")
     if restart_length < 0x2A or area + restart_length > system_page:
         raise NtfsMetadataError("NTFS $LogFile restart length exceeds the page")
-    return NtfsLogFileRestartArea(system_page, log_page, restart_offset, restart_length, flags, current_lsn, revision)
+    return NtfsLogFileRestartArea(
+        system_page,
+        log_page,
+        restart_offset,
+        restart_length,
+        flags,
+        current_lsn,
+        revision,
+    )
 
 
 def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestartArea:
@@ -192,13 +211,23 @@ def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestar
     errors = []
     for start in (0, _LOGFILE_PAGE_SIZE):
         try:
-            valid.append(parse_ntfs_logfile_restart_area(raw_logfile[start : start + _LOGFILE_PAGE_SIZE]))
+            valid.append(
+                parse_ntfs_logfile_restart_area(
+                    raw_logfile[start : start + _LOGFILE_PAGE_SIZE]
+                )
+            )
         except NtfsMetadataError as exc:
             errors.append(exc)
     if not valid:
-        raise NtfsMetadataError("NTFS $LogFile has no valid restart area") from errors[0]
+        raise NtfsMetadataError("NTFS $LogFile has no valid restart area") from errors[
+            0
+        ]
     first = valid[0]
-    if any((item.system_page_size, item.log_page_size) != (first.system_page_size, first.log_page_size) for item in valid[1:]):
+    if any(
+        (item.system_page_size, item.log_page_size)
+        != (first.system_page_size, first.log_page_size)
+        for item in valid[1:]
+    ):
         raise NtfsMetadataError("NTFS $LogFile restart pages disagree on geometry")
     clean = [item for item in valid if item.clean_dismount]
     if not clean:
@@ -282,9 +311,7 @@ def _parse_runlist(
             previous_lcn += delta
             lcn = previous_lcn
         if lcn is not None and (
-            lcn < 0
-            or lcn + run_length < lcn
-            or lcn + run_length > cluster_count
+            lcn < 0 or lcn + run_length < lcn or lcn + run_length > cluster_count
         ):
             raise NtfsMetadataError("NTFS runlist points outside the volume")
         if vcn + run_length < vcn or (
@@ -432,7 +459,9 @@ def _parse_ntfs_index_entries(
             if flags & 1:
                 if entry_length < 24:
                     raise NtfsMetadataError("NTFS index child pointer is truncated")
-                children.append(struct.unpack_from("<Q", value, pos + entry_length - 8)[0])
+                children.append(
+                    struct.unpack_from("<Q", value, pos + entry_length - 8)[0]
+                )
             return tuple(result), tuple(children)
         try:
             decode_ntfs_file_reference(reference)
@@ -504,14 +533,19 @@ def parse_ntfs_index_root(
     start = 16 + entry_offset
     end = 16 + total_size
     entries, _children = _parse_ntfs_index_entries(
-        value, start=start, end=end, parent_reference=parent_reference,
+        value,
+        start=start,
+        end=end,
+        parent_reference=parent_reference,
         allow_children=allow_index_allocation,
     )
     return entries
 
 
 def parse_ntfs_index_block(
-    raw_block: bytes, *, parent_reference: int | None = None,
+    raw_block: bytes,
+    *,
+    parent_reference: int | None = None,
     expected_vcn: int | None = None,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Validate an INDX block's USA and parse its bounded index entries."""
@@ -534,7 +568,10 @@ def parse_ntfs_index_block(
             0
         ]
         struct.pack_into("<H", fixed, trailer, replacement)
-    if expected_vcn is not None and struct.unpack_from("<q", fixed, 16)[0] != expected_vcn:
+    if (
+        expected_vcn is not None
+        and struct.unpack_from("<q", fixed, 16)[0] != expected_vcn
+    ):
         raise NtfsMetadataError("NTFS INDX VCN does not match requested block")
     entry_offset, total_size, allocated_size = struct.unpack_from("<III", fixed, 24)
     flags = struct.unpack_from("<I", fixed, 36)[0]
@@ -543,7 +580,10 @@ def parse_ntfs_index_block(
     start = 24 + entry_offset
     end = 24 + total_size
     entries, children = _parse_ntfs_index_entries(
-        bytes(fixed), start=start, end=end, parent_reference=parent_reference,
+        bytes(fixed),
+        start=start,
+        end=end,
+        parent_reference=parent_reference,
         allow_children=False,
     )
     if children:
@@ -724,10 +764,11 @@ __all__ = [
 ]
 
 
-class NativeNtfsMetadataImage:
+class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     """Read-only access to validated unnamed DATA of MFT record 0 only."""
 
     backend_name = "native-ntfs-metadata-ro"
+    case_insensitive_paths = True
 
     def __init__(self, image_path, offset=0, volume_size=None):
         if volume_size is None:
@@ -958,7 +999,9 @@ class NativeNtfsMetadataImage:
         root = roots[0]
         root_value = root.resident_value
         parent_reference = record_number | (record.sequence_number << 48)
-        entry_offset, total_size, allocated_size = struct.unpack_from("<III", root_value, 16)
+        entry_offset, total_size, allocated_size = struct.unpack_from(
+            "<III", root_value, 16
+        )
         index_flags = struct.unpack_from("<I", root_value, 28)[0]
         if index_flags & ~1 or allocated_size < total_size or entry_offset < 16:
             raise NtfsMetadataError("invalid NTFS INDEX_ROOT header bounds")
@@ -973,14 +1016,18 @@ class NativeNtfsMetadataImage:
         if index_flags & 1:
             allocations = [a for a in attrs if a.type_code == 0xA0 and a.name == "$I30"]
             if len(allocations) != 1:
-                raise NtfsMetadataError("NTFS directory has no unique $I30 INDEX_ALLOCATION")
+                raise NtfsMetadataError(
+                    "NTFS directory has no unique $I30 INDEX_ALLOCATION"
+                )
             allocation = allocations[0]
             _validate_nonresident_data_stream(
                 allocation, self.profile.boot.cluster_size, name="$I30"
             )
             block_size = self.profile.boot.index_record_size
             if block_size < 512 or allocation.data_size % block_size:
-                raise NtfsMetadataError("NTFS $I30 INDEX_ALLOCATION has invalid block bounds")
+                raise NtfsMetadataError(
+                    "NTFS $I30 INDEX_ALLOCATION has invalid block bounds"
+                )
             pending = list(child_vcns)
             visited_vcns: set[int] = set()
             while pending:

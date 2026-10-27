@@ -102,6 +102,43 @@ def test_native_ext2_single_indirect_file_roundtrip_and_reclamation(
     _assert_e2fsck_clean(image)
 
 
+def test_native_ext2_directory_grows_through_single_indirect_block(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "indirect-directory.ext2"
+    _make_ext2(image, size=16 * 1024 * 1024, block_size=1024)
+    writer = NativeExt2ImageWriter(image)
+    names = [f"{index:03d}-" + "x" * 235 for index in range(60)]
+
+    def populate_many(fs, file_names):
+        fs.mkdir("/crowded")
+        for name in file_names:
+            fs.write_file("/crowded/" + name, b"")
+
+    from mountfile.ext2_native import _Ext2FS
+
+    monkeypatch.setattr(_Ext2FS, "populate_many_for_test", populate_many, raising=False)
+    writer._mutate("populate_many_for_test", names)
+
+    entries = writer.list_dir("/crowded")
+    assert {entry["name"] for entry in entries} == set(names)
+    _, raw, _ = writer._fs._resolve("/crowded")
+    assert raw is not None
+    assert writer._fs._u32(raw, 40 + 12 * 4) != 0
+    assert len(writer._fs._inode_blocks(raw, allow_indirect=True)) > 12
+    _assert_e2fsck_clean(image)
+
+    def remove_many(fs, file_names):
+        for name in file_names:
+            fs.delete("/crowded/" + name)
+        fs.delete("/crowded")
+
+    monkeypatch.setattr(_Ext2FS, "remove_many_for_test", remove_many, raising=False)
+    writer._mutate("remove_many_for_test", names)
+    assert "crowded" not in {entry["name"] for entry in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
 def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     tmp_path,
 ):

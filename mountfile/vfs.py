@@ -2,18 +2,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Read-only filesystem providers for raw images.
+"""Read-only, bounded filesystem providers for raw images.
 
-``TskImage`` uses The Sleuth Kit (pytsk3) for formats without an accepted native
-profile. ``NativeFatImage`` reads FAT12/16/32 and ``NativeExt2Image`` reads a
-strict, clean ext2 subset in pure Python. Legacy format coverage still depends
-on the explicitly optional libtsk build.
-
-The module also exports a dependency-free ext superblock probe. The probe
-reports format features and geometry only; it does not browse files or authorize
-writes.
-The pure-Python NTFS probe validates boot-sector geometry and FILE-record USA
-fixups only; it does not replace the pytsk3 reader or enable NTFS writes.
+Native providers cover selected profiles of FAT12/16/32, ext2/3/4, exFAT and
+NTFS. Every provider follows the shared list/stat/read-range/extract contract.
+``TskImage`` is an explicitly optional compatibility fallback for unrecognized
+formats; a recognized but unsupported or malformed native profile is rejected
+without falling through to a different parser. Native NTFS browsing and all
+native readers are read-only. Write support is routed separately through the
+existing writer APIs.
 """
 
 from __future__ import annotations
@@ -21,11 +18,12 @@ from __future__ import annotations
 import os
 import time
 
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
-from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.fat_reader import FatReadError, NativeFatImage
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
@@ -177,7 +175,7 @@ def _fmt_mtime(meta):
         return ""
 
 
-class TskImage:
+class TskImage(ReadOnlyVFSStatMixin):
     """Browsable view of one filesystem inside a raw image at `offset`."""
 
     def __init__(self, image_path, offset=0):
