@@ -178,6 +178,8 @@ class NativeExfatWriter:
                 name = bytes(name_raw[: name_len * 2]).decode("utf-16le")
             except UnicodeDecodeError as exc:
                 raise ExfatWriteError("invalid exFAT filename encoding") from exc
+            if struct.unpack_from("<H", stream, 4)[0] != self._name_hash(name):
+                raise ExfatWriteError("exFAT filename hash mismatch")
             records.append((name, pos, total, stream, raw[pos : pos + total]))
             pos += total
         return records

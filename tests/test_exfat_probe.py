@@ -28,6 +28,14 @@ def _entry_set_checksum(entry_set):
     return checksum
 
 
+def _name_hash(name):
+    checksum = 0
+    for value in name.encode("utf-16le"):
+        checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
+        checksum = (checksum + value) & 0xFFFF
+    return checksum
+
+
 def _region(sector_size=512):
     region = bytearray(24 * sector_size)
     boot = memoryview(region)[:sector_size]
@@ -105,6 +113,7 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
     struct.pack_into("<H", root, 4, 0)
     root[32] = 0xC0
     root[35] = 9
+    struct.pack_into("<H", root, 36, _name_hash("HELLO.TXT"))
     struct.pack_into("<I", root, 32 + 20, 3)
     payload = b"hello exFAT"
     struct.pack_into("<Q", root, 32 + 24, len(payload))
@@ -142,6 +151,7 @@ def _tree_image(path):
     root[65] = 2
     root[96] = 0xC0
     root[99] = 9
+    struct.pack_into("<H", root, 100, _name_hash("HELLO.TXT"))
     struct.pack_into("<I", root, 116, 3)
     payload = b"hello exFAT"
     struct.pack_into("<Q", root, 120, len(payload))
@@ -251,6 +261,24 @@ def test_native_exfat_writer_rejects_entry_checksum_before_mutation(tmp_path):
     with pytest.raises(ExfatWriteError, match="entry-set checksum"):
         writer.write_file("/HELLO.TXT", b"must not commit")
     assert path.read_bytes() == before
+
+
+def test_native_exfat_reader_rejects_filename_hash_corruption(tmp_path):
+    path = tmp_path / "exfat-name-hash.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    struct.pack_into("<H", raw, 32 * 512 + 100, 0x1234)
+    entry_start = 32 * 512 + 64
+    entry_set = bytearray(raw[entry_start : entry_start + 96])
+    struct.pack_into("<H", entry_set, 2, _entry_set_checksum(entry_set))
+    raw[entry_start : entry_start + 96] = entry_set
+    path.write_bytes(raw)
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match="filename hash"):
+            provider.list_dir("/")
+    finally:
+        provider.close()
 
 
 @pytest.mark.parametrize(

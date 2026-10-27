@@ -179,6 +179,14 @@ class NativeExfatImage:
             checksum = (checksum + value) & 0xFFFF
         return checksum
 
+    @staticmethod
+    def _name_hash(name):
+        checksum = 0
+        for value in name.encode("utf-16le"):
+            checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
+            checksum = (checksum + value) & 0xFFFF
+        return checksum
+
     def _directory(self, cluster):
         raw = b"".join(
             self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
@@ -221,6 +229,9 @@ class NativeExfatImage:
                     raise ExfatReadError("exFAT file entry has invalid name entry")
                 name_raw.extend(item[2:32])
             name = self._decode_name(bytes(name_raw[: name_length * 2]))
+            stored_name_hash = struct.unpack_from("<H", stream, 4)[0]
+            if stored_name_hash != self._name_hash(name):
+                raise ExfatReadError("exFAT filename hash mismatch")
             entries.append(
                 _Entry(
                     name,
