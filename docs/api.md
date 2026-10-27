@@ -51,7 +51,11 @@ descriptor/data/commit records, не изменяет исходный обра�
 checksum, неизвестные feature flags, повреждённые или неполные транзакции.
 
 `pytsk3` остаётся optional compatibility fallback только для форматов, которые
-native routing не распознал. Установка базового MountFile не требует `pytsk3`.
+native routing не распознал, и теперь отключён по умолчанию. Для его явного
+включения используйте `MOUNTFILE_ALLOW_LEGACY_TSK=1` или передайте
+`allow_legacy_fallback=True` в `open_image_provider`. Установка базового
+MountFile не требует `pytsk3`; native routing не запускает сеть, subprocess или
+системный mount.
 
 ::: mountfile.vfs.open_image_provider
 

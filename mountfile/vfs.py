@@ -84,6 +84,20 @@ class RecognizedFilesystemError(TskError):
     """A recognized filesystem was rejected and must not use another format parser."""
 
 
+_TRUE = frozenset(("1", "true", "yes", "on", "да"))
+
+
+def legacy_tsk_enabled() -> bool:
+    """Return whether the optional external Sleuth Kit fallback is enabled.
+
+    Native VFS routing is deliberately offline and dependency-free by default.
+    Applications that explicitly need compatibility parsing for an unknown
+    format must opt in through ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` or the keyword
+    argument of :func:`open_image_provider`.
+    """
+    return os.environ.get("MOUNTFILE_ALLOW_LEGACY_TSK", "").strip().lower() in _TRUE
+
+
 def open_native_ext2(image_path, offset=0, volume_size=None):
     """Open the bounded pure-Python ext2 read-only provider.
 
@@ -393,8 +407,17 @@ def _detect_macos_filesystem(image_path, offset, volume_size):
     return None
 
 
-def open_image_provider(image_path, offset=0, volume_size=None):
-    """Open a read-only provider with fail-closed routing for recognized formats."""
+def open_image_provider(
+    image_path, offset=0, volume_size=None, *, allow_legacy_fallback=None
+):
+    """Open a bounded native provider without external fallback by default.
+
+    Supported native profiles are always handled in-process. ``pytsk3`` is an
+    optional compatibility backend for genuinely unrecognized formats and is
+    only reachable when ``allow_legacy_fallback=True`` or
+    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. A recognized-but-unsupported
+    profile remains fail-closed regardless of this flag.
+    """
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         if volume_size is None:
             raise RecognizedFilesystemError(
@@ -475,4 +498,12 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             f"recognized {macos_filesystem} image requires its explicit read-only adapter"
         )
 
+    if allow_legacy_fallback is None:
+        allow_legacy_fallback = legacy_tsk_enabled()
+    if not allow_legacy_fallback:
+        raise RecognizedFilesystemError(
+            "filesystem is not covered by the native offline providers; "
+            "legacy pytsk3 fallback is disabled (set "
+            "MOUNTFILE_ALLOW_LEGACY_TSK=1 or pass allow_legacy_fallback=True)"
+        )
     return TskImage(image_path, offset=offset)
