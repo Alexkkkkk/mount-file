@@ -13,10 +13,60 @@ from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Imag
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
 
+def _make_clean_journal_image(path, *, commit_sequence=7, truncate_commit=False):
+    _make_image(path, compat=0x000C)
+    image = bytearray(path.read_bytes())
+    sb = memoryview(image)[1024:2048]
+    filesystem_uuid = b"0123456789abcdef"
+    sb[0x68:0x78] = filesystem_uuid
+    # inode 8: a four-block internal journal at blocks 40..43
+    inode = 5 * 1024 + 7 * 128
+    struct.pack_into("<H", image, inode, 0x8000 | 0o600)
+    struct.pack_into("<I", image, inode + 4, 4 * 1024)
+    struct.pack_into("<4I", image, inode + 40, 40, 41, 42, 43)
+
+    journal = memoryview(image)[40 * 1024 : 44 * 1024]
+    struct.pack_into(">III", journal, 0, 0xC03B3998, 3, 7)
+    struct.pack_into(">II", journal, 12, 1024, 4)
+    struct.pack_into(">II", journal, 20, 1, 0)
+    journal[48:64] = filesystem_uuid
+    # One classic descriptor tag, one data block, and its matching commit.
+    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, 7)
+    struct.pack_into(">II", journal, 1036, 21, 0x0000000A)  # LAST|SAME_UUID
+    struct.pack_into(">III", journal, 3072, 0xC03B3998, 2, commit_sequence)
+    if truncate_commit:
+        struct.pack_into(">I", image, 43 * 1024 + 8, 0)
+    path.write_bytes(image)
+
+
 def test_journaled_profile_rejects_without_a_valid_jbd2_journal(tmp_path):
     image_path = tmp_path / "journaled.img"
     _make_image(image_path, compat=0x000C)
     with pytest.raises(Ext3ReadError, match="journal inode|JBD2"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_clean_journal_with_bounded_transaction_is_readable(tmp_path):
+    image_path = tmp_path / "clean-journal.img"
+    _make_clean_journal_image(image_path)
+    provider = NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+    try:
+        assert provider.backend_name == "native-ext3-ro"
+    finally:
+        provider.close()
+
+
+def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
+    image_path = tmp_path / "mismatched-journal.img"
+    _make_clean_journal_image(image_path, commit_sequence=8)
+    with pytest.raises(Ext3ReadError, match="sequence/type mismatch"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_truncated_journal_record_fails_closed(tmp_path):
+    image_path = tmp_path / "truncated-journal.img"
+    _make_clean_journal_image(image_path, truncate_commit=True)
+    with pytest.raises(Ext3ReadError, match="journal|JBD2|bounds|short"):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 

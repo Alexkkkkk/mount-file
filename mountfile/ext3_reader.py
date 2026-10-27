@@ -33,6 +33,8 @@ _JBD2_MAGIC = 0xC03B3998
 _JBD2_DESCRIPTOR = 1
 _JBD2_COMMIT = 2
 _JBD2_REVOKE = 5
+_JBD2_TAG_LAST = 0x00000008
+_JBD2_TAG_SAME_UUID = 0x00000002
 _MAX_JOURNAL_BLOCKS = 1 << 20
 _RO_COMPAT_EXTRA_ISIZE = 0x0040
 
@@ -116,6 +118,77 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("journal contains a sparse block")
         return self._read_block(physical)
 
+    def _journal_logical_block(self, inode, logical, journal_blocks):
+        """Read one journal block after checking both ring and filesystem bounds."""
+        if logical < 0 or logical >= journal_blocks:
+            raise Ext3ReadError("JBD2 logical block is outside journal inode")
+        return self._journal_block(inode, logical)
+
+    @staticmethod
+    def _jbd2_header(raw):
+        if len(raw) < 12:
+            raise Ext3ReadError("short JBD2 record header")
+        return struct.unpack_from(">III", raw, 0)
+
+    def _validate_jbd2_transaction(
+        self, inode, journal_blocks, logical, expected_sequence
+    ) -> int:
+        """Validate one bounded descriptor/data/commit chain.
+
+        This deliberately supports only the classic, no-checksum JBD2 tag
+        layout.  It never applies data blocks and rejects revoke, checksum and
+        otherwise unknown records rather than guessing their extent.
+        """
+        descriptor = self._journal_logical_block(inode, logical, journal_blocks)
+        magic, record_type, sequence = self._jbd2_header(descriptor)
+        if magic != _JBD2_MAGIC or record_type != _JBD2_DESCRIPTOR:
+            raise Ext3ReadError("invalid JBD2 transaction descriptor")
+        if sequence == 0 or (
+            expected_sequence is not None and sequence != expected_sequence
+        ):
+            raise Ext3ReadError("JBD2 descriptor sequence mismatch")
+
+        cursor = 12
+        tag_count = 0
+        last = False
+        while cursor + 8 <= self.block_size:
+            block_number, flags = struct.unpack_from(">II", descriptor, cursor)
+            cursor += 8
+            tag_count += 1
+            if block_number == 0 or block_number >= self.blocks_count:
+                raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
+            if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+                raise Ext3ReadError("unsupported JBD2 descriptor tag flags")
+            if not flags & _JBD2_TAG_SAME_UUID:
+                if cursor + 16 > self.block_size:
+                    raise Ext3ReadError("truncated JBD2 descriptor UUID")
+                if descriptor[cursor : cursor + 16] != self.profile.filesystem_uuid:
+                    raise Ext3ReadError("JBD2 descriptor UUID mismatch")
+                cursor += 16
+            if flags & _JBD2_TAG_LAST:
+                last = True
+                break
+        if not last or tag_count == 0:
+            raise Ext3ReadError("unterminated or empty JBD2 descriptor")
+
+        # Every tag has one following data block; the next block must be the
+        # matching commit record.  Ring arithmetic is explicit and bounded.
+        data_start = logical + 1
+        commit_logical = data_start + tag_count
+        if commit_logical >= journal_blocks:
+            raise Ext3ReadError("JBD2 transaction exceeds journal bounds")
+        for data_logical in range(data_start, commit_logical):
+            self._journal_logical_block(inode, data_logical, journal_blocks)
+        commit = self._journal_logical_block(inode, commit_logical, journal_blocks)
+        commit_magic, commit_type, commit_sequence = self._jbd2_header(commit)
+        if (
+            commit_magic != _JBD2_MAGIC
+            or commit_type != _JBD2_COMMIT
+            or commit_sequence != sequence
+        ):
+            raise Ext3ReadError("JBD2 commit record sequence/type mismatch")
+        return commit_logical
+
     def _validate_empty_journal(self) -> None:
         journal = self._read_inode(8)
         if not journal.is_regular:
@@ -123,14 +196,16 @@ class NativeExt3Image(NativeExt2Image):
         if journal.size < self.block_size or journal.size % self.block_size:
             raise Ext3ReadError("journal size is not block aligned")
         journal_blocks = journal.size // self.block_size
-        if journal_blocks > _MAX_JOURNAL_BLOCKS:
+        if journal_blocks < 2 or journal_blocks > _MAX_JOURNAL_BLOCKS:
             raise Ext3ReadError("journal exceeds conservative scan limit")
         raw = self._journal_block(journal, 0)
-        if len(raw) < 0x24:
+        if len(raw) < 0x40:
             raise Ext3ReadError("short JBD2 superblock")
-        magic, block_type, _sequence = struct.unpack_from(">III", raw, 0)
+        magic, block_type, sequence = struct.unpack_from(">III", raw, 0)
         if magic != _JBD2_MAGIC or block_type not in (3, 4):
             raise Ext3ReadError("invalid JBD2 journal superblock")
+        if sequence == 0:
+            raise Ext3ReadError("invalid JBD2 journal sequence")
         if raw[0x30:0x40] != self.profile.filesystem_uuid:
             raise Ext3ReadError("JBD2 journal UUID does not match filesystem UUID")
         journal_block_size, max_length = struct.unpack_from(">II", raw, 0x0C)
@@ -144,22 +219,29 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 block size disagrees with filesystem")
         if not 1 <= first < max_length <= journal_blocks:
             raise Ext3ReadError("JBD2 ring geometry exceeds journal inode")
-        # s_start == 0 is not sufficient proof of cleanliness. Scan the whole
-        # ring and accept only an all-zero unused area. We do not replay or
-        # interpret stale transactions.
+        if start != 0 and not first <= start < max_length:
+            raise Ext3ReadError("JBD2 start is outside journal ring")
+        # A nonzero start means an uncheckpointed transaction and is never
+        # eligible for read-only browsing.  With start == 0, stale records may
+        # remain in the ring, but only a fully bounded descriptor/data/commit
+        # chain with matching sequence is accepted; no data is replayed.
         if start != 0:
             raise Ext3ReadError("JBD2 journal contains an uncheckpointed transaction")
-        for logical in range(first, max_length):
-            block = self._journal_block(journal, logical)
+        logical = first
+        while logical < max_length:
+            block = self._journal_logical_block(journal, logical, journal_blocks)
             if not block.strip(b"\x00"):
+                logical += 1
                 continue
-            candidate = struct.unpack_from(">I", block, 0)[0]
-            if candidate != _JBD2_MAGIC:
-                raise Ext3ReadError("non-empty or malformed JBD2 journal area")
-            block_kind = struct.unpack_from(">I", block, 4)[0]
-            if block_kind in (_JBD2_DESCRIPTOR, _JBD2_COMMIT, _JBD2_REVOKE):
-                raise Ext3ReadError("JBD2 journal contains transaction records")
-            raise Ext3ReadError("unsupported JBD2 journal record")
+            _magic, block_kind, record_sequence = self._jbd2_header(block)
+            if block_kind != _JBD2_DESCRIPTOR:
+                raise Ext3ReadError("unexpected JBD2 journal record")
+            logical = self._validate_jbd2_transaction(
+                journal,
+                max_length,
+                logical,
+                record_sequence,
+            ) + 1
 
 
 class NativeExt4Image(NativeExt3Image):
