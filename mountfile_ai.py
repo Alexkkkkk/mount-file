@@ -869,7 +869,8 @@ class Executor:
         limit = max(1, CONFIG.max_agent_rounds)
         if len(plan.steps) > limit:
             raise RuntimeError(
-                "agent plan exceeds MOUNTFILE_MAX_ROUNDS=%d; refusing to execute" % limit
+                "agent plan exceeds MOUNTFILE_MAX_ROUNDS=%d; refusing to execute"
+                % limit
             )
         for step in plan.steps:
             args = dict(step.args)

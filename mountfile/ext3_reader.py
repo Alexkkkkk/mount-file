@@ -251,12 +251,15 @@ class NativeExt3Image(NativeExt2Image):
             _magic, block_kind, record_sequence = self._jbd2_header(block)
             if block_kind != _JBD2_DESCRIPTOR:
                 raise Ext3ReadError("unexpected JBD2 journal record")
-            logical = self._validate_jbd2_transaction(
-                journal,
-                max_length,
-                logical,
-                record_sequence,
-            ) + 1
+            logical = (
+                self._validate_jbd2_transaction(
+                    journal,
+                    max_length,
+                    logical,
+                    record_sequence,
+                )
+                + 1
+            )
 
 
 class NativeExt4Image(NativeExt3Image):
@@ -428,7 +431,8 @@ class NativeExt4Image(NativeExt3Image):
                 or entries > maximum
                 or maximum > capacity
                 or maximum == 0
-                or entries == 0 and node_depth == 0
+                or entries == 0
+                and node_depth == 0
             ):
                 raise Ext3ReadError("invalid extent header bounds")
             if node_depth > _MAX_EXTENT_TREE_DEPTH or (
@@ -474,7 +478,9 @@ class NativeExt4Image(NativeExt3Image):
                 if logical >= logical_start:
                     child = child_lo | (child_hi << 32)
                     if not 0 < child < self.blocks_count:
-                        raise Ext3ReadError("extent index block is outside filesystem bounds")
+                        raise Ext3ReadError(
+                            "extent index block is outside filesystem bounds"
+                        )
                     selected = (logical_start, child)
             if selected is None:
                 return 0, False

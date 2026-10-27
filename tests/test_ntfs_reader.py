@@ -311,12 +311,18 @@ def test_rejects_truncated_ntfs_logfile_restart_stream():
         validate_ntfs_logfile_restart_pages(bytes(4096))
 
 
-@pytest.mark.parametrize("mutate, message", [
-    (lambda page: page.__setitem__(slice(0, 4), b"XXXX"), "signature"),
-    (lambda page: page.__setitem__(511, page[511] ^ 1), "USA mismatch"),
-    (lambda page: struct.pack_into("<H", page, 0x30 + 0x14, 0x20), "client array bounds"),
-    (lambda page: struct.pack_into("<H", page, 0x30 + 0x0E, 0x20), "unknown state"),
-])
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda page: page.__setitem__(slice(0, 4), b"XXXX"), "signature"),
+        (lambda page: page.__setitem__(511, page[511] ^ 1), "USA mismatch"),
+        (
+            lambda page: struct.pack_into("<H", page, 0x30 + 0x14, 0x20),
+            "client array bounds",
+        ),
+        (lambda page: struct.pack_into("<H", page, 0x30 + 0x0E, 0x20), "unknown state"),
+    ],
+)
 def test_rejects_malformed_ntfs_logfile_restart_page(mutate, message):
     page = bytearray(_restart_page())
     mutate(page)

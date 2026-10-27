@@ -102,7 +102,9 @@ def test_metadata_checksum_profile_exposes_no_write_eligibility_for_unknown_layo
     image = bytearray(_image(ro_compat=0x0403))
     superblock = memoryview(image)[1024:2048]
     superblock[0x175] = 1
-    struct.pack_into("<I", superblock, 0x3FC, ext4_superblock_checksum(bytes(superblock)))
+    struct.pack_into(
+        "<I", superblock, 0x3FC, ext4_superblock_checksum(bytes(superblock))
+    )
 
     profile = probe_ext_superblock(io.BytesIO(image))
     assert not profile.phase1_ext2_profile_candidate
