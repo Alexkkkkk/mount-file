@@ -2126,14 +2126,11 @@ class UniversalFSRW:
                 or off + volume_size > image_size
             ):
                 raise ValueError("explicit volume_size exceeds image bounds")
-            if (
-                candidate is not None
-                and candidate.source == "table"
-                and candidate.size
-                and volume_size > int(candidate.size)
+            if candidate is not None and candidate.size and volume_size > int(
+                candidate.size
             ):
-                raise ValueError("explicit volume_size exceeds partition-table extent")
-        elif candidate is not None and candidate.source == "table" and candidate.size:
+                raise ValueError("explicit volume_size exceeds detected extent")
+        elif candidate is not None and candidate.size:
             volume_size = int(candidate.size)
         elif off == 0:
             # A partitionless whole-image filesystem can use its own validated
