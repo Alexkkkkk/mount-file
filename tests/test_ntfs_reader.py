@@ -13,6 +13,8 @@ from mountfile.ntfs_reader import (
     _parse_runlist,
     parse_ntfs_index_block,
     parse_ntfs_index_root,
+    parse_ntfs_file_name,
+    parse_ntfs_standard_information,
     parse_ntfs_volume_state,
     probe_ntfs_metadata,
 )
@@ -227,3 +229,34 @@ def test_parses_ntfs_volume_flags_and_rejects_missing_information():
     assert not parse_ntfs_volume_state((dirty,)).clean
     with pytest.raises(NtfsMetadataError, match="ambiguous volume information"):
         parse_ntfs_volume_state(())
+
+
+def test_parses_resident_filename_and_standard_information_bounds():
+    value = bytearray(76)
+    struct.pack_into("<Q", value, 0, (3 << 48) | 5)
+    struct.pack_into("<I", value, 56, 0x20)
+    value[64] = 5
+    value[65] = 3
+    value[66:76] = "hello".encode("utf-16le")
+    parsed = parse_ntfs_file_name(bytes(value))
+    assert parsed.name == "hello"
+    assert parsed.file_attributes == 0x20
+
+    standard = bytearray(48)
+    struct.pack_into("<I", standard, 32, 0x20)
+    struct.pack_into("<II", standard, 40, 2, 1)
+    info = parse_ntfs_standard_information(bytes(standard))
+    assert (info.file_attributes, info.version, info.class_id) == (0x20, 2, 1)
+    with pytest.raises(NtfsMetadataError, match="FILE_NAME"):
+        parse_ntfs_file_name(bytes(value[:65]))
+    with pytest.raises(NtfsMetadataError, match="STANDARD_INFORMATION"):
+        parse_ntfs_standard_information(bytes(47))
+
+
+def test_rejects_unknown_ntfs_volume_flags():
+    value = bytearray(12)
+    value[8:10] = b"\x03\x01"
+    struct.pack_into("<H", value, 10, 0x0080)
+    attr = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
+    with pytest.raises(NtfsMetadataError, match="unknown volume flags"):
+        parse_ntfs_volume_state((attr,))

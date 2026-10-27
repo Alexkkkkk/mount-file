@@ -34,6 +34,7 @@ _MAX_RUNLIST_BYTES = 1 << 20
 _ATTRIBUTE_FLAG_COMPRESSED = 0x0001
 _ATTRIBUTE_FLAG_ENCRYPTED = 0x4000
 _ATTRIBUTE_FLAG_SPARSE = 0x8000
+_VOLUME_KNOWN_FLAGS = 0x807F
 
 
 class NtfsMetadataError(ValueError):
@@ -77,6 +78,25 @@ class NtfsAttributeSummary:
     runs: tuple[NtfsRun, ...] = ()
     resident_value: bytes | None = None
     data_size: int = 0
+
+
+@dataclass(frozen=True)
+class NtfsFileName:
+    """The bounded, resident portion of an NTFS FILE_NAME attribute."""
+
+    parent_reference: int
+    name: str
+    namespace: int
+    file_attributes: int
+
+
+@dataclass(frozen=True)
+class NtfsStandardInformation:
+    """The fixed prefix of a resident STANDARD_INFORMATION attribute."""
+
+    file_attributes: int
+    version: int
+    class_id: int
 
 
 @dataclass(frozen=True)
@@ -166,7 +186,11 @@ def _parse_runlist(
             delta = int.from_bytes(encoded, "little", signed=False)
             previous_lcn += delta
             lcn = previous_lcn
-        if lcn is not None and (lcn <= 0 or lcn + run_length > cluster_count):
+        if lcn is not None and (
+            lcn < 0
+            or lcn + run_length < lcn
+            or lcn + run_length > cluster_count
+        ):
             raise NtfsMetadataError("NTFS runlist points outside the volume")
         if vcn + run_length < vcn or (
             highest_vcn is not None and vcn + run_length > highest_vcn + 1
@@ -403,7 +427,51 @@ def parse_ntfs_volume_state(
     major, minor = volume.resident_value[8:10]
     if (major, minor) not in ((1, 1), (3, 0), (3, 1)):
         raise NtfsMetadataError("unsupported NTFS $Volume version")
-    return NtfsVolumeState(struct.unpack_from("<H", volume.resident_value, 10)[0])
+    flags = struct.unpack_from("<H", volume.resident_value, 10)[0]
+    if flags & ~_VOLUME_KNOWN_FLAGS:
+        raise NtfsMetadataError("NTFS $Volume has unknown volume flags")
+    return NtfsVolumeState(flags)
+
+
+def parse_ntfs_file_name(value: bytes) -> NtfsFileName:
+    """Parse a resident FILE_NAME value with bounded UTF-16 validation."""
+    if len(value) < 66:
+        raise NtfsMetadataError("NTFS FILE_NAME value is truncated")
+    parent_reference = struct.unpack_from("<Q", value, 0)[0]
+    try:
+        decode_ntfs_file_reference(parent_reference)
+    except NtfsRecordError as exc:
+        raise NtfsMetadataError("invalid NTFS FILE_NAME parent reference") from exc
+    name_length = value[64]
+    namespace = value[65]
+    if name_length == 0 or namespace > 3:
+        raise NtfsMetadataError("invalid NTFS FILE_NAME name or namespace")
+    end = 66 + name_length * 2
+    if end > len(value):
+        raise NtfsMetadataError("NTFS FILE_NAME name exceeds its value")
+    try:
+        name = value[66:end].decode("utf-16le")
+    except UnicodeDecodeError as exc:
+        raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
+    if not name.isascii() or any(c in name for c in ("/", "\\", "\x00")):
+        raise NtfsMetadataError("NTFS FILE_NAME is outside the native ASCII profile")
+    return NtfsFileName(
+        parent_reference,
+        name,
+        namespace,
+        struct.unpack_from("<I", value, 56)[0],
+    )
+
+
+def parse_ntfs_standard_information(value: bytes) -> NtfsStandardInformation:
+    """Parse the stable 48-byte prefix of resident STANDARD_INFORMATION."""
+    if len(value) < 48:
+        raise NtfsMetadataError("NTFS STANDARD_INFORMATION value is truncated")
+    return NtfsStandardInformation(
+        struct.unpack_from("<I", value, 32)[0],
+        struct.unpack_from("<I", value, 40)[0],
+        struct.unpack_from("<I", value, 44)[0],
+    )
 
 
 def _validate_nonresident_data_stream(
@@ -411,7 +479,10 @@ def _validate_nonresident_data_stream(
 ) -> None:
     if not attribute.nonresident or attribute.lowest_vcn != 0 or not attribute.runs:
         raise NtfsMetadataError(f"{name} has no complete nonresident DATA stream")
-    capacity = sum(run.length for run in attribute.runs) * cluster_size
+    clusters = sum(run.length for run in attribute.runs)
+    if clusters <= 0 or clusters > (1 << 63) // cluster_size:
+        raise NtfsMetadataError(f"{name} DATA runlist capacity overflows")
+    capacity = clusters * cluster_size
     if attribute.data_size <= 0 or attribute.data_size > capacity:
         raise NtfsMetadataError(f"{name} DATA size exceeds its allocated runlist")
 
@@ -499,10 +570,14 @@ __all__ = [
     "NtfsVolumeState",
     "NtfsMetadataProfile",
     "NtfsRun",
+    "NtfsFileName",
+    "NtfsStandardInformation",
     "parse_ntfs_attribute_stream",
     "parse_ntfs_index_root",
     "parse_ntfs_index_block",
     "parse_ntfs_volume_state",
+    "parse_ntfs_file_name",
+    "parse_ntfs_standard_information",
     "probe_ntfs_metadata",
 ]
 
