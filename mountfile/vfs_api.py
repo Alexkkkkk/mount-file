@@ -75,3 +75,34 @@ class ReadOnlyVFSStatMixin:
     def read_capabilities(self) -> tuple[str, ...]:
         """Operations implemented by every reader using this API contract."""
         return ("list", "stat", "read-range", "extract")
+
+    @property
+    def write_capabilities(self) -> tuple[str, ...]:
+        """Mutations exposed by this provider.
+
+        Native readers are deliberately read-only. Keeping this explicit in
+        the provider contract prevents callers from inferring write support
+        from the fact that a filesystem is browsable.
+        """
+        return ()
+
+    @property
+    def backend_status(self) -> dict:
+        """Return a stable, serialisable capability/status description.
+
+        The result is metadata-only. It does not probe the image again and it
+        never claims that a legacy writer is available. Mutable backends may
+        override this property and report their own bounded write capabilities.
+        """
+        backend = str(getattr(self, "backend_name", type(self).__name__))
+        return {
+            "backend": backend,
+            "mode": "read-only",
+            "read_capabilities": list(self.read_capabilities),
+            "write_capabilities": list(self.write_capabilities),
+            "write_enabled": False,
+            "write_rejection_reason": (
+                "native provider is read-only; use an explicitly selected "
+                "bounded writer profile"
+            ),
+        }

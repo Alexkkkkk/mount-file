@@ -65,3 +65,19 @@ def test_stat_rejects_traversal_and_invalid_types():
         provider.stat("/Folder\\Report.TXT")
     with pytest.raises(ValueError, match="invalid"):
         provider.stat(None)
+
+
+def test_backend_status_is_explicitly_read_only_and_serialisable():
+    provider = _Provider()
+    assert provider.write_capabilities == ()
+    assert provider.backend_status == {
+        "backend": "_Provider",
+        "mode": "read-only",
+        "read_capabilities": ["list", "stat", "read-range", "extract"],
+        "write_capabilities": [],
+        "write_enabled": False,
+        "write_rejection_reason": (
+            "native provider is read-only; use an explicitly selected "
+            "bounded writer profile"
+        ),
+    }

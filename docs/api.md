@@ -39,6 +39,10 @@ file carving. SQLite хранит SHA-256, дедуплицированные ch
 использует тот же bounded range API. `stat` возвращает metadata выбранной записи
 и фактический регистр имени из образа. FAT и NTFS включают предусмотренный их
 reader-ом case-insensitive lookup; для ext namespace он остаётся case-sensitive.
+Каждый native provider также публикует `backend_status`: сериализуемый словарь
+с backend name, read/write capabilities, режимом и явной причиной отказа от
+записи. Пустой `write_capabilities` означает именно read-only native profile,
+а не скрытый переход на `debugfs`, `ntfs-3g` или системный mount.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
 другим parser-ом. Чтение не разрешает запись или replay/recovery.
 
