@@ -213,6 +213,17 @@ def test_exfat_writer_fails_closed_without_system_metadata(tmp_path):
         writer.write_file("/HELLO.TXT", b"blocked")
 
 
+def test_native_exfat_writer_rejects_bitmap_fat_mismatch(tmp_path):
+    path = tmp_path / "exfat-bitmap-fat-mismatch.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    struct.pack_into("<I", raw, 24 * 512 + 6 * 4, 0xFFFFFFFF)
+    path.write_bytes(raw)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    with pytest.raises(ExfatWriteError, match="bitmap/FAT metadata is inconsistent"):
+        writer.write_file("/NEW.TXT", b"blocked")
+
+
 @pytest.mark.parametrize("mutate", ["signature", "checksum", "heap"])
 def test_rejects_corrupt_or_unsafe_boot_region(mutate):
     region = bytearray(_region())

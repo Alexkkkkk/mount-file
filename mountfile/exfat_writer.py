@@ -260,10 +260,21 @@ class NativeExfatWriter:
         else:
             bitmap[index >> 3] &= ~mask
 
-    def _free_clusters(self, bitmap, reader, needed):
+    def _free_clusters(self, bitmap, reader, needed, stream):
         result = []
         for cluster in range(2, reader.profile.cluster_count + 2):
             if not (bitmap[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7))):
+                fat_relative = (
+                    reader.profile.fat_offset * reader.profile.bytes_per_sector
+                    + cluster * 4
+                )
+                fat_value = struct.unpack(
+                    "<I", self._read_rel(stream, fat_relative, 4)
+                )[0]
+                if fat_value != 0:
+                    raise ExfatWriteError(
+                        "exFAT allocation bitmap/FAT metadata is inconsistent"
+                    )
                 result.append(cluster)
                 if len(result) == needed:
                     return result
@@ -392,7 +403,9 @@ class NativeExfatWriter:
                         len(payload) + reader.profile.cluster_size - 1
                     ) // reader.profile.cluster_size
                     clusters = (
-                        self._free_clusters(bitmap, reader, count) if count else []
+                        self._free_clusters(bitmap, reader, count, stream)
+                        if count
+                        else []
                     )
                     for index, cluster in enumerate(clusters):
                         self._set_allocated(bitmap, cluster, True)
@@ -442,7 +455,7 @@ class NativeExfatWriter:
                     ) // reader.profile.cluster_size
                     if needed > len(old_chain):
                         extra = self._free_clusters(
-                            bitmap, reader, needed - len(old_chain)
+                            bitmap, reader, needed - len(old_chain), stream
                         )
                         chain = old_chain + extra
                         for cluster in extra:
@@ -563,7 +576,7 @@ class NativeExfatWriter:
             directory, name = self._parent(reader, path)
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
-                cluster = self._free_clusters(bitmap, reader, 1)[0]
+                cluster = self._free_clusters(bitmap, reader, 1, stream)[0]
                 self._set_allocated(bitmap, cluster, True)
                 self._fat_write(stream, reader, cluster, _EOC)
                 self._write_rel(
