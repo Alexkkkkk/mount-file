@@ -11,6 +11,8 @@ from mountfile.exfat_probe import (
     exfat_boot_checksum,
     parse_exfat_boot_region,
 )
+from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.universal_fs_rw import NativeExfatRW
 
 VOLUME_SIZE = 2 * 1024 * 1024
 
@@ -108,6 +110,64 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
         assert provider.read_file_range("/HELLO.TXT", 2, 5) == payload[2:7]
     finally:
         provider.close()
+
+
+def _tree_image(path):
+    region = bytearray(VOLUME_SIZE)
+    region[: 24 * 512] = _region()
+    struct.pack_into("<I", region, 24 * 512 + 2 * 4, 0xFFFFFFFF)
+    struct.pack_into("<I", region, 24 * 512 + 3 * 4, 0xFFFFFFFF)
+    root = bytearray(512)
+    root[0] = 0x85
+    root[1] = 2
+    root[32] = 0xC0
+    root[35] = 9
+    struct.pack_into("<I", root, 52, 3)
+    payload = b"hello exFAT"
+    struct.pack_into("<Q", root, 56, len(payload))
+    root[64] = 0xC1
+    root[66:84] = "HELLO.TXT".encode("utf-16le")
+    region[32 * 512 : 33 * 512] = root
+    region[33 * 512 : 33 * 512 + len(payload)] = payload
+    path.write_bytes(region)
+    return payload
+
+
+def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):
+    path = tmp_path / "exfat-writer.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.write_file("/HELLO.TXT", b"updated")
+    writer.rename("/HELLO.TXT", "/RENAMED.TXT")
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/RENAMED.TXT") == b"updated"
+    finally:
+        provider.close()
+
+
+def test_native_exfat_writer_rejects_growth_and_allocation_mutations(tmp_path):
+    path = tmp_path / "exfat-writer-limits.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    with pytest.raises(ExfatWriteError, match="stream growth"):
+        writer.write_file("/HELLO.TXT", b"x" * 513)
+    with pytest.raises(ExfatWriteError, match="does not allocate"):
+        writer.mkdir("/NEW")
+    with pytest.raises(ExfatWriteError, match="allocation bitmap"):
+        writer.delete("/HELLO.TXT")
+
+
+def test_universal_rw_exposes_limited_exfat_strategy(tmp_path):
+    path = tmp_path / "exfat-rw.img"
+    _tree_image(path)
+    backend = NativeExfatRW(path, volume_size=VOLUME_SIZE)
+    try:
+        assert backend.info().write_strategy == "native-exfat-phase1"
+        backend.write_file("/HELLO.TXT", b"adapter")
+        assert backend.read("/HELLO.TXT") == b"adapter"
+    finally:
+        backend.close()
 
 
 @pytest.mark.parametrize("mutate", ["signature", "checksum", "heap"])

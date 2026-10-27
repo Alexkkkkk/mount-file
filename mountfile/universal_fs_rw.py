@@ -442,7 +442,75 @@ class RWBackend(ABC):
 
 
 # =============================================================================
-# 4. NATIVE FAT32 (read + write)
+# 4. NATIVE EXFAT (phase-one read + limited write)
+# =============================================================================
+class NativeExfatRW(RWBackend):
+    """Bounded exFAT writer: replace-in-place and same-directory rename only."""
+
+    def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
+        super().__init__(image, offset)
+        from mountfile.exfat_reader import NativeExfatImage
+        from mountfile.exfat_writer import NativeExfatWriter
+
+        self._reader = NativeExfatImage(image, offset=offset, volume_size=volume_size)
+        self._writer = NativeExfatWriter(image, offset=offset, volume_size=volume_size)
+        self.volume_size = int(volume_size)
+
+    def close(self) -> None:
+        self._reader.close()
+
+    def info(self) -> FSInfo:
+        return FSInfo(
+            fs_type="exfat",
+            offset=self.offset,
+            backend="native-exfat-rw",
+            total_size=self._reader.profile.volume_length
+            * self._reader.profile.bytes_per_sector,
+            writable=True,
+            write_strategy="native-exfat-phase1",
+        )
+
+    def list(self, path: str = "/") -> list[FSEntry]:
+        return [
+            FSEntry(
+                name=item["name"],
+                path=(path.rstrip("/") + "/" + item["name"]).replace("//", "/"),
+                size=item["size"],
+                is_dir=item["is_dir"],
+            )
+            for item in self._reader.list_dir(path)
+        ]
+
+    def read(self, path: str) -> bytes:
+        return self._reader.read_file(path)
+
+    def write_file(self, path: str, data: bytes) -> None:
+        self._writer.write_file(path, data)
+        self._reader.close()
+        from mountfile.exfat_reader import NativeExfatImage
+
+        self._reader = NativeExfatImage(
+            self.image, offset=self.offset, volume_size=self.volume_size
+        )
+
+    def mkdir(self, path: str) -> None:
+        self._writer.mkdir(path)
+
+    def delete(self, path: str, recursive: bool = False) -> None:
+        self._writer.delete(path, recursive=recursive)
+
+    def rename(self, src: str, dst: str) -> None:
+        self._writer.rename(src, dst)
+        self._reader.close()
+        from mountfile.exfat_reader import NativeExfatImage
+
+        self._reader = NativeExfatImage(
+            self.image, offset=self.offset, volume_size=self.volume_size
+        )
+
+
+# =============================================================================
+# 5. NATIVE FAT32 (read + write)
 # =============================================================================
 class Fat32RW(RWBackend):
     """Native FAT12/16/32 — read + write без внешних утилит."""
@@ -1990,13 +2058,14 @@ class UniversalFSRW:
         # must be case-insensitive.
         fs_type_lower = str(fs_type).lower()
         for cls, types in [
+            (NativeExfatRW, ("exfat",)),
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
             (NtfsRW, ("ntfs",)),
         ]:
             if fs_type_lower.startswith(types):
                 try:
-                    if cls is Ext234RW:
+                    if cls in (Ext234RW, NativeExfatRW):
                         self.backend = cls(self.image, off, volume_size=volume_size)
                     else:
                         self.backend = cls(self.image, off)
