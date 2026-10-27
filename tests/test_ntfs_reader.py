@@ -12,11 +12,13 @@ from mountfile.ntfs_reader import (
     NtfsMetadataError,
     _parse_runlist,
     parse_ntfs_index_block,
+    parse_ntfs_logfile_restart_area,
     parse_ntfs_index_root,
     parse_ntfs_file_name,
     parse_ntfs_standard_information,
     parse_ntfs_volume_state,
     probe_ntfs_metadata,
+    validate_ntfs_logfile_restart_pages,
 )
 
 BPS = 512
@@ -260,3 +262,47 @@ def test_rejects_unknown_ntfs_volume_flags():
     attr = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
     with pytest.raises(NtfsMetadataError, match="unknown volume flags"):
         parse_ntfs_volume_state((attr,))
+
+
+def _restart_page(*, flags=0x0002, sequence=0xA55A, revision=7):
+    page = bytearray(4096)
+    page[:4] = b"RSTR"
+    struct.pack_into("<HH", page, 4, 0x1E, 9)
+    struct.pack_into("<II", page, 0x10, 4096, 4096)
+    struct.pack_into("<hh", page, 0x1A, 1, 2)
+    struct.pack_into("<H", page, 0x18, 0x30)
+    struct.pack_into("<QHHHHI", page, 0x30, 42, 0, 0xFFFF, 0xFFFF, flags, 0)
+    struct.pack_into("<HH", page, 0x30 + 0x14, 0x30, 0x30)
+    struct.pack_into("<I", page, 0x30 + 0x28, revision)
+    struct.pack_into("<H", page, 0x1E, sequence)
+    for index in range(8):
+        struct.pack_into("<H", page, 0x20 + index * 2, 0x1100 + index)
+        struct.pack_into("<H", page, (index + 1) * 512 - 2, sequence)
+    return bytes(page)
+
+
+def test_validates_ntfs_logfile_restart_pages_and_clean_gate():
+    first = _restart_page(revision=3)
+    second = _restart_page(revision=8)
+    parsed = validate_ntfs_logfile_restart_pages(first + second)
+    assert parsed.clean_dismount is True
+    assert parsed.revision == 8
+    assert parse_ntfs_logfile_restart_area(first).log_page_size == 4096
+
+
+def test_rejects_truncated_ntfs_logfile_restart_stream():
+    with pytest.raises(NtfsMetadataError, match="truncated"):
+        validate_ntfs_logfile_restart_pages(bytes(4096))
+
+
+@pytest.mark.parametrize("mutate, message", [
+    (lambda page: page.__setitem__(slice(0, 4), b"XXXX"), "signature"),
+    (lambda page: page.__setitem__(511, page[511] ^ 1), "USA mismatch"),
+    (lambda page: struct.pack_into("<H", page, 0x30 + 0x14, 0x20), "client array bounds"),
+    (lambda page: struct.pack_into("<H", page, 0x30 + 0x0E, 0x20), "unknown state"),
+])
+def test_rejects_malformed_ntfs_logfile_restart_page(mutate, message):
+    page = bytearray(_restart_page())
+    mutate(page)
+    with pytest.raises(NtfsMetadataError, match=message):
+        parse_ntfs_logfile_restart_area(bytes(page))
