@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import struct
 import tempfile
 from contextlib import contextmanager
@@ -31,8 +32,23 @@ _EOC = 0xFFFFFFFF
 
 @contextmanager
 def _image_lock(path):
-    stream = open(path, "r+b")
+    image = Path(path).resolve()
+    identity = hashlib.sha256(os.fsencode(str(image))).hexdigest()[:32]
+    lock_path = image.parent / f".mountfile-{identity}.lock"
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(lock_path, flags, 0o600)
+    stream = None
+    acquired = False
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("exFAT lock path is not a regular file")
+        stream = os.fdopen(fd, "r+b", buffering=0)
+        fd = None
+        if os.fstat(stream.fileno()).st_size == 0:
+            stream.write(b"\0")
+            stream.flush()
         if os.name == "nt":
             import msvcrt
 
@@ -42,20 +58,25 @@ def _image_lock(path):
             import fcntl
 
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        acquired = True
         yield
     finally:
         try:
-            if os.name == "nt":
-                import msvcrt
+            if acquired and stream is not None:
+                if os.name == "nt":
+                    import msvcrt
 
-                stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
 
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         finally:
-            stream.close()
+            if stream is not None:
+                stream.close()
+            elif fd is not None:
+                os.close(fd)
 
 
 def _hash_extent(path, offset, length):
