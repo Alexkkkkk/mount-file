@@ -264,7 +264,14 @@ class NativeExfatImage:
         bitmap_flags, bitmap_cluster, bitmap_size = bitmap
         if bitmap_flags & 0xFE or bitmap_size < (self.profile.cluster_count + 7) // 8:
             raise ExfatReadError("exFAT allocation bitmap geometry is invalid")
-        self._read_stream(bitmap_cluster, bitmap_size, False)
+        bitmap_data = self._read_stream(bitmap_cluster, bitmap_size, False)
+        for cluster in range(2, self.profile.cluster_count + 2):
+            bit = bool(bitmap_data[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7)))
+            fat_value = self._fat_entry(cluster)
+            if bit != (fat_value != 0):
+                raise ExfatReadError(
+                    "exFAT allocation bitmap/FAT metadata is inconsistent"
+                )
         upcase_checksum, upcase_cluster, upcase_size = upcase
         if (
             upcase_size == 0

@@ -31,8 +31,9 @@ profile; явный library-level legacy ext2/3/4 compatibility backend чере
 VFS can browse a validated exFAT image without `pytsk3` when an explicit
 partition extent is supplied. The bounded provider supports directory listing,
 file sizes, range reads and extraction through the common read API. It validates
-the main and backup boot regions, FAT geometry, cluster chains and file-entry
-sets, but never writes the image. `put`, `mkdir`, rename and delete remain
+the main and backup boot regions, FAT geometry, cluster chains, allocation
+bitmap/FAT consistency and checksummed file-entry sets, but never writes the
+image. `put`, `mkdir`, rename and delete remain
 unsupported until allocation bitmap, upcase table and transactional metadata
 updates have independent validation and rollback coverage.
 
