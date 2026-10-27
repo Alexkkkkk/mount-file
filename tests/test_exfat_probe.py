@@ -11,10 +11,21 @@ from mountfile.exfat_probe import (
     exfat_boot_checksum,
     parse_exfat_boot_region,
 )
+from mountfile.exfat_reader import ExfatReadError
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
 from mountfile.universal_fs_rw import NativeExfatRW
 
 VOLUME_SIZE = 2 * 1024 * 1024
+
+
+def _entry_set_checksum(entry_set):
+    checksum = 0
+    for index, value in enumerate(entry_set):
+        if index in (2, 3):
+            value = 0
+        checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
+        checksum = (checksum + value) & 0xFFFF
+    return checksum
 
 
 def _region(sector_size=512):
@@ -99,6 +110,7 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
     struct.pack_into("<Q", root, 32 + 24, len(payload))
     root[64] = 0xC1
     root[66 : 66 + 18] = "HELLO.TXT".encode("utf-16le")
+    struct.pack_into("<H", root, 2, _entry_set_checksum(root[:96]))
     region[cluster_heap : cluster_heap + 512] = root
     region[cluster_heap + 512 : cluster_heap + 1024] = payload
     path = tmp_path / "exfat-tree.img"
@@ -135,6 +147,7 @@ def _tree_image(path):
     struct.pack_into("<Q", root, 120, len(payload))
     root[128] = 0xC1
     root[130:148] = "HELLO.TXT".encode("utf-16le")
+    struct.pack_into("<H", root, 66, _entry_set_checksum(root[64:160]))
     region[32 * 512 : 33 * 512] = root
     region[33 * 512 : 33 * 512 + len(payload)] = payload
     region[34 * 512 : 35 * 512] = b"\x0f" + bytes(511)
@@ -211,6 +224,20 @@ def test_exfat_writer_fails_closed_without_system_metadata(tmp_path):
     writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
     with pytest.raises(ExfatWriteError, match="allocation bitmap entry is missing"):
         writer.write_file("/HELLO.TXT", b"blocked")
+
+
+def test_native_exfat_reader_rejects_entry_set_checksum_corruption(tmp_path):
+    path = tmp_path / "exfat-entry-checksum.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    raw[32 * 512 + 130] ^= 0x01
+    path.write_bytes(raw)
+    provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match="entry-set checksum"):
+            provider.list_dir("/")
+    finally:
+        provider.close()
 
 
 def test_native_exfat_writer_rejects_bitmap_fat_mismatch(tmp_path):

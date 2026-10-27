@@ -169,6 +169,16 @@ class NativeExfatImage:
             raise ExfatReadError("invalid exFAT filename")
         return name
 
+    @staticmethod
+    def _entry_set_checksum(raw):
+        checksum = 0
+        for index, value in enumerate(raw):
+            if index in (2, 3):
+                value = 0
+            checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
+            checksum = (checksum + value) & 0xFFFF
+        return checksum
+
     def _directory(self, cluster):
         raw = b"".join(
             self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
@@ -189,6 +199,10 @@ class NativeExfatImage:
             total = (secondary_count + 1) * 32
             if secondary_count < 2 or pos + total > len(raw):
                 raise ExfatReadError("truncated exFAT file entry set")
+            entry_set = raw[pos : pos + total]
+            stored_checksum = struct.unpack_from("<H", entry_set, 2)[0]
+            if stored_checksum != self._entry_set_checksum(entry_set):
+                raise ExfatReadError("exFAT file entry-set checksum mismatch")
             stream = raw[pos + 32 : pos + 64]
             if stream[0] != 0xC0:
                 raise ExfatReadError("exFAT file entry lacks stream extension")
