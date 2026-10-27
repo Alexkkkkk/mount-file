@@ -38,5 +38,9 @@ def test_benchmark_discards_warmups_and_aggregates_only_timed_runs(monkeypatch):
     assert len(calls) == 5
     assert all(call == (factory, "image", 17, 100, ["/a"]) for call in calls)
     assert result["sample_count"] == 3
-    assert [sample["elapsed_seconds"] for sample in result["samples"]] == [3.0, 4.0, 5.0]
+    assert [sample["elapsed_seconds"] for sample in result["samples"]] == [
+        3.0,
+        4.0,
+        5.0,
+    ]
     assert result["elapsed_seconds_median"] == 4.0

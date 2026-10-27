@@ -8,6 +8,7 @@ pytsk3 baseline. It never guesses a partition extent. Repeated samples and
 warm-ups make timing variability visible; they do not certify filesystem
 correctness or imply support for unimplemented profiles.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -109,9 +110,7 @@ def main() -> int:
     parser.add_argument(
         "--warmups", type=int, default=1, help="untimed provider runs per baseline"
     )
-    parser.add_argument(
-        "--repeat", type=int, default=5, help="timed runs per baseline"
-    )
+    parser.add_argument("--repeat", type=int, default=5, help="timed runs per baseline")
     args = parser.parse_args()
     if args.offset < 0 or args.volume_size <= 0:
         parser.error("offset must be non-negative and volume-size must be positive")
