@@ -145,6 +145,67 @@ def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
         reader._extent_map(inode, 2)
 
 
+def _extent_inode(root, *, logical_size=8 * 1024):
+    root = bytes(root).ljust(60, b"\x00")
+    return _Inode(
+        number=12,
+        mode=0x8000,
+        size=logical_size,
+        flags=0x00080000,
+        mtime=0,
+        block_pointers=struct.unpack("<15I", root),
+    )
+
+
+def _extent_reader(blocks_count=64, blocks=None):
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.blocks_count = blocks_count
+    blocks = blocks or {}
+    reader._extent_block = lambda block: blocks[block]
+    return reader
+
+
+def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 1, 0)
+    struct.pack_into("<IIH", root, 12, 2, 40, 0)
+    leaf = bytearray(1024)
+    struct.pack_into("<HHHH", leaf, 0, 0xF30A, 1, 84, 0)
+    struct.pack_into("<IHHI", leaf, 12, 2, 2, 0, 50)
+
+    reader = _extent_reader(blocks={40: bytes(leaf)})
+    inode = _extent_inode(root)
+    assert reader._extent_map(inode, 2) == (50, False)
+    assert reader._extent_map(inode, 3) == (51, False)
+    assert reader._extent_map(inode, 0) == (0, False)
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        lambda: struct.pack("<HHHHI", 0xF30A, 1, 5, 0, 0) + bytes(40),
+        lambda: struct.pack("<HHHHI", 0xF30A, 1, 4, 6, 0) + bytes(40),
+        lambda: struct.pack("<HHHHI", 0xF30A, 1, 4, 1, 0)
+        + struct.pack("<IIH", 2, 64, 0)
+        + bytes(28),
+    ],
+)
+def test_ext4_synthetic_extent_tree_malformed_or_out_of_bounds_fails_closed(builder):
+    root = bytearray(builder())
+    reader = _extent_reader(blocks={})
+    inode = _extent_inode(root)
+    with pytest.raises(Ext3ReadError, match="extent|depth|header|bounds"):
+        reader._extent_map(inode, 2)
+
+
+def test_ext4_extent_tree_depth_is_bounded():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 0, 4, 6, 0)
+    reader = _extent_reader()
+    with pytest.raises(Ext3ReadError, match="depth|header"):
+        reader._extent_map(_extent_inode(root), 0)
+
+
 def test_extent_profile_reads_a_real_clean_ext4_image(tmp_path):
     mke2fs = shutil.which("mke2fs")
     if mke2fs is None:

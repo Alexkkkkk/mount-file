@@ -46,6 +46,9 @@ _JBD2_TAG_LAST = 0x00000008
 _JBD2_TAG_SAME_UUID = 0x00000002
 _MAX_JOURNAL_BLOCKS = 1 << 20
 _RO_COMPAT_EXTRA_ISIZE = 0x0040
+_EXT4_EXTENTS_MAGIC = 0xF30A
+_MAX_EXTENT_TREE_DEPTH = 5
+_EXT4_METADATA_CSUM_SUPPORTED = False
 
 
 class Ext3ReadError(Ext2ReadError):
@@ -285,7 +288,10 @@ class NativeExt4Image(NativeExt3Image):
             raise Ext3ReadError("ext4 flex_bg group layout is not supported")
         if profile.feature_ro_compat & _RO_COMPAT_BIGALLOC:
             raise Ext3ReadError("ext4 bigalloc cluster layout is not supported")
-        if profile.feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
+        if (
+            profile.feature_ro_compat & _RO_COMPAT_METADATA_CSUM
+            and not _EXT4_METADATA_CSUM_SUPPORTED
+        ):
             raise Ext3ReadError("ext4 metadata checksums are not supported")
         if profile.feature_compat & (
             _COMPAT_FAST_COMMIT | _COMPAT_ORPHAN_FILE | _COMPAT_SPARSE_SUPER2
@@ -326,7 +332,7 @@ class NativeExt4Image(NativeExt3Image):
         if flags & _EXT4_EXTENTS_FL:
             if self.profile.feature_incompat & 0x0040 == 0:
                 raise Ext3ReadError("inode extent flag lacks EXTENTS feature")
-        elif mode & 0xF000 == _S_IFREG and self.profile.feature_incompat & 0x0040:
+        elif self.profile.feature_incompat & 0x0040:
             raise Ext3ReadError("ext4 EXTENTS profile contains a pointer-layout inode")
         size_low = struct.unpack_from("<I", raw, 4)[0]
         size_high = struct.unpack_from("<I", raw, 108)[0]
@@ -404,13 +410,20 @@ class NativeExt4Image(NativeExt3Image):
         node = struct.pack("<15I", *inode.block_pointers)
         visited: set[int] = set()
         expected_depth = None
-        for _depth in range(6):
+        for current_depth in range(_MAX_EXTENT_TREE_DEPTH + 1):
             if len(node) < 12:
                 raise Ext3ReadError("short extent header")
             magic, entries, maximum, node_depth = struct.unpack_from("<HHHH", node, 0)
-            if magic != 0xF30A or entries > maximum or maximum > (len(node) - 12) // 12:
+            capacity = (len(node) - 12) // 12
+            if (
+                magic != _EXT4_EXTENTS_MAGIC
+                or entries > maximum
+                or maximum > capacity
+                or maximum == 0
+                or entries == 0 and node_depth == 0
+            ):
                 raise Ext3ReadError("invalid extent header bounds")
-            if node_depth < 0 or (
+            if node_depth > _MAX_EXTENT_TREE_DEPTH or (
                 expected_depth is not None and node_depth != expected_depth
             ):
                 raise Ext3ReadError("invalid extent tree depth")
@@ -426,7 +439,7 @@ class NativeExt4Image(NativeExt3Image):
                     if length == 0 or start < previous_end:
                         raise Ext3ReadError("empty or overlapping extent")
                     end = start + length
-                    if end > 1 << 32:
+                    if end <= start or end > 1 << 32:
                         raise Ext3ReadError("extent logical range overflow")
                     physical_start = (start_hi << 32) | start_lo
                     if (
@@ -447,11 +460,14 @@ class NativeExt4Image(NativeExt3Image):
                 logical_start, child_lo, child_hi = struct.unpack_from(
                     "<IIH", node, off
                 )
-                if logical_start < previous_key:
+                if logical_start >= 1 << 32 or logical_start < previous_key:
                     raise Ext3ReadError("extent index keys are not sorted")
                 previous_key = logical_start
                 if logical >= logical_start:
-                    selected = (logical_start, child_lo | (child_hi << 32))
+                    child = child_lo | (child_hi << 32)
+                    if not 0 < child < self.blocks_count:
+                        raise Ext3ReadError("extent index block is outside filesystem bounds")
+                    selected = (logical_start, child)
             if selected is None:
                 return 0, False
             if selected[1] in visited:
