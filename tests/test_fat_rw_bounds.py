@@ -21,6 +21,18 @@ def test_native_fat_rejects_bpb_larger_than_selected_extent(tmp_path):
         Fat32RW(image, volume_size=exact_size - 512)
 
 
+def test_native_fat_inferred_extent_must_match_whole_image(tmp_path):
+    image = tmp_path / "fat32.img"
+    make_fat32_image(image)
+    backend = Fat32RW(image)
+    backend.close()
+
+    with image.open("ab") as stream:
+        stream.write(b"trailing bytes")
+    with pytest.raises(ValueError, match="must cover the whole image"):
+        Fat32RW(image)
+
+
 def test_native_fat_metadata_writes_cannot_cross_selected_extent(tmp_path):
     image = tmp_path / "partition.img"
     make_fat32_image(image)

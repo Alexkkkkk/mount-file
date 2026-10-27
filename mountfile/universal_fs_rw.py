@@ -524,6 +524,7 @@ class Fat32RW(RWBackend):
         if offset < 0:
             raise ValueError("negative FAT volume offset")
         image_size = self.image.stat().st_size
+        inferred_whole_image = volume_size is None
         if volume_size is None:
             if offset != 0:
                 raise ValueError(
@@ -615,6 +616,11 @@ class Fat32RW(RWBackend):
         declared_bytes = self.total_sectors * self.bytes_per_sector
         if declared_bytes > self.volume_size:
             raise ValueError("FAT BPB exceeds the selected volume extent")
+        if inferred_whole_image and declared_bytes != self.volume_size:
+            raise ValueError(
+                "FAT BPB must cover the whole image when volume_size is omitted"
+            )
+        self.volume_size = declared_bytes
 
         if self.fat_type == 32:
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
@@ -2066,6 +2072,7 @@ class UniversalFSRW:
         offset: int | None = None,
         auto_backup: bool = True,
         allow_legacy_mount: bool = False,
+        volume_size: int | None = None,
     ):
         self.image = Path(image)
         self.offset = offset
@@ -2074,6 +2081,7 @@ class UniversalFSRW:
         self.backup = ImageBackup(self.image)
         self._auto_backup = auto_backup
         self.allow_legacy_mount = bool(allow_legacy_mount)
+        self._requested_volume_size = volume_size
         self._backup_path: Path | None = None
         self._open()
 
@@ -2104,11 +2112,40 @@ class UniversalFSRW:
             else:
                 fs_type, off = candidate.fstype, candidate.offset
             self.offset = off
-        next_offsets = [int(volume.offset) for volume in volumes if volume.offset > off]
-        boundary = min(next_offsets) if next_offsets else image_size
-        if candidate is not None and candidate.size:
-            boundary = min(boundary, off + int(candidate.size))
-        volume_size = max(0, min(image_size, boundary) - off)
+        if self._requested_volume_size is not None:
+            if not isinstance(self._requested_volume_size, int) or isinstance(
+                self._requested_volume_size, bool
+            ):
+                raise ValueError("volume_size must be an integer byte count")
+            volume_size = self._requested_volume_size
+            if (
+                volume_size <= 0
+                or off < 0
+                or off + volume_size < off
+                or off + volume_size > image_size
+            ):
+                raise ValueError("explicit volume_size exceeds image bounds")
+            if (
+                candidate is not None
+                and candidate.source == "table"
+                and candidate.size
+                and volume_size > int(candidate.size)
+            ):
+                raise ValueError("explicit volume_size exceeds partition-table extent")
+        elif candidate is not None and candidate.source == "table" and candidate.size:
+            volume_size = int(candidate.size)
+        elif off == 0:
+            # A partitionless whole-image filesystem can use its own validated
+            # on-disk length; incidental backup boot-sector signatures are not
+            # partition boundaries.
+            volume_size = image_size
+        else:
+            raise RuntimeError(
+                "exact volume_size required for nonzero offsets without a "
+                "partition-table extent"
+            )
+        if off + volume_size > image_size:
+            raise ValueError("selected volume extent exceeds image bounds")
         self.volume_size = volume_size
         # ``probe_filesystem`` returns display names such as ``FAT32`` or
         # ``NTFS`` while the backend table is lowercase, so the match below

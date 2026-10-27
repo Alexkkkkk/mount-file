@@ -102,8 +102,10 @@ engine.close()
   нельзя честно сделать обычными RW-ФС без пересборки образа по их спецификации.
 * `Fat32RW` receives and enforces the selected volume extent. It rejects a BPB
   whose declared size exceeds that extent and checks every relative read/write
-  against the selected boundary. At nonzero offsets a caller must supply an
-  explicit `volume_size`.
+  against the declared filesystem boundary. Partition-table extents are used
+  when available; signature-scan hits (including FAT backup boot sectors) are
+  never treated as partition ends. At nonzero offsets without an authoritative
+  partition-table size, a caller must supply `UniversalFSRW(..., volume_size=...)`.
 * `UniversalFSRW` is default-deny for unsupported profiles. System/mount-based
   fallback is disabled unless a caller explicitly opts into
   `allow_legacy_mount=True`; a recognized filesystem declined by its native
@@ -145,11 +147,11 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 
 ## Ограничения и риски
 
-* Native ext2 имеет консервативный feature allowlist и проверяет staged image
-  до commit, но не является power-loss-atomic; ext3/ext4 и unsupported ext2
-  профили по умолчанию остаются read-only. Native NTFS metadata browse также
-  fail-closed до отдельной реализации валидации restart area `$LogFile`; boot/MFT
-  probe остаётся доступным только для диагностики.
+* Native ext2 writes remain limited to the clean allowlisted profile and are not
+  power-loss-atomic; ext3/ext4 and unsupported ext2 profiles remain read-only.
+  Native NTFS metadata browsing requires its bounded boot/MFT/USA, volume-state,
+  restart-area and directory-index validations. It remains read-only: log replay,
+  attribute-list streams, unsupported runlists and NTFS mutations are not enabled.
 
   GUI и `WriteEngine(read_only=False)` используют тот же `UniversalFSRW`,
   поэтому это не только read/extract режим.
@@ -159,7 +161,7 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 * Покрытие строк/ветвей из §9.3 (≥85% / ≥75%, транзакционный слой ≥95%) на
   текущем прогоне не подтверждено для всего пакета.
 
-## NTFS boot-sector probe (read-only groundwork)
+## NTFS bounded native read profile
 
 `mountfile.vfs.probe_ntfs_profile(image_path, offset, volume_size)` вызывает
 pure-Python probe первичного 512-байтового NTFS boot sector. Он требует явную
@@ -171,35 +173,17 @@ sectors-per-cluster, объявленный размер тома, распол�
 on-disk](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/ntfs.h)
 и [проверками геометрии](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/super.c).
 
-Успешный результат означает только валидную геометрию boot sector. Probe не
-проверяет сам backup boot sector, MFT FILE records и USA fixups, атрибуты и
-runlists, каталоговые индексы, `$Volume` dirty flag либо `$LogFile` recovery.
-Поэтому он не является готовым NTFS reader, clean-volume verdict или разрешением
-на запись. Native VFS routing остаётся выключенным до завершения последующих
-read-only metadata-validation этапов.
+`mountfile.vfs.probe_ntfs_profile` remains a geometry-only probe. The native
+read-only provider `open_native_ntfs_metadata(image_path, offset, volume_size)`
+requires the exact selected volume extent and validates the primary and backup
+boot sectors, `$MFT`/`$MFTMirr`, FILE-record USA fixups, bounded attribute streams
+and runlists, `$Volume` dirty flags, and clean `$LogFile` restart pages before
+exposing a tree. It supports list/stat/read-range/extract through the existing
+VFS; it does not replay the journal or authorize writes.
 
-## NTFS FILE-record header and USA validation
-
-`mountfile.vfs.parse_ntfs_file_record_header(record)` валидирует заголовок одного
-in-use `FILE` record и Update Sequence Array: требуемый count, границы массива,
-совпадение update sequence number в конце каждого 512-байтового блока и поля
-размера/смещения заголовка. Исправленные trailer words возвращаются в отдельной
-копии только после успешной проверки всех блоков. При несовпадении parser
-отклоняет запись целиком; атрибуты остаются непрочитанными.
-
-Реализация принимает старое и новое расположение USA (`0x2A` и `0x30`) и
-ограничивает запись 1 MiB. Формат заголовка и алгоритм fixup сверены с
-[документацией Microsoft](https://learn.microsoft.com/en-us/windows/win32/devnotes/file-record-segment-header)
-и [реализацией NTFS3](https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/fsntfs.c).
-Это низкоуровневый parser, а не чтение `$MFT` с диска: он не проверяет атрибуты,
-родительские ссылки, каталоги, `$Volume`/`$LogFile` и не включает NTFS read/write
-routing.
-
-`mountfile.vfs.probe_ntfs_metadata(image_path, offset, volume_size)` — следующий
-read-only этап. Он требует точную границу тома, повторно проверяет backup boot
-sector, читает `$MFT` и `$MFTMirr` record 0 с bounded reads и проверяет полный
-поток атрибутов: длины, выравнивание, resident/nonresident layout, VCN bounds и
-структуру runlist. Результат является metadata profile и не включает обход
-каталогов, восстановление `$LogFile`, symlink traversal или любые операции
-записи. При несогласованности primary/backup boot, MFT или USA весь профиль
-отклоняется.
+The reader validates resident and nonresident metadata records, parent/sequence
+references and bounded `$I30` index roots/allocation blocks. It rejects malformed
+indexes, cycles, unsupported `ATTRIBUTE_LIST` streams, sparse/compressed/encrypted
+data, and path components outside its declared profile. Native NTFS writes remain
+disabled; the system-driver path is a separate explicit compatibility choice, not
+a substitute for `$LogFile`-aware native transactions.

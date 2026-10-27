@@ -119,7 +119,9 @@ def test_recognized_fat_profile_does_not_fall_through_to_mount_writer(
     image.write_bytes(b"not a valid FAT volume".ljust(512, b"\x00"))
     monkeypatch.setattr(
         "mountfile.firmware.detect_volumes",
-        lambda _image: [SimpleNamespace(fstype="FAT32", offset=0, size=512)],
+        lambda _image: [
+            SimpleNamespace(fstype="FAT32", offset=0, size=512, source="signature")
+        ],
     )
     monkeypatch.setattr(
         universal_fs_rw,
@@ -136,7 +138,9 @@ def test_legacy_mount_fallback_requires_explicit_opt_in(tmp_path, monkeypatch):
     image.write_bytes(b"legacy volume".ljust(512, b"\x00"))
     monkeypatch.setattr(
         "mountfile.firmware.detect_volumes",
-        lambda _image: [SimpleNamespace(fstype="hfs+", offset=0, size=512)],
+        lambda _image: [
+            SimpleNamespace(fstype="hfs+", offset=0, size=512, source="signature")
+        ],
     )
     monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "hfs+")
 
@@ -148,6 +152,35 @@ def test_legacy_mount_fallback_requires_explicit_opt_in(tmp_path, monkeypatch):
         assert isinstance(fs.backend, LoopMountRW)
     finally:
         fs.close()
+
+
+def test_backup_boot_signature_is_not_used_as_partition_boundary(tmp_path):
+    image = tmp_path / "fat32-backup.img"
+    make_fat32_image(image)
+
+    fs = UniversalFSRW(image, auto_backup=False)
+    try:
+        assert fs.volume_size == image.stat().st_size
+        assert fs.info().fs_type == "fat32"
+    finally:
+        fs.close()
+
+
+def test_nonzero_signature_offset_requires_explicit_extent(tmp_path, monkeypatch):
+    image = tmp_path / "partitionless.img"
+    image.write_bytes(b"X" * 8192)
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(
+                fstype="FAT32", offset=4096, size=None, source="signature"
+            )
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
+
+    with pytest.raises(RuntimeError, match="exact volume_size required"):
+        UniversalFSRW(image, offset=4096, auto_backup=False)
 
 
 def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):
