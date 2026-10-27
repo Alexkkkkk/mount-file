@@ -111,3 +111,67 @@ def test_staged_fat_readback_failure_restores_original_image(tmp_path, monkeypat
             backend.read("/ROLLBACK.TXT")
     finally:
         backend.close()
+
+
+def test_staged_fat_mutation_does_not_overwrite_concurrent_source_change(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "fat32.img"
+    make_fat32_image(image)
+    backend = Fat32RW(image)
+    write_chain = backend._write_chain
+    concurrent_bytes = b"concurrent external modification"
+
+    def modify_source_then_write(clusters, data):
+        with image.open("ab") as stream:
+            stream.write(concurrent_bytes)
+        return write_chain(clusters, data)
+
+    monkeypatch.setattr(backend, "_write_chain", modify_source_then_write)
+    try:
+        with pytest.raises(RuntimeError, match="source image changed"):
+            backend.write_file("/CONCURRENT.TXT", b"staged data")
+        assert image.read_bytes().endswith(concurrent_bytes)
+    finally:
+        backend.close()
+
+
+def test_failed_fat_rollback_quarantines_image_and_retains_snapshot(
+    tmp_path, monkeypatch
+):
+    import mountfile.universal_fs_rw as fs_rw
+
+    image = tmp_path / "fat32.img"
+    make_fat32_image(image)
+    before = image.read_bytes()
+    backend = Fat32RW(image)
+    verify = backend._verify_staged_mutation
+    replace = fs_rw.os.replace
+
+    def fail_after_commit(target, operation, arguments):
+        if Path(target) == image:
+            raise OSError("simulated post-commit read-back failure")
+        return verify(target, operation, arguments)
+
+    def fail_rollback(source, destination):
+        if Path(source).name.endswith(".mountfile-rollback"):
+            raise OSError("simulated rollback replace failure")
+        return replace(source, destination)
+
+    monkeypatch.setattr(backend, "_verify_staged_mutation", fail_after_commit)
+    monkeypatch.setattr(fs_rw.os, "replace", fail_rollback)
+    try:
+        with pytest.raises(RuntimeError, match="image is quarantined"):
+            backend.write_file("/QUARANTINE.TXT", b"not trusted")
+        assert backend._quarantine_marker.exists()
+        rollback_line = next(
+            line
+            for line in backend._quarantine_marker.read_text().splitlines()
+            if line.startswith("rollback=")
+        )
+        rollback = Path(rollback_line.split("=", 1)[1])
+        assert rollback.read_bytes() == before
+        with pytest.raises(RuntimeError, match="is quarantined"):
+            backend.write_file("/BLOCKED.TXT", b"must be denied")
+    finally:
+        backend.close()

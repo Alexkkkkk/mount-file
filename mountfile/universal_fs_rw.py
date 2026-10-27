@@ -688,6 +688,13 @@ class Fat32RW(RWBackend):
                 raise ValueError("staged FAT writes require a regular image file")
             if metadata.st_nlink != 1:
                 raise ValueError("staged FAT writes refuse multiply-linked images")
+            source_identity = (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
             original_hash = _sha256_file(original)
             image_size = metadata.st_size
             if shutil.disk_usage(parent).free < image_size * 2:
@@ -702,6 +709,22 @@ class Fat32RW(RWBackend):
                 rollback = self._temporary_sibling(".mountfile-rollback")
                 shutil.copy2(original, staged)
                 shutil.copy2(original, rollback)
+                staged_stat = original.stat()
+                if (
+                    (
+                        staged_stat.st_dev,
+                        staged_stat.st_ino,
+                        staged_stat.st_size,
+                        staged_stat.st_mtime_ns,
+                        staged_stat.st_ctime_ns,
+                    )
+                    != source_identity
+                    or _sha256_file(staged) != original_hash
+                    or _sha256_file(rollback) != original_hash
+                ):
+                    raise RuntimeError(
+                        "source image changed while creating FAT staging copies"
+                    )
                 self.image = staged
                 self._in_staged_mutation = True
                 try:
@@ -712,7 +735,18 @@ class Fat32RW(RWBackend):
 
                 _fsync_file(staged)
                 self._verify_staged_mutation(staged, operation, arguments)
-                if _sha256_file(original) != original_hash:
+                current_stat = original.stat()
+                current_identity = (
+                    current_stat.st_dev,
+                    current_stat.st_ino,
+                    current_stat.st_size,
+                    current_stat.st_mtime_ns,
+                    current_stat.st_ctime_ns,
+                )
+                if (
+                    current_identity != source_identity
+                    or _sha256_file(original) != original_hash
+                ):
                     raise RuntimeError(
                         "source image changed during staged FAT mutation; "
                         "staged changes were discarded"
