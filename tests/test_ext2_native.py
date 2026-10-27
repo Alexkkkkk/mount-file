@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+import mountfile.ext2_native as ext2_native
 from mountfile.ext2_native import NativeExt2Error, NativeExt2ImageWriter
 
 MKE2FS = shutil.which("mke2fs")
@@ -129,6 +130,79 @@ def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     assert len(check_extent) == volume_size
     check_image = tmp_path / "partition-after.ext2"
     check_image.write_bytes(check_extent)
+    _assert_e2fsck_clean(check_image)
+
+
+def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
+    tmp_path, monkeypatch
+):
+    partition = tmp_path / "partition.ext2"
+    _make_ext2(partition, size=8 * 1024 * 1024, block_size=1024)
+    prefix = b"before-selected-extent" * 17
+    suffix = b"after-selected-extent" * 17
+    image = tmp_path / "disk.img"
+    image.write_bytes(prefix + partition.read_bytes() + suffix)
+
+    writer = NativeExt2ImageWriter(
+        image, offset=len(prefix), volume_size=partition.stat().st_size
+    )
+    original_free_space = writer.free_space()
+    writer.mkdir("/grown")
+    entry_size = (8 + 255 + 3) & ~3
+    entries_per_block = (writer.block_size - 24) // entry_size
+    names = [f"{index:04d}-" + "x" * 250 for index in range(12 * entries_per_block + 4)]
+    direct_names = names[: 12 * entries_per_block]
+    for name in direct_names:
+        writer.write_file("/grown/" + name, b"")
+
+    before_transition = image.read_bytes()
+    original_write_block = ext2_native._Ext2FS._write_block
+    staged_writes = 0
+
+    def fail_pointer_table_write(fs, block, data):
+        nonlocal staged_writes
+        staged_writes += 1
+        if staged_writes == 2:
+            raise OSError("injected indirect-table write failure")
+        return original_write_block(fs, block, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ext2_native._Ext2FS, "_write_block", fail_pointer_table_write)
+        with pytest.raises(OSError, match="indirect-table"):
+            writer.write_file("/grown/" + names[len(direct_names)], b"")
+    assert image.read_bytes() == before_transition
+
+    for name in names[len(direct_names) :]:
+        writer.write_file("/grown/" + name, b"")
+
+    directory_inode = next(
+        item["inode"] for item in writer.list_dir("/") if item["name"] == "grown"
+    )
+    raw = writer._fs._read_inode(directory_inode)
+    single_indirect = writer._fs._u32(raw, 40 + 12 * 4)
+    assert single_indirect
+    directory_blocks = writer._fs._inode_blocks(raw, allow_indirect=True)
+    assert len(directory_blocks) == 14
+    pointers = writer._fs._read_block(single_indirect)
+    assert writer._fs._u32(pointers, 0) == directory_blocks[12]
+    assert writer._fs._u32(pointers, 4) == directory_blocks[13]
+    assert not any(pointers[8:])
+    assert writer._fs._u32(raw, 28) == 15 * (writer.block_size // 512)
+    assert writer.read_file("/grown/" + names[-1]) == b""
+
+    for name in names:
+        writer.delete("/grown/" + name)
+    writer.delete("/grown")
+    assert writer.free_space() == original_free_space
+    assert "grown" not in {entry["name"] for entry in writer.list_dir("/")}
+    with image.open("rb") as stream:
+        assert stream.read(len(prefix)) == prefix
+        stream.seek(len(prefix) + partition.stat().st_size)
+        assert stream.read() == suffix
+        stream.seek(len(prefix))
+        checked_extent = stream.read(partition.stat().st_size)
+    check_image = tmp_path / "partition-after-directory-growth.ext2"
+    check_image.write_bytes(checked_extent)
     _assert_e2fsck_clean(check_image)
 
 

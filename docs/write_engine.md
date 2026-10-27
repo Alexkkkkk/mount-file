@@ -76,10 +76,11 @@ engine.close()
   кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
   `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only.
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
-  один single-indirect pointer для данных файла) использует собственный Python
-  writer без `debugfs`; предел файла — `12 + block_size/4` data blocks, без
-  sparse/double/triple indirect. Рост каталогов за пределы direct blocks не
-  поддерживается. Unsupported/dirty/out-of-bounds volumes не получают native RW.
+  один single-indirect pointer для данных файла и каталогов) использует
+  собственный Python writer без `debugfs`; предел файла и каталога —
+  `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
+  расширении каталога pointer block, bitmap/counters и directory map проходят
+  read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с
   `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
