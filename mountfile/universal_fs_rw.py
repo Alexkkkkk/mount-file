@@ -884,7 +884,9 @@ class Fat32RW(RWBackend):
             if ext_flags & 0x0080:
                 raise ValueError("non-mirrored FAT32 mode is unsupported")
             if self.num_fats > 1:
-                primary = self._read_at(self.fat_offset, self.fat_size * self.bytes_per_sector)
+                primary = self._read_at(
+                    self.fat_offset, self.fat_size * self.bytes_per_sector
+                )
                 for index in range(1, self.num_fats):
                     replica = self._read_at(
                         self.fat_offset + index * self.fat_size * self.bytes_per_sector,
@@ -897,7 +899,10 @@ class Fat32RW(RWBackend):
                 backup_offset = backup_sector * self.bytes_per_sector
                 if backup_offset + self.bytes_per_sector > declared_bytes:
                     raise ValueError("FAT32 backup boot sector exceeds volume bounds")
-                if self._read_at(backup_offset, self.bytes_per_sector) != bs[: self.bytes_per_sector]:
+                if (
+                    self._read_at(backup_offset, self.bytes_per_sector)
+                    != bs[: self.bytes_per_sector]
+                ):
                     raise ValueError("FAT32 backup boot sector is inconsistent")
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
             if not 2 <= self.root_cluster < self.cluster_count + 2:
