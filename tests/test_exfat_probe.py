@@ -102,38 +102,16 @@ def test_vfs_probe_uses_partition_offset(tmp_path):
 
 
 def test_vfs_opens_validated_exfat_with_native_provider(tmp_path):
-    region = _region()
     path = tmp_path / "exfat.img"
-    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+    _tree_image(path)
     provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
     assert provider.backend_name == "native-exfat-ro"
     provider.close()
 
 
 def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
-    region = bytearray(VOLUME_SIZE)
-    region[: 24 * 512] = _region()
-    cluster_heap = 32 * 512
-    fat = 24 * 512
-    struct.pack_into("<I", region, fat + 2 * 4, 0xFFFFFFFF)
-    struct.pack_into("<I", region, fat + 3 * 4, 0xFFFFFFFF)
-    root = bytearray(512)
-    root[0] = 0x85
-    root[1] = 2
-    struct.pack_into("<H", root, 4, 0)
-    root[32] = 0xC0
-    root[35] = 9
-    struct.pack_into("<H", root, 36, _name_hash("HELLO.TXT"))
-    struct.pack_into("<I", root, 32 + 20, 3)
-    payload = b"hello exFAT"
-    struct.pack_into("<Q", root, 32 + 24, len(payload))
-    root[64] = 0xC1
-    root[66 : 66 + 18] = "HELLO.TXT".encode("utf-16le")
-    struct.pack_into("<H", root, 2, _entry_set_checksum(root[:96]))
-    region[cluster_heap : cluster_heap + 512] = root
-    region[cluster_heap + 512 : cluster_heap + 1024] = payload
     path = tmp_path / "exfat-tree.img"
-    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+    payload = _tree_image(path)
     provider = vfs.open_image_provider(path, volume_size=VOLUME_SIZE)
     try:
         assert provider.list_dir("/")[0]["name"] == "HELLO.TXT"
@@ -254,6 +232,28 @@ def test_directory_limit_is_checked_before_reading_next_cluster(
     assert reads == [(1024, 512)]
 
 
+def test_exfat_writer_directory_records_use_bounded_reader_limit(monkeypatch):
+    import mountfile.exfat_reader as exfat_reader
+
+    monkeypatch.setattr(exfat_reader, "_MAX_DIR_BYTES", 512)
+    reader = NativeExfatImage.__new__(NativeExfatImage)
+    reader.profile = SimpleNamespace(cluster_size=512)
+    reader._iter_chain = lambda *_args, **_kwargs: iter((2, 3))
+    reader._cluster_offset = lambda cluster: cluster * 512
+    reads = []
+
+    def read_relative(relative, size):
+        reads.append((relative, size))
+        return bytes(size)
+
+    reader._read_rel = read_relative
+    writer = NativeExfatWriter.__new__(NativeExfatWriter)
+    with pytest.raises(ExfatReadError, match="directory exceeds reader limit"):
+        writer._directory_records(reader, 2)
+
+    assert reads == [(1024, 512)]
+
+
 def _tree_image(path):
     region = bytearray(VOLUME_SIZE)
     region[: 24 * 512] = _region()
@@ -286,6 +286,36 @@ def _tree_image(path):
     region[35 * 512 : 36 * 512] = bytes(512)
     path.write_bytes(region)
     return payload
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        ("missing_bitmap", "allocation bitmap entry is missing"),
+        ("missing_upcase", "upcase table entry is missing"),
+        ("bitmap_fat_mismatch", "bitmap/FAT metadata is inconsistent"),
+        ("upcase_checksum", "upcase table checksum mismatch"),
+    ],
+)
+def test_native_exfat_reader_requires_valid_system_metadata(
+    tmp_path, mutate, message
+):
+    path = tmp_path / f"exfat-metadata-{mutate}.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    root = 32 * 512
+    if mutate == "missing_bitmap":
+        raw[root] = 0
+    elif mutate == "missing_upcase":
+        raw[root + 32] = 0
+    elif mutate == "bitmap_fat_mismatch":
+        raw[34 * 512] ^= 0x04
+    else:
+        raw[35 * 512] = 1
+    path.write_bytes(raw)
+
+    with pytest.raises(ExfatReadError, match=message):
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
 
 
 def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):

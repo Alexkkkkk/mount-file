@@ -69,6 +69,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 or self.volume_end > self._image_size
             ):
                 raise ExfatReadError("exFAT volume exceeds selected bounds")
+            self._system_metadata = self.system_metadata()
             self.root_name = self.image_path
         except (OSError, ExfatProbeError, struct.error) as exc:
             self.close()
