@@ -40,20 +40,26 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     """Read-only exFAT provider for a validated bounded volume."""
 
     backend_name = "native-exfat-ro"
+    case_insensitive_paths = True
 
     def __init__(self, image_path, offset=0, volume_size=None):
-        if volume_size is None:
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or offset < 0
+            or not isinstance(volume_size, int)
+            or isinstance(volume_size, bool)
+            or volume_size <= 0
+        ):
             raise ExfatReadError("exFAT provider requires an explicit volume extent")
         self.image_path = str(image_path)
-        self.offset = int(offset)
-        if self.offset < 0:
-            raise ExfatReadError("negative exFAT offset")
+        self.offset = offset
         self._stream = None
         try:
             self._stream = Path(self.image_path).open("rb")
             self._image_size = os.fstat(self._stream.fileno()).st_size
             self.profile = probe_exfat_boot_region(
-                self.image_path, offset=self.offset, volume_size=int(volume_size)
+                self.image_path, offset=self.offset, volume_size=volume_size
             )
             if self.profile.volume_flags != 0:
                 raise ExfatReadError("native exFAT reader rejects nonzero volume flags")
@@ -65,7 +71,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 self.offset + self.profile.volume_length * self.profile.bytes_per_sector
             )
             if (
-                self.volume_end > self.offset + int(volume_size)
+                self.volume_end > self.offset + volume_size
                 or self.volume_end > self._image_size
             ):
                 raise ExfatReadError("exFAT volume exceeds selected bounds")
@@ -258,8 +264,10 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 pos += 32
                 continue
             secondary_count = raw[pos + 1]
+            if secondary_count < 2 or secondary_count > 18:
+                raise ExfatReadError("exFAT file entry set has invalid secondary count")
             total = (secondary_count + 1) * 32
-            if secondary_count < 2 or pos + total > len(raw):
+            if pos + total > len(raw):
                 raise ExfatReadError("truncated exFAT file entry set")
             entry_set = raw[pos : pos + total]
             stored_checksum = struct.unpack_from("<H", entry_set, 2)[0]
@@ -273,6 +281,11 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             name_length = stream[3]
             if name_length == 0 or name_length > 15 * (secondary_count - 1):
                 raise ExfatReadError("exFAT filename length exceeds entry set")
+            if (name_length + 14) // 15 != secondary_count - 1:
+                raise ExfatReadError("exFAT filename entry count is invalid")
+            attributes = struct.unpack_from("<H", raw, pos + 4)[0]
+            if attributes & ~0x003F:
+                raise ExfatReadError("exFAT file entry has reserved attributes")
             first_cluster = struct.unpack_from("<I", stream, 20)[0]
             size = struct.unpack_from("<Q", stream, 24)[0]
             no_fat_chain = bool(stream[1] & 0x02)
@@ -289,7 +302,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             entries.append(
                 _Entry(
                     name,
-                    bool(struct.unpack_from("<H", raw, pos + 4)[0] & 0x10),
+                    bool(attributes & 0x10),
                     first_cluster,
                     size,
                     no_fat_chain,
@@ -372,7 +385,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 (
                     item
                     for item in self._directory(current.first_cluster)
-                    if item.name == part
+                    if item.name == part or item.name.casefold() == part.casefold()
                 ),
                 None,
             )
