@@ -16,6 +16,8 @@ from mountfile.ext2_reader import (
     _COMPAT_EXT_ATTR,
     _COMPAT_HAS_JOURNAL,
     _COMPAT_RESIZE_INODE,
+    _EXT2_COMPR_FL,
+    _EXT2_INDEX_FL,
     _EXT4_EA_INODE_FL,
     _EXT4_ENCRYPT_FL,
     _EXT4_EXTENTS_FL,
@@ -289,9 +291,13 @@ class NativeExt3Image(NativeExt2Image):
         logical = start
         transactions = 0
         overlay = {}
+        terminated = False
         while logical < max_length:
             descriptor = self._journal_logical_block(inode, logical, journal_blocks)
             if not descriptor.strip(b"\x00"):
+                if transactions == 0:
+                    raise Ext3ReadError("first JBD2 replay descriptor is empty")
+                terminated = True
                 break
             magic, record_type, sequence = self._jbd2_header(descriptor)
             if magic != _JBD2_MAGIC or record_type != _JBD2_DESCRIPTOR:
@@ -347,7 +353,14 @@ class NativeExt3Image(NativeExt2Image):
             logical = commit_logical + 1
         # Do not expose a partially replayed view if a later transaction is
         # malformed. Publish only after the complete supported log prefix has
-        # been validated successfully.
+        # been validated successfully, a committed transaction was found, and
+        # an unused-record terminator proves this non-wrapping range is complete.
+        if transactions == 0:
+            raise Ext3ReadError("JBD2 replay verified no committed transaction")
+        if not terminated:
+            raise Ext3ReadError(
+                "JBD2 replay reaches end of non-wrapping log without terminator"
+            )
         self._journal_overlay = overlay
 
     def _read_at(self, relative_offset: int, size: int) -> bytes:
@@ -444,13 +457,16 @@ class NativeExt4Image(NativeExt3Image):
             raise Ext3ReadError("allocated inode has no valid file mode")
         flags = struct.unpack_from("<I", raw, 32)[0]
         unsupported_flags = (
-            _EXT4_EA_INODE_FL
+            _EXT2_COMPR_FL
+            | _EXT4_EA_INODE_FL
             | _EXT4_ENCRYPT_FL
             | _EXT4_VERITY_FL
             | _EXT4_INLINE_DATA_FL
         )
         if flags & unsupported_flags:
             raise Ext3ReadError("inode uses an unsupported ext4 data layout")
+        if mode & 0xF000 == 0x4000 and flags & _EXT2_INDEX_FL:
+            raise Ext3ReadError("indexed directories are not supported by this profile")
         if flags & _EXT4_EXTENTS_FL:
             if self.profile.feature_incompat & 0x0040 == 0:
                 raise Ext3ReadError("inode extent flag lacks EXTENTS feature")
@@ -467,6 +483,13 @@ class NativeExt4Image(NativeExt3Image):
         else:
             size = size_low
         pointers = struct.unpack_from("<15I", raw, 40)
+        if not flags & _EXT4_EXTENTS_FL:
+            addressable_blocks = 12 + self.block_size // 4
+            addressable_blocks += (self.block_size // 4) ** 2 + (
+                self.block_size // 4
+            ) ** 3
+            if size > addressable_blocks * self.block_size:
+                raise Ext3ReadError("inode size exceeds classic block-pointer capacity")
         inode = _Inode(
             number=number,
             mode=mode,
@@ -580,11 +603,15 @@ class NativeExt4Image(NativeExt3Image):
             selected = None
             for pos in range(entries):
                 off = 12 + pos * 12
-                logical_start, child_lo, child_hi = struct.unpack_from(
-                    "<IIH", node, off
+                logical_start, child_lo, child_hi, reserved = struct.unpack_from(
+                    "<IIHH", node, off
                 )
-                if logical_start >= 1 << 32 or logical_start < previous_key:
-                    raise Ext3ReadError("extent index keys are not sorted")
+                if logical_start >= 1 << 32 or logical_start <= previous_key:
+                    raise Ext3ReadError(
+                        "extent index logical keys are not strictly increasing"
+                    )
+                if reserved:
+                    raise Ext3ReadError("extent index reserved field is nonzero")
                 previous_key = logical_start
                 if logical >= logical_start:
                     child = child_lo | (child_hi << 32)
