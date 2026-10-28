@@ -121,6 +121,41 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
         provider.close()
 
 
+def test_native_exfat_traverses_nested_paths_and_case_insensitive_stat(tmp_path):
+    path = tmp_path / "exfat-nested-read.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.mkdir("/Nested")
+    writer.write_file("/Nested/Report.TXT", b"nested report")
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.stat("/nested/report.txt")["size"] == len(b"nested report")
+        assert provider.read_file_range("/NESTED/report.txt", 7, 6) == b"report"
+        assert provider.list_dir("/nested") == [
+            {"name": "Report.TXT", "is_dir": False, "size": 13, "date": ""}
+        ]
+    finally:
+        provider.close()
+
+
+def test_native_exfat_rejects_reserved_file_attributes(tmp_path):
+    path = tmp_path / "exfat-reserved-attributes.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    entry_start = 32 * 512 + 64
+    struct.pack_into("<H", raw, entry_start + 4, 0x0040)
+    entry_set = bytearray(raw[entry_start : entry_start + 96])
+    struct.pack_into("<H", entry_set, 2, _entry_set_checksum(entry_set))
+    raw[entry_start : entry_start + 96] = entry_set
+    path.write_bytes(raw)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match="reserved attributes"):
+            provider.list_dir("/")
+    finally:
+        provider.close()
+
+
 def test_exfat_range_read_fetches_only_clusters_and_bytes_requested():
     reader = NativeExfatImage.__new__(NativeExfatImage)
     reader.profile = SimpleNamespace(cluster_size=512, cluster_count=10)
