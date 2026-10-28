@@ -187,7 +187,10 @@ def test_validates_nested_indx_child_pointer_but_public_parser_remains_fail_clos
     struct.pack_into("<Q", block, 152 + 24 - 8, 8)
 
     entries, children = _parse_ntfs_index_block(
-        bytes(block), parent_reference=(3 << 48) | 5, expected_vcn=0, allow_children=True
+        bytes(block),
+        parent_reference=(3 << 48) | 5,
+        expected_vcn=0,
+        allow_children=True,
     )
     assert entries[0].name == "file"
     assert children == (7, 8)
