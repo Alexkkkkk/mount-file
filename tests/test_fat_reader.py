@@ -193,9 +193,7 @@ def test_native_fat_requires_explicit_extent_at_nonzero_offset(tmp_path):
         NativeFatImage(image, offset=len(prefix))
 
     with pytest.raises(vfs.RecognizedFilesystemError, match="explicit FAT volume_size"):
-        vfs.open_image_provider(
-            image, offset=len(prefix), allow_legacy_fallback=True
-        )
+        vfs.open_image_provider(image, offset=len(prefix), allow_legacy_fallback=True)
 
 
 def test_vfs_rejects_inflated_fat_bpb_outside_nonzero_extent(tmp_path):
@@ -218,6 +216,8 @@ def test_vfs_rejects_inflated_fat_bpb_outside_nonzero_extent(tmp_path):
             volume_size=len(raw_volume),
             allow_legacy_fallback=True,
         )
+
+
 # ---------------------------------------------------------------------------
 # Differential matrix (issue #182): native FAT12/16/32 readers vs an
 # independent reference oracle.

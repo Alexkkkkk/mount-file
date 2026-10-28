@@ -297,9 +297,7 @@ def _tree_image(path):
         ("upcase_checksum", "upcase table checksum mismatch"),
     ],
 )
-def test_native_exfat_reader_requires_valid_system_metadata(
-    tmp_path, mutate, message
-):
+def test_native_exfat_reader_requires_valid_system_metadata(tmp_path, mutate, message):
     path = tmp_path / f"exfat-metadata-{mutate}.img"
     _tree_image(path)
     raw = bytearray(path.read_bytes())

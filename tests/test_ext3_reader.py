@@ -145,7 +145,9 @@ def test_journal_replay_requires_terminator_before_nonwrapping_log_end(tmp_path)
     struct.pack_into(">I", image, 40 * 1024 + 24, 1)
     image_path.write_bytes(image)
 
-    with pytest.raises(Ext3ReadError, match="end of non-wrapping log without terminator"):
+    with pytest.raises(
+        Ext3ReadError, match="end of non-wrapping log without terminator"
+    ):
         NativeExt3Image(
             image_path,
             volume_size=BLOCKS_COUNT * 1024,

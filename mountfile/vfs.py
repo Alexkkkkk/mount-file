@@ -354,10 +354,9 @@ def _has_fat_boot_magic(image_path, offset, volume_size):
                 return False
             stream.seek(offset)
             raw = stream.read(512)
-            return (
-                NativeFatImage.has_fat_family_marker(raw)
-                or NativeFatImage.looks_like_boot_sector(raw)
-            )
+            return NativeFatImage.has_fat_family_marker(
+                raw
+            ) or NativeFatImage.looks_like_boot_sector(raw)
     except OSError as exc:
         raise TskError(f"cannot inspect image for native FAT: {exc}") from exc
 
