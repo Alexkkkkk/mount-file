@@ -2519,9 +2519,9 @@ class UniversalFSRW:
             reason = ""
         else:
             write = []
-            reason = (
-                "write operations are unsupported for profile %s (%s)"
-                % (info.fs_type, strategy or "read-only")
+            reason = "write operations are unsupported for profile %s (%s)" % (
+                info.fs_type,
+                strategy or "read-only",
             )
         return {
             "backend": info.backend,
