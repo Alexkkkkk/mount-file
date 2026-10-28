@@ -59,3 +59,4 @@ nav:
   - Разработчикам:
       - Структура репозитория: structure.md
       - UniversalFSRW snippet: tc_window_universal_fs_rw_snippet.md
+      - VFS benchmarks: benchmarks.md

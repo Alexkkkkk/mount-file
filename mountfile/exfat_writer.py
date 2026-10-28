@@ -144,7 +144,12 @@ class NativeExfatWriter:
         return parts
 
     def _reader(self, stage):
-        return NativeExfatImage(stage, offset=self.offset, volume_size=self.volume_size)
+        try:
+            return NativeExfatImage(
+                stage, offset=self.offset, volume_size=self.volume_size
+            )
+        except ExfatReadError as exc:
+            raise ExfatWriteError(str(exc)) from exc
 
     def _read_rel(self, stream, relative, size):
         absolute = self.offset + relative
@@ -165,10 +170,7 @@ class NativeExfatWriter:
             raise ExfatWriteError("short write to staged exFAT image")
 
     def _directory_records(self, reader, cluster):
-        raw = b"".join(
-            reader._read_rel(reader._cluster_offset(item), reader.profile.cluster_size)
-            for item in reader._chain(cluster, no_fat_chain=False)
-        )
+        raw = reader._read_directory_bytes(cluster)
         records = []
         pos = 0
         while pos + 32 <= len(raw):

@@ -440,6 +440,93 @@ def test_native_ext2_staging_failure_does_not_modify_original(tmp_path, monkeypa
     assert image.read_bytes() == before
 
 
+def test_native_ext2_rolls_back_and_verifies_restored_extent_hash(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+    hash_source = writer._hash_source
+    hash_calls = 0
+
+    def reject_committed_hash():
+        nonlocal hash_calls
+        hash_calls += 1
+        digest = hash_source()
+        if hash_calls == 3:
+            return b"\x00" * len(digest)
+        return digest
+
+    monkeypatch.setattr(writer, "_hash_source", reject_committed_hash)
+    with pytest.raises(
+        NativeExt2Error, match="committed ext2 extent failed SHA-256 verification"
+    ):
+        writer.write_file("/not-committed.txt", b"staged only")
+
+    assert hash_calls == 4
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+    hash_source = writer._hash_source
+    hash_calls = 0
+    image_write_opens = 0
+    original_open = open
+
+    def reject_committed_hash():
+        nonlocal hash_calls
+        hash_calls += 1
+        digest = hash_source()
+        if hash_calls == 3:
+            return b"\x00" * len(digest)
+        return digest
+
+    class ShortWriteStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def write(self, _data):
+            return 0
+
+    def short_rollback_open(path, mode="r", *args, **kwargs):
+        nonlocal image_write_opens
+        stream = original_open(path, mode, *args, **kwargs)
+        if str(path) == str(image) and mode == "r+b":
+            image_write_opens += 1
+            if image_write_opens == 3:
+                return ShortWriteStream(stream)
+        return stream
+
+    monkeypatch.setattr(writer, "_hash_source", reject_committed_hash)
+    monkeypatch.setattr(ext2_native, "open", short_rollback_open, raising=False)
+    with pytest.raises(
+        NativeExt2Error,
+        match="commit and rollback both failed.*short write while restoring ext2 extent",
+    ):
+        writer.write_file("/not-restored.txt", b"staged only")
+
+    assert image_write_opens == 3
+    assert hash_calls == 4
+    assert image.read_bytes() != before
+
+
 def test_native_ext2_rejects_concurrent_change_before_commit(tmp_path, monkeypatch):
     image = tmp_path / "concurrent-change.ext2"
     _make_ext2(image)

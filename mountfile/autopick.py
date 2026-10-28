@@ -100,6 +100,7 @@ class Candidate:
     __slots__ = (
         "backend",
         "error",
+        "extent_size",
         "fstype",
         "label",
         "name",
@@ -110,11 +111,21 @@ class Candidate:
         "source",
     )
 
-    def __init__(self, offset, fstype, source="scan", size=None, label="", name=""):
+    def __init__(
+        self,
+        offset,
+        fstype,
+        source="scan",
+        size=None,
+        label="",
+        name="",
+        extent_size=None,
+    ):
         self.offset = int(offset)
         self.fstype = fstype
         self.source = source
         self.size = size
+        self.extent_size = extent_size
         self.label = label or ""
         self.name = name or ""
         self.score = FS_WEIGHT.get(fstype, 20)
@@ -359,6 +370,7 @@ def _volume_candidates(path, udev=None, scan_limit=DEFAULT_SCAN_LIMIT):
                     source="partition",
                     name=p.name,
                     size=p.size_bytes,
+                    extent_size=p.size_bytes,
                 )
             )
     except Exception:
@@ -407,13 +419,34 @@ def scan_candidates(
                 old.label = cand.label
             if not old.size and cand.size:
                 old.size = cand.size
+            if old.extent_size is None and cand.extent_size is not None:
+                old.extent_size = cand.extent_size
+            elif (
+                old.extent_size is not None
+                and cand.extent_size is not None
+                and old.extent_size != cand.extent_size
+            ):
+                old.extent_size = None
+                old.add(-20, "authoritative volume bounds disagree")
             old.add(6, "подтверждён источником %s" % cand.source)
         return by_offset[cand.offset]
 
     with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        image_size = f.tell()
         # 1. сигнатуры в начале образа
         for offset, fstype, label, size in _scan_range(f, 0, scan_limit):
-            add(Candidate(offset, fstype, source="signature", size=size, label=label))
+            extent_size = image_size - offset if offset + size == image_size else None
+            add(
+                Candidate(
+                    offset,
+                    fstype,
+                    source="signature",
+                    size=size,
+                    label=label,
+                    extent_size=extent_size,
+                )
+            )
 
         # 2. таблица разделов и udev
         for cand in _volume_candidates(path, udev=udev, scan_limit=scan_limit):
@@ -431,7 +464,7 @@ def scan_candidates(
         # 3. глубокий поиск внутри разделов без валидной ФС
         if deep and inner_window:
             starts = [
-                (c.offset, c.name or c.source, c.size)
+                (c.offset, c.name or c.source, c.extent_size)
                 for c in list(candidates)
                 if c.fstype == "raw" and c.source in ("partition", "udev")
             ]
@@ -456,6 +489,11 @@ def scan_candidates(
                             size=size,
                             label=label,
                             name=name,
+                            extent_size=(
+                                partition_end - hit
+                                if partition_end is not None
+                                else None
+                            ),
                         )
                     )
                     inner.add(4, "ФС найдена внутри раздела %r" % name)
@@ -486,7 +524,7 @@ def _score_alignment(cand, path):
         cand.add(3, "том начинается с нуля")
 
 
-def verify_mount(path, offset, fstype=None):
+def verify_mount(path, offset, fstype=None, volume_size=None):
     """Реально открыть том. Возвращает ``(backend, entries, error)``.
 
     ``backend`` — ``"native-fat12"``, ``"native-fat16"``, ``"native-fat32"``,
@@ -498,7 +536,7 @@ def verify_mount(path, offset, fstype=None):
         try:
             from .fat_reader import NativeFatImage
 
-            provider = NativeFatImage(path, offset=offset)
+            provider = NativeFatImage(path, offset=offset, volume_size=volume_size)
             try:
                 entries = len(provider.list_dir("/"))
                 return "native-fat%d" % provider.fat_type, entries, None
@@ -571,7 +609,9 @@ def auto_select(
 
     if verify:
         for cand in candidates:
-            backend, entries, error = verify_mount(path, cand.offset, cand.fstype)
+            backend, entries, error = verify_mount(
+                path, cand.offset, cand.fstype, cand.extent_size
+            )
             cand.backend = backend
             cand.error = error
             if backend:

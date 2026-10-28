@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from mountfile import vfs
-from mountfile.ext2_reader import _Inode
+from mountfile.ext2_reader import _EXT2_COMPR_FL, _EXT2_INDEX_FL, _Inode
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
@@ -22,15 +22,16 @@ def _make_clean_journal_image(
     sb = memoryview(image)[1024:2048]
     filesystem_uuid = b"0123456789abcdef"
     sb[0x68:0x78] = filesystem_uuid
-    # inode 8: a four-block internal journal at blocks 40..43
+    # inode 8: a five-block internal journal at blocks 40..44. The final
+    # zero block is the terminator for the non-wrapping replay range.
     inode = 5 * 1024 + 7 * 128
     struct.pack_into("<H", image, inode, 0x8000 | 0o600)
-    struct.pack_into("<I", image, inode + 4, 4 * 1024)
-    struct.pack_into("<4I", image, inode + 40, 40, 41, 42, 43)
+    struct.pack_into("<I", image, inode + 4, 5 * 1024)
+    struct.pack_into("<5I", image, inode + 40, 40, 41, 42, 43, 44)
 
-    journal = memoryview(image)[40 * 1024 : 44 * 1024]
+    journal = memoryview(image)[40 * 1024 : 45 * 1024]
     struct.pack_into(">III", journal, 0, 0xC03B3998, 3, 7)
-    struct.pack_into(">II", journal, 12, 1024, 4)
+    struct.pack_into(">II", journal, 12, 1024, 5)
     struct.pack_into(">II", journal, 20, 1, 0)
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
@@ -103,6 +104,55 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
         assert image_path.read_bytes()[21 * 1024 : 22 * 1024] != payload
     finally:
         provider.close()
+
+
+def test_active_journal_replay_rejects_empty_first_descriptor(tmp_path):
+    image_path = tmp_path / "empty-replay-descriptor.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image[41 * 1024 : 42 * 1024] = bytes(1024)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="first JBD2 replay descriptor is empty"):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=True,
+        )
+
+
+def test_journal_replay_empty_first_descriptor_preserves_existing_overlay():
+    reader = NativeExt3Image.__new__(NativeExt3Image)
+    reader.block_size = 1024
+    reader.blocks_count = 128
+    reader._journal_overlay = {99: b"previous-state"}
+    reader._journal_logical_block = lambda _inode, _logical, _count: bytes(1024)
+
+    with pytest.raises(Ext3ReadError, match="first JBD2 replay descriptor is empty"):
+        reader._replay_journal(
+            object(), start=1, max_length=7, journal_blocks=8, expected_sequence=7
+        )
+
+    assert reader._journal_overlay == {99: b"previous-state"}
+
+
+def test_journal_replay_requires_terminator_before_nonwrapping_log_end(tmp_path):
+    image_path = tmp_path / "unterminated-replay-range.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 16, 4)
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+
+    with pytest.raises(
+        Ext3ReadError, match="end of non-wrapping log without terminator"
+    ):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=True,
+        )
 
 
 def test_journal_replay_rejects_sequence_not_advertised_by_superblock(tmp_path):
@@ -232,6 +282,51 @@ def test_ext4_metadata_csum_rejection_names_unvalidated_structures():
         NativeExt4Image._validate_profile(profile)
 
 
+def _ext4_inode_reader(raw, *, block_size=1024):
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.inodes_count = 16
+    reader.inodes_per_group = 16
+    reader.inode_size = len(raw)
+    reader.block_size = block_size
+    reader.feature_ro_compat = 0x0003
+    reader.profile = SimpleNamespace(feature_incompat=0)
+    reader._inode_cache = {}
+    reader._group_descriptor = lambda _group: SimpleNamespace(inode_table=5)
+    reader._inode_is_allocated = lambda _number, _group, _index: True
+    reader._read_at = lambda _offset, size: bytes(raw[:size])
+    return reader
+
+
+@pytest.mark.parametrize(
+    ("mode", "flags", "reason"),
+    [
+        (0x8000, _EXT2_COMPR_FL, "unsupported ext4 data layout"),
+        (0x4000, _EXT2_INDEX_FL, "indexed directories"),
+    ],
+)
+def test_ext4_rejects_compressed_inodes_and_indexed_directories(mode, flags, reason):
+    raw = bytearray(128)
+    struct.pack_into("<H", raw, 0, mode)
+    struct.pack_into("<I", raw, 32, flags)
+
+    with pytest.raises(Ext3ReadError, match=reason):
+        _ext4_inode_reader(raw)._read_inode(2)
+
+
+def test_ext4_rejects_nonextent_inode_larger_than_classic_pointer_capacity():
+    block_size = 1024
+    entries = block_size // 4
+    capacity = 12 + entries + entries**2 + entries**3
+    size = capacity * block_size + 1
+    raw = bytearray(128)
+    struct.pack_into("<H", raw, 0, 0x8000)
+    struct.pack_into("<I", raw, 4, size & 0xFFFFFFFF)
+    struct.pack_into("<I", raw, 108, size >> 32)
+
+    with pytest.raises(Ext3ReadError, match="classic block-pointer capacity"):
+        _ext4_inode_reader(raw, block_size=block_size)._read_inode(2)
+
+
 def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
     root = bytearray(60)
     struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)
@@ -286,6 +381,25 @@ def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
     assert reader._extent_map(inode, 2) == (50, False)
     assert reader._extent_map(inode, 3) == (51, False)
     assert reader._extent_map(inode, 0) == (0, False)
+
+
+@pytest.mark.parametrize(
+    ("indexes", "reason"),
+    [
+        ([(0, 40, 0), (0, 41, 0)], "strictly increasing"),
+        ([(0, 40, 1)], "reserved field is nonzero"),
+    ],
+)
+def test_ext4_extent_index_requires_unique_keys_and_zero_reserved_field(
+    indexes, reason
+):
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, len(indexes), 4, 1, 0)
+    for position, (logical, child, reserved) in enumerate(indexes):
+        struct.pack_into("<IIHH", root, 12 + position * 12, logical, child, 0, reserved)
+
+    with pytest.raises(Ext3ReadError, match=reason):
+        _extent_reader()._extent_map(_extent_inode(root), 0)
 
 
 @pytest.mark.parametrize(

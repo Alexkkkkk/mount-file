@@ -75,6 +75,10 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         self.offset = int(offset)
         if self.offset < 0:
             raise FatReadError("negative filesystem offset")
+        if self.offset and volume_size is None:
+            raise FatReadError(
+                "an explicit FAT volume_size is required for a nonzero offset"
+            )
         self._stream = None
         self._lock = threading.RLock()
         self._image_size = 0
@@ -105,6 +109,17 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         except Exception:
             self.close()
             raise
+
+    @staticmethod
+    def has_fat_family_marker(raw: bytes) -> bool:
+        """Return whether bytes carry a classic FAT type marker.
+
+        This is deliberately independent of BPB validation so dispatch can
+        fail closed for a labelled FAT boot sector whose geometry is malformed.
+        """
+        return len(raw) >= 90 and (
+            raw[54:59] in (b"FAT12", b"FAT16") or raw[82:87] == b"FAT32"
+        )
 
     @staticmethod
     def looks_like_boot_sector(raw: bytes) -> bool:

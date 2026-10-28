@@ -81,6 +81,23 @@ engine.close()
   `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only. Native
   reader также отклоняет рассинхронные mirrored FAT copies и повреждённую
   backup BPB FAT32 до чтения файлов.
+  Статус read parity (issue #182): подтверждена differential тест-матрицей
+  в `tests/test_fat_reader.py` — для всех трёх вариантов FAT прогоняются
+  valid- и invalid-fixture (синтетические образы со short-name, LFN, пустым,
+  многокластерным файлом и вложенным каталогом), а результаты
+  list/stat/read-range/extract native reader сравниваются с независимой
+  референс-реализацией FAT внутри тестов (`pytsk3` и `mkfs.vfat` в тестовом
+  окружении недоступны, поэтому oracle — собственная минимальная
+  reference-читалка, не разделяющая код с `mountfile.fat_reader`). Повреждённые
+  профили (битая boot signature, усечённый образ, цикл или свободная ссылка
+  в цепочке кластеров) завершаются явным отказом; routing-тесты дополнительно
+  фиксируют, что bounded FAT-профили всегда обрабатываются native reader-ом
+  и legacy `pytsk3` fallback не вызывается.
+  Статус write parity: native WRITE parity для FAT12/16 НЕ заявляется —
+  у этих вариантов нет write path вовсе (read-only); это честное ограничение,
+  а не скрытый fallback. FAT32 writer (`mountfile/fat32.py`) остаётся отдельным
+  bounded-движком и также не претендует на паритет с системными средствами
+  записи.
   Writer принимает только mirrored FAT32 mode с идентичными FAT copies.
   Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
   текущий writer обновляет все FAT copies одновременно и не поддерживает

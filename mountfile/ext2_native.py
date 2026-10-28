@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-import shutil
 import stat
 import struct
 import tempfile
@@ -1274,6 +1273,47 @@ class NativeExt2ImageWriter:
                 remaining -= len(chunk)
         return digest.digest()
 
+    def _restore_extent(self, rollback: str, original_hash: bytes) -> None:
+        rollback_error = None
+        try:
+            remaining = self.filesystem_size
+            with open(self.image_path, "r+b") as dst, open(rollback, "rb") as src:
+                dst.seek(self.offset)
+                while remaining:
+                    chunk = src.read(min(_CHUNK, remaining))
+                    if not chunk:
+                        raise NativeExt2Error("rollback ext2 extent is truncated")
+                    written = dst.write(chunk)
+                    if written != len(chunk):
+                        raise NativeExt2Error("short write while restoring ext2 extent")
+                    remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+        except Exception as exc:
+            rollback_error = exc
+
+        try:
+            restored_hash = self._hash_source()
+        except Exception as verification_error:
+            if rollback_error is not None:
+                raise NativeExt2Error(
+                    "ext2 rollback write failed and restoration verification failed: %s"
+                    % rollback_error
+                ) from verification_error
+            raise NativeExt2Error(
+                "ext2 rollback restoration verification failed"
+            ) from verification_error
+
+        if restored_hash != original_hash:
+            if rollback_error is not None:
+                raise NativeExt2Error(
+                    "ext2 rollback write failed and restored extent SHA-256 did not "
+                    "match: %s" % rollback_error
+                )
+            raise NativeExt2Error("restored ext2 extent failed SHA-256 verification")
+        if rollback_error is not None:
+            raise rollback_error
+
     def _commit(self, staged: str, original_hash: bytes) -> None:
         if self._hash_source() != original_hash:
             raise NativeExt2Error(
@@ -1308,14 +1348,7 @@ class NativeExt2ImageWriter:
                     )
             except Exception as exc:
                 try:
-                    with (
-                        open(self.image_path, "r+b") as dst,
-                        open(rollback, "rb") as src,
-                    ):
-                        dst.seek(self.offset)
-                        shutil.copyfileobj(src, dst, _CHUNK)
-                        dst.flush()
-                        os.fsync(dst.fileno())
+                    self._restore_extent(rollback, original_hash)
                 except Exception as rollback_exc:
                     raise NativeExt2Error(
                         "ext2 commit and rollback both failed; restore the persistent image backup: %s"
