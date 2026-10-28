@@ -155,3 +155,65 @@ def test_vfs_selects_native_fat_without_pytsk3(tmp_path, monkeypatch):
         assert provider.list_dir("/") == []
     finally:
         provider.close()
+
+
+@pytest.mark.parametrize(
+    ("marker_offset", "marker"),
+    [(54, b"FAT12   "), (54, b"FAT16   "), (82, b"FAT32   ")],
+)
+def test_vfs_rejects_malformed_fat_marker_without_legacy_fallback(
+    tmp_path, monkeypatch, marker_offset, marker
+):
+    image = tmp_path / f"malformed-{marker[:5].decode().lower()}.img"
+    boot = bytearray(512)
+    boot[marker_offset : marker_offset + len(marker)] = marker
+    boot[510:512] = b"\x55\xaa"
+    image.write_bytes(boot)
+    opened_tsk = []
+
+    def tsk_sentinel(*_args, **_kwargs):
+        opened_tsk.append(True)
+        raise AssertionError("TskImage must not open a recognized FAT image")
+
+    monkeypatch.setattr(vfs, "TskImage", tsk_sentinel)
+    with pytest.raises(vfs.RecognizedFilesystemError, match="native FAT reader"):
+        vfs.open_image_provider(image, allow_legacy_fallback=True)
+    assert opened_tsk == []
+
+
+def test_native_fat_requires_explicit_extent_at_nonzero_offset(tmp_path):
+    volume = tmp_path / "fat32-volume.img"
+    make_fat32_image(volume)
+    prefix = b"P" * 4096
+    image = tmp_path / "disk.img"
+    image.write_bytes(prefix + volume.read_bytes())
+
+    with pytest.raises(FatReadError, match="explicit FAT volume_size"):
+        NativeFatImage(image, offset=len(prefix))
+
+    with pytest.raises(vfs.RecognizedFilesystemError, match="explicit FAT volume_size"):
+        vfs.open_image_provider(
+            image, offset=len(prefix), allow_legacy_fallback=True
+        )
+
+
+def test_vfs_rejects_inflated_fat_bpb_outside_nonzero_extent(tmp_path):
+    volume = tmp_path / "fat32-volume.img"
+    make_fat32_image(volume)
+    raw_volume = bytearray(volume.read_bytes())
+    declared_sectors = struct.unpack_from("<I", raw_volume, 32)[0]
+    struct.pack_into("<I", raw_volume, 32, declared_sectors + 8)
+    prefix = b"P" * 4096
+    suffix = b"S" * (16 * 512)
+    image = tmp_path / "disk.img"
+    image.write_bytes(prefix + raw_volume + suffix)
+
+    with pytest.raises(
+        vfs.RecognizedFilesystemError, match="selected partition bounds"
+    ):
+        vfs.open_image_provider(
+            image,
+            offset=len(prefix),
+            volume_size=len(raw_volume),
+            allow_legacy_fallback=True,
+        )
