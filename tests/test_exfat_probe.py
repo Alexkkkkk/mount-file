@@ -134,6 +134,67 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
         provider.close()
 
 
+def test_exfat_range_read_fetches_only_clusters_and_bytes_requested():
+    reader = NativeExfatImage.__new__(NativeExfatImage)
+    reader.profile = SimpleNamespace(cluster_size=512, cluster_count=10)
+    entry = SimpleNamespace(
+        is_dir=False, size=4096, first_cluster=2, no_fat_chain=False
+    )
+    reader._find = lambda _path: entry
+    yielded = []
+
+    def chain(*_args, **_kwargs):
+        for cluster in (2, 3, 4, 5):
+            yielded.append(cluster)
+            yield cluster
+
+    reader._iter_chain = chain
+    reader._cluster_offset = lambda cluster: cluster * 512
+    reads = []
+
+    def read_relative(relative, size):
+        reads.append((relative, size))
+        return bytes([relative // 512]) * size
+
+    reader._read_rel = read_relative
+
+    assert reader.read_file_range("/FILE", 500, 40) == b"\x02" * 12 + b"\x03" * 28
+    assert yielded == [2, 3]
+    assert reads == [(2 * 512 + 500, 12), (3 * 512, 28)]
+
+
+def test_exfat_range_read_rejects_chain_shorter_than_requested_range():
+    reader = NativeExfatImage.__new__(NativeExfatImage)
+    reader.profile = SimpleNamespace(cluster_size=512, cluster_count=10)
+    entry = SimpleNamespace(
+        is_dir=False, size=4096, first_cluster=2, no_fat_chain=False
+    )
+    reader._find = lambda _path: entry
+    reader._iter_chain = lambda *_args, **_kwargs: iter((2, 3))
+    reader._cluster_offset = lambda cluster: cluster * 512
+    reader._read_rel = lambda _relative, size: bytes(size)
+
+    with pytest.raises(ExfatReadError, match="shorter than requested range"):
+        reader.read_file_range("/FILE", 1024, 512)
+
+
+def test_native_exfat_reader_rejects_unvalidated_multiple_fats(tmp_path):
+    region = bytearray(_region())
+    for start in (0, 12 * 512):
+        region[start + 0x6E] = 2
+        struct.pack_into("<I", region, start + 0x58, 40)
+        checksum = exfat_boot_checksum(
+            bytes(region[start : start + 11 * 512]), sector_size=512
+        )
+        for offset in range(0, 512, 4):
+            struct.pack_into("<I", region, start + 11 * 512 + offset, checksum)
+    path = tmp_path / "exfat-two-fats.img"
+    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+
+    with pytest.raises(ExfatReadError, match="only single-FAT"):
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
+
+
 @pytest.mark.parametrize("directory_reader", ["_directory", "system_metadata"])
 def test_directory_limit_is_checked_before_reading_next_cluster(
     monkeypatch, directory_reader

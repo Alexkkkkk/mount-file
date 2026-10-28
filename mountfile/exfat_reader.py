@@ -55,6 +55,10 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             self.profile = probe_exfat_boot_region(
                 self.image_path, offset=self.offset, volume_size=int(volume_size)
             )
+            if self.profile.number_of_fats != 1:
+                raise ExfatReadError(
+                    "native exFAT reader supports only single-FAT volumes"
+                )
             self.volume_end = (
                 self.offset + self.profile.volume_length * self.profile.bytes_per_sector
             )
@@ -174,6 +178,42 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         if len(output) < size:
             raise ExfatReadError("short exFAT stream")
         return bytes(output[:size])
+
+    def _read_stream_range(
+        self, first_cluster, size, offset, length, no_fat_chain=False
+    ):
+        """Read only clusters intersecting a bounded file range."""
+        if size < 0 or size > self.profile.cluster_count * self.profile.cluster_size:
+            raise ExfatReadError("exFAT stream size exceeds volume capacity")
+        if offset < 0 or length < 0 or offset + length < offset:
+            raise ExfatReadError("invalid exFAT stream range")
+        if offset >= size or length == 0:
+            return b""
+        end = min(offset + length, size)
+        cluster_size = self.profile.cluster_size
+        first_index = offset // cluster_size
+        last_index = (end - 1) // cluster_size
+        output = bytearray()
+        for index, cluster in enumerate(
+            self._iter_chain(first_cluster, size, no_fat_chain=no_fat_chain)
+        ):
+            if index > last_index:
+                break
+            if index >= first_index:
+                cluster_start = index * cluster_size
+                read_start = max(offset, cluster_start) - cluster_start
+                read_end = min(end, cluster_start + cluster_size) - cluster_start
+                output.extend(
+                    self._read_rel(
+                        self._cluster_offset(cluster) + read_start,
+                        read_end - read_start,
+                    )
+                )
+            if index == last_index:
+                break
+        if len(output) != end - offset:
+            raise ExfatReadError("exFAT chain is shorter than requested range")
+        return bytes(output)
 
     @staticmethod
     def _decode_name(raw):
@@ -370,8 +410,13 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         if offset >= entry.size:
             return b""
         length = min(length, entry.size - offset)
-        full = self._read_stream(entry.first_cluster, entry.size, entry.no_fat_chain)
-        return full[offset : offset + length]
+        return self._read_stream_range(
+            entry.first_cluster,
+            entry.size,
+            offset,
+            length,
+            entry.no_fat_chain,
+        )
 
     def read_file(self, path):
         return self.read_file_range(path, 0, self.file_size(path))
