@@ -55,6 +55,8 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             self.profile = probe_exfat_boot_region(
                 self.image_path, offset=self.offset, volume_size=int(volume_size)
             )
+            if self.profile.volume_flags != 0:
+                raise ExfatReadError("native exFAT reader rejects nonzero volume flags")
             if self.profile.number_of_fats != 1:
                 raise ExfatReadError(
                     "native exFAT reader supports only single-FAT volumes"

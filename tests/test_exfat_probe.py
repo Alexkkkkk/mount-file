@@ -66,6 +66,15 @@ def _region(sector_size=512):
     return bytes(region)
 
 
+def _image_with_volume_flags(path, flags):
+    region = bytearray(_region())
+    struct.pack_into("<H", region, 0x6A, flags)
+    checksum = exfat_boot_checksum(bytes(region[: 11 * 512]), sector_size=512)
+    for offset in range(0, 512, 4):
+        struct.pack_into("<I", region, 11 * 512 + offset, checksum)
+    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+
+
 def test_parses_exfat_geometry_and_checksum():
     profile = parse_exfat_boot_region(_region(), volume_size=VOLUME_SIZE)
     assert profile.bytes_per_sector == 512
@@ -193,6 +202,29 @@ def test_native_exfat_reader_rejects_unvalidated_multiple_fats(tmp_path):
 
     with pytest.raises(ExfatReadError, match="only single-FAT"):
         NativeExfatImage(path, volume_size=VOLUME_SIZE)
+
+
+@pytest.mark.parametrize("flags", [0x0001, 0x0002, 0x0004, 0x0008, 0x8000])
+def test_native_exfat_reader_rejects_nonzero_volume_flags(tmp_path, flags):
+    path = tmp_path / f"exfat-flags-{flags:04x}.img"
+    _image_with_volume_flags(path, flags)
+
+    with pytest.raises(ExfatReadError, match="nonzero volume flags"):
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
+
+
+@pytest.mark.parametrize("flags", [0x0001, 0x0002, 0x0004, 0x0008, 0x8000])
+def test_native_exfat_writer_rejects_nonzero_volume_flags_without_mutation(
+    tmp_path, flags
+):
+    path = tmp_path / f"exfat-writer-flags-{flags:04x}.img"
+    _image_with_volume_flags(path, flags)
+    before = path.read_bytes()
+
+    with pytest.raises(ExfatWriteError, match="nonzero volume flags"):
+        NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("directory_reader", ["_directory", "system_metadata"])

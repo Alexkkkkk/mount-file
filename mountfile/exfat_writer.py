@@ -111,6 +111,8 @@ class NativeExfatWriter:
             )
         except (OSError, ExfatProbeError) as exc:
             raise ExfatWriteError(str(exc)) from exc
+        if self.profile.volume_flags != 0:
+            raise ExfatWriteError("exFAT writer rejects nonzero volume flags")
         if self.profile.number_of_fats != 1:
             raise ExfatWriteError("bounded exFAT writer requires exactly one FAT")
         self.extent_size = self.profile.volume_length * self.profile.bytes_per_sector
