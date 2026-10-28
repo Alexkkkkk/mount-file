@@ -323,6 +323,9 @@ class FSInfo:
     total_size: int = 0
     writable: bool = False
     write_strategy: str = ""
+    read_capabilities: tuple[str, ...] = ("list", "read", "extract")
+    write_capabilities: tuple[str, ...] = ()
+    write_rejection_reason: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -2446,8 +2449,15 @@ class UniversalFSRW:
                             raise RuntimeError(
                                 "refusing unsafe ext2 geometry/state: %s" % e
                             ) from e
+                        profile = str(fs_type).lower()
+                        if profile.startswith(("ext3", "ext4")):
+                            raise RuntimeError(
+                                "%s native write profile is unsupported; "
+                                "no subprocess or legacy fallback was attempted: %s"
+                                % (profile, e)
+                            ) from e
                         raise RuntimeError(
-                            "refusing unsupported ext profile without an explicit "
+                            "refusing unsupported ext2 profile without an explicit "
                             "legacy compatibility backend: %s" % e
                         ) from e
                     raise RuntimeError(
@@ -2456,7 +2466,7 @@ class UniversalFSRW:
                     ) from e
         if fs_type_lower.startswith("ntfs") and not self.allow_legacy_mount:
             raise RuntimeError(
-                "native NTFS writes are not implemented; pass "
+                "native NTFS writes are unsupported and not implemented; pass "
                 "allow_legacy_mount=True only for the explicit compatibility backend"
             )
         if not self.allow_legacy_mount:
@@ -2482,7 +2492,57 @@ class UniversalFSRW:
 
     # ---- read/write -------------------------------------------------------
     def info(self) -> FSInfo:
-        return self.backend.info()
+        info = self.backend.info()
+        # Keep the backend's identity, while making operation support explicit
+        # to CLI, GUI, and WriteEngine callers.  Browsability never implies RW.
+        capabilities = self.backend_status(info)
+        return FSInfo(
+            **{
+                **info.to_dict(),
+                "read_capabilities": tuple(capabilities["read_capabilities"]),
+                "write_capabilities": tuple(capabilities["write_capabilities"]),
+                "write_rejection_reason": capabilities["write_rejection_reason"],
+            }
+        )
+
+    @staticmethod
+    def backend_status(info: FSInfo) -> dict:
+        """Return a serialisable, conservative operation capability matrix."""
+        read = ["list", "read", "extract"]
+        writable = bool(info.writable)
+        strategy = str(info.write_strategy or "")
+        if strategy in {"native", "native-ext2", "native-exfat-phase1"}:
+            write = ["write_file", "mkdir", "delete", "rename"]
+            reason = ""
+        elif writable:
+            write = ["write_file", "mkdir", "delete", "rename"]
+            reason = ""
+        else:
+            write = []
+            reason = (
+                "write operations are unsupported for profile %s (%s)"
+                % (info.fs_type, strategy or "read-only")
+            )
+        return {
+            "backend": info.backend,
+            "mode": "read-write" if write else "read-only",
+            "read_capabilities": read,
+            "write_capabilities": write,
+            "write_enabled": bool(write),
+            "write_rejection_reason": reason,
+        }
+
+    def capability_status(self) -> dict:
+        """Expose the selected backend's bounded operation support."""
+        return self.backend_status(self.backend.info())
+
+    def _require_operation(self, operation: str) -> None:
+        status = self.capability_status()
+        if operation not in status["write_capabilities"]:
+            raise RuntimeError(
+                "%s is unsupported for %s: %s"
+                % (operation, status["backend"], status["write_rejection_reason"])
+            )
 
     def list(self, path: str = "/") -> list[FSEntry]:
         return self.backend.list(path)
@@ -2502,21 +2562,25 @@ class UniversalFSRW:
         self.journal.log(op)
 
     def write_file(self, path: str, data: bytes) -> None:
+        self._require_operation("write_file")
         op = WriteOperation("write", path, {"size": len(data)})
         self._audit_and_backup(op)
         self.backend.write_file(path, data)
 
     def mkdir(self, path: str) -> None:
+        self._require_operation("mkdir")
         op = WriteOperation("mkdir", path)
         self._audit_and_backup(op)
         self.backend.mkdir(path)
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        self._require_operation("delete")
         op = WriteOperation("delete", path, {"recursive": recursive})
         self._audit_and_backup(op)
         self.backend.delete(path, recursive)
 
     def rename(self, src: str, dst: str) -> None:
+        self._require_operation("rename")
         op = WriteOperation("rename", src, {"dst": dst})
         self._audit_and_backup(op)
         self.backend.rename(src, dst)
