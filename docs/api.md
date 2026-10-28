@@ -31,3 +31,32 @@ file carving. SQLite хранит SHA-256, дедуплицированные ch
 ::: mountfile.android.parse_sparse_header
 
 ::: mountfile.android.parse_boot_image_header
+
+## Read-only image VFS
+
+`open_image_provider` открывает выбранный bounded filesystem profile. Providers
+поддерживают `list_dir`, `stat`, `read_file_range` и `read_file`; extraction
+использует тот же bounded range API. `stat` возвращает metadata выбранной записи
+и фактический регистр имени из образа. FAT и NTFS включают предусмотренный их
+reader-ом case-insensitive lookup; для ext namespace он остаётся case-sensitive.
+Каждый native provider также публикует `backend_status`: сериализуемый словарь
+с backend name, read/write capabilities, режимом и явной причиной отказа от
+записи. Пустой `write_capabilities` означает именно read-only native profile,
+а не скрытый переход на `debugfs`, `ntfs-3g` или системный mount.
+Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
+другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
+проверенного classic JBD2 существует только явный `open_native_ext3(...,
+replay_journal=True)`: он строит bounded in-memory overlay из committed
+descriptor/data/commit records, не изменяет исходный образ и отклоняет revoke,
+checksum, неизвестные feature flags, повреждённые или неполные транзакции.
+
+`pytsk3` остаётся optional compatibility fallback только для форматов, которые
+native routing не распознал, и теперь отключён по умолчанию. Для его явного
+включения используйте `MOUNTFILE_ALLOW_LEGACY_TSK=1` или передайте
+`allow_legacy_fallback=True` в `open_image_provider`. Установка базового
+MountFile не требует `pytsk3`; native routing не запускает сеть, subprocess или
+системный mount.
+
+::: mountfile.vfs.open_image_provider
+
+::: mountfile.vfs.ReadOnlyVFSStatMixin

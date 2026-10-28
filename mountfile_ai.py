@@ -249,13 +249,13 @@ def _require_tsk() -> None:
 
 
 SIGNATURES: list[tuple[bytes, int, str, str]] = [
-    (b"\x53\xEF", 0x438, "ext2/3/4", "superblock magic"),
+    (b"\x53\xef", 0x438, "ext2/3/4", "superblock magic"),
     (b"NTFS    ", 3, "ntfs", "NTFS OEM"),
     (b"MSWIN4.1", 3, "fat", "FAT boot sector"),
     (b"FAT12", 54, "fat12", ""),
     (b"FAT16", 54, "fat16", ""),
     (b"FAT32", 82, "fat32", ""),
-    (b"\x55\xAA", 510, "mbr", "MBR boot sig"),
+    (b"\x55\xaa", 510, "mbr", "MBR boot sig"),
 ]
 
 
@@ -430,8 +430,8 @@ def hash_file(path: Path) -> str:
 # !!! REPLACE with real keys from mount-file resources/XOR_MST_*.bin !!!
 XOR_KEYS: dict[str, bytes] = {
     "identity": b"\x00" * 16,
-    "mstar_a": b"\xA5" * 16,
-    "mtk_a": b"\x5A" * 16,
+    "mstar_a": b"\xa5" * 16,
+    "mtk_a": b"\x5a" * 16,
 }
 
 
@@ -869,7 +869,8 @@ class Executor:
         limit = max(1, CONFIG.max_agent_rounds)
         if len(plan.steps) > limit:
             raise RuntimeError(
-                "agent plan exceeds MOUNTFILE_MAX_ROUNDS=%d; refusing to execute" % limit
+                "agent plan exceeds MOUNTFILE_MAX_ROUNDS=%d; refusing to execute"
+                % limit
             )
         for step in plan.steps:
             args = dict(step.args)

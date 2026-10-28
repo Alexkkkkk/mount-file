@@ -77,7 +77,7 @@ jobs:
       - name: Install Qt and pytest with coverage
         run: |
           python -m pip install --upgrade pip pytest pytest-cov setuptools wheel 'PyQt6>=6.11.0'
-          python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0'
+          python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0' 'pydantic>=2.0'
 
       - name: Validate Windows installers without system changes
         if: runner.os == 'Windows'
@@ -109,12 +109,33 @@ jobs:
           retention-days: 14
 
       - name: Verify installable AI surface
+        shell: bash
         run: |
           python -m pip wheel --no-deps --wheel-dir dist .
-          python -m venv /tmp/mountfile-wheel-smoke
-          /tmp/mountfile-wheel-smoke/bin/pip install --no-deps dist/*.whl
-          /tmp/mountfile-wheel-smoke/bin/python -c "import mountfile.ai, mountfile_ai"
-          /tmp/mountfile-wheel-smoke/bin/mountfile-ai --help
+          python - <<'PY'
+          import glob
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          import tempfile
+          import venv
+
+          wheel = pathlib.Path(glob.glob("dist/*.whl")[0]).resolve()
+          env_dir = pathlib.Path(tempfile.mkdtemp(prefix="mountfile-wheel-smoke-"))
+          venv.EnvBuilder(with_pip=True).create(env_dir)
+          scripts = env_dir / ("Scripts" if os.name == "nt" else "bin")
+          python = scripts / ("python.exe" if os.name == "nt" else "python")
+          cli = scripts / ("mountfile-ai.exe" if os.name == "nt" else "mountfile-ai")
+
+          # AI is an optional extra; install it explicitly when validating the
+          # AI entry points instead of testing a deliberately dependency-free wheel.
+          subprocess.run([str(python), "-m", "pip", "install", f"{wheel}[ai]"], check=True)
+          subprocess.run(
+              [str(python), "-c", "import mountfile.ai, mountfile_ai"], check=True
+          )
+          subprocess.run([str(cli), "--help"], check=True)
+          PY
 
   # Keep the legacy protected context while tests run only once in the matrix.
   # It fails closed unless the complete matrix, including Ubuntu/Python 3.12, passes.

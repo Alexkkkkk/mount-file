@@ -2,18 +2,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Read-only filesystem providers for raw images.
+"""Read-only, bounded filesystem providers for raw images.
 
-``TskImage`` uses The Sleuth Kit (pytsk3) for formats without an accepted native
-profile. ``NativeFatImage`` reads FAT12/16/32 and ``NativeExt2Image`` reads a
-strict, clean ext2 subset in pure Python. Legacy format coverage still depends
-on the explicitly optional libtsk build.
-
-The module also exports a dependency-free ext superblock probe. The probe
-reports format features and geometry only; it does not browse files or authorize
-writes.
-The pure-Python NTFS probe validates boot-sector geometry and FILE-record USA
-fixups only; it does not replace the pytsk3 reader or enable NTFS writes.
+Native providers cover selected profiles of FAT12/16/32, ext2/3/4, exFAT and
+NTFS. Every provider follows the shared list/stat/read-range/extract contract.
+``TskImage`` is an explicitly optional compatibility fallback for unrecognized
+formats; a recognized but unsupported or malformed native profile is rejected
+without falling through to a different parser. Native NTFS browsing and all
+native readers are read-only. Write support is routed separately through the
+existing writer APIs.
 """
 
 from __future__ import annotations
@@ -21,11 +18,12 @@ from __future__ import annotations
 import os
 import time
 
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
-from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.fat_reader import FatReadError, NativeFatImage
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
@@ -86,6 +84,20 @@ class RecognizedFilesystemError(TskError):
     """A recognized filesystem was rejected and must not use another format parser."""
 
 
+_TRUE = frozenset(("1", "true", "yes", "on", "да"))
+
+
+def legacy_tsk_enabled() -> bool:
+    """Return whether the optional external Sleuth Kit fallback is enabled.
+
+    Native VFS routing is deliberately offline and dependency-free by default.
+    Applications that explicitly need compatibility parsing for an unknown
+    format must opt in through ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` or the keyword
+    argument of :func:`open_image_provider`.
+    """
+    return os.environ.get("MOUNTFILE_ALLOW_LEGACY_TSK", "").strip().lower() in _TRUE
+
+
 def open_native_ext2(image_path, offset=0, volume_size=None):
     """Open the bounded pure-Python ext2 read-only provider.
 
@@ -95,11 +107,20 @@ def open_native_ext2(image_path, offset=0, volume_size=None):
     return NativeExt2Image(image_path, offset=offset, volume_size=volume_size)
 
 
-def open_native_ext3(image_path, offset=0, volume_size=None):
-    """Open the conservative classic-layout ext3/ext4 read-only provider."""
+def open_native_ext3(image_path, offset=0, volume_size=None, *, replay_journal=False):
+    """Open bounded ext3/ext4 read-only access with optional journal overlay.
+
+    ``replay_journal`` is explicit and in-memory only. Automatic VFS routing
+    leaves it disabled, so active journals remain fail-closed by default.
+    """
     profile = probe_ext_superblock(image_path, offset=offset, volume_size=volume_size)
     provider_type = NativeExt4Image if profile.fs_type == "ext4" else NativeExt3Image
-    return provider_type(image_path, offset=offset, volume_size=volume_size)
+    return provider_type(
+        image_path,
+        offset=offset,
+        volume_size=volume_size,
+        replay_journal=replay_journal,
+    )
 
 
 def volume_size_for_offset(image_path, offset):
@@ -177,7 +198,7 @@ def _fmt_mtime(meta):
         return ""
 
 
-class TskImage:
+class TskImage(ReadOnlyVFSStatMixin):
     """Browsable view of one filesystem inside a raw image at `offset`."""
 
     def __init__(self, image_path, offset=0):
@@ -358,8 +379,45 @@ def _has_exfat_boot_magic(image_path, offset, volume_size):
         raise TskError(f"cannot inspect image for native exFAT: {exc}") from exc
 
 
-def open_image_provider(image_path, offset=0, volume_size=None):
-    """Open a read-only provider with fail-closed routing for recognized formats."""
+def _detect_macos_filesystem(image_path, offset, volume_size):
+    """Return an explicit macOS filesystem name without opening a backend."""
+    try:
+        offset = int(offset)
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
+            if volume_size <= 0 or offset + volume_size > os.path.getsize(image_path):
+                raise TskError("selected filesystem extent exceeds image bounds")
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset + 1026 > image_size:
+                return None
+            if volume_size is not None and volume_size < 1026:
+                return None
+            stream.seek(offset + 1024)
+            marker = stream.read(2)
+            if marker in (b"H+", b"HX"):
+                return "HFS+"
+            stream.seek(offset + 0x20)
+            if stream.read(4) in (b"NXSB", b"APSB"):
+                return "APFS"
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for macOS filesystem: {exc}") from exc
+    return None
+
+
+def open_image_provider(
+    image_path, offset=0, volume_size=None, *, allow_legacy_fallback=None
+):
+    """Open a bounded native provider without external fallback by default.
+
+    Supported native profiles are always handled in-process. ``pytsk3`` is an
+    optional compatibility backend for genuinely unrecognized formats and is
+    only reachable when ``allow_legacy_fallback=True`` or
+    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. A recognized-but-unsupported
+    profile remains fail-closed regardless of this flag.
+    """
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         if volume_size is None:
             raise RecognizedFilesystemError(
@@ -434,4 +492,18 @@ def open_image_provider(image_path, offset=0, volume_size=None):
                 f"native FAT reader declined the FAT profile: {exc}"
             ) from exc
 
+    macos_filesystem = _detect_macos_filesystem(image_path, offset, volume_size)
+    if macos_filesystem:
+        raise RecognizedFilesystemError(
+            f"recognized {macos_filesystem} image requires its explicit read-only adapter"
+        )
+
+    if allow_legacy_fallback is None:
+        allow_legacy_fallback = legacy_tsk_enabled()
+    if not allow_legacy_fallback:
+        raise RecognizedFilesystemError(
+            "filesystem is not covered by the native offline providers; "
+            "legacy pytsk3 fallback is disabled (set "
+            "MOUNTFILE_ALLOW_LEGACY_TSK=1 or pass allow_legacy_fallback=True)"
+        )
     return TskImage(image_path, offset=offset)

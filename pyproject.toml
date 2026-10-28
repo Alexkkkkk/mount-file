@@ -50,6 +50,7 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "hypothesis>=6",
+    "pydantic>=2.0",
     "ruff>=0.4",
     "black>=24.4",
     "isort>=5.13",

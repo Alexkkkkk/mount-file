@@ -2028,7 +2028,7 @@ class MainWindow(QMainWindow):
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._update_cmd_prompt()
-        self._start_updater()
+        self._start_updater(startup=True)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2093,10 +2093,13 @@ class MainWindow(QMainWindow):
             self.log_msg("Полный экран включен (F11 — выход)")
 
     # ----------------------------------------------------------- updater
-    def _start_updater(self):
-        """Check GitHub Releases on every start (background thread)."""
-        if updates_disabled():
-            self.log_msg("Автопроверка обновлений выключена (MOUNTFILE_NO_UPDATE=1)")
+    def _start_updater(self, startup=False):
+        """Run an explicit/manual update check without making startup online."""
+        if startup and updates_disabled():
+            self.log_msg(
+                "Автопроверка обновлений выключена; для opt-in задайте "
+                "MOUNTFILE_ENABLE_UPDATE_CHECK=1"
+            )
             return
         if self.updater is not None and self.updater.isRunning():
             return

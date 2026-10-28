@@ -22,6 +22,7 @@ from mountfile.ext_probe import (
     ExtSuperblockProfile,
     probe_ext_superblock,
 )
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
 class Ext2ReadError(ValueError):
@@ -99,7 +100,7 @@ class _DirectoryEntry:
     file_type: int
 
 
-class NativeExt2Image:
+class NativeExt2Image(ReadOnlyVFSStatMixin):
     """Read-only VFS-compatible provider for a bounded ext2 image extent.
 
     ``volume_size`` is mandatory so every filesystem read can be proven to stay

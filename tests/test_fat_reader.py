@@ -103,6 +103,30 @@ def test_native_fat32_reads_lfn_and_uses_native_backend(tmp_path):
         provider.close()
 
 
+def test_native_fat32_rejects_inconsistent_backup_boot_sector(tmp_path):
+    image = tmp_path / "fat32-bad-backup.img"
+    make_fat32_image(image)
+    raw = bytearray(image.read_bytes())
+    raw[6 * 512 + 3] ^= 1
+    image.write_bytes(raw)
+
+    with pytest.raises(FatReadError, match="backup boot sector"):
+        NativeFatImage(image, volume_size=image.stat().st_size)
+
+
+def test_native_fat32_rejects_inconsistent_mirrored_fat(tmp_path):
+    image = tmp_path / "fat32-bad-mirror.img"
+    make_fat32_image(image)
+    raw = bytearray(image.read_bytes())
+    raw[16] = 2
+    raw[6 * 512 + 16] = 2
+    raw[(32 + 600) * 512 + 8] ^= 1
+    image.write_bytes(raw)
+
+    with pytest.raises(FatReadError, match="mirrored FAT copies"):
+        NativeFatImage(image, volume_size=image.stat().st_size)
+
+
 def test_native_fat_rejects_short_chain_and_never_falls_back(tmp_path):
     image = tmp_path / "fat12.img"
     _make_small_fat(image, 12)

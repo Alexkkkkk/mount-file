@@ -85,11 +85,10 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 - **Разметка диска:** определение MBR и GPT, выбор раздела или всего образа,
   чтение смещений из файла `udev`.
-- **Просмотр и извлечение:** встроенные bounded pure-Python readers для FAT12/16/32
-  и ограниченных clean ext2/ext3/ext4 профилей выбираются первыми; The Sleuth Kit
-  (`pytsk3`) остаётся явно optional fallback для остальных форматов — exFAT,
-  NTFS, HFS+, ISO9660 и других файловых систем, поддерживаемых установленной
-  сборкой `libtsk`.
+- **Просмотр и извлечение:** bounded pure-Python readers поддерживают выбранные
+  профили FAT12/16/32, clean ext2/ext3/ext4, exFAT и NTFS. `pytsk3` — optional
+  compatibility fallback для нераспознанных форматов. Узнанный, но dirty,
+  повреждённый или неподдержанный native-профиль не передаётся другому parser-у.
 - **Запись в FAT32:** создание и перезапись файлов, длинные имена (LFN) и
   имена 8.3, создание каталогов, переименование и удаление, выделение и
   освобождение кластеров — собственным движком `mountfile/fat32.py`.
@@ -485,10 +484,11 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 | `Ctrl+I` | AI: добавить файл для анализа |
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
-FAT32 и ограниченный профиль чистого ext2 имеют встроенную запись. В фазе 1
-native ext2 использует allowlisted features и один single-indirect block
-(до `12 + block_size/4` data blocks на файл); sparse/double/triple-indirect
-не поддерживаются. ext2 вне этого профиля и ext3/4 остаются read-only в GUI и
+  FAT32, ограниченный профиль чистого ext2 и ограниченный native exFAT профиль
+  имеют встроенную запись. Native ext2 использует allowlisted features и
+  single-indirect blocks для файлов и каталогов (до `12 + block_size/4` data
+  blocks на объект); sparse и double/triple-indirect не поддерживаются.
+  ext2 вне этого профиля, ext3/4 и NTFS остаются read-only в GUI и
 `WriteEngine`: legacy `debugfs` доступен только как явный library-level
 compatibility opt-in (`allow_legacy_debugfs=True`), а не как автоматический
 fallback (`debugfs.exe`/WSL на Windows).
@@ -529,12 +529,22 @@ python mountfile.py --version
 
 ## Настройки и окружение
 
-При запуске приложение проверяет GitHub Releases в фоновом потоке; отсутствие
-сети не блокирует работу.
+Основной VFS и native read/write-путь работают локально, в процессе Python и
+без сети, `pytsk3`, системных mount-команд или filesystem-драйверов. Для
+неизвестного формата VFS завершается понятной ошибкой, а не подключает внешний
+fallback молча. Совместимость с `pytsk3` включается только явно через
+`MOUNTFILE_ALLOW_LEGACY_TSK=1` или `allow_legacy_fallback=True`; legacy writer-ы
+так же требуют своих explicit opt-in флагов.
+
+Проверка GitHub Releases при старте выключена по умолчанию. Сетевые обновления
+и AI/API-интеграции являются отдельными opt-in возможностями; ручная проверка
+обновлений из меню остаётся доступной.
 
 | Переменная окружения | Действие |
 |---|---|
-| `MOUNTFILE_NO_UPDATE=1` | отключить проверку обновлений |
+| `MOUNTFILE_ENABLE_UPDATE_CHECK=1` | разрешить сетевую проверку обновлений при старте |
+| `MOUNTFILE_NO_UPDATE=1` | дополнительно отключить проверку обновлений |
+| `MOUNTFILE_ALLOW_LEGACY_TSK=1` | явно разрешить `pytsk3` для нераспознанных native-профилями форматов |
 | `MOUNTFILE_AUTO_UPDATE=1` | устанавливать найденное обновление без подтверждения |
 | `MOUNTFILE_UPDATE_REPO=owner/repo` | проверять релизы другого репозитория |
 | `MOUNTFILE_UPDATE_URL=https://…` | прямой URL на JSON последнего релиза |
@@ -801,21 +811,18 @@ mount-file/
 
 ## Ограничения
 
-- **Запись зависит от файловой системы и системного backend.** FAT32 и
-  allowlisted clean ext2 имеют встроенные writers; ext2 вне native-профиля и
-  ext3/4 по умолчанию остаются read-only. Legacy `debugfs` (на Windows через
-  WSL с `e2fsprogs`) требует явного library-level compatibility opt-in;
-  NTFS — `ntfs-3g` на Linux или
-  ImDisk и права администратора на Windows. На Windows ImDisk поддерживает
-  NTFS, exFAT и FAT12/16 через системный драйвер. Остальные ФС доступны только
-  для просмотра/извлечения, если их поддерживает установленная `libtsk`.
-- **Без `pytsk3`** доступны собственные readers FAT32 и supported clean ext2;
-  чтение других ФС зависит от внешнего reader/backend.
-- Native FAT32 и supported ext2 subset не требуют внешних CLI. Явный legacy
-  ext2/3/4 compatibility backend использует `debugfs`; NTFS/exFAT/FAT12/16 на Windows требуют ImDisk,
-  а NTFS на Linux — `ntfs-3g`.
-  Если требуемый backend отсутствует, приложение явно отказывает в записи, а
-  не сообщает об успехе после открытия тома только для чтения.
+- **Запись зависит от поддерживаемого профиля.** FAT32, allowlisted clean ext2
+  и ограниченный exFAT имеют native writers; у каждого остаются явные
+  ограничения операций и metadata layout. Native NTFS и ext3/ext4 writers
+  выключены до реализации проверяемого on-volume journal/recovery пути.
+  Legacy `debugfs`, `ntfs-3g` и системные mount/drivers доступны только как
+  отдельные compatibility пути там, где они явно разрешены.
+- **Без `pytsk3`** работают bounded native readers FAT12/16/32, выбранных clean
+  ext2/ext3/ext4 профилей, exFAT и NTFS. Каждый parser требует корректные bounds
+  и fail-closed на dirty, неизвестных и повреждённых профилях.
+- Native FAT32, ext2 и exFAT write profiles не запускают внешние filesystem CLI.
+  Если операция не входит в активный профиль, приложение явно отказывает в
+  записи, а не сообщает об успехе после открытия тома только для чтения.
 - Для неатомарных writer-ов `debugfs` и `ntfs-3g` перед каждой операцией записи
   создаётся временный снимок всего образа. Это повышает надёжность восстановления,
   но требует свободного места примерно под размер образа и может заметно увеличить

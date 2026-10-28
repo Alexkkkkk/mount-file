@@ -14,7 +14,9 @@ from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Imag
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
 
-def _make_clean_journal_image(path, *, commit_sequence=7, truncate_commit=False):
+def _make_clean_journal_image(
+    path, *, descriptor_sequence=7, commit_sequence=7, truncate_commit=False
+):
     _make_image(path, compat=0x000C)
     image = bytearray(path.read_bytes())
     sb = memoryview(image)[1024:2048]
@@ -32,7 +34,7 @@ def _make_clean_journal_image(path, *, commit_sequence=7, truncate_commit=False)
     struct.pack_into(">II", journal, 20, 1, 0)
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
-    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, 7)
+    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
     struct.pack_into(">II", journal, 1036, 21, 0x0000000A)  # LAST|SAME_UUID
     struct.pack_into(">III", journal, 3072, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
@@ -68,6 +70,99 @@ def test_truncated_journal_record_fails_closed(tmp_path):
     image_path = tmp_path / "truncated-journal.img"
     _make_clean_journal_image(image_path, truncate_commit=True)
     with pytest.raises(Ext3ReadError, match="journal|JBD2|bounds|short"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_journal_with_nonzero_start_is_recovery_required(tmp_path):
+    image_path = tmp_path / "active-journal.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+    with pytest.raises(Ext3ReadError, match="uncheckpointed transaction"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
+    image_path = tmp_path / "replay-journal.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    payload = bytes([0xA7]) * 1024
+    image[40 * 1024 + 2 * 1024 : 40 * 1024 + 3 * 1024] = payload
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+
+    provider = NativeExt3Image(
+        image_path,
+        volume_size=BLOCKS_COUNT * 1024,
+        replay_journal=True,
+    )
+    try:
+        assert provider.journal_replayed is True
+        assert provider._read_at(21 * 1024, 1024) == payload
+        assert image_path.read_bytes()[21 * 1024 : 22 * 1024] != payload
+    finally:
+        provider.close()
+
+
+def test_journal_replay_rejects_sequence_not_advertised_by_superblock(tmp_path):
+    image_path = tmp_path / "stale-replay-sequence.img"
+    _make_clean_journal_image(image_path, descriptor_sequence=99, commit_sequence=99)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="sequence disagrees with superblock"):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=True,
+        )
+
+
+def test_journal_replay_does_not_publish_partial_overlay_on_late_failure():
+    reader = NativeExt3Image.__new__(NativeExt3Image)
+    reader.block_size = 1024
+    reader.blocks_count = 128
+    reader.profile = SimpleNamespace(filesystem_uuid=b"0123456789abcdef")
+    reader._journal_overlay = {99: b"previous-state"}
+
+    def descriptor(sequence, target):
+        block = bytearray(1024)
+        struct.pack_into(">III", block, 0, 0xC03B3998, 1, sequence)
+        struct.pack_into(">II", block, 12, target, 0x0000000A)
+        return bytes(block)
+
+    def commit(sequence):
+        block = bytearray(1024)
+        struct.pack_into(">III", block, 0, 0xC03B3998, 2, sequence)
+        return bytes(block)
+
+    blocks = {
+        1: descriptor(7, 21),
+        2: b"A" * 1024,
+        3: commit(7),
+        4: descriptor(8, 22),
+        5: b"B" * 1024,
+        6: commit(99),  # Corrupt later commit, after one valid transaction.
+    }
+    reader._journal_logical_block = lambda _inode, logical, _count: blocks[logical]
+
+    with pytest.raises(Ext3ReadError, match="commit does not match descriptor"):
+        reader._replay_journal(
+            object(), start=1, max_length=7, journal_blocks=8, expected_sequence=7
+        )
+
+    assert reader._journal_overlay == {99: b"previous-state"}
+
+
+def test_journal_with_unknown_feature_bits_fails_closed(tmp_path):
+    image_path = tmp_path / "unsupported-journal-feature.img"
+    _make_clean_journal_image(image_path)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 0x24, 1)
+    image_path.write_bytes(image)
+    with pytest.raises(Ext3ReadError, match="unsupported or unchecked JBD2"):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
