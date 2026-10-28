@@ -8,8 +8,79 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
+from test_fat_reader import _make_fat1216_image
 
 from mountfile.universal_fs_rw import Fat32RW
+
+
+@pytest.mark.parametrize("fat_type", [12, 16])
+def test_native_fat12_and_fat16_writes_are_explicitly_unsupported(tmp_path, fat_type):
+    image = tmp_path / f"fat{fat_type}.img"
+    _make_fat1216_image(image, fat_type)
+
+    with pytest.raises(ValueError, match="native FAT12/16 writes are unsupported"):
+        Fat32RW(image, volume_size=image.stat().st_size)
+
+
+def test_native_fat_rejects_non_mirrored_fat32_mode(tmp_path):
+    image = tmp_path / "non-mirrored.img"
+    make_fat32_image(image)
+    raw = bytearray(image.read_bytes())
+    raw[40:42] = (0x0080).to_bytes(2, "little")
+    backup = 6 * 512
+    raw[backup + 40 : backup + 42] = (0x0080).to_bytes(2, "little")
+    image.write_bytes(raw)
+
+    with pytest.raises(ValueError, match="non-mirrored"):
+        Fat32RW(image, volume_size=image.stat().st_size)
+
+
+def test_native_fat_rejects_inconsistent_backup_boot_sector(tmp_path):
+    image = tmp_path / "bad-backup.img"
+    make_fat32_image(image)
+    raw = bytearray(image.read_bytes())
+    raw[6 * 512 + 3] ^= 1
+    image.write_bytes(raw)
+
+    with pytest.raises(ValueError, match="backup boot sector is inconsistent"):
+        Fat32RW(image, volume_size=image.stat().st_size)
+
+
+def test_native_fat_rejects_short_metadata_write(tmp_path, monkeypatch):
+    image = tmp_path / "short-write.img"
+    make_fat32_image(image)
+    backend = Fat32RW(image, volume_size=image.stat().st_size)
+    original_open = Path.open
+
+    class ShortWriteHandle:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self.handle.__exit__(*exc)
+
+        def seek(self, *args):
+            return self.handle.seek(*args)
+
+        def write(self, data):
+            return max(0, len(data) - 1)
+
+    def short_open(path, mode="r", *args, **kwargs):
+        handle = original_open(path, mode, *args, **kwargs)
+        if Path(path) == image and mode == "r+b":
+            return ShortWriteHandle(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", short_open)
+    try:
+        with pytest.raises(OSError, match="short write"):
+            backend._write_at(512, b"metadata")
+    finally:
+        backend.close()
 
 
 def test_native_fat_rejects_bpb_larger_than_selected_extent(tmp_path):
