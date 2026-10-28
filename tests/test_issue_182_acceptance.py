@@ -10,12 +10,11 @@ import struct
 import pytest
 
 from mountfile import vfs
-from mountfile.extract import extract_path
 from mountfile.ext2_native import NativeExt2ImageWriter
 from mountfile.ext2_reader import NativeExt2Image
-
+from mountfile.extract import extract_path
 from tests.test_ext2_native import _make_ext2
-from tests.test_ext2_reader import BLOCKS_COUNT, BLOCK_SIZE, _make_image
+from tests.test_ext2_reader import BLOCK_SIZE, BLOCKS_COUNT, _make_image
 from tests.test_ext3_reader import _make_clean_journal_image
 
 
