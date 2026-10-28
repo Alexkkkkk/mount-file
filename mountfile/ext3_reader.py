@@ -288,6 +288,7 @@ class NativeExt3Image(NativeExt2Image):
         """
         logical = start
         transactions = 0
+        overlay = {}
         while logical < max_length:
             descriptor = self._journal_logical_block(inode, logical, journal_blocks)
             if not descriptor.strip(b"\x00"):
@@ -338,12 +339,16 @@ class NativeExt3Image(NativeExt2Image):
             ):
                 raise Ext3ReadError("JBD2 replay commit does not match descriptor")
             for target, data in zip(targets, data_blocks):
-                self._journal_overlay[target] = data
+                overlay[target] = data
             transactions += 1
             if transactions > _MAX_JOURNAL_BLOCKS:
                 raise Ext3ReadError("JBD2 replay transaction count is excessive")
             expected_sequence = (expected_sequence + 1) & 0xFFFFFFFF
             logical = commit_logical + 1
+        # Do not expose a partially replayed view if a later transaction is
+        # malformed. Publish only after the complete supported log prefix has
+        # been validated successfully.
+        self._journal_overlay = overlay
 
     def _read_at(self, relative_offset: int, size: int) -> bytes:
         """Read the image and overlay only committed journal blocks."""

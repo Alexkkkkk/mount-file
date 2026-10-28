@@ -120,6 +120,42 @@ def test_journal_replay_rejects_sequence_not_advertised_by_superblock(tmp_path):
         )
 
 
+def test_journal_replay_does_not_publish_partial_overlay_on_late_failure():
+    reader = NativeExt3Image.__new__(NativeExt3Image)
+    reader.block_size = 1024
+    reader.blocks_count = 128
+    reader.profile = SimpleNamespace(filesystem_uuid=b"0123456789abcdef")
+    reader._journal_overlay = {99: b"previous-state"}
+
+    def descriptor(sequence, target):
+        block = bytearray(1024)
+        struct.pack_into(">III", block, 0, 0xC03B3998, 1, sequence)
+        struct.pack_into(">II", block, 12, target, 0x0000000A)
+        return bytes(block)
+
+    def commit(sequence):
+        block = bytearray(1024)
+        struct.pack_into(">III", block, 0, 0xC03B3998, 2, sequence)
+        return bytes(block)
+
+    blocks = {
+        1: descriptor(7, 21),
+        2: b"A" * 1024,
+        3: commit(7),
+        4: descriptor(8, 22),
+        5: b"B" * 1024,
+        6: commit(99),  # Corrupt later commit, after one valid transaction.
+    }
+    reader._journal_logical_block = lambda _inode, logical, _count: blocks[logical]
+
+    with pytest.raises(Ext3ReadError, match="commit does not match descriptor"):
+        reader._replay_journal(
+            object(), start=1, max_length=7, journal_blocks=8, expected_sequence=7
+        )
+
+    assert reader._journal_overlay == {99: b"previous-state"}
+
+
 def test_journal_with_unknown_feature_bits_fails_closed(tmp_path):
     image_path = tmp_path / "unsupported-journal-feature.img"
     _make_clean_journal_image(image_path)
