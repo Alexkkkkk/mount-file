@@ -225,8 +225,6 @@ class NativeExt3Image(NativeExt2Image):
         magic, block_type, sequence = struct.unpack_from(">III", raw, 0)
         if magic != _JBD2_MAGIC or block_type not in (3, 4):
             raise Ext3ReadError("invalid JBD2 journal superblock")
-        if sequence == 0:
-            raise Ext3ReadError("invalid JBD2 journal sequence")
         if raw[0x30:0x40] != self.profile.filesystem_uuid:
             raise Ext3ReadError("JBD2 journal UUID does not match filesystem UUID")
         journal_block_size, max_length = struct.unpack_from(">II", raw, 0x0C)
@@ -242,6 +240,18 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 ring geometry exceeds journal inode")
         if start != 0 and not first <= start < max_length:
             raise Ext3ReadError("JBD2 start is outside journal ring")
+        if sequence == 0 and start != 0:
+            # Some e2fsprogs-created empty journals retain a nonzero head but
+            # encode no transaction sequence.  Prove that the entire bounded
+            # post-head range is zero-filled before treating it as empty.
+            if any(
+                self._journal_logical_block(journal, logical, journal_blocks).strip(
+                    b"\x00"
+                )
+                for logical in range(start, max_length)
+            ):
+                raise Ext3ReadError("invalid JBD2 journal sequence")
+            start = 0
         # A nonzero start means an uncheckpointed transaction.  The default
         # route remains fail-closed; an explicit read-only replay can expose a
         # bounded in-memory overlay without changing the source image.
