@@ -354,6 +354,11 @@ def parse_ntfs_attribute_stream(
             raise NtfsMetadataError("invalid NTFS resident flag")
         if type_code == _ATTRIBUTE_LIST:
             raise NtfsMetadataError("NTFS ATTRIBUTE_LIST streams are unsupported")
+        name_minimum = 64 if nonresident else 24
+        if name_length and name_offset < name_minimum:
+            raise NtfsMetadataError("NTFS attribute name offset is inside its header")
+        if not name_length and name_offset not in (0, name_minimum):
+            raise NtfsMetadataError("NTFS unnamed attribute has an invalid name offset")
         name = _decode_name(raw[pos : pos + length], name_length, name_offset)
         lowest_vcn = highest_vcn = None
         run_count = 0
@@ -541,12 +546,13 @@ def parse_ntfs_index_root(
     return entries
 
 
-def parse_ntfs_index_block(
+def _parse_ntfs_index_block(
     raw_block: bytes,
     *,
     parent_reference: int | None = None,
     expected_vcn: int | None = None,
-) -> tuple[NtfsIndexEntry, ...]:
+    allow_children: bool = False,
+) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
     """Validate an INDX block's USA and parse its bounded index entries."""
     if len(raw_block) < 512 or len(raw_block) % 512:
         raise NtfsMetadataError("NTFS INDX block size is invalid")
@@ -583,10 +589,23 @@ def parse_ntfs_index_block(
         start=start,
         end=end,
         parent_reference=parent_reference,
-        allow_children=False,
+        allow_children=allow_children,
     )
-    if children:
+    if children and not allow_children:
         raise NtfsMetadataError("NTFS INDX child pointers are unsupported")
+    return entries, children
+
+
+def parse_ntfs_index_block(
+    raw_block: bytes,
+    *,
+    parent_reference: int | None = None,
+    expected_vcn: int | None = None,
+) -> tuple[NtfsIndexEntry, ...]:
+    """Validate an INDX block and parse entries without exposing child pointers."""
+    entries, _children = _parse_ntfs_index_block(
+        raw_block, parent_reference=parent_reference, expected_vcn=expected_vcn
+    )
     return entries
 
 
@@ -1042,10 +1061,14 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     raise NtfsMetadataError("NTFS $I30 child VCN is outside allocation")
                 visited_vcns.add(vcn)
                 block = self._read_runs(allocation.runs, vcn * block_size, block_size)
-                block_entries = parse_ntfs_index_block(
-                    block, parent_reference=parent_reference, expected_vcn=vcn
+                block_entries, block_children = _parse_ntfs_index_block(
+                    block,
+                    parent_reference=parent_reference,
+                    expected_vcn=vcn,
+                    allow_children=True,
                 )
                 entries.extend(block_entries)
+                pending.extend(block_children)
         unique: dict[tuple[str, int], NtfsIndexEntry] = {}
         names: set[str] = set()
         for entry in entries:
