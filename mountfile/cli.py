@@ -165,9 +165,10 @@ def _select(image, args):
     return 0, probe_filesystem(image, 0) or "unknown", "whole image"
 
 
-def _provider(image, offset):
+def _provider(image, offset, volume_size=None):
     """Open the best available bounded read-only provider for a volume."""
-    volume_size = volume_size_for_offset(image, offset)
+    if volume_size is None:
+        volume_size = volume_size_for_offset(image, offset)
     try:
         provider = open_image_provider(image, offset=offset, volume_size=volume_size)
         return provider, getattr(provider, "backend_name", "read-only")
@@ -410,6 +411,7 @@ def cmd_autopick(args):
                     "source": best.source,
                     "score": best.score,
                     "size": best.size,
+                    "extent_size": best.extent_size,
                     "label": best.label,
                     "name": best.name,
                     "backend": best.backend,
@@ -423,6 +425,7 @@ def cmd_autopick(args):
                     "fstype": c.fstype,
                     "source": c.source,
                     "score": c.score,
+                    "extent_size": c.extent_size,
                     "backend": c.backend,
                     "error": c.error,
                     "name": c.name,
@@ -444,7 +447,9 @@ def cmd_autopick(args):
         return ERROR
 
     if args.extract:
-        provider, backend = _provider(args.image, best.offset)
+        provider, backend = _provider(
+            args.image, best.offset, volume_size=best.extent_size
+        )
         try:
             count = extract_path(provider, "/", args.extract)
         finally:
