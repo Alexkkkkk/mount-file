@@ -117,6 +117,7 @@ def _iteration(provider, paths: list[str]) -> dict:
         "extract": [],
     }
     file_sizes = {}
+    file_sha256 = {}
     range_bytes = 0
     extracted_bytes = 0
     listed_entries = 0
@@ -161,6 +162,7 @@ def _iteration(provider, paths: list[str]) -> dict:
                 raise ValueError(
                     f"extraction size mismatch for {path!r}: expected {size}, got {written}"
                 )
+            file_sha256[path] = _sha256_file(destination)
             samples["extract"].append(elapsed)
             extracted_bytes += written
 
@@ -168,6 +170,7 @@ def _iteration(provider, paths: list[str]) -> dict:
         "operation_seconds": samples,
         "operation_counts": {name: len(values) for name, values in samples.items()},
         "file_sizes_bytes": file_sizes,
+        "file_sha256": file_sha256,
         "listed_entries": listed_entries,
         "range_read_bytes": range_bytes,
         "extracted_bytes": extracted_bytes,
@@ -328,19 +331,48 @@ def build_report(
     native = report["backends"].get("native")
     pytsk3 = report["backends"].get("pytsk3")
     if native is not None and pytsk3 is not None:
-        ratio = native["median_iteration_seconds"] / max(
-            pytsk3["median_iteration_seconds"], 1e-12
-        )
-        change_percent = (ratio - 1.0) * 100.0
-        report["comparison"] = {
+        reference = native["iterations"][0]
+        mismatches = set()
+        for backend in (native, pytsk3):
+            for iteration in backend["iterations"]:
+                paths_in_result = set(iteration["file_sizes_bytes"])
+                paths_in_reference = set(reference["file_sizes_bytes"])
+                for path in paths_in_result | paths_in_reference:
+                    if iteration["file_sizes_bytes"].get(path) != reference[
+                        "file_sizes_bytes"
+                    ].get(path) or iteration["file_sha256"].get(path) != reference[
+                        "file_sha256"
+                    ].get(
+                        path
+                    ):
+                        mismatches.add(path)
+        equivalent = not mismatches
+        comparison = {
             "baseline": "pytsk3",
-            "metric": "median full-iteration wall time; provider open excluded",
-            "native_to_baseline_ratio": ratio,
-            "relative_change_percent": change_percent,
-            "target_max_regression_percent": 20,
-            "within_target_for_this_run": change_percent <= 20,
-            "note": "This comparison is descriptive; publish repeated results and cache methodology before claiming benchmark acceptance.",
+            "content_equivalent": equivalent,
+            "content_mismatches": sorted(mismatches),
         }
+        if equivalent:
+            ratio = native["median_iteration_seconds"] / max(
+                pytsk3["median_iteration_seconds"], 1e-12
+            )
+            change_percent = (ratio - 1.0) * 100.0
+            comparison.update(
+                {
+                    "metric": "median full-iteration wall time; provider open excluded",
+                    "native_to_baseline_ratio": ratio,
+                    "relative_change_percent": change_percent,
+                    "target_max_regression_percent": 20,
+                    "within_target_for_this_run": change_percent <= 20,
+                    "note": "This comparison is descriptive; publish repeated results and cache methodology before claiming benchmark acceptance.",
+                }
+            )
+        else:
+            comparison["note"] = (
+                "Performance comparison withheld because native and pytsk3 "
+                "did not produce identical file sizes and SHA-256 content."
+            )
+        report["comparison"] = comparison
     if hash_image:
         report["image"]["sha256"] = _sha256_file(image)
     return report

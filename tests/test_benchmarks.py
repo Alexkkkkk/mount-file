@@ -3,11 +3,14 @@
 
 import hashlib
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from benchmarks import bench_vfs
+from mountfile.ext2_native import NativeExt2ImageWriter
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
@@ -118,8 +121,81 @@ def test_build_report_compares_backends_only_when_both_succeed(tmp_path, monkeyp
     )
 
     assert report["comparison"]["baseline"] == "pytsk3"
+    assert report["comparison"]["content_equivalent"] is True
     assert report["comparison"]["target_max_regression_percent"] == 20
     assert isinstance(report["comparison"]["relative_change_percent"], float)
+
+
+def test_build_report_withholds_performance_comparison_on_content_mismatch(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "sample.img"
+    image.write_bytes(b"1234")
+
+    def open_native(path, offset=0, volume_size=None):
+        return _FakeProvider()
+
+    class DifferentProvider(_FakeProvider):
+        backend_name = "pytsk3-test"
+
+        def read_file_range(self, path, offset=0, length=1 << 20):
+            return b"jello"[offset : offset + length]
+
+    monkeypatch.setattr(bench_vfs, "open_image_provider", open_native)
+    monkeypatch.setattr(
+        bench_vfs, "TskImage", lambda *_args, **_kwargs: DifferentProvider()
+    )
+    report = bench_vfs.build_report(
+        image, 0, 4, ["/docs/readme.txt"], baseline="both", repeats=1, warmups=0
+    )
+
+    assert report["comparison"]["content_equivalent"] is False
+    assert report["comparison"]["content_mismatches"] == ["/docs/readme.txt"]
+    assert "native_to_baseline_ratio" not in report["comparison"]
+
+
+@pytest.mark.skipif(not shutil.which("mke2fs"), reason="mke2fs is required")
+def test_real_ext2_benchmark_requires_identical_pytsk3_file_content(tmp_path):
+    pytest.importorskip("pytsk3")
+    image = tmp_path / "benchmark.ext2"
+    image_size = 16 * 1024 * 1024
+    image.write_bytes(bytes(image_size))
+    subprocess.run(
+        [
+            shutil.which("mke2fs"),
+            "-q",
+            "-F",
+            "-t",
+            "ext2",
+            "-b",
+            "4096",
+            "-O",
+            "none,filetype,sparse_super,large_file",
+            str(image),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expected = b"benchmark differential payload\x00" * 300
+    NativeExt2ImageWriter(image).write_file("/benchmark.bin", expected)
+
+    report = bench_vfs.build_report(
+        image,
+        0,
+        image_size,
+        ["/benchmark.bin"],
+        baseline="both",
+        repeats=1,
+        warmups=0,
+    )
+
+    assert "native_error" not in report["backends"]
+    assert "pytsk3_error" not in report["backends"]
+    assert report["comparison"]["content_equivalent"] is True
+    assert report["backends"]["native"]["iterations"][0]["file_sha256"] == {
+        "/benchmark.bin": hashlib.sha256(expected).hexdigest()
+    }
 
 
 def test_native_benchmark_does_not_count_pytsk_fallback_as_native(
