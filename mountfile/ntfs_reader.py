@@ -38,6 +38,7 @@ _ATTRIBUTE_FLAG_ENCRYPTED = 0x4000
 _ATTRIBUTE_FLAG_SPARSE = 0x8000
 _VOLUME_KNOWN_FLAGS = 0x807F
 _LOGFILE_PAGE_SIZE = 4096
+_MAX_READ_RANGE_BYTES = 1 << 20
 _LOGFILE_CLEAN_DISMOUNT = 0x0002
 _LOGFILE_KNOWN_FLAGS = _LOGFILE_CLEAN_DISMOUNT | 0x0001
 
@@ -913,13 +914,22 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         )
 
     def read_file_range(self, path, offset=0, length=1 << 20):
-        if not isinstance(offset, int) or not isinstance(length, int):
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(length, int)
+            or isinstance(length, bool)
+        ):
             raise NtfsMetadataError("invalid NTFS metadata read request")
+        if offset < 0 or length < 0:
+            raise NtfsMetadataError("negative NTFS read range")
+        if length > _MAX_READ_RANGE_BYTES:
+            raise NtfsMetadataError("NTFS read range exceeds the 1 MiB limit")
         if path == "/$MFT":
             data = self._mft_data
-            if offset < 0 or length < 0 or offset >= data.data_size or not length:
+            if offset >= data.data_size or not length:
                 return b""
-            length = min(length, data.data_size - offset, 1 << 20)
+            length = min(length, data.data_size - offset)
             return self._read_runs(data.runs, offset, length)
         _number, record = self._resolve(path)
         if record.is_directory:
@@ -937,17 +947,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if data is None:
             raise NtfsMetadataError("NTFS file has no unnamed DATA attribute")
         if data.resident_value is not None:
-            if (
-                offset < 0
-                or length < 0
-                or offset >= len(data.resident_value)
-                or not length
-            ):
+            if offset >= len(data.resident_value) or not length:
                 return b""
-            return data.resident_value[offset : offset + min(length, 1 << 20)]
-        if offset < 0 or length < 0 or offset >= data.data_size or not length:
+            return data.resident_value[offset : offset + length]
+        if offset >= data.data_size or not length:
             return b""
-        length = min(length, data.data_size - offset, 1 << 20)
+        length = min(length, data.data_size - offset)
         return self._read_runs(data.runs, offset, length)
 
     def _read_runs(self, runs, offset, length):
@@ -1080,7 +1085,20 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         return tuple(sorted(unique.values(), key=lambda item: item.name.lower()))
 
     def read_file(self, path):
-        return self.read_file_range(path, 0, self.file_size(path))
+        """Return the complete file, fetching it through bounded ranges."""
+        size = self.file_size(path)
+        output = bytearray()
+        offset = 0
+        while offset < size:
+            requested = min(_MAX_READ_RANGE_BYTES, size - offset)
+            chunk = self.read_file_range(path, offset, requested)
+            if len(chunk) != requested:
+                raise NtfsMetadataError(
+                    "short NTFS read while assembling complete file"
+                )
+            output.extend(chunk)
+            offset += len(chunk)
+        return bytes(output)
 
     def read_mft_record(self, record_number, *, reference=None):
         """Load one MFT record only after checked arithmetic and bounds checks."""
