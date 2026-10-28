@@ -12,6 +12,7 @@ ext3/ext4 support.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import stat
@@ -19,6 +20,7 @@ import struct
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1216,9 +1218,242 @@ class NativeExt2ImageWriter:
         self.image_path = os.path.realpath(os.fspath(image_path))
         self.offset = int(offset)
         self.volume_size = int(volume_size) if volume_size is not None else None
-        self._fs = _Ext2FS(self.image_path, self.offset, self.volume_size)
         with self._locks_guard:
             self._lock = self._locks.setdefault(self.image_path, threading.RLock())
+        with self._lock:
+            if os.path.exists(self._recovery_marker_path):
+                with _image_process_lock(self.image_path):
+                    self._recover_pending_transaction()
+            self._fs = _Ext2FS(self.image_path, self.offset, self.volume_size)
+
+    @property
+    def _recovery_marker_path(self) -> str:
+        return self.image_path + ".mountfile-ext2-recovery.json"
+
+    @staticmethod
+    def _hash_extent(path: str, offset: int, size: int) -> bytes:
+        digest = hashlib.sha256()
+        remaining = size
+        with open(path, "rb") as stream:
+            stream.seek(offset)
+            while remaining:
+                chunk = stream.read(min(_CHUNK, remaining))
+                if not chunk:
+                    raise NativeExt2Error("short read while hashing recovery extent")
+                digest.update(chunk)
+                remaining -= len(chunk)
+        return digest.digest()
+
+    @staticmethod
+    def _fsync_parent(path: str) -> None:
+        if os.name == "nt":
+            return
+        directory = os.path.dirname(path) or "."
+        fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _atomic_write_json(path: str, payload: dict) -> None:
+        directory = os.path.dirname(path) or "."
+        fd, temporary = tempfile.mkstemp(
+            prefix=".mountfile-ext2-marker-", suffix=".tmp", dir=directory
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            NativeExt2ImageWriter._fsync_parent(path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+    def _preserve_recovery_snapshot(
+        self, rollback: str, original_hash: bytes
+    ) -> tuple[str, str]:
+        """Persist rollback bytes and a fail-closed recovery marker beside image."""
+        directory = os.path.dirname(self.image_path) or "."
+        basename = os.path.basename(self.image_path)
+        fd, snapshot = tempfile.mkstemp(
+            prefix=f".{basename}.mountfile-ext2-recovery-",
+            suffix=".bin",
+            dir=directory,
+        )
+        digest = hashlib.sha256()
+        snapshot_ready = False
+        try:
+            with open(rollback, "rb") as src, os.fdopen(fd, "wb") as dst:
+                remaining = self.filesystem_size
+                while remaining:
+                    chunk = src.read(min(_CHUNK, remaining))
+                    if not chunk:
+                        raise NativeExt2Error("rollback snapshot is truncated")
+                    written = dst.write(chunk)
+                    if written != len(chunk):
+                        raise NativeExt2Error(
+                            "short write while preserving recovery snapshot"
+                        )
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            if digest.digest() != original_hash:
+                raise NativeExt2Error("persistent rollback snapshot hash mismatch")
+            self._fsync_parent(snapshot)
+            snapshot_ready = True
+            current_hash = self._hash_source()
+            image_stat = os.stat(self.image_path)
+            marker = {
+                "format": 1,
+                "image": self.image_path,
+                "offset": self.offset,
+                "size": self.filesystem_size,
+                "original_sha256": original_hash.hex(),
+                "observed_sha256": current_hash.hex(),
+                "device": image_stat.st_dev,
+                "inode": image_stat.st_ino,
+                "image_size": image_stat.st_size,
+                "mtime_ns": image_stat.st_mtime_ns,
+                "snapshot": os.path.basename(snapshot),
+            }
+            self._atomic_write_json(self._recovery_marker_path, marker)
+            return snapshot, self._recovery_marker_path
+        except Exception as exc:
+            if snapshot_ready:
+                raise NativeExt2Error(
+                    "persistent ext2 recovery snapshot retained at %s, but its "
+                    "automatic recovery marker could not be safely written: %s"
+                    % (snapshot, exc)
+                ) from exc
+            try:
+                os.unlink(snapshot)
+            except OSError:
+                pass
+            raise
+
+    def _recover_pending_transaction(self) -> None:
+        marker_path = self._recovery_marker_path
+        if not os.path.exists(marker_path):
+            return
+        if os.path.islink(marker_path):
+            raise NativeExt2Error(
+                "ext2 recovery marker is a symbolic link; refusing recovery"
+            )
+        try:
+            with open(marker_path, "r", encoding="utf-8") as stream:
+                marker = json.load(stream)
+        except (OSError, ValueError) as exc:
+            raise NativeExt2Error(
+                "ext2 recovery marker is unreadable; writes are blocked"
+            ) from exc
+        if not isinstance(marker, dict) or marker.get("format") != 1:
+            raise NativeExt2Error("unknown ext2 recovery marker; writes are blocked")
+        try:
+            size = int(marker["size"])
+            offset = int(marker["offset"])
+            snapshot_name = marker["snapshot"]
+            original_hash = bytes.fromhex(marker["original_sha256"])
+            observed_hash = bytes.fromhex(marker["observed_sha256"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise NativeExt2Error(
+                "invalid ext2 recovery marker; writes are blocked"
+            ) from exc
+        if (
+            marker.get("image") != self.image_path
+            or offset != self.offset
+            or size <= 0
+            or (self.volume_size is not None and self.volume_size != size)
+            or len(original_hash) != 32
+            or len(observed_hash) != 32
+            or not isinstance(snapshot_name, str)
+            or os.path.basename(snapshot_name) != snapshot_name
+            or not snapshot_name.startswith(
+                f".{os.path.basename(self.image_path)}.mountfile-ext2-recovery-"
+            )
+            or not snapshot_name.endswith(".bin")
+        ):
+            raise NativeExt2Error(
+                "ext2 recovery marker does not match this image extent"
+            )
+        snapshot = os.path.join(os.path.dirname(self.image_path), snapshot_name)
+        if os.path.islink(snapshot) or not os.path.isfile(snapshot):
+            raise NativeExt2Error(
+                "ext2 recovery snapshot is missing or unsafe; writes are blocked"
+            )
+        try:
+            image_stat = os.stat(self.image_path)
+            snapshot_stat = os.stat(snapshot)
+            if (
+                image_stat.st_dev != int(marker["device"])
+                or image_stat.st_ino != int(marker["inode"])
+                or image_stat.st_size != int(marker["image_size"])
+                or snapshot_stat.st_size != size
+            ):
+                raise NativeExt2Error(
+                    "image or recovery snapshot changed; automatic recovery refused"
+                )
+            if self._hash_extent(snapshot, 0, size) != original_hash:
+                raise NativeExt2Error(
+                    "ext2 recovery snapshot hash mismatch; writes are blocked"
+                )
+            current_hash = self._hash_extent(self.image_path, offset, size)
+            if current_hash == original_hash:
+                # A previous recovery may have fsynced the restored bytes and
+                # crashed before removing its marker. Make that path idempotent.
+                with open(self.image_path, "r+b") as stream:
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if self._hash_extent(self.image_path, offset, size) != original_hash:
+                    raise NativeExt2Error(
+                        "already-restored ext2 extent changed during recovery"
+                    )
+                os.unlink(marker_path)
+                os.unlink(snapshot)
+                self._fsync_parent(marker_path)
+                return
+            if (
+                image_stat.st_mtime_ns != int(marker["mtime_ns"])
+                or current_hash != observed_hash
+            ):
+                raise NativeExt2Error(
+                    "image changed since ext2 failure; automatic recovery refused"
+                )
+            remaining = size
+            with open(self.image_path, "r+b") as dst, open(snapshot, "rb") as src:
+                dst.seek(offset)
+                while remaining:
+                    chunk = src.read(min(_CHUNK, remaining))
+                    if not chunk:
+                        raise NativeExt2Error("ext2 recovery snapshot is truncated")
+                    written = dst.write(chunk)
+                    if written != len(chunk):
+                        raise NativeExt2Error(
+                            "short write while restoring ext2 recovery snapshot"
+                        )
+                    remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            if self._hash_extent(self.image_path, offset, size) != original_hash:
+                raise NativeExt2Error(
+                    "restored ext2 recovery extent failed SHA-256 verification"
+                )
+            os.unlink(marker_path)
+            os.unlink(snapshot)
+            self._fsync_parent(marker_path)
+        except NativeExt2Error:
+            raise
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise NativeExt2Error(
+                "ext2 automatic recovery failed; writes are blocked"
+            ) from exc
 
     @property
     def filesystem_size(self):
@@ -1350,14 +1585,31 @@ class NativeExt2ImageWriter:
                 try:
                     self._restore_extent(rollback, original_hash)
                 except Exception as rollback_exc:
+                    try:
+                        snapshot, marker = self._preserve_recovery_snapshot(
+                            rollback, original_hash
+                        )
+                        recovery_detail = (
+                            f"durable recovery snapshot: {snapshot}; marker: {marker}"
+                        )
+                    except Exception as preserve_exc:
+                        if "recovery snapshot retained at" in str(preserve_exc):
+                            recovery_detail = str(preserve_exc)
+                        else:
+                            recovery_detail = (
+                                "no durable recovery snapshot was established; "
+                                "the temporary rollback copy will be removed: "
+                                f"{preserve_exc}"
+                            )
                     raise NativeExt2Error(
-                        "ext2 commit and rollback both failed; restore the persistent image backup: %s"
-                        % rollback_exc
+                        "ext2 commit and rollback both failed; "
+                        f"{recovery_detail}; rollback error: {rollback_exc}"
                     ) from exc
                 raise
 
     def _mutate(self, method: str, *args, **kwargs):
         with self._lock, _image_process_lock(self.image_path):
+            self._recover_pending_transaction()
             current = _Ext2FS(self.image_path, self.offset, self.volume_size)
             if current.filesystem_size != self.filesystem_size:
                 raise NativeExt2Error(
