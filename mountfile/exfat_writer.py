@@ -82,18 +82,36 @@ def _image_lock(path):
                 os.close(fd)
 
 
-def _hash_extent(path, offset, length):
+def _image_identity(path):
+    """Return a stable full-image identity or fail if it changes while hashing."""
     digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        stream.seek(offset)
-        remaining = length
-        while remaining:
-            chunk = stream.read(min(1 << 20, remaining))
-            if not chunk:
-                raise ExfatWriteError("short read while hashing exFAT extent")
-            digest.update(chunk)
-            remaining -= len(chunk)
-    return digest.digest()
+    try:
+        with open(path, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise ExfatWriteError("exFAT image is not a regular file")
+            while True:
+                chunk = stream.read(1 << 20)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+        current = os.stat(path)
+    except OSError as exc:
+        raise ExfatWriteError("cannot establish full exFAT image identity") from exc
+
+    def signature(metadata):
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+
+    if signature(before) != signature(after) or signature(after) != signature(current):
+        raise ExfatWriteError("exFAT image changed while establishing identity")
+    return after.st_size, digest.digest()
 
 
 class NativeExfatWriter:
@@ -116,7 +134,7 @@ class NativeExfatWriter:
         if self.profile.number_of_fats != 1:
             raise ExfatWriteError("bounded exFAT writer requires exactly one FAT")
         self.extent_size = self.profile.volume_length * self.profile.bytes_per_sector
-        self._source_hash = _hash_extent(self.image, self.offset, self.extent_size)
+        self._source_image_identity = _image_identity(self.image)
 
     def _copy_stage(self):
         handle = tempfile.NamedTemporaryFile(
@@ -566,15 +584,13 @@ class NativeExfatWriter:
 
     def _commit_stage(self, stage):
         try:
-            if (
-                _hash_extent(self.image, self.offset, self.extent_size)
-                != self._source_hash
-            ):
+            if _image_identity(self.image) != self._source_image_identity:
                 raise ExfatWriteError(
                     "source image changed concurrently; refusing commit"
                 )
+            staged_identity = _image_identity(stage)
             os.replace(stage, self.image)
-            self._source_hash = _hash_extent(self.image, self.offset, self.extent_size)
+            self._source_image_identity = staged_identity
             stage = None
         finally:
             if stage is not None:

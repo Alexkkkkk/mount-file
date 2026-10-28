@@ -49,10 +49,14 @@ growth, same- and cross-directory rename, and file or recursive directory
 deletion. Before freeing clusters it scans allocation ownership and rejects
 cross-linked or inconsistent streams. Each operation copies the complete image
 to a staging file, validates the staged image through the native reader, checks
-the source extent hash under an exclusive image lock, and commits with an
-atomic replacement. A changed source, short write or failed read-back leaves
-the original image untouched; unsupported or ambiguous metadata still fails
-closed.
+the full source-image size and SHA-256 under the native exFAT image lock, and
+commits with an atomic replacement only if that identity is unchanged. This
+detects changes both inside and outside the selected exFAT extent during
+staging, preserving concurrent external changes instead of replacing them with
+an older staged copy. The lock is advisory; an unrelated writer that ignores it
+can still race in the final identity-check/replacement window. This is not a
+power-loss recovery protocol. A rejected commit, short write or failed read-back
+discards the stage; unsupported or ambiguous metadata still fails closed.
 
 ## Использование
 
