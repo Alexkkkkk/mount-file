@@ -124,6 +124,7 @@ from .qt_compat import (
     TableExtendedSelection,
     TB_InstantPopup,
     TB_TextBesideIcon,
+    WidgetWithChildrenShortcut,
     exec_dialog,
     standard_icon,
 )
@@ -247,7 +248,7 @@ PANEL_LEGEND = (
 #: F3..F8 as shown by the function key bar (the F9 menu toggle stays a
 #: shortcut only, exactly like the reference window).
 FKEYS = (
-    ("F3", "Просмотр"),
+    ("F3", "Просмотр/HEX"),
     ("F4", "Правка"),
     ("F5", "Копирование"),
     ("F6", "Перемещение"),
@@ -394,22 +395,52 @@ class HexEditorPage(QWidget):
         find = QPushButton("Найти")
         find.clicked.connect(self.find)
         buttons.addWidget(find)
+        self.goto_button = QPushButton("Перейти…")
+        self.goto_button.clicked.connect(self.goto)
+        buttons.addWidget(self.goto_button)
         buttons.addStretch(1)
         back = QPushButton("Назад к панелям")
-        back.clicked.connect(self._close_callback)
+        back.clicked.connect(self.request_close)
         buttons.addWidget(back)
         layout.addLayout(buttons)
+        self._shortcut_actions = []
+        for shortcut, callback in (
+            ("Ctrl+S", self.save),
+            ("Ctrl+F", self.find),
+            ("Ctrl+G", self.goto),
+        ):
+            action = QAction(shortcut, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.setShortcutContext(WidgetWithChildrenShortcut)
+            action.triggered.connect(lambda *_args, slot=callback: slot())
+            self.addAction(action)
+            self._shortcut_actions.append(action)
         self._changed()
         self.hex_view.setFocus()
 
     def _changed(self):
         modified = self.hex_view.isModified()
-        self.save_button.setEnabled(modified)
-        self.status.setText("Есть несохранённые изменения" if modified else "Сохранено")
+        can_save = self._save_callback is not None
+        self.save_button.setEnabled(modified and can_save)
+        if not can_save:
+            self.status.setText(
+                "Изменения не сохраняются: том только для чтения"
+                if modified
+                else "Только чтение"
+            )
+        else:
+            self.status.setText(
+                "Есть несохранённые изменения" if modified else "Сохранено"
+            )
 
     def save(self):
-        if self.hex_view.isModified() and self._save_callback(self.hex_view.data()):
-            self.hex_view.setData(self.hex_view.data())
+        if not self.hex_view.isModified() or self._save_callback is None:
+            return
+        try:
+            if self._save_callback(self.hex_view.data()):
+                self.hex_view.setData(self.hex_view.data())
+        except Exception as exc:
+            QMessageBox.critical(self, "Сохранение HEX не удалось", str(exc))
 
     def find(self):
         value, ok = QInputDialog.getText(self, "Поиск байтов", "HEX или текст:")
@@ -421,6 +452,40 @@ class HexEditorPage(QWidget):
             needle = value.encode("utf-8")
         pos = self.hex_view.find(needle)
         self.status.setText("Найдено: 0x%X" % pos if pos >= 0 else "Не найдено")
+
+    def goto(self):
+        value, ok = QInputDialog.getText(
+            self, "Перейти к смещению", "Смещение (десятичное или 0x…):"
+        )
+        if not ok or not value:
+            return
+        try:
+            offset = int(value.strip(), 0)
+        except ValueError:
+            QMessageBox.warning(
+                self, "Перейти к смещению", "Некорректное смещение."
+            )
+            return
+        if not self.hex_view.goto(offset):
+            QMessageBox.information(
+                self, "Перейти к смещению", "Нет загруженных данных."
+            )
+        else:
+            actual = min(max(offset, 0), len(self.hex_view.data()) - 1)
+            self.status.setText("Смещение: 0x%X" % actual)
+
+    def request_close(self):
+        if self.hex_view.isModified():
+            answer = QMessageBox.warning(
+                self,
+                "Несохранённые изменения",
+                "Вернуться к панелям и отбросить изменения HEX?",
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                return
+        self._close_callback()
 
 
 class TextEditorDialog(QDialog):
@@ -1125,7 +1190,7 @@ class TcPanel(QWidget):
         else:
             open_label = "Просмотр (F3)"
         add(open_label, lambda: self.open_row(self.table.currentRow()), bool(entry))
-        add("HEX-просмотр", self.win.f3_hex_view, is_file)
+        add("HEX-редактор", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
         add(
@@ -2481,6 +2546,10 @@ class MainWindow(QMainWindow):
 
     def _show_panels(self):
         """Return from an embedded tool page to the two file panels."""
+        current = self.workspace_stack.currentWidget()
+        if isinstance(current, HexEditorPage):
+            self.workspace_stack.removeWidget(current)
+            current.deleteLater()
         self.workspace_stack.setCurrentWidget(self.splitter)
         self.workspace_hint.setText("Образы дисков · просмотр и извлечение")
 
@@ -4074,12 +4143,13 @@ class MainWindow(QMainWindow):
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
 
+        save_callback = save_edited if p.mode != "img" or p.writer is not None else None
         page = HexEditorPage(
             self,
             entry["name"],
             entry.get("size") or 0,
             data,
-            save_callback=save_edited,
+            save_callback=save_callback,
             close_callback=self._show_panels,
         )
         self._show_hex_page(page)
@@ -4591,6 +4661,19 @@ class MainWindow(QMainWindow):
         _ORPHAN_THREADS.append(updater)
 
     def closeEvent(self, e):
+        page = getattr(self, "workspace_stack", None)
+        page = page.currentWidget() if page is not None else None
+        if isinstance(page, HexEditorPage) and page.hex_view.isModified():
+            answer = QMessageBox.warning(
+                self,
+                "Несохранённые изменения",
+                "Выйти без сохранения изменений HEX?",
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                e.ignore()
+                return
         if self._text_tmp and text_editor.has_active_editors(self._text_tmp):
             QMessageBox.information(
                 self,
