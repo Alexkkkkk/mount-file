@@ -4,6 +4,7 @@ These tests intentionally use the existing synthetic ext fixtures and native
 writer helper.  They verify the public behavior at the routing boundary rather
 than reaching into provider internals, and keep all negative cases fail-closed.
 """
+
 import struct
 
 import pytest
@@ -143,7 +144,9 @@ def test_recovery_required_profile_is_default_deny_and_read_only(tmp_path, monke
     assert image.read_bytes() == before
 
 
-@pytest.mark.skipif(not __import__("shutil").which("mke2fs"), reason="mke2fs is required")
+@pytest.mark.skipif(
+    not __import__("shutil").which("mke2fs"), reason="mke2fs is required"
+)
 def test_native_write_readback_and_injected_commit_failure_preserve_original(
     tmp_path, monkeypatch
 ):
