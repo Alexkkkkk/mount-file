@@ -96,20 +96,21 @@ def _image_identity(path):
                     break
                 digest.update(chunk)
             after = os.fstat(stream.fileno())
-        current = os.stat(path)
     except OSError as exc:
         raise ExfatWriteError("cannot establish full exFAT image identity") from exc
 
     def signature(metadata):
         return (
-            metadata.st_dev,
-            metadata.st_ino,
             metadata.st_size,
             metadata.st_mtime_ns,
             metadata.st_ctime_ns,
         )
 
-    if signature(before) != signature(after) or signature(after) != signature(current):
+    # Windows may report different st_dev/st_ino values for a path stat and
+    # its open handle. Compare metadata on the same descriptor; a concurrent
+    # path replacement is detected when the next identity is computed at
+    # commit, while in-place changes during hashing alter these timestamps.
+    if signature(before) != signature(after):
         raise ExfatWriteError("exFAT image changed while establishing identity")
     return after.st_size, digest.digest()
 
