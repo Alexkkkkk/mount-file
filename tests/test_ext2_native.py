@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 """Regression coverage for the in-process, limited-profile ext2 writer."""
 
+import json
+import os
 import shutil
 import subprocess
 
@@ -523,8 +525,53 @@ def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
         writer.write_file("/not-restored.txt", b"staged only")
 
     assert image_write_opens == 3
-    assert hash_calls == 4
+    assert hash_calls == 5
     assert image.read_bytes() != before
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    snapshot = image.with_name(recovery["snapshot"])
+    assert snapshot.is_file()
+    assert snapshot.read_bytes() == before
+
+    # External edits after the failure must not be overwritten by recovery.
+    pending_image = image.read_bytes()
+    pending_stat = image.stat()
+    with image.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(bytes([pending_image[0] ^ 1]))
+    monkeypatch.undo()
+    with pytest.raises(NativeExt2Error, match="image changed since ext2 failure"):
+        NativeExt2ImageWriter(image)
+    assert marker.is_file()
+
+    # If the exact post-failure image is restored, a later writer open can
+    # restore the snapshot and remove the marker.
+    with image.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(pending_image[:1])
+    os.utime(image, ns=(pending_stat.st_atime_ns, recovery["mtime_ns"]))
+
+    # Simulate a process failure after the restored bytes are fsynced but
+    # before the marker is removed; the next open must finish cleanup safely.
+    original_unlink = os.unlink
+
+    def fail_marker_unlink(path):
+        if str(path) == str(marker):
+            raise OSError("injected crash before recovery marker cleanup")
+        return original_unlink(path)
+
+    monkeypatch.setattr(ext2_native.os, "unlink", fail_marker_unlink)
+    with pytest.raises(NativeExt2Error, match="automatic recovery failed"):
+        NativeExt2ImageWriter(image)
+    assert image.read_bytes() == before
+    assert marker.is_file()
+    monkeypatch.undo()
+
+    NativeExt2ImageWriter(image)
+    assert image.read_bytes() == before
+    assert not marker.exists()
+    assert not snapshot.exists()
 
 
 def test_native_ext2_rejects_concurrent_change_before_commit(tmp_path, monkeypatch):
