@@ -2,6 +2,7 @@
 """F4 text-edit save and encoding preservation tests."""
 import os
 import shutil
+import stat
 import subprocess
 from types import SimpleNamespace
 
@@ -53,6 +54,35 @@ def test_local_edit_uses_atomic_replace(tmp_path):
     tc_window._atomic_write_local(str(target), b"after\n")
     assert target.read_bytes() == b"after\n"
     assert sorted(path.name for path in tmp_path.iterdir()) == ["settings.ini"]
+
+
+def test_local_atomic_write_preserves_mode_and_rejects_external_edit(tmp_path):
+    target = tmp_path / "settings.ini"
+    target.write_bytes(b"opened\n")
+    if os.name != "nt":
+        target.chmod(0o640)
+    original = target.read_bytes()
+    identity = tc_window._local_file_identity(target.stat())
+
+    tc_window._atomic_write_local(
+        str(target), b"saved\n", expected_data=original, expected_identity=identity
+    )
+
+    assert target.read_bytes() == b"saved\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+    opened_again = target.read_bytes()
+    identity_again = tc_window._local_file_identity(target.stat())
+    target.write_bytes(b"external edit\n")
+    with pytest.raises(RuntimeError, match="changed since it was opened"):
+        tc_window._atomic_write_local(
+            str(target),
+            b"stale overwrite\n",
+            expected_data=opened_again,
+            expected_identity=identity_again,
+        )
+    assert target.read_bytes() == b"external edit\n"
 
 
 def test_image_write_requires_backup_and_never_overwrites_existing_backup(

@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("mountfile.qt_compat", exc_type=ImportError)
 
 from mountfile.hexview import HexView
-from mountfile.qt_compat import CtrlModifier, QApplication
+from mountfile.qt_compat import QT6, CtrlModifier, QApplication, Qt, QtCore, QtGui
 
 
 @pytest.fixture(scope="module")
@@ -87,6 +87,25 @@ def test_hit_test_distinguishes_hex_ascii_and_nibbles(app):
     assert view._hit_test(_Point(x_hex)) == (0, "hex", 0)
     assert view._hit_test(_Point(x_hex + c)) == (0, "hex", 1)
     assert view._hit_test(_Point(x_ascii)) == (0, "ascii", 0)
+
+
+def test_mouse_click_preserves_low_hex_nibble(app):
+    view = HexView()
+    view.setData(b"\xAB")
+    _, x_hex, _ = view._columns()
+    point = QtCore.QPointF(x_hex + view._char_w, view._line_h // 2)
+    event_type = (
+        QtCore.QEvent.Type.MouseButtonPress if QT6 else QtCore.QEvent.MouseButtonPress
+    )
+    left_button = Qt.MouseButton.LeftButton if QT6 else Qt.LeftButton
+    no_modifier = Qt.KeyboardModifier.NoModifier if QT6 else Qt.NoModifier
+    event = QtGui.QMouseEvent(event_type, point, left_button, left_button, no_modifier)
+
+    view.mousePressEvent(event)
+    assert view._hex_nibble == 1
+    view.keyPressEvent(_KeyEvent(ord("4"), text="4"))
+
+    assert view.data() == b"\xA4"
 
 
 def test_ascii_and_hex_modes_edit_bytes(app):

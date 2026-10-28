@@ -40,6 +40,7 @@ import atexit
 import fnmatch
 import os
 import shutil
+import stat
 import tempfile
 import threading
 import webbrowser
@@ -462,9 +463,7 @@ class HexEditorPage(QWidget):
         try:
             offset = int(value.strip(), 0)
         except ValueError:
-            QMessageBox.warning(
-                self, "Перейти к смещению", "Некорректное смещение."
-            )
+            QMessageBox.warning(self, "Перейти к смещению", "Некорректное смещение.")
             return
         if not self.hex_view.goto(offset):
             QMessageBox.information(
@@ -601,15 +600,70 @@ def _encode_editable_text(text, encoding, bom, newline):
     return (b"\xef\xbb\xbf" + data) if bom else data
 
 
-def _atomic_write_local(path, data):
-    """Replace a local text file atomically without leaving partial contents."""
+def _local_file_identity(metadata):
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _file_contents_match(stream, expected):
+    offset = 0
+    while True:
+        chunk = stream.read(1 << 20)
+        if not chunk:
+            return offset == len(expected)
+        end = offset + len(chunk)
+        if end > len(expected) or expected[offset:end] != chunk:
+            return False
+        offset = end
+
+
+def _atomic_write_local(path, data, expected_data=None, expected_identity=None):
+    """Atomically replace a regular local file without clobbering later edits."""
     parent = os.path.dirname(os.path.abspath(path))
+    original = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(original.st_mode):
+        raise RuntimeError("refusing to replace a non-regular local file")
+    baseline = expected_identity or _local_file_identity(original)
+
+    def verify_unchanged():
+        current = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or _local_file_identity(current) != baseline
+        ):
+            raise RuntimeError(
+                "local file changed since it was opened; refusing to overwrite"
+            )
+        with open(path, "rb") as source:
+            opened = _local_file_identity(os.fstat(source.fileno()))
+            if opened != baseline or (
+                expected_data is not None
+                and not _file_contents_match(source, expected_data)
+            ):
+                raise RuntimeError(
+                    "local file changed since it was opened; refusing to overwrite"
+                )
+        current = os.stat(path, follow_symlinks=False)
+        if _local_file_identity(current) != baseline:
+            raise RuntimeError(
+                "local file changed since it was opened; refusing to overwrite"
+            )
+
+    verify_unchanged()
     fd, temp_path = tempfile.mkstemp(prefix=".mountfile-edit-", dir=parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        os.chmod(temp_path, stat.S_IMODE(original.st_mode))
+        verify_unchanged()
         os.replace(temp_path, path)
     finally:
         if os.path.exists(temp_path):
@@ -4098,6 +4152,7 @@ class MainWindow(QMainWindow):
                 self, "Просмотр", "Сначала выберите файл в активной панели."
             )
             return
+        local_identity = None
         try:
             full = p.join(entry["name"])
             if p.mode == "img":
@@ -4105,11 +4160,13 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as f:
                     data = f.read()
+                    local_identity = _local_file_identity(os.fstat(f.fileno()))
         except Exception as e:
             QMessageBox.critical(self, "Просмотр", str(e))
             return
 
         def save_edited(updated):
+            nonlocal data, local_identity
             answer = QMessageBox.warning(
                 self,
                 "Подтверждение записи HEX",
@@ -4128,17 +4185,16 @@ class MainWindow(QMainWindow):
                 parent = str(PurePosixPath(full).parent)
                 p.writer.write_file(parent, entry["name"], updated)
             else:
-                directory = os.path.dirname(full) or "."
-                fd, tmp = tempfile.mkstemp(prefix=".mountfile-hex-", dir=directory)
-                try:
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(updated)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(tmp, full)
-                finally:
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
+                _atomic_write_local(
+                    full,
+                    updated,
+                    expected_data=data,
+                    expected_identity=local_identity,
+                )
+                data = updated
+                local_identity = _local_file_identity(
+                    os.stat(full, follow_symlinks=False)
+                )
             p.refresh()
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
@@ -4181,6 +4237,7 @@ class MainWindow(QMainWindow):
             )
             return
         full = p.join(name)
+        local_identity = None
         try:
             if p.mode == "img":
                 if p.writer is None:
@@ -4190,6 +4247,7 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as stream:
                     data = stream.read(2 * 1024 * 1024 + 1)
+                    local_identity = _local_file_identity(os.fstat(stream.fileno()))
         except Exception as exc:
             QMessageBox.warning(self, "Правка", "Не удалось прочитать файл:\n%s" % exc)
             return
@@ -4238,7 +4296,12 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            _atomic_write_local(full, updated)
+            _atomic_write_local(
+                full,
+                updated,
+                expected_data=data,
+                expected_identity=local_identity,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Сохранение не удалось", str(exc))
             return
