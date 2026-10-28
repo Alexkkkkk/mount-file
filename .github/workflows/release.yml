@@ -128,14 +128,15 @@ jobs:
           # The Qt binding is mandatory - without it the frozen exe is useless.
           python -c "import ${{ matrix.qt }} as m; print('${{ matrix.qt }} OK')"
           if ($LASTEXITCODE -ne 0) { throw "${{ matrix.qt }} could not be imported" }
-          # pytsk3 is optional: without it the app still browses and writes
-          # FAT32 with the built-in engine. This probe must never leak its
-          # non-zero exit code into the step.
+          # pytsk3 is optional: built-in pure-Python readers still browse
+          # supported FAT/ext/exFAT/NTFS profiles without it. It is only a
+          # compatibility fallback for unrecognized formats. This probe must
+          # never leak its non-zero exit code into the step.
           python -c "import pytsk3" 2>$null
           if ($LASTEXITCODE -eq 0) {
             Write-Host 'pytsk3 OK'
           } else {
-            Write-Host '::warning title=pytsk3 missing::NTFS/EXT browsing unavailable in this build'
+            Write-Host '::warning title=pytsk3 missing::Compatibility fallback for unrecognized filesystem formats is unavailable; supported native profiles remain available'
           }
           exit 0
 
