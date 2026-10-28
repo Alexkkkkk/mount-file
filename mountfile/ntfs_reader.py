@@ -128,6 +128,7 @@ class NtfsLogFileRestartArea:
     flags: int
     current_lsn: int
     revision: int
+    version: tuple[int, int] = (0, 0)
 
     @property
     def clean_dismount(self) -> bool:
@@ -193,46 +194,44 @@ def parse_ntfs_logfile_restart_area(raw_page: bytes) -> NtfsLogFileRestartArea:
     if restart_length < 0x2A or area + restart_length > system_page:
         raise NtfsMetadataError("NTFS $LogFile restart length exceeds the page")
     return NtfsLogFileRestartArea(
-        system_page,
-        log_page,
-        restart_offset,
-        restart_length,
-        flags,
-        current_lsn,
-        revision,
+        system_page_size=system_page,
+        log_page_size=log_page,
+        restart_offset=restart_offset,
+        restart_length=restart_length,
+        flags=flags,
+        current_lsn=current_lsn,
+        revision=revision,
+        version=(major, minor),
     )
 
 
 def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestartArea:
-    """Return a clean restart area from the two bounded tail pages, fail closed otherwise."""
+    """Validate the first two restart pages and return their newer clean area."""
     if len(raw_logfile) < 2 * _LOGFILE_PAGE_SIZE:
         raise NtfsMetadataError("NTFS $LogFile DATA stream is truncated")
-    valid: list[NtfsLogFileRestartArea] = []
-    errors = []
-    for start in (0, _LOGFILE_PAGE_SIZE):
-        try:
-            valid.append(
-                parse_ntfs_logfile_restart_area(
-                    raw_logfile[start : start + _LOGFILE_PAGE_SIZE]
-                )
-            )
-        except NtfsMetadataError as exc:
-            errors.append(exc)
-    if not valid:
-        raise NtfsMetadataError("NTFS $LogFile has no valid restart area") from errors[
-            0
-        ]
-    first = valid[0]
-    if any(
-        (item.system_page_size, item.log_page_size)
-        != (first.system_page_size, first.log_page_size)
-        for item in valid[1:]
+    first = parse_ntfs_logfile_restart_area(raw_logfile[:_LOGFILE_PAGE_SIZE])
+    second = parse_ntfs_logfile_restart_area(
+        raw_logfile[_LOGFILE_PAGE_SIZE : 2 * _LOGFILE_PAGE_SIZE]
+    )
+    if (
+        first.system_page_size,
+        first.log_page_size,
+        first.restart_offset,
+        first.restart_length,
+    ) != (
+        second.system_page_size,
+        second.log_page_size,
+        second.restart_offset,
+        second.restart_length,
     ):
         raise NtfsMetadataError("NTFS $LogFile restart pages disagree on geometry")
-    clean = [item for item in valid if item.clean_dismount]
-    if not clean:
+    if first.version != second.version:
+        raise NtfsMetadataError("NTFS $LogFile restart pages disagree on version")
+    if first.flags != second.flags:
+        raise NtfsMetadataError("NTFS $LogFile restart pages disagree on clean state")
+    if not first.clean_dismount:
         raise NtfsMetadataError("NTFS $LogFile requires recovery or has unknown state")
-    return max(clean, key=lambda item: (item.revision, item.current_lsn))
+    return max((first, second), key=lambda item: (item.revision, item.current_lsn))
 
 
 def _read_exact(stream, absolute: int, size: int, image_size: int, end: int) -> bytes:
@@ -813,6 +812,10 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             _validate_nonresident_data_stream(
                 logfile_data, self.profile.boot.cluster_size, name="$LogFile"
             )
+            if logfile_data.data_size < 2 * _LOGFILE_PAGE_SIZE:
+                raise NtfsMetadataError(
+                    "NTFS $LogFile DATA stream is shorter than two restart pages"
+                )
             self.logfile_restart = validate_ntfs_logfile_restart_pages(
                 self._read_runs(logfile_data.runs, 0, 2 * _LOGFILE_PAGE_SIZE)
             )

@@ -299,12 +299,20 @@ def test_rejects_unknown_ntfs_volume_flags():
         parse_ntfs_volume_state((attr,))
 
 
-def _restart_page(*, flags=0x0002, sequence=0xA55A, revision=7):
+def _restart_page(
+    *,
+    flags=0x0002,
+    sequence=0xA55A,
+    revision=7,
+    log_page_size=4096,
+    minor_version=1,
+    major_version=2,
+):
     page = bytearray(4096)
     page[:4] = b"RSTR"
     struct.pack_into("<HH", page, 4, 0x1E, 9)
-    struct.pack_into("<II", page, 0x10, 4096, 4096)
-    struct.pack_into("<hh", page, 0x1A, 1, 2)
+    struct.pack_into("<II", page, 0x10, 4096, log_page_size)
+    struct.pack_into("<hh", page, 0x1A, minor_version, major_version)
     struct.pack_into("<H", page, 0x18, 0x30)
     struct.pack_into("<QHHHHI", page, 0x30, 42, 0, 0xFFFF, 0xFFFF, flags, 0)
     struct.pack_into("<HH", page, 0x30 + 0x14, 0x30, 0x30)
@@ -316,18 +324,107 @@ def _restart_page(*, flags=0x0002, sequence=0xA55A, revision=7):
     return bytes(page)
 
 
-def test_validates_ntfs_logfile_restart_pages_and_clean_gate():
+def test_accepts_consistent_clean_ntfs_logfile_restart_pair():
     first = _restart_page(revision=3)
     second = _restart_page(revision=8)
     parsed = validate_ntfs_logfile_restart_pages(first + second)
     assert parsed.clean_dismount is True
     assert parsed.revision == 8
+    assert parsed.version == (2, 1)
     assert parse_ntfs_logfile_restart_area(first).log_page_size == 4096
 
 
 def test_rejects_truncated_ntfs_logfile_restart_stream():
     with pytest.raises(NtfsMetadataError, match="truncated"):
         validate_ntfs_logfile_restart_pages(bytes(4096))
+
+
+def test_rejects_valid_first_and_malformed_second_ntfs_logfile_restart_page():
+    second = bytearray(_restart_page())
+    second[:4] = b"XXXX"
+    with pytest.raises(NtfsMetadataError, match="signature"):
+        validate_ntfs_logfile_restart_pages(_restart_page() + bytes(second))
+
+
+@pytest.mark.parametrize(
+    "second, message",
+    [
+        (_restart_page(log_page_size=8192), "geometry"),
+        (_restart_page(minor_version=2), "version"),
+        (_restart_page(flags=0), "clean state"),
+    ],
+)
+def test_rejects_inconsistent_ntfs_logfile_restart_pair(second, message):
+    with pytest.raises(NtfsMetadataError, match=message):
+        validate_ntfs_logfile_restart_pages(_restart_page() + second)
+
+
+def test_rejects_logfile_with_less_than_two_logical_restart_pages(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    image = tmp_path / "short-logfile.img"
+    image.write_bytes(b"")
+    mft_data = NtfsAttributeSummary(
+        0x80,
+        64,
+        True,
+        "",
+        lowest_vcn=0,
+        highest_vcn=0,
+        run_count=1,
+        runs=(NtfsRun(0, 0, 1),),
+        data_size=4096,
+    )
+    logfile_data = NtfsAttributeSummary(
+        0x80,
+        64,
+        True,
+        "",
+        lowest_vcn=0,
+        highest_vcn=1,
+        run_count=1,
+        runs=(NtfsRun(0, 0, 2),),
+        data_size=2 * 4096 - 1,
+    )
+    volume_record = object()
+    logfile_record = object()
+    profile = SimpleNamespace(
+        boot=SimpleNamespace(
+            cluster_size=4096,
+            cluster_count=2,
+            filesystem_size=4096,
+        ),
+        attributes=(mft_data,),
+    )
+
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.probe_ntfs_metadata", lambda *args, **kwargs: profile
+    )
+    monkeypatch.setattr(
+        NativeNtfsMetadataImage,
+        "read_mft_record",
+        lambda _self, record_number, **_kwargs: (
+            volume_record if record_number == 3 else logfile_record
+        ),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda record, **_kwargs: (() if record is volume_record else (logfile_data,)),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_volume_state",
+        lambda _attrs: SimpleNamespace(clean=True),
+    )
+    monkeypatch.setattr(
+        NativeNtfsMetadataImage,
+        "_read_runs",
+        lambda *_args: pytest.fail("short logical $LogFile must not be read"),
+    )
+
+    with pytest.raises(NtfsMetadataError, match="shorter than two restart pages"):
+        NativeNtfsMetadataImage(image, volume_size=4096)
 
 
 @pytest.mark.parametrize(
