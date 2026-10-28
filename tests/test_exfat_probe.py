@@ -366,6 +366,39 @@ def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):
         provider.close()
 
 
+def test_exfat_writer_refuses_to_overwrite_concurrent_outside_extent_change(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "exfat-outside-change.img"
+    original_payload = _tree_image(path)
+    original_suffix = b"outside-image-sentinel-001"
+    changed_suffix = b"outside-image-sentinel-002"
+    with path.open("ab") as stream:
+        stream.write(original_suffix)
+
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    copy_stage = writer._copy_stage
+
+    def copy_then_change_outside_extent():
+        stage = copy_stage()
+        with path.open("r+b") as stream:
+            stream.seek(VOLUME_SIZE)
+            stream.write(changed_suffix)
+            stream.flush()
+        return stage
+
+    monkeypatch.setattr(writer, "_copy_stage", copy_then_change_outside_extent)
+    with pytest.raises(ExfatWriteError, match="changed concurrently"):
+        writer.write_file("/HELLO.TXT", b"must not commit")
+
+    assert path.read_bytes()[VOLUME_SIZE:] == changed_suffix
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/HELLO.TXT") == original_payload
+    finally:
+        provider.close()
+
+
 def test_native_exfat_move_grows_destination_directory(tmp_path):
     path = tmp_path / "exfat-cross-directory-move.img"
     _tree_image(path)

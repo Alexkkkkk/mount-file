@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from mountfile import vfs
+from mountfile import cli, vfs
 from mountfile.fat32 import Fat32
 from mountfile.fat_reader import FatReadError, NativeFatImage
 from tests.test_fat32 import make_fat32_image
@@ -646,6 +646,21 @@ def test_routing_bounded_fat_profiles_go_native_without_fallback(
             assert provider.read_file("/HELLO.TXT") == _HELLO
         finally:
             provider.close()
+
+
+@pytest.mark.parametrize("fat_type", _FAT_TYPES)
+def test_cli_get_extracts_native_fat12_16_32_without_legacy_fallback(
+    tmp_path, monkeypatch, fat_type
+):
+    image = tmp_path / f"fat{fat_type}-cli-get.img"
+    _build_fat_image(image, fat_type)
+    _forbid_legacy_fallback(monkeypatch)
+    output = tmp_path / f"fat{fat_type}-extracted"
+
+    assert (
+        cli.main(["get", str(image), "/HELLO.TXT", "--output", str(output)]) == cli.OK
+    )
+    assert (output / "HELLO.TXT").read_bytes() == _HELLO
 
 
 @pytest.mark.parametrize("fat_type", _FAT_TYPES)
