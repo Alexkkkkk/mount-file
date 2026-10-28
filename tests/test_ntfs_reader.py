@@ -494,3 +494,59 @@ def test_rejects_malformed_ntfs_logfile_restart_page(mutate, message):
     mutate(page)
     with pytest.raises(NtfsMetadataError, match=message):
         parse_ntfs_logfile_restart_area(bytes(page))
+
+
+def test_ntfs_read_file_returns_complete_large_file_in_bounded_ranges(monkeypatch):
+    from types import SimpleNamespace
+
+    from mountfile import ntfs_reader
+
+    payload = bytes(range(251)) * ((1 << 20) // 251 + 8)
+    record = SimpleNamespace(is_directory=False)
+    data = NtfsAttributeSummary(
+        type_code=0x80,
+        length=64,
+        nonresident=True,
+        name="",
+        lowest_vcn=0,
+        highest_vcn=0,
+        run_count=1,
+        runs=(NtfsRun(0, 0, (len(payload) + CLUSTER - 1) // CLUSTER),),
+        data_size=len(payload),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=10000))
+    reader._resolve = lambda _path: (1, record)
+    calls = []
+
+    def read_runs(_runs, offset, length):
+        calls.append((offset, length))
+        return payload[offset : offset + length]
+
+    reader._read_runs = read_runs
+    monkeypatch.setattr(
+        ntfs_reader, "parse_ntfs_attribute_stream", lambda *_a, **_k: (data,)
+    )
+
+    result = reader.read_file("/large.bin")
+
+    assert result == payload
+    assert calls == [(0, 1 << 20), (1 << 20, len(payload) - (1 << 20))]
+
+
+@pytest.mark.parametrize(
+    ("offset", "length", "message"),
+    [
+        (-1, 1, "negative NTFS read range"),
+        (0, -1, "negative NTFS read range"),
+        (True, 1, "invalid NTFS metadata read request"),
+        (0, False, "invalid NTFS metadata read request"),
+        (0, (1 << 20) + 1, "exceeds the 1 MiB limit"),
+    ],
+)
+def test_ntfs_read_file_range_rejects_invalid_or_excessive_requests(
+    offset, length, message
+):
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    with pytest.raises(NtfsMetadataError, match=message):
+        reader.read_file_range("/not-opened", offset, length)
