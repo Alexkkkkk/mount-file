@@ -60,6 +60,27 @@ def test_clean_journal_with_bounded_transaction_is_readable(tmp_path):
         provider.close()
 
 
+def test_real_clean_empty_ext3_supports_native_directory_reads(tmp_path):
+    if not shutil.which("mke2fs"):
+        pytest.skip("e2fsprogs is unavailable")
+    image_path = tmp_path / "real-ext3.img"
+    image_path.write_bytes(bytes(16 * 1024 * 1024))
+    subprocess.run(
+        ["mke2fs", "-q", "-t", "ext3", "-O", "^dir_index", "-F", str(image_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    provider = NativeExt3Image(image_path, volume_size=image_path.stat().st_size)
+    try:
+        assert provider.backend_name == "native-ext3-ro"
+        names = {entry["name"] for entry in provider.list_dir("/")}
+        assert "lost+found" in names
+    finally:
+        provider.close()
+
+
 def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
     image_path = tmp_path / "mismatched-journal.img"
     _make_clean_journal_image(image_path, commit_sequence=8)

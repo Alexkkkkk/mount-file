@@ -140,6 +140,11 @@ engine.close()
   fallback is disabled unless a caller explicitly opts into
   `allow_legacy_mount=True`; a recognized filesystem declined by its native
   provider is never silently redirected to a different writer.
+  `UniversalFSRW.capability_status()` and `FSInfo.write_capabilities` report the
+  exact bounded mutations of the selected backend. Native ext3/ext4 and NTFS
+  writes fail with an explicit unsupported-profile reason; they do not invoke a
+  subprocess or fall back to a legacy writer. A read-only backend reports an
+  empty write capability list and a human-readable rejection reason.
 * Если backend, драйвер или права отсутствуют, операция завершается явной
   ошибкой; фасад не сообщает об успешной записи после молчаливого RO-mount.
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
