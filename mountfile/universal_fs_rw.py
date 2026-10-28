@@ -582,7 +582,13 @@ class NativeExfatRW(RWBackend):
 # 5. NATIVE FAT32 (read + write)
 # =============================================================================
 class Fat32RW(RWBackend):
-    """Native FAT12/16/32 — read + write без внешних утилит."""
+    """Bounded native FAT32 read/write without external utilities.
+
+    FAT12/16 are deliberately rejected: their packed FAT12 entries, fixed
+    root directory, and format-specific end-of-chain rules are not covered by
+    this writer's safety proof.  They remain available to the read-only FAT
+    reader, but never reach a native mutation path.
+    """
 
     ATTR_DIR = 0x10
     ATTR_LFN = 0x0F
@@ -632,7 +638,14 @@ class Fat32RW(RWBackend):
             or offset + len(data) > self.volume_size
         ):
             raise ValueError("FAT write exceeds selected volume bounds")
-        super()._write_at(offset, data)
+        with self.image.open("r+b") as stream:
+            stream.seek(self.offset + offset)
+            written = stream.write(data)
+            if written != len(data):
+                raise OSError(
+                    "short write at FAT offset 0x%X: %d of %d bytes"
+                    % (offset, written or 0, len(data))
+                )
 
     def _temporary_sibling(self, suffix: str) -> Path:
         descriptor, name = tempfile.mkstemp(
@@ -867,17 +880,39 @@ class Fat32RW(RWBackend):
         self.volume_size = declared_bytes
 
         if self.fat_type == 32:
+            ext_flags = struct.unpack("<H", bs[40:42])[0]
+            if ext_flags & 0x0080:
+                raise ValueError("non-mirrored FAT32 mode is unsupported")
+            if self.num_fats > 1:
+                primary = self._read_at(self.fat_offset, self.fat_size * self.bytes_per_sector)
+                for index in range(1, self.num_fats):
+                    replica = self._read_at(
+                        self.fat_offset + index * self.fat_size * self.bytes_per_sector,
+                        self.fat_size * self.bytes_per_sector,
+                    )
+                    if replica != primary:
+                        raise ValueError("mirrored FAT32 copies are inconsistent")
+            backup_sector = struct.unpack("<H", bs[50:52])[0]
+            if backup_sector:
+                backup_offset = backup_sector * self.bytes_per_sector
+                if backup_offset + self.bytes_per_sector > declared_bytes:
+                    raise ValueError("FAT32 backup boot sector exceeds volume bounds")
+                if self._read_at(backup_offset, self.bytes_per_sector) != bs[: self.bytes_per_sector]:
+                    raise ValueError("FAT32 backup boot sector is inconsistent")
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
-            if self.root_cluster < 2:
-                self.root_cluster = 2
+            if not 2 <= self.root_cluster < self.cluster_count + 2:
+                raise ValueError("invalid FAT32 root cluster")
+            if self.cluster_count + 2 > self.fat_size * self.bytes_per_sector // 4:
+                raise ValueError("FAT32 FAT is too small for the declared volume")
             # FSINFO only caches the allocator state; the FAT stays the source
             # of truth.  The pointer is kept so the writer paths below can
             # refresh that cache - a stale free-cluster count is exactly what
             # `fsck.fat` reports as "Free cluster summary wrong".
             self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
         else:
-            self.root_cluster = 0
-            self.fsinfo_sector = 0
+            raise ValueError(
+                "native FAT12/16 writes are unsupported; use the read-only FAT reader"
+            )
 
     # ---- FSINFO ------------------------------------------------------------
     def free_clusters(self) -> tuple:
