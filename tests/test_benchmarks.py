@@ -12,6 +12,7 @@ import pytest
 from benchmarks import bench_vfs
 from mountfile.ext2_native import NativeExt2ImageWriter
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
+from scripts import make_bench_ext2_image
 
 
 class _FakeProvider(ReadOnlyVFSStatMixin):
@@ -216,3 +217,14 @@ def test_native_benchmark_does_not_count_pytsk_fallback_as_native(
     assert "native" not in report["backends"]
     assert "selected the pytsk3 fallback" in report["backends"]["native_error"]
     assert fallback.closed
+
+
+@pytest.mark.skipif(not shutil.which("mke2fs"), reason="mke2fs is required")
+def test_benchmark_fixture_generator_is_byte_reproducible(tmp_path):
+    first = make_bench_ext2_image.make_image(tmp_path / "first.ext2", 16, 4096)
+    second = make_bench_ext2_image.make_image(tmp_path / "second.ext2", 16, 4096)
+
+    assert (
+        hashlib.sha256(first.read_bytes()).digest()
+        == hashlib.sha256(second.read_bytes()).digest()
+    )
