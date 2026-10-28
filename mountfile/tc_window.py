@@ -156,6 +156,8 @@ class _UniversalImageWriter:
         self.fs_type = info.fs_type
         self.write_strategy = info.write_strategy
         self.writable = bool(info.writable)
+        self.write_capabilities = tuple(info.write_capabilities)
+        self.write_rejection_reason = info.write_rejection_reason
 
     @staticmethod
     def _join(directory, name):

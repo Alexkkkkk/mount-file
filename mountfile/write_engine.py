@@ -553,7 +553,12 @@ class WriteEngine:
     def _open_backend(self) -> UniversalFSRW:
         if not self.image.exists():
             raise WriteEngineError("image does not exist: %s" % self.image)
-        fs = UniversalFSRW(self.image, self.offset, auto_backup=False)
+        try:
+            fs = UniversalFSRW(self.image, self.offset, auto_backup=False)
+        except RuntimeError as exc:
+            raise WriterUnavailableError(
+                "no supported write backend for %s: %s" % (self.image.name, exc)
+            ) from exc
         # the facade snapshots the whole image itself; never duplicate the copy
         fs._auto_backup = False
         self.offset = fs.offset
@@ -565,6 +570,10 @@ class WriteEngine:
 
     def info(self) -> FSInfo:
         return self._fs.info()
+
+    def capability_status(self) -> dict:
+        """Return the selected backend's explicit bounded operation matrix."""
+        return self._fs.capability_status()
 
     def close(self) -> None:
         if self._active is not None:

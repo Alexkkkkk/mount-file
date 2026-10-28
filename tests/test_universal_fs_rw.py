@@ -206,6 +206,81 @@ def test_nonzero_signature_offset_requires_explicit_extent(tmp_path, monkeypatch
         UniversalFSRW(image, offset=4096, auto_backup=False)
 
 
+def test_native_fat_capability_matrix_is_explicit(tmp_path):
+    image = tmp_path / "capabilities-fat32.img"
+    make_fat32_image(image)
+    fs = UniversalFSRW(image, auto_backup=False)
+    try:
+        status = fs.capability_status()
+        assert status["write_enabled"] is True
+        assert status["write_capabilities"] == [
+            "write_file",
+            "mkdir",
+            "delete",
+            "rename",
+        ]
+        assert fs.info().write_capabilities == tuple(status["write_capabilities"])
+        assert fs.info().write_rejection_reason == ""
+    finally:
+        fs.close()
+
+
+@pytest.mark.parametrize("fs_type", ["ext3", "ext4", "NTFS"])
+def test_unsupported_native_profiles_report_reason_without_legacy_fallback(
+    tmp_path, monkeypatch, fs_type
+):
+    image = tmp_path / (fs_type.lower() + ".img")
+    image.write_bytes(b"placeholder".ljust(4096, b"\0"))
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype=fs_type, offset=0, size=4096, source="test")
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: fs_type)
+    monkeypatch.setattr(
+        universal_fs_rw,
+        "LoopMountRW",
+        lambda *_args, **_kwargs: pytest.fail("legacy fallback must not be attempted"),
+    )
+    with pytest.raises(RuntimeError, match="unsupported") as excinfo:
+        UniversalFSRW(image, auto_backup=False)
+    message = str(excinfo.value).lower()
+    if fs_type.lower().startswith("ext"):
+        assert fs_type.lower() in message
+        assert "subprocess" in message
+    else:
+        assert "native ntfs writes are unsupported" in message
+
+
+def test_explicit_volume_size_preserves_partition_sentinel(tmp_path, monkeypatch):
+    image = tmp_path / "bounded-fat.img"
+    prefix = b"P" * 4096
+    partition = tmp_path / "partition.img"
+    make_fat32_image(partition)
+    volume = partition.read_bytes()
+    sentinel = b"NEXT-PARTITION-SENTINEL"
+    image.write_bytes(prefix + volume + sentinel)
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(
+                fstype="FAT32", offset=len(prefix), size=len(volume), source="table"
+            )
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
+    fs = UniversalFSRW(
+        image, offset=len(prefix), volume_size=len(volume), auto_backup=False
+    )
+    try:
+        assert fs.volume_size == len(volume)
+        fs.write_file("/SENTINEL.TXT", b"bounded")
+    finally:
+        fs.close()
+    assert image.read_bytes()[-len(sentinel) :] == sentinel
+
+
 def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):
     image = tmp_path / "factory-fat32.img"
     make_fat32_image(image)
