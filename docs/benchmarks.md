@@ -36,6 +36,8 @@
 
 ```bash
 python scripts/make_bench_ext2_image.py --output /tmp/bench.ext2
+# Optional extended fixture for the acceptance workload:
+python scripts/make_bench_ext2_image.py --output /tmp/bench-10m.ext2 --include-10m
 ```
 
 Скрипт форматирует образ через `mke2fs -t ext2 -b 4096` и наполняет его через
@@ -44,17 +46,27 @@ rollback-снимком), т. е. генерация фикстуры прохо
 gates, что и продукт. Содержимое файлов детерминировано (SHA-256 от
 `seed:counter`, псевдослучайные, плохо сжимаемые данные).
 
+Опциональный `--include-10m` добавляет `/bench/large_10m.dat` в готовый образ
+через `debugfs`. Это исключительно test/benchmark fixture setup: внешний tool
+обходит текущий 4 МиБ лимит production writer'а, чтобы проверить double-indirect
+read-only путь; ни production writer, ни benchmark reader этим инструментом
+не вызываются для записи. Нужны `mke2fs` и `debugfs` из e2fsprogs.
+
 После staged-записей генератор нормализует только metadata самой fixture:
 UUID, directory-hash seed и поля времени superblock/inode. Поэтому два запуска
-на одной версии `mke2fs` дают побайтно идентичный образ; это проверяет
-`test_benchmark_fixture_generator_is_byte_reproducible`. Production writer не
-меняется: нормализация существует только в benchmark generator.
+на одной версии `mke2fs` дают побайтно идентичный образ; это проверяют
+`test_benchmark_fixture_generator_is_byte_reproducible` и
+`test_10m_benchmark_fixture_is_reproducible_and_native_readable`. Production
+writer не меняется: нормализация и debugfs fixture setup находятся только в
+benchmark generator.
 
-Ограничение: нативный ext2 writer хранит файл в прямых блоках плюс один
-single-indirect блок (~4 МиБ при блоке 4 КиБ), поэтому `extract_10m` из
-критерия приёмки на нативном пути воспроизвести нельзя — максимальный файл
-фикстуры 4 МиБ. Это честно зафиксировано как неполное покрытие критерия № 6
-(см. § 6).
+В стандартной фикстуре самый большой файл — 4 МиБ, поскольку native writer
+ограничен direct + single-indirect addressing (~4 МиБ при блоке 4 КиБ). Для
+критерия `extract_10m` запустите расширенный режим benchmark runner:
+
+```bash
+INCLUDE_10M=1 scripts/run_vfs_benchmarks.sh /tmp/vfs-bench-10m
+```
 
 Параметры фикстуры (32 МиБ):
 
@@ -66,7 +78,8 @@ single-indirect блок (~4 МиБ при блоке 4 КиБ), поэтому 
 | Offset тома | 0 байт |
 | Volume size | 33 554 432 байта |
 | mke2fs | e2fsprogs 1.47.0 |
-| SHA-256 образа | `3f2fe458bded5b34690dfc69f3440fb92107f1f1eaa9902a2ed0963b9acb1211` |
+| SHA-256 default fixture | `686da57622d45ad1906337f00d93561fc0be75f12bd222e604a1d10c1a1c1be4` |
+| SHA-256 extended 10 MiB fixture | `2eb5a1b64d081d789fc5eb810489f7e2608dafb8015d7430db9489a7d41f6a43` |
 
 Набор файлов (все под `/bench`, плюс каталог `many` для list_dir):
 
@@ -78,18 +91,17 @@ single-indirect блок (~4 МиБ при блоке 4 КиБ), поэтому 
 | `/bench/medium_512k.dat` | 512 КиБ |
 | `/bench/large_1m.dat` | 1 МиБ |
 | `/bench/large_4m.dat` | 4 МиБ (максимум нативного writer'а) |
+| `/bench/large_10m.dat` | 10 МиБ (только с `--include-10m`, test-only debugfs fixture) |
 | `/bench/many/file_{000,008,016}.dat` | 4 КиБ × 3 |
 
 ## 3. Окружение
 
 | Параметр | Значение |
 | --- | --- |
-| Python | CPython 3.12.3 (`/home/ubuntu/venv-mf/bin/python`) |
-| Платформа | Linux-6.18.38+-x86_64-with-glibc2.39 |
-| CPU | AMD EPYC, 6 vCPU |
-| RAM | 24 ГиБ |
-| pytsk3 | 20260715 (manylinux cp312 wheel; сборка из исходников не требовалась) |
-| Cache state | метка `warm` (образ только что создан генератором; page cache не управлялся harness'ом) |
+| Python | CPython 3.12.3 |
+| Платформа | Linux-6.18.38+-aarch64-with-glibc2.39 |
+| pytsk3 | 20260715 (manylinux aarch64 wheel; сборка из исходников не требовалась) |
+| Cache state | `unspecified`; page cache не управлялся harness'ом |
 | Методика повтора | 1 разогревочная итерация + 5 измеряемых итераций на backend; каждая итерация открывает и закрывает провайдера заново; open исключён из метрики итерации |
 
 Воспроизведение:
@@ -101,85 +113,81 @@ scripts/run_vfs_benchmarks.sh /tmp/vfs-bench
 
 ## 4. Результаты
 
-Два независимых запуска (run 1 опубликован ниже целиком, run 2 — контроль
-стабильности). Эти исторические значения получены до добавления чередующегося
-порядка backend'ов; новый harness записывает `backend_execution_order` и
-балансирует порядок пар, но таблицы ниже автоматически не пересчитываются.
-Метрика сравнения — медиана полного времени итерации без учёта открытия
-провайдера. Cache остаётся uncontrolled.
+Два независимых запуска до новой 10 MiB fixture/reader оптимизации сохранены как
+baseline и не являются текущим результатом. Для всех запусков ниже harness
+использует один warmup, пять измеряемых итераций на backend и чередует порядок
+пар. Метрика full iteration — медиана полного времени без открытия провайдера;
+page cache не контролируется.
+
+### 4.1 Baseline: исходная 9-файловая фикстура
+
+Raw schema-v2 отчёты: [run 1](https://github.com/Alexkkkkk/mount-file/blob/main/benchmarks/results/issue-182-ext2-aarch64-2026-10-29-run1.json)
+и [run 2](https://github.com/Alexkkkkk/mount-file/blob/main/benchmarks/results/issue-182-ext2-aarch64-2026-10-29-run2.json).
 
 | Прогон | native, медиана итерации | pytsk3, медиана итерации | native/pytsk3 |
 | --- | --- | --- | --- |
-| run 1 | 0.0284 с | 0.0130 с | 2.19× (+119.4 %) |
-| run 2 | 0.0268 с | 0.0141 с | 1.91× (+90.8 %) |
+| run 1 | 0.02575 с | 0.01701 с | 1.51× (+51.4 %) |
+| run 2 | 0.02924 с | 0.01950 с | 1.50× (+49.9 %) |
 
-В обоих прогонах `content_equivalent = true`: размеры и SHA-256 всех файлов
-совпали между backend'ами, поэтому сравнение корректно.
+В обоих прогонах `content_equivalent = true`; SHA-256 fixture совпал
+(`686da57622d45ad1906337f00d93561fc0be75f12bd222e604a1d10c1a1c1be4`).
+Содержимое native и `pytsk3` совпало по размерам и SHA-256 каждого файла.
 
-### 4.1 Операции целиком (run 1, агрегаты по 9 файлам × 5 повторов)
+Оба baseline прогона были content-equivalent и использовали fixture SHA-256
+`686da57622d45ad1906337f00d93561fc0be75f12bd222e604a1d10c1a1c1be4`.
+Их результаты фиксируют gap до следующих изменений: native full iteration был
+на 49.9–51.4 % медленнее `pytsk3`.
 
-| Операция | Вызовов/итерацию | native, медиана вызова | native, медиана суммы за итерацию | pytsk3, медиана вызова | pytsk3, медиана суммы за итерацию |
-| --- | --- | --- | --- | --- | --- |
-| list_dir | 2 | 0.149 мс | 0.279 мс | 0.061 мс | 0.120 мс |
-| stat | 9 | 0.090 мс | 1.099 мс | 0.066 мс | 0.678 мс |
-| read_range | 9 | 0.092 мс | 4.533 мс | 0.019 мс | 0.247 мс |
-| extract | 9 | 0.800 мс | 17.169 мс | 0.587 мс | 6.734 мс |
+### 4.2 Текущий extended benchmark: 10 MiB extraction и range-read optimization
 
-### 4.2 По файлам (run 1, медианы по 5 повторам)
+Два итоговых прогона выполнены на CPython 3.12.3 / Linux ARM64 с pytsk3 20260715.
+Они используют одну и ту же детерминированную 32 MiB fixture с
+`/bench/large_10m.dat`; fixture SHA-256:
+`2eb5a1b64d081d789fc5eb810489f7e2608dafb8015d7430db9489a7d41f6a43`.
+Raw schema-v2 отчёты: [run 1](https://github.com/Alexkkkkk/mount-file/blob/main/benchmarks/results/issue-182-ext2-10m-aarch64-2026-10-29-run1.json)
+и [run 2](https://github.com/Alexkkkkk/mount-file/blob/main/benchmarks/results/issue-182-ext2-10m-aarch64-2026-10-29-run2.json).
 
-| Путь | Размер | native stat | native read_range | native extract | pytsk3 stat | pytsk3 read_range | pytsk3 extract |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/bench/tiny_1k.dat` | 1 КиБ | 0.066 мс | 0.029 мс | 0.753 мс | 0.066 мс | 0.014 мс | 0.594 мс |
-| `/bench/small_16k.dat` | 16 КиБ | 0.062 мс | 0.040 мс | 0.632 мс | 0.056 мс | 0.010 мс | 0.492 мс |
-| `/bench/small_64k.dat` | 64 КиБ | 0.060 мс | 0.091 мс | 0.709 мс | 0.055 мс | 0.015 мс | 0.514 мс |
-| `/bench/medium_512k.dat` | 512 КиБ | 0.075 мс | 0.788 мс | 1.557 мс | 0.052 мс | 0.034 мс | 0.654 мс |
-| `/bench/large_1m.dat` | 1 МиБ | 0.062 мс | 1.833 мс | 2.565 мс | 0.052 мс | 0.053 мс | 0.816 мс |
-| `/bench/large_4m.dat` | 4 МиБ | 0.091 мс | 1.454 мс | 8.259 мс | 0.051 мс | 0.050 мс | 2.097 мс |
-| `/bench/many/file_000.dat` | 4 КиБ | 0.270 мс | 0.070 мс | 0.838 мс | 0.129 мс | 0.013 мс | 0.531 мс |
-| `/bench/many/file_008.dat` | 4 КиБ | 0.171 мс | 0.082 мс | 0.736 мс | 0.111 мс | 0.013 мс | 0.530 мс |
-| `/bench/many/file_016.dat` | 4 КиБ | 0.158 мс | 0.058 мс | 0.683 мс | 0.110 мс | 0.019 мс | 0.521 мс |
+| Прогон | Full iteration native / pytsk3 | `large_1m.dat` range-read native / pytsk3 | `large_10m.dat` extract native / pytsk3 |
+| --- | --- | --- | --- |
+| run 1 | 0.04048 с / 0.21686 с (0.187×) | 0.218 мс / 0.322 мс (0.679×) | 10.191 мс / 92.756 мс (0.110×) |
+| run 2 | 0.04066 с / 0.21543 с (0.189×) | 0.215 мс / 0.312 мс (0.691×) | 10.594 мс / 92.335 мс (0.115×) |
 
-Примечания к таблице:
+Оба extended прогона вернули `content_equivalent = true`; SHA-256 всех файлов
+совпал между backend'ами. `large_1m.dat` range-read — ровно 1 MiB; extraction
+полностью записывает и проверяет размер 10 MiB. Хеширование destination
+выполняется вне таймера.
 
-- `read_range` для `large_4m.dat` ограничен 1 МиБ (`range_read_1m`),
-  для остальных файлов — размер файла.
-- Время SHA-256 извлечённых файлов в тайминги extract не входит (хэширование
-  выполняется harness'ом после остановки таймера и используется только для
-  cross-check'а content equivalence).
+### 4.3 Baseline operation aggregates (9 файлов, до range-read optimization)
+
+| Операция | Вызовов/итерацию | native, медиана суммы за итерацию | pytsk3, медиана суммы за итерацию |
+| --- | --- | --- | --- |
+| list_dir | 2 | 0.622 мс | 0.315 мс |
+| stat | 9 | 1.937 мс | 1.804 мс |
+| read_range | 9 | 3.149 мс | 0.619 мс |
+| extract | 9 | 13.282 мс | 7.462 мс |
+
+Операционные времена в baseline таблице — медианы суммы вызовов за одну
+итерацию run 1. `read_range` был ограничен 1 МиБ на файл.
 
 ## 5. Выводы (честные)
 
-1. **Критерий № 6 в текущем виде НЕ выполнен.** Нативный провайдер медленнее
-   pytsk3-базлайна на 91–119 % по медиане полной итерации — существенно хуже
-   целевых «≤ 20 % slower». На целевой операции `range_read_1m` разрыв ещё
-   больше: 1.833 мс против 0.053 мс (~35×) для чтения 1 МиБ.
-2. **Извлечение 10 МиБ не покрыто**: нативный ext2 writer поддерживает файлы
-   только в пределах single-indirect адресации (~4 МиБ при блоке 4 КиБ),
-   поэтому `extract_10m` из критерия невозможно прогнать на этом backend'е.
-   Крупные файлы должны идти через ext3/ext4-профили, которые остаются
-   read-only по контракту issue #182.
-3. **Узкие места нативного read-пути** (без ослабления проверок):
-   - `read_file_range` читает по одному блоку ФС (4 КиБ) отдельным системным
-     вызовом, без буферизации и readahead; pytsk3 (C-библиотека) читает
-     крупными порциями. Это главная причина разрыва на последовательном
-     чтении.
-   - `_resolve(path)` повторно проходит по компонентам пути и читает
-     inode/каталог для каждой операции (`stat`, `read_file_range`, extract),
-     хотя внутри одной итерации путь не меняется.
-   - `_logical_block` заново разрешает indirect-блоки для каждого логического
-     блока последовательного чтения.
-   - В `list_dir` каждый child-inode читается и валидируется по отдельности
-     (проверка несоответствия file_type и mode) — дороже pytsk3 в ~2.4×, но
-     это осознанная цена integrity gate.
-4. **Производительность не оправдывает ослабление integrity gates.**
-   Возможные законные направления оптимизации (все — с сохранением проверок):
-   пакетное чтение блоков с сохранением per-block проверки границ,
-   кэширование resolved-пути в рамках одной операции, кэш indirect-таблиц на
-   время одного файла. Пока такие оптимизации не внесены и не перемерены,
-   нативный путь обосновывается отсутствием внешних зависимостей и
-   fail-closed-поведением, а не скоростью.
-5. Сравнение в harness'е намеренно скрывается при любом расхождении содержимого;
-   в обоих прогонах содержимое совпало, так что приведённые ratio валидны.
+1. **Acceptance performance criterion № 6 достигнут на измеренной ARM64
+   workload:** в обоих финальных прогонах 1 MiB range-read и 10 MiB extraction
+   native были быстрее `pytsk3`; результаты приведены в § 4.2. Вывод ограничен
+   этим окружением, этой fixture и uncontrolled OS page cache — его нельзя
+   переносить на другие машины без повторных измерений.
+2. 10 MiB fixture строится отдельным opt-in режимом через `debugfs` только при
+   подготовке тестового образа. Production writer и read-only benchmark path
+   этим инструментом не записывают данные.
+3. Оптимизации чтения сохраняют integrity gates: direct/single-indirect
+   pointers bulk-unpack'ятся в пределах запрошенного bounded range; contiguous
+   physical runs валидируются целиком по block-group metadata и allocation
+   bitmap bitmask перед чтением; sparse/noncontiguous runs проходят прежний
+   checked path. Для полностью contiguous range возвращаются непосредственно
+   проверенные bytes, без промежуточных копий.
+4. Harness скрывает сравнение производительности при любом расхождении размера
+   или SHA-256. В обоих финальных прогонах содержимое совпало, поэтому ratio
+   относятся к одинаковой полезной нагрузке.
 
 ## 6. Как повторить сравнение на другой машине
 

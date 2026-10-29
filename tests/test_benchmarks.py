@@ -11,6 +11,7 @@ import pytest
 
 from benchmarks import bench_vfs
 from mountfile.ext2_native import NativeExt2ImageWriter
+from mountfile.ext2_reader import NativeExt2Image
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 from scripts import make_bench_ext2_image
 
@@ -326,3 +327,32 @@ def test_benchmark_fixture_generator_is_byte_reproducible(tmp_path):
         hashlib.sha256(first.read_bytes()).digest()
         == hashlib.sha256(second.read_bytes()).digest()
     )
+
+
+@pytest.mark.skipif(
+    not shutil.which("mke2fs") or not shutil.which("debugfs"),
+    reason="mke2fs and debugfs are required for the optional 10 MiB fixture",
+)
+def test_10m_benchmark_fixture_is_reproducible_and_native_readable(tmp_path):
+    first = make_bench_ext2_image.make_image(
+        tmp_path / "first-10m.ext2", 32, 4096, include_10m=True
+    )
+    second = make_bench_ext2_image.make_image(
+        tmp_path / "second-10m.ext2", 32, 4096, include_10m=True
+    )
+    first_hash = hashlib.sha256(first.read_bytes()).digest()
+    second_hash = hashlib.sha256(second.read_bytes()).digest()
+    assert first_hash == second_hash
+    assert "/bench/large_10m.dat" in make_bench_ext2_image.bench_paths(include_10m=True)
+
+    expected = make_bench_ext2_image.deterministic_payload(
+        make_bench_ext2_image.LARGE_10M_NAME,
+        make_bench_ext2_image.LARGE_10M_SIZE,
+    )
+    reader = NativeExt2Image(first, volume_size=first.stat().st_size)
+    try:
+        assert reader.file_size("/bench/large_10m.dat") == len(expected)
+        actual = reader.read_file_range("/bench/large_10m.dat", 0, len(expected))
+        assert actual == expected
+    finally:
+        reader.close()
