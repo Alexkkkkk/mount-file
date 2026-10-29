@@ -119,12 +119,14 @@ engine.close()
   `<image>.mountfile-ext2-recovery.json` marker и fsync-ит родительский каталог.
   После внезапного завершения процесса следующий native writer сверяет identity
   image и SHA-256 snapshot, восстанавливает только выбранный extent, делает
-  read-back и удаляет marker до snapshot. При обычном отказе rollback marker
+  read-back и удаляет marker до snapshot. Process-crash tests покрывают
+  прерывание commit, повторного recovery и завершённый commit до удаления marker.
+  При обычном отказе rollback marker
   дополнительно привязывается к точному post-failure extent и mtime; любое
   последующее изменение блокирует автоматическое восстановление. Не редактируйте
-  image и не удаляйте sidecar-файлы, пока recovery не завершён. Это проверено
-  process-crash regression test, но не заменяет backup и не является
-  универсальной power-loss гарантией для всех файловых систем, устройств и ОС;
+  image и не удаляйте sidecar-файлы, пока recovery не завершён. Это не заменяет
+  backup и не является универсальной power-loss гарантией для всех файловых
+  систем, устройств и ОС;
   directory fsync применяется там, где ОС его поддерживает.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с

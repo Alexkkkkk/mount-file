@@ -604,6 +604,7 @@ image_write_opens = 0
 class CrashDuringWrite:
     def __init__(self, stream):
         self.stream = stream
+        self.write_calls = 0
     def __enter__(self):
         return self
     def __exit__(self, *args):
@@ -611,11 +612,14 @@ class CrashDuringWrite:
     def __getattr__(self, name):
         return getattr(self.stream, name)
     def write(self, data):
-        count = max(1, len(data) // 2)
+        self.write_calls += 1
+        count = len(data) if self.write_calls == 1 else max(1, len(data) // 2)
         written = self.stream.write(data[:count])
         self.stream.flush()
         os.fsync(self.stream.fileno())
-        os._exit(73)
+        if self.write_calls == 2:
+            os._exit(73)
+        return written
 
 def crash_open(path, mode='r', *args, **kwargs):
     global image_write_opens
@@ -648,6 +652,55 @@ writer.write_file('/interrupted.txt', b'this transaction must roll back')
     snapshot = image.with_name(recovery["snapshot"])
     assert snapshot.read_bytes() == filesystem
 
+    recovery_crash_script = f"""
+import os
+from mountfile import ext2_native
+from mountfile.ext2_native import NativeExt2ImageWriter
+
+image = {str(image)!r}
+real_open = open
+image_write_opens = 0
+
+class CrashDuringRecovery:
+    def __init__(self, stream):
+        self.stream = stream
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+    def write(self, data):
+        count = max(1, len(data) // 2)
+        written = self.stream.write(data[:count])
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        os._exit(74)
+
+def crash_open(path, mode='r', *args, **kwargs):
+    global image_write_opens
+    stream = real_open(path, mode, *args, **kwargs)
+    if os.fspath(path) == image and mode == 'r+b':
+        image_write_opens += 1
+        if image_write_opens == 2:
+            return CrashDuringRecovery(stream)
+    return stream
+
+ext2_native.open = crash_open
+NativeExt2ImageWriter(image, offset={volume_offset}, volume_size={len(filesystem)})
+"""
+    recovery_crashed = subprocess.run(
+        [sys.executable, "-c", recovery_crash_script],
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert recovery_crashed.returncode == 74, (
+        recovery_crashed.stdout + recovery_crashed.stderr
+    )
+    assert marker.is_file()
+
     writer = NativeExt2ImageWriter(
         image, offset=volume_offset, volume_size=len(filesystem)
     )
@@ -660,6 +713,49 @@ writer.write_file('/interrupted.txt', b'this transaction must roll back')
         image.read_bytes()[offset : offset + len(filesystem)]
     )
     _assert_e2fsck_clean(recovered_partition)
+
+
+def test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup(
+    tmp_path,
+):
+    image = tmp_path / "commit-complete.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    before = image.read_bytes()
+    crash_temp = tmp_path / "commit-crash-temp"
+    crash_temp.mkdir()
+    crash_script = f"""
+import os
+import tempfile
+from mountfile.ext2_native import NativeExt2ImageWriter
+
+tempfile.tempdir = {str(crash_temp)!r}
+image = {str(image)!r}
+
+def crash_before_cleanup(self, marker_path, snapshot):
+    os._exit(75)
+
+NativeExt2ImageWriter._clear_recovery_snapshot = crash_before_cleanup
+writer = NativeExt2ImageWriter(image)
+writer.write_file('/unacknowledged.txt', b'commit was not acknowledged')
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_script],
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert crashed.returncode == 75, crashed.stdout + crashed.stderr
+    assert image.read_bytes() != before
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    assert recovery["phase"] == "commit_in_progress"
+
+    writer = NativeExt2ImageWriter(image)
+    assert image.read_bytes() == before
+    assert not marker.exists()
+    assert "unacknowledged.txt" not in {entry["name"] for entry in writer.list_dir("/")}
 
 
 def test_native_ext2_blocks_writes_for_dangling_recovery_marker_symlink(tmp_path):
