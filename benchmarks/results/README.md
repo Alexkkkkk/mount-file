@@ -64,3 +64,19 @@ The harness reports a `warm` cache label, but it does not flush or control the h
 | combined iteration | 0.040292 s | 0.272564 s |
 
 These figures are specific to this generated fixture and warm-cache run. `pytsk3` was faster on bounded range reads; extraction was nearly tied. The combined iteration includes the harness's per-path work and must not be treated as a universal throughput measure. To reproduce the fixture and JSON, run [`run_ext2_matrix.sh`](../run_ext2_matrix.sh). This is still a small, synthetic, single-host sample and does not complete the broader benchmark acceptance criterion.
+
+
+## Allowlisted ext4 mixed-size run (2026-10-29)
+
+[`ext4-matrix-aarch64.json`](ext4-matrix-aarch64.json) records a 128 MiB ext4 image with 4 KiB blocks and only the generated features `extent,filetype,sparse_super,large_file`; journal, metadata checksums, 64-bit descriptors and flex_bg are absent. The image profile opened as `native-ext4-ro`. The fixture contains the same 19-path mix as the ext2 matrix: a text file, 1 MiB and 8 MiB files, and 16 small files in a second directory. All 19 sizes and SHA-256 digests matched between native and `pytsk3`.
+
+The generated fixture passes `e2fsck -fn` before measurement. The run used CPython 3.12.3 on Linux 6.18.38+ aarch64, seven measured iterations after two warmups, with alternating backend order and the extraction stream's 1 MiB bounded chunk. The median full iteration was **0.03216 s native** vs **0.03099 s `pytsk3`**, a **3.8%** regression—within the issue's 20% target for this profile and this run.
+
+| Operation (median total per iteration) | Native | `pytsk3` |
+|---|---:|---:|
+| `list_dir` | 0.000459 s | 0.000229 s |
+| `stat` | 0.001928 s | 0.003943 s |
+| 1 MiB-bounded `read_range` per path | 0.001641 s | 0.001206 s |
+| extraction of all 19 files | 0.017637 s | 0.014568 s |
+
+This is a synthetic, single-host result for one deliberately restricted ext4 profile. It does not establish the target for metadata-checksummed/default ext4, other storage devices, cold caches, or other operating systems. Reproduce it with [`run_ext4_matrix.sh`](../run_ext4_matrix.sh); e2fsprogs and the optional `pytsk3` extra are required. The benchmark's cache label is descriptive; the harness does not flush or control the OS page cache.

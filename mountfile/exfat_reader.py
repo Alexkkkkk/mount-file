@@ -41,6 +41,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
 
     backend_name = "native-exfat-ro"
     case_insensitive_paths = True
+    max_read_range_bytes = _MAX_READ
 
     def __init__(self, image_path, offset=0, volume_size=None):
         if (

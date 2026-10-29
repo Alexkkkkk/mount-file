@@ -67,6 +67,19 @@ def test_extract_streams_ranged_provider_in_bounded_chunks(
     assert provider.calls == [(0, 4), (4, 4), (8, 2)]
 
 
+def test_extract_respects_explicit_provider_range_limit(tmp_path, monkeypatch):
+    payload = bytes(range(10))
+    provider = RangeProvider(payload)
+    provider.max_read_range_bytes = 3
+    destination = tmp_path / "limited.bin"
+    monkeypatch.setattr(extract_module, "_COPY_CHUNK_SIZE", 8)
+
+    assert extract_file(provider, "/large.bin", destination) == len(payload)
+
+    assert destination.read_bytes() == payload
+    assert provider.calls == [(0, 3), (3, 3), (6, 3), (9, 1)]
+
+
 @pytest.mark.parametrize(
     "use_dir_fd", sorted({False, bool(extract_module._HAS_DIR_FD)})
 )

@@ -109,6 +109,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
     """
 
     backend_name = "native-ext2"
+    max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
     def __init__(self, image_path, offset=0, volume_size=None):
         if volume_size is None:
@@ -123,6 +124,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         self._block_bitmap_cache: dict[int, bytes] = {}
         self._inode_bitmap_cache: dict[int, bytes] = {}
         self._inode_cache: dict[int, _Inode] = {}
+        self._directory_cache: dict[int, tuple[_DirectoryEntry, ...]] = {}
 
         try:
             # The provider owns this read-only handle until close(); it cannot
@@ -612,6 +614,12 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
     def _directory_entries(self, inode: _Inode) -> list[_DirectoryEntry]:
         if not inode.is_dir:
             raise Ext2ReadError("requested path is not a directory")
+        cache = getattr(self, "_directory_cache", None)
+        if cache is None:
+            cache = self._directory_cache = {}
+        cached = cache.get(inode.number)
+        if cached is not None:
+            return list(cached)
         if inode.size % self.block_size:
             raise Ext2ReadError("directory size is not block aligned")
         if inode.size > _MAX_DIRECTORY_BYTES:
@@ -669,6 +677,9 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                 position += record_length
             if position != self.block_size:
                 raise Ext2ReadError("directory records do not fill their data block")
+        if len(cache) >= _MAX_CACHE_ITEMS:
+            cache.clear()
+        cache[inode.number] = tuple(result)
         return result
 
     def _resolve(self, path: str) -> _Inode:
