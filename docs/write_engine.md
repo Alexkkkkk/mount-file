@@ -193,8 +193,10 @@ features, unknown feature flags, indexed directories, compressed/encrypted/
 extent/inline inodes и symlink traversal отклоняются. `open_image_provider`
 автоматически выбирает этот read-only backend в GUI, CLI и MCP только при наличии
 точного размера раздела (или whole-image ext2 без таблицы разделов); остальные
-профили остаются на pytsk3/существующих fallback путях. Это не разрешение на
-запись и не FUSE export. `phase1_ext2_profile_candidate` по-прежнему означает
+профили не становятся автоматически читаемыми через этот provider. Распознанный,
+но неподдержанный ext profile отвергается; compatibility fallback на `pytsk3`
+возможен только для нераспознанного формата и при явном opt-in. Это не разрешение
+на запись и не FUSE export. `phase1_ext2_profile_candidate` по-прежнему означает
 только предварительное соответствие write profile. Writer обязан самостоятельно
 проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
 

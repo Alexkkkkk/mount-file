@@ -3,6 +3,8 @@
 > **Reference only.** This file is preserved from the attached proposal for review and synchronization. It is **not** production code and must not be merged or enabled without implementation-specific tests on reference filesystem images, differential read-back, rollback/failure injection, bounds validation, and full cross-platform CI.
 >
 > The repository's native/default-deny policy takes precedence: external tools and legacy backends remain explicit opt-in only.
+>
+> **Status as of 2026-10-29:** this is an unverified collection of future-work sketches, not a representation of current support or a committed roadmap. The live capability/status snapshot is maintained in [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182); do not infer that the pseudocode below exists in the repository.
 
 ---
 
