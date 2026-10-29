@@ -641,8 +641,10 @@ def _atomic_write_local(path, data, expected_data=None, expected_identity=None):
                 "local file changed since it was opened; refusing to overwrite"
             )
         with open(path, "rb") as source:
-            opened = _local_file_identity(os.fstat(source.fileno()))
-            if opened != baseline or (
+            opened = os.fstat(source.fileno())
+            # On Windows, fstat metadata can differ from path stat after
+            # os.replace; path identity is checked on both sides of this read.
+            if not stat.S_ISREG(opened.st_mode) or (
                 expected_data is not None
                 and not _file_contents_match(source, expected_data)
             ):
