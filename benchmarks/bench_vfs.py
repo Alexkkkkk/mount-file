@@ -5,8 +5,9 @@
 Measures directory listing, file-size/stat, bounded range reads and full-file
 extraction against a native provider and/or the explicit pytsk3 baseline. The
 source image is never opened for writing. A selected volume extent is mandatory.
-The harness does not manipulate the host page cache: cache policy is reported,
-not inferred.
+When both providers are requested, paired runs alternate backend order and log
+the actual sequence. The harness does not manipulate the host page cache: cache
+policy is reported, not inferred.
 """
 
 from __future__ import annotations
@@ -178,32 +179,27 @@ def _iteration(provider, paths: list[str]) -> dict:
     }
 
 
-def _run_backend(
+def _measure_backend_iteration(
     factory: Callable,
     image: Path,
     offset: int,
     volume_size: int,
     paths: list[str],
-    repeats: int,
-    warmups: int,
-) -> dict:
-    runs = []
-    open_samples = []
-    provider_info = None
-    for run_index in range(warmups + repeats):
-        provider, open_elapsed = _timed(lambda: factory(image, offset, volume_size))
-        try:
-            if provider_info is None:
-                provider_info = _provider_profile(provider)
-            measured = _iteration(provider, paths)
-        finally:
-            close = getattr(provider, "close", None)
-            if callable(close):
-                close()
-        if run_index >= warmups:
-            runs.append(measured)
-            open_samples.append(open_elapsed)
+) -> tuple[dict, dict, float]:
+    provider, open_elapsed = _timed(lambda: factory(image, offset, volume_size))
+    try:
+        provider_info = _provider_profile(provider)
+        measured = _iteration(provider, paths)
+    finally:
+        close = getattr(provider, "close", None)
+        if callable(close):
+            close()
+    return provider_info, measured, open_elapsed
 
+
+def _summarize_backend(
+    provider_info: dict, runs: list[dict], open_samples: list[float]
+):
     operation_summaries = {}
     for operation in ("list_dir", "stat", "read_range", "extract"):
         flat_samples = [
@@ -217,7 +213,7 @@ def _run_backend(
             ),
         }
     return {
-        **(provider_info or {}),
+        **provider_info,
         "open_seconds": _summarize(open_samples),
         "median_iteration_seconds": statistics.median(
             run["elapsed_seconds"] for run in runs
@@ -225,6 +221,82 @@ def _run_backend(
         "operations": operation_summaries,
         "iterations": runs,
     }
+
+
+def _run_backend(
+    factory: Callable,
+    image: Path,
+    offset: int,
+    volume_size: int,
+    paths: list[str],
+    repeats: int,
+    warmups: int,
+) -> dict:
+    runs = []
+    open_samples = []
+    provider_info = None
+    for run_index in range(warmups + repeats):
+        current_info, measured, open_elapsed = _measure_backend_iteration(
+            factory, image, offset, volume_size, paths
+        )
+        if provider_info is None:
+            provider_info = current_info
+        if run_index >= warmups:
+            runs.append(measured)
+            open_samples.append(open_elapsed)
+    return _summarize_backend(provider_info or {}, runs, open_samples)
+
+
+def _run_backends_interleaved(
+    factories: dict[str, Callable],
+    image: Path,
+    offset: int,
+    volume_size: int,
+    paths: list[str],
+    repeats: int,
+    warmups: int,
+) -> tuple[dict[str, dict], dict[str, str], list[dict]]:
+    """Alternate backend order per pair to reduce systematic order bias."""
+    state = {name: {"info": None, "runs": [], "open_samples": []} for name in factories}
+    errors = {}
+    execution_order = []
+    for run_index in range(warmups + repeats):
+        pair = list(factories)
+        if run_index % 2:
+            pair.reverse()
+        for name in pair:
+            if name in errors:
+                continue
+            entry = {
+                "pair_index": run_index,
+                "backend": name,
+                "discarded_warmup": run_index < warmups,
+            }
+            try:
+                info, measured, open_elapsed = _measure_backend_iteration(
+                    factories[name], image, offset, volume_size, paths
+                )
+            except (OSError, TskError, ValueError) as exc:
+                errors[name] = str(exc)
+                entry["status"] = "error"
+                entry["error"] = str(exc)
+            else:
+                entry["status"] = "ok"
+                slot = state[name]
+                if slot["info"] is None:
+                    slot["info"] = info
+                if run_index >= warmups:
+                    slot["runs"].append(measured)
+                    slot["open_samples"].append(open_elapsed)
+            execution_order.append(entry)
+
+    reports = {}
+    for name, slot in state.items():
+        if name not in errors and len(slot["runs"]) == repeats:
+            reports[name] = _summarize_backend(
+                slot["info"] or {}, slot["runs"], slot["open_samples"]
+            )
+    return reports, errors, execution_order
 
 
 def _sha256_file(path: Path) -> str:
@@ -297,12 +369,32 @@ def build_report(
         "cache_state": {
             "label": cache_state,
             "managed_by_harness": False,
-            "note": "The harness does not flush or control the operating-system page cache.",
+            "note": (
+                "The harness does not flush or control the operating-system page "
+                "cache; paired backends alternate order to reduce systematic order bias."
+            ),
         },
         "backends": {},
     }
 
-    if baseline in ("native", "both"):
+    if baseline == "both":
+        reports, errors, execution_order = _run_backends_interleaved(
+            {
+                "native": _open_native_provider,
+                "pytsk3": lambda path, start, _size: TskImage(path, offset=start),
+            },
+            image,
+            offset,
+            volume_size,
+            paths,
+            repeats,
+            warmups,
+        )
+        report["backends"].update(reports)
+        report["backend_execution_order"] = execution_order
+        for name, error in errors.items():
+            report["backends"][f"{name}_error"] = error
+    elif baseline == "native":
         try:
             report["backends"]["native"] = _run_backend(
                 _open_native_provider,
@@ -315,7 +407,7 @@ def build_report(
             )
         except (OSError, TskError, ValueError) as exc:
             report["backends"]["native_error"] = str(exc)
-    if baseline in ("pytsk3", "both"):
+    elif baseline == "pytsk3":
         try:
             report["backends"]["pytsk3"] = _run_backend(
                 lambda path, start, _size: TskImage(path, offset=start),

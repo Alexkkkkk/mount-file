@@ -127,6 +127,104 @@ def test_build_report_compares_backends_only_when_both_succeed(tmp_path, monkeyp
     assert isinstance(report["comparison"]["relative_change_percent"], float)
 
 
+def test_both_backends_are_interleaved_and_execution_order_is_recorded(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "sample.img"
+    image.write_bytes(b"1234")
+    execution = []
+    real_iteration = bench_vfs._iteration
+
+    def open_native(path, offset=0, volume_size=None):
+        provider = _FakeProvider()
+        provider.backend_name = "native-test"
+        return provider
+
+    def open_pytsk(path, offset=0):
+        provider = _FakeProvider()
+        provider.backend_name = "pytsk3-test"
+        return provider
+
+    def record_iteration(provider, paths):
+        execution.append(provider.backend_name)
+        return real_iteration(provider, paths)
+
+    monkeypatch.setattr(bench_vfs, "open_image_provider", open_native)
+    monkeypatch.setattr(bench_vfs, "TskImage", open_pytsk)
+    monkeypatch.setattr(bench_vfs, "_iteration", record_iteration)
+    report = bench_vfs.build_report(
+        image,
+        0,
+        4,
+        ["/docs/readme.txt"],
+        baseline="both",
+        repeats=3,
+        warmups=1,
+    )
+
+    assert execution == [
+        "native-test",
+        "pytsk3-test",
+        "pytsk3-test",
+        "native-test",
+        "native-test",
+        "pytsk3-test",
+        "pytsk3-test",
+        "native-test",
+    ]
+    order = report["backend_execution_order"]
+    assert [entry["backend"] for entry in order] == [
+        "native",
+        "pytsk3",
+        "pytsk3",
+        "native",
+        "native",
+        "pytsk3",
+        "pytsk3",
+        "native",
+    ]
+    assert [entry["discarded_warmup"] for entry in order] == [True, True] + [False] * 6
+    assert all(entry["status"] == "ok" for entry in order)
+    assert report["cache_state"]["managed_by_harness"] is False
+
+
+def test_interleaved_benchmark_keeps_working_backend_when_other_fails(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "sample.img"
+    image.write_bytes(b"1234")
+
+    def fail_native(*_args, **_kwargs):
+        raise bench_vfs.TskError("native fixture unavailable")
+
+    def open_pytsk(path, offset=0):
+        provider = _FakeProvider()
+        provider.backend_name = "pytsk3-test"
+        return provider
+
+    monkeypatch.setattr(bench_vfs, "open_image_provider", fail_native)
+    monkeypatch.setattr(bench_vfs, "TskImage", open_pytsk)
+    report = bench_vfs.build_report(
+        image,
+        0,
+        4,
+        ["/docs/readme.txt"],
+        baseline="both",
+        repeats=2,
+        warmups=0,
+    )
+
+    assert report["backends"]["native_error"] == "native fixture unavailable"
+    assert "native" not in report["backends"]
+    assert len(report["backends"]["pytsk3"]["iterations"]) == 2
+    assert report["backend_execution_order"][0]["status"] == "error"
+    assert all(
+        item["backend"] == "pytsk3" and item["status"] == "ok"
+        for item in report["backend_execution_order"][1:]
+    )
+    assert "comparison" not in report
+
+
 def test_build_report_withholds_performance_comparison_on_content_mismatch(
     tmp_path, monkeypatch
 ):

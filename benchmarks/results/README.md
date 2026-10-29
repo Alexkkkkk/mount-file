@@ -1,6 +1,6 @@
 # Issue #182: preliminary ext2 benchmark (ARM64)
 
-This is a **single-host, preliminary measurement**, not a cross-platform performance claim or full acceptance of issue #182. Raw schema-v2 output is in [`issue-182-ext2-arm64-2026-10-28.json`](issue-182-ext2-arm64-2026-10-28.json). The 64 MiB ext2 fixture itself is not committed; its SHA-256 is recorded in the JSON.
+This is a **single-host, preliminary measurement**, not a cross-platform performance claim or full acceptance of issue #182. Raw schema-v2 output is in [`issue-182-ext2-arm64-2026-10-28.json`](issue-182-ext2-arm64-2026-10-28.json). The 64 MiB ext2 fixture itself is not committed; its SHA-256 is recorded in the JSON. This historical run predates the harness's alternating backend order; use a fresh run for order-balanced comparisons.
 
 ## Method
 
