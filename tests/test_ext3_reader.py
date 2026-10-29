@@ -404,6 +404,21 @@ def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
     assert reader._extent_map(inode, 0) == (0, False)
 
 
+def test_ext4_rejects_out_of_bounds_unselected_extent_index_sibling():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 2, 4, 1, 0)
+    struct.pack_into("<IIHH", root, 12, 2, 40, 0, 0)
+    struct.pack_into("<IIHH", root, 24, 4, 64, 0, 0)
+    leaf = bytearray(1024)
+    struct.pack_into("<HHHH", leaf, 0, 0xF30A, 1, 84, 0)
+    struct.pack_into("<IHHI", leaf, 12, 2, 2, 0, 50)
+
+    reader = _extent_reader(blocks_count=64, blocks={40: bytes(leaf)})
+
+    with pytest.raises(Ext3ReadError, match="extent index block is outside"):
+        reader._extent_map(_extent_inode(root), 2)
+
+
 @pytest.mark.parametrize(
     ("indexes", "reason"),
     [

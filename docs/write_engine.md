@@ -49,10 +49,14 @@ growth, same- and cross-directory rename, and file or recursive directory
 deletion. Before freeing clusters it scans allocation ownership and rejects
 cross-linked or inconsistent streams. Each operation copies the complete image
 to a staging file, validates the staged image through the native reader, checks
-the source extent hash under an exclusive image lock, and commits with an
-atomic replacement. A changed source, short write or failed read-back leaves
-the original image untouched; unsupported or ambiguous metadata still fails
-closed.
+the full source-image size and SHA-256 under the native exFAT image lock, and
+commits with an atomic replacement only if that identity is unchanged. This
+detects changes both inside and outside the selected exFAT extent during
+staging, preserving concurrent external changes instead of replacing them with
+an older staged copy. The lock is advisory; an unrelated writer that ignores it
+can still race in the final identity-check/replacement window. This is not a
+power-loss recovery protocol. A rejected commit, short write or failed read-back
+discards the stage; unsupported or ambiguous metadata still fails closed.
 
 ## Использование
 
@@ -110,6 +114,15 @@ engine.close()
   `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
   расширении каталога pointer block, bitmap/counters и directory map проходят
   read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
+  Если commit и rollback одновременно завершаются ошибкой, writer сохраняет
+  проверенный extent snapshot рядом с образом и атомарный
+  `<image>.mountfile-ext2-recovery.json` marker. Следующий native ext2 writer
+  автоматически восстановит snapshot только если identity, extent и SHA-256
+  текущего post-failure образа совпадают с marker; при любом расхождении запись
+  блокируется, marker и snapshot остаются для ручной проверки. Не удаляйте их,
+  пока recovery не завершён. Это защищает от потери rollback-копии и не является
+  заменой резервной копии или общей power-loss гарантий ext2; directory fsync
+  применяется там, где ОС его поддерживает.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с
   `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
