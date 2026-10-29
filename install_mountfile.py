@@ -165,6 +165,13 @@ def ensure_venv(*, dry_run: bool = False) -> str | None:
     failure result instead of continuing to pip with a broken environment.
     """
 
+    # A dry run describes the commands that would be executed for this
+    # checkout.  It must not silently switch to the interpreter of the
+    # environment running the installer, otherwise callers cannot preview the
+    # platform-specific target path (and tests cannot safely substitute it).
+    if dry_run:
+        return str(venv_python())
+
     if is_venv_active():
         print(f"✅ Уже в виртуальном окружении: {sys.prefix}")
         return sys.executable
@@ -179,10 +186,6 @@ def ensure_venv(*, dry_run: bool = False) -> str | None:
             print("❌ Не удалось создать .venv; зависимости не будут устанавливаться.")
             return None
 
-    # A dry run must neither create nor inspect a planned virtual environment
-    # as a prerequisite for printing the remaining commands.
-    if dry_run:
-        return str(py)
     if not py.exists():
         print(f"❌ Не найден интерпретатор виртуального окружения: {py}")
         return None
