@@ -5,11 +5,14 @@
 This is a fixture formatter for benchmark reproducibility only (issue #182).
 It formats a fresh image with ``mke2fs -t ext2`` and populates it through the
 project's own ``NativeExt2ImageWriter`` (staged, hash-verified writes), so the
-generation path keeps the same integrity gates as the rest of the project.
+default generation path keeps the same integrity gates as the rest of the
+project. The optional 10 MiB fixture is added with e2fsprogs ``debugfs`` only
+to exercise the read-only reader beyond the writer's current file-size limit.
 No binaries are committed; run this script to rebuild the image locally.
 
 Usage:
     python scripts/make_bench_ext2_image.py --output /tmp/bench.ext2
+    python scripts/make_bench_ext2_image.py --output /tmp/bench.ext2 --include-10m
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ MANY_DIR_FILES = 24
 MANY_FILE_SIZE = 4 << 10
 DEFAULT_IMAGE_MIB = 32
 DEFAULT_BLOCK_SIZE = 4096
+LARGE_10M_NAME = "large_10m.dat"
+LARGE_10M_SIZE = 10 << 20
 _FIXTURE_TIME = 1_700_000_000
 _FIXTURE_UUID = bytes.fromhex("6d6f756e7466696c652d62656e636831")
 _FIXTURE_HASH_SEED = bytes.fromhex("00112233445566778899aabbccddeeff")
@@ -139,9 +144,18 @@ def deterministic_payload(seed: str, size: int) -> bytes:
     return b"".join(chunks)[:size]
 
 
-def make_image(output: Path, image_mib: int, block_size: int) -> Path:
+def make_image(
+    output: Path, image_mib: int, block_size: int, *, include_10m: bool = False
+) -> Path:
     if shutil.which("mke2fs") is None:
         raise SystemExit("mke2fs is required to format the fixture image")
+    debugfs = shutil.which("debugfs") if include_10m else None
+    if include_10m and debugfs is None:
+        raise SystemExit("debugfs is required for the optional 10 MiB fixture")
+    if include_10m and image_mib < 24:
+        raise SystemExit(
+            "the optional 10 MiB fixture requires an image of 24 MiB or larger"
+        )
     output = output.expanduser().resolve()
     if output.exists():
         output.unlink()
@@ -178,12 +192,35 @@ def make_image(output: Path, image_mib: int, block_size: int) -> Path:
             )
     finally:
         writer.close()
+    if include_10m:
+        # This external tool is confined to fixture construction. Production
+        # reads remain read-only, and production writes remain capped at the
+        # native writer's current single-indirect profile.
+        with tempfile.TemporaryDirectory(
+            prefix="mountfile-bench-10m-", dir="/tmp"
+        ) as temporary_directory:
+            host_file = Path(temporary_directory) / LARGE_10M_NAME
+            host_file.write_bytes(deterministic_payload(LARGE_10M_NAME, LARGE_10M_SIZE))
+            subprocess.run(
+                [
+                    debugfs,
+                    "-w",
+                    "-R",
+                    f"write {host_file} /bench/{LARGE_10M_NAME}",
+                    str(output),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
     _normalise_ext2_metadata(output)
     return output
 
 
-def bench_paths() -> list[str]:
+def bench_paths(*, include_10m: bool = False) -> list[str]:
     paths = [f"/bench/{name}" for name, _size in BENCH_FILES]
+    if include_10m:
+        paths.append(f"/bench/{LARGE_10M_NAME}")
     paths += [
         f"/bench/many/file_{index:03d}.dat" for index in range(0, MANY_DIR_FILES, 8)
     ]
@@ -195,16 +232,23 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--size-mib", type=int, default=DEFAULT_IMAGE_MIB)
     parser.add_argument("--block-size", type=int, default=DEFAULT_BLOCK_SIZE)
+    parser.add_argument(
+        "--include-10m",
+        action="store_true",
+        help="add a 10 MiB read-only benchmark fixture using debugfs",
+    )
     parser.add_argument("--print-paths", action="store_true")
     args = parser.parse_args()
 
-    image = make_image(args.output, args.size_mib, args.block_size)
+    image = make_image(
+        args.output, args.size_mib, args.block_size, include_10m=args.include_10m
+    )
     print(f"image: {image} ({args.size_mib} MiB, block {args.block_size})")
     print("paths:")
-    for path in bench_paths():
+    for path in bench_paths(include_10m=args.include_10m):
         print(f"  {path}")
     if args.print_paths:
-        print(" ".join(bench_paths()))
+        print(" ".join(bench_paths(include_10m=args.include_10m)))
     return 0
 
 

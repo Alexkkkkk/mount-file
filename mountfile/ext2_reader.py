@@ -377,6 +377,63 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                     "data block pointer references backup superblock metadata"
                 )
 
+    def _validate_data_block_run(self, first_block: int, count: int) -> None:
+        """Validate an ascending contiguous run without repeating group lookups."""
+        end_block = first_block + count
+        if (
+            count < 1
+            or first_block <= self.first_data_block
+            or end_block > self.blocks_count
+        ):
+            raise Ext2ReadError(
+                "data block pointer is outside allocatable filesystem bounds"
+            )
+
+        sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
+        block = first_block
+        while block < end_block:
+            group = (block - self.first_data_block) // self.blocks_per_group
+            descriptor = self._group_descriptor(group)
+            run_end = min(end_block, descriptor.end_block)
+            if run_end <= block:
+                raise Ext2ReadError("data block run exceeds block-group bounds")
+
+            if block <= descriptor.block_bitmap < run_end:
+                raise Ext2ReadError("data block pointer references a block bitmap")
+            if block <= descriptor.inode_bitmap < run_end:
+                raise Ext2ReadError("data block pointer references a block bitmap")
+            inode_table_end = descriptor.inode_table + descriptor.inode_table_blocks
+            if block < inode_table_end and run_end > descriptor.inode_table:
+                raise Ext2ReadError("data block pointer references an inode table")
+            if (
+                block < self._primary_metadata_end
+                and run_end > self._primary_metadata_start
+            ):
+                raise Ext2ReadError(
+                    "data block pointer references primary superblock metadata"
+                )
+            if self._has_super_backup(group, sparse):
+                backup_end = min(
+                    descriptor.end_block,
+                    descriptor.first_block + 1 + self._gdt_blocks,
+                )
+                if block < backup_end and run_end > descriptor.first_block:
+                    raise Ext2ReadError(
+                        "data block pointer references backup superblock metadata"
+                    )
+
+            start_bit = block - descriptor.first_block
+            bit_count = run_end - block
+            bitmap = self._bitmap(group, inode=False)
+            first_byte = start_bit // 8
+            last_bit = start_bit + bit_count
+            last_byte = (last_bit + 7) // 8
+            bits = int.from_bytes(bitmap[first_byte:last_byte], "little")
+            required = ((1 << bit_count) - 1) << (start_bit % 8)
+            if bits & required != required:
+                raise Ext2ReadError("data block pointer references a free block")
+            block = run_end
+
     def _read_block(self, block: int) -> bytes:
         if block == 0:
             raise Ext2ReadError("block zero is a hole, not a readable metadata block")
@@ -497,6 +554,49 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         if index < entries**3:
             return self._indirect_block(pointers[14], 3, index, block_cache)
         raise Ext2ReadError("logical block exceeds ext2 pointer capacity")
+
+    def _logical_block_run(
+        self,
+        inode: _Inode,
+        first_logical: int,
+        count: int,
+        block_cache: dict[int, bytes],
+    ) -> tuple[int, ...]:
+        """Map a bounded logical range, unpacking each single-indirect slice once."""
+        if first_logical < 0 or count < 1:
+            raise Ext2ReadError("invalid logical block range")
+        entries = self.block_size // 4
+        result = []
+        logical = first_logical
+        remaining = count
+        while remaining:
+            if logical < 12:
+                take = min(remaining, 12 - logical)
+                result.extend(inode.block_pointers[logical : logical + take])
+            elif logical < 12 + entries:
+                index = logical - 12
+                take = min(remaining, entries - index)
+                root = inode.block_pointers[12]
+                if root == 0:
+                    result.extend((0,) * take)
+                else:
+                    table = block_cache.get(root)
+                    if table is None:
+                        table = self._read_block(root)
+                        if len(block_cache) < _MAX_RANGE_INDIRECT_CACHE_ITEMS:
+                            block_cache[root] = table
+                    result.extend(struct.unpack_from(f"<{take}I", table, index * 4))
+            else:
+                # Double/triple-indirect ranges retain the established checked
+                # mapper; direct/single-indirect ranges take the bulk path above.
+                result.extend(
+                    self._logical_block(inode, logical + index, block_cache)
+                    for index in range(remaining)
+                )
+                break
+            logical += take
+            remaining -= take
+        return tuple(result)
 
     @staticmethod
     def _path_parts(path: str) -> list[str]:
@@ -661,31 +761,37 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         while remaining:
             logical = position // self.block_size
             in_block = position % self.block_size
-            first_block = self._logical_block(inode, logical, indirect_cache)
+            blocks_needed = math.ceil((in_block + remaining) / self.block_size)
+            block_numbers = self._logical_block_run(
+                inode, logical, blocks_needed, indirect_cache
+            )
+            first_block = block_numbers[0]
             if first_block == 0:
-                amount = min(remaining, self.block_size - in_block)
+                zero_blocks = 1
+                while (
+                    zero_blocks < len(block_numbers) and block_numbers[zero_blocks] == 0
+                ):
+                    zero_blocks += 1
+                amount = min(remaining, zero_blocks * self.block_size - in_block)
                 output.extend(b"\x00" * amount)
                 position += amount
                 remaining -= amount
                 continue
 
-            self._validate_data_block(first_block)
             run_blocks = 1
-            blocks_needed = math.ceil((in_block + remaining) / self.block_size)
-            while run_blocks < blocks_needed:
-                next_block = self._logical_block(
-                    inode, logical + run_blocks, indirect_cache
-                )
-                if next_block == 0 or next_block != first_block + run_blocks:
+            while run_blocks < len(block_numbers):
+                if block_numbers[run_blocks] != first_block + run_blocks:
                     break
-                self._validate_data_block(next_block)
                 run_blocks += 1
 
+            self._validate_data_block_run(first_block, run_blocks)
             amount = min(remaining, run_blocks * self.block_size - in_block)
             data = self._read_at(
                 first_block * self.block_size + in_block,
                 amount,
             )
+            if not output and amount == remaining:
+                return data
             output.extend(data)
             position += amount
             remaining -= amount

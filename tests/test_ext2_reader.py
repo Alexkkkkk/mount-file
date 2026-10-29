@@ -383,6 +383,25 @@ def test_range_reads_batch_contiguous_blocks_and_cache_indirect_tables(tmp_path)
         provider.close()
 
 
+def test_batched_range_still_rejects_free_data_block(tmp_path):
+    image_path = tmp_path / "free-block-in-contiguous-run.img"
+    image = bytearray(_make_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (12 - 1) * 128
+    struct.pack_into("<I", image, inode_offset + 4, 15 * BLOCK_SIZE)
+    struct.pack_into("<III", image, 23 * BLOCK_SIZE, 24, 25, 26)
+    # Block 25 is the second physical block of the contiguous data run.
+    group_index = 25 - 1  # first_data_block is 1 for this 1 KiB ext2 fixture.
+    image[3 * BLOCK_SIZE + group_index // 8] &= ~(1 << (group_index % 8))
+    image_path.write_bytes(image)
+
+    provider = NativeExt2Image(image_path, volume_size=len(image))
+    try:
+        with pytest.raises(Ext2ReadError, match="references a free block"):
+            provider.read_file_range("/single.bin", 12 * BLOCK_SIZE, 3 * BLOCK_SIZE)
+    finally:
+        provider.close()
+
+
 def test_range_read_keeps_noncontiguous_blocks_and_sparse_holes_separate(tmp_path):
     image_path = tmp_path / "noncontiguous-range.img"
     image = bytearray(_make_image(image_path))
