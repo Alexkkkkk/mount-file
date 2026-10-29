@@ -114,15 +114,20 @@ engine.close()
   `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
   расширении каталога pointer block, bitmap/counters и directory map проходят
   read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
-  Если commit и rollback одновременно завершаются ошибкой, writer сохраняет
-  проверенный extent snapshot рядом с образом и атомарный
-  `<image>.mountfile-ext2-recovery.json` marker. Следующий native ext2 writer
-  автоматически восстановит snapshot только если identity, extent и SHA-256
-  текущего post-failure образа совпадают с marker; при любом расхождении запись
-  блокируется, marker и snapshot остаются для ручной проверки. Не удаляйте их,
-  пока recovery не завершён. Это защищает от потери rollback-копии и не является
-  заменой резервной копии или общей power-loss гарантий ext2; directory fsync
-  применяется там, где ОС его поддерживает.
+  Перед изменением image writer сохраняет и fsync-ит проверенный before-image
+  выбранного ext2 extent рядом с образом, затем атомарно публикует
+  `<image>.mountfile-ext2-recovery.json` marker и fsync-ит родительский каталог.
+  После внезапного завершения процесса следующий native writer сверяет identity
+  image и SHA-256 snapshot, восстанавливает только выбранный extent, делает
+  read-back и удаляет marker до snapshot. Process-crash tests покрывают
+  прерывание commit, повторного recovery и завершённый commit до удаления marker.
+  При обычном отказе rollback marker
+  дополнительно привязывается к точному post-failure extent и mtime; любое
+  последующее изменение блокирует автоматическое восстановление. Не редактируйте
+  image и не удаляйте sidecar-файлы, пока recovery не завершён. Это не заменяет
+  backup и не является универсальной power-loss гарантией для всех файловых
+  систем, устройств и ОС;
+  directory fsync применяется там, где ОС его поддерживает.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с
   `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
