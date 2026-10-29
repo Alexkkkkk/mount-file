@@ -4160,7 +4160,11 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as f:
                     data = f.read()
-                    local_identity = _local_file_identity(os.fstat(f.fileno()))
+                    # Snapshot the path metadata used by the atomic writer's
+                    # subsequent checks; expected_data also guards stale bytes.
+                    local_identity = _local_file_identity(
+                        os.stat(full, follow_symlinks=False)
+                    )
         except Exception as e:
             QMessageBox.critical(self, "Просмотр", str(e))
             return
