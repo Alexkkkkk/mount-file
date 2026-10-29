@@ -34,3 +34,18 @@ PYTHONPATH=. python benchmarks/bench_vfs.py native-ext2-benchmark.img \
   --hash-image --json-out benchmarks/results/benchmark.json \
   /bench/tiny.txt /bench/1m.bin /bench/8m.bin
 ```
+
+
+## Alternating-order ext2 10 MiB run (2026-10-29)
+
+A second, distinct synthetic run is stored in [`ext2-10mib-aarch64.json`](ext2-10mib-aarch64.json). It uses one 10 MiB file in a 64 MiB ext2 image, 4 KiB blocks, and `dir_index` disabled to match the native reader's allowlist. The run used CPython 3.12.3 on Linux 6.18.38+ aarch64, seven measured iterations after two warmups, with alternating backend order. The source image was temporary; the result records its SHA-256. The output hash and file size match between native and `pytsk3` for the file in this workload.
+
+| Operation median | Native | `pytsk3` |
+|---|---:|---:|
+| `list_dir` | 0.000154 s | 0.007881 s |
+| `stat` | 0.000104 s | 0.007831 s |
+| 1 MiB `read_range` | 0.000492 s | 0.008108 s |
+| full extraction, 10 MiB | 0.012592 s | 0.094690 s |
+| combined iteration | 0.023445 s | 0.129058 s |
+
+The harness reports a `warm` cache label, but it does not flush or control the host page cache. This small synthetic workload is not representative enough to claim the issue's performance target is satisfied. It does not cover cold-cache access, directories with many entries, several file sizes, write workloads, other ext profiles, or other operating systems. The exact fixture and command are reproducible with [`run_ext2_smoke.sh`](../run_ext2_smoke.sh), which requires e2fsprogs and the optional `pytsk3` package.
