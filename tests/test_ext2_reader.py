@@ -349,6 +349,60 @@ def test_reads_single_double_and_triple_indirect_blocks(tmp_path):
         provider.close()
 
 
+def test_range_reads_batch_contiguous_blocks_and_cache_indirect_tables(tmp_path):
+    image_path = tmp_path / "batched-range.img"
+    image = bytearray(_make_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (12 - 1) * 128
+    struct.pack_into("<I", image, inode_offset + 4, 15 * BLOCK_SIZE)
+    struct.pack_into("<III", image, 23 * BLOCK_SIZE, 24, 25, 26)
+    image[24 * BLOCK_SIZE : 25 * BLOCK_SIZE] = b"A" * BLOCK_SIZE
+    image[25 * BLOCK_SIZE : 26 * BLOCK_SIZE] = b"B" * BLOCK_SIZE
+    image[26 * BLOCK_SIZE : 27 * BLOCK_SIZE] = b"C" * BLOCK_SIZE
+    image_path.write_bytes(image)
+
+    provider = NativeExt2Image(image_path, volume_size=len(image))
+    pointer_reads = []
+    data_reads = []
+    read_at = provider._read_at
+
+    def counted_read_at(relative_offset, size):
+        if relative_offset == 23 * BLOCK_SIZE:
+            pointer_reads.append((relative_offset, size))
+        if 24 * BLOCK_SIZE <= relative_offset < 27 * BLOCK_SIZE:
+            data_reads.append((relative_offset, size))
+        return read_at(relative_offset, size)
+
+    provider._read_at = counted_read_at
+    try:
+        assert provider.read_file_range(
+            "/single.bin", 12 * BLOCK_SIZE, 3 * BLOCK_SIZE
+        ) == (b"A" * BLOCK_SIZE + b"B" * BLOCK_SIZE + b"C" * BLOCK_SIZE)
+        assert pointer_reads == [(23 * BLOCK_SIZE, BLOCK_SIZE)]
+        assert data_reads == [(24 * BLOCK_SIZE, 3 * BLOCK_SIZE)]
+    finally:
+        provider.close()
+
+
+def test_range_read_keeps_noncontiguous_blocks_and_sparse_holes_separate(tmp_path):
+    image_path = tmp_path / "noncontiguous-range.img"
+    image = bytearray(_make_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (12 - 1) * 128
+    struct.pack_into("<I", image, inode_offset + 4, 15 * BLOCK_SIZE)
+    struct.pack_into("<III", image, 23 * BLOCK_SIZE, 24, 26, 0)
+    image[24 * BLOCK_SIZE : 25 * BLOCK_SIZE] = b"A" * BLOCK_SIZE
+    image[26 * BLOCK_SIZE : 27 * BLOCK_SIZE] = b"B" * BLOCK_SIZE
+    image_path.write_bytes(image)
+
+    provider = NativeExt2Image(image_path, volume_size=len(image))
+    try:
+        assert (
+            provider.read_file_range("/single.bin", 12 * BLOCK_SIZE, 3 * BLOCK_SIZE)
+            == b"A" * BLOCK_SIZE + b"B" * BLOCK_SIZE + b"\x00" * BLOCK_SIZE
+        )
+    finally:
+        provider.close()
+
+
 def test_large_file_reads_are_limited_before_allocating(tmp_path):
     image_path = tmp_path / "large-file.img"
     _make_image(image_path)

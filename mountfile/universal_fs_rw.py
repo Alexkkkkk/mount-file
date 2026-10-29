@@ -323,6 +323,9 @@ class FSInfo:
     total_size: int = 0
     writable: bool = False
     write_strategy: str = ""
+    read_capabilities: tuple[str, ...] = ("list", "read", "extract")
+    write_capabilities: tuple[str, ...] = ()
+    write_rejection_reason: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -582,7 +585,13 @@ class NativeExfatRW(RWBackend):
 # 5. NATIVE FAT32 (read + write)
 # =============================================================================
 class Fat32RW(RWBackend):
-    """Native FAT12/16/32 — read + write без внешних утилит."""
+    """Bounded native FAT32 read/write without external utilities.
+
+    FAT12/16 are deliberately rejected: their packed FAT12 entries, fixed
+    root directory, and format-specific end-of-chain rules are not covered by
+    this writer's safety proof.  They remain available to the read-only FAT
+    reader, but never reach a native mutation path.
+    """
 
     ATTR_DIR = 0x10
     ATTR_LFN = 0x0F
@@ -632,7 +641,14 @@ class Fat32RW(RWBackend):
             or offset + len(data) > self.volume_size
         ):
             raise ValueError("FAT write exceeds selected volume bounds")
-        super()._write_at(offset, data)
+        with self.image.open("r+b") as stream:
+            stream.seek(self.offset + offset)
+            written = stream.write(data)
+            if written != len(data):
+                raise OSError(
+                    "short write at FAT offset 0x%X: %d of %d bytes"
+                    % (offset, written or 0, len(data))
+                )
 
     def _temporary_sibling(self, suffix: str) -> Path:
         descriptor, name = tempfile.mkstemp(
@@ -867,17 +883,44 @@ class Fat32RW(RWBackend):
         self.volume_size = declared_bytes
 
         if self.fat_type == 32:
+            ext_flags = struct.unpack("<H", bs[40:42])[0]
+            if ext_flags & 0x0080:
+                raise ValueError("non-mirrored FAT32 mode is unsupported")
+            if self.num_fats > 1:
+                primary = self._read_at(
+                    self.fat_offset, self.fat_size * self.bytes_per_sector
+                )
+                for index in range(1, self.num_fats):
+                    replica = self._read_at(
+                        self.fat_offset + index * self.fat_size * self.bytes_per_sector,
+                        self.fat_size * self.bytes_per_sector,
+                    )
+                    if replica != primary:
+                        raise ValueError("mirrored FAT32 copies are inconsistent")
+            backup_sector = struct.unpack("<H", bs[50:52])[0]
+            if backup_sector:
+                backup_offset = backup_sector * self.bytes_per_sector
+                if backup_offset + self.bytes_per_sector > declared_bytes:
+                    raise ValueError("FAT32 backup boot sector exceeds volume bounds")
+                if (
+                    self._read_at(backup_offset, self.bytes_per_sector)
+                    != bs[: self.bytes_per_sector]
+                ):
+                    raise ValueError("FAT32 backup boot sector is inconsistent")
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
-            if self.root_cluster < 2:
-                self.root_cluster = 2
+            if not 2 <= self.root_cluster < self.cluster_count + 2:
+                raise ValueError("invalid FAT32 root cluster")
+            if self.cluster_count + 2 > self.fat_size * self.bytes_per_sector // 4:
+                raise ValueError("FAT32 FAT is too small for the declared volume")
             # FSINFO only caches the allocator state; the FAT stays the source
             # of truth.  The pointer is kept so the writer paths below can
             # refresh that cache - a stale free-cluster count is exactly what
             # `fsck.fat` reports as "Free cluster summary wrong".
             self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
         else:
-            self.root_cluster = 0
-            self.fsinfo_sector = 0
+            raise ValueError(
+                "native FAT12/16 writes are unsupported; use the read-only FAT reader"
+            )
 
     # ---- FSINFO ------------------------------------------------------------
     def free_clusters(self) -> tuple:
@@ -2446,8 +2489,15 @@ class UniversalFSRW:
                             raise RuntimeError(
                                 "refusing unsafe ext2 geometry/state: %s" % e
                             ) from e
+                        profile = str(fs_type).lower()
+                        if profile.startswith(("ext3", "ext4")):
+                            raise RuntimeError(
+                                "%s native write profile is unsupported; "
+                                "no subprocess or legacy fallback was attempted: %s"
+                                % (profile, e)
+                            ) from e
                         raise RuntimeError(
-                            "refusing unsupported ext profile without an explicit "
+                            "refusing unsupported ext2 profile without an explicit "
                             "legacy compatibility backend: %s" % e
                         ) from e
                     raise RuntimeError(
@@ -2456,7 +2506,7 @@ class UniversalFSRW:
                     ) from e
         if fs_type_lower.startswith("ntfs") and not self.allow_legacy_mount:
             raise RuntimeError(
-                "native NTFS writes are not implemented; pass "
+                "native NTFS writes are unsupported and not implemented; pass "
                 "allow_legacy_mount=True only for the explicit compatibility backend"
             )
         if not self.allow_legacy_mount:
@@ -2482,7 +2532,57 @@ class UniversalFSRW:
 
     # ---- read/write -------------------------------------------------------
     def info(self) -> FSInfo:
-        return self.backend.info()
+        info = self.backend.info()
+        # Keep the backend's identity, while making operation support explicit
+        # to CLI, GUI, and WriteEngine callers.  Browsability never implies RW.
+        capabilities = self.backend_status(info)
+        return FSInfo(
+            **{
+                **info.to_dict(),
+                "read_capabilities": tuple(capabilities["read_capabilities"]),
+                "write_capabilities": tuple(capabilities["write_capabilities"]),
+                "write_rejection_reason": capabilities["write_rejection_reason"],
+            }
+        )
+
+    @staticmethod
+    def backend_status(info: FSInfo) -> dict:
+        """Return a serialisable, conservative operation capability matrix."""
+        read = ["list", "read", "extract"]
+        writable = bool(info.writable)
+        strategy = str(info.write_strategy or "")
+        if strategy in {"native", "native-ext2", "native-exfat-phase1"}:
+            write = ["write_file", "mkdir", "delete", "rename"]
+            reason = ""
+        elif writable:
+            write = ["write_file", "mkdir", "delete", "rename"]
+            reason = ""
+        else:
+            write = []
+            reason = "write operations are unsupported for profile %s (%s)" % (
+                info.fs_type,
+                strategy or "read-only",
+            )
+        return {
+            "backend": info.backend,
+            "mode": "read-write" if write else "read-only",
+            "read_capabilities": read,
+            "write_capabilities": write,
+            "write_enabled": bool(write),
+            "write_rejection_reason": reason,
+        }
+
+    def capability_status(self) -> dict:
+        """Expose the selected backend's bounded operation support."""
+        return self.backend_status(self.backend.info())
+
+    def _require_operation(self, operation: str) -> None:
+        status = self.capability_status()
+        if operation not in status["write_capabilities"]:
+            raise RuntimeError(
+                "%s is unsupported for %s: %s"
+                % (operation, status["backend"], status["write_rejection_reason"])
+            )
 
     def list(self, path: str = "/") -> list[FSEntry]:
         return self.backend.list(path)
@@ -2502,21 +2602,25 @@ class UniversalFSRW:
         self.journal.log(op)
 
     def write_file(self, path: str, data: bytes) -> None:
+        self._require_operation("write_file")
         op = WriteOperation("write", path, {"size": len(data)})
         self._audit_and_backup(op)
         self.backend.write_file(path, data)
 
     def mkdir(self, path: str) -> None:
+        self._require_operation("mkdir")
         op = WriteOperation("mkdir", path)
         self._audit_and_backup(op)
         self.backend.mkdir(path)
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        self._require_operation("delete")
         op = WriteOperation("delete", path, {"recursive": recursive})
         self._audit_and_backup(op)
         self.backend.delete(path, recursive)
 
     def rename(self, src: str, dst: str) -> None:
+        self._require_operation("rename")
         op = WriteOperation("rename", src, {"dst": dst})
         self._audit_and_backup(op)
         self.backend.rename(src, dst)

@@ -38,6 +38,7 @@ _ATTRIBUTE_FLAG_ENCRYPTED = 0x4000
 _ATTRIBUTE_FLAG_SPARSE = 0x8000
 _VOLUME_KNOWN_FLAGS = 0x807F
 _LOGFILE_PAGE_SIZE = 4096
+_MAX_READ_RANGE_BYTES = 1 << 20
 _LOGFILE_CLEAN_DISMOUNT = 0x0002
 _LOGFILE_KNOWN_FLAGS = _LOGFILE_CLEAN_DISMOUNT | 0x0001
 
@@ -354,6 +355,11 @@ def parse_ntfs_attribute_stream(
             raise NtfsMetadataError("invalid NTFS resident flag")
         if type_code == _ATTRIBUTE_LIST:
             raise NtfsMetadataError("NTFS ATTRIBUTE_LIST streams are unsupported")
+        name_minimum = 64 if nonresident else 24
+        if name_length and name_offset < name_minimum:
+            raise NtfsMetadataError("NTFS attribute name offset is inside its header")
+        if not name_length and name_offset not in (0, name_minimum):
+            raise NtfsMetadataError("NTFS unnamed attribute has an invalid name offset")
         name = _decode_name(raw[pos : pos + length], name_length, name_offset)
         lowest_vcn = highest_vcn = None
         run_count = 0
@@ -541,12 +547,13 @@ def parse_ntfs_index_root(
     return entries
 
 
-def parse_ntfs_index_block(
+def _parse_ntfs_index_block(
     raw_block: bytes,
     *,
     parent_reference: int | None = None,
     expected_vcn: int | None = None,
-) -> tuple[NtfsIndexEntry, ...]:
+    allow_children: bool = False,
+) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
     """Validate an INDX block's USA and parse its bounded index entries."""
     if len(raw_block) < 512 or len(raw_block) % 512:
         raise NtfsMetadataError("NTFS INDX block size is invalid")
@@ -583,10 +590,23 @@ def parse_ntfs_index_block(
         start=start,
         end=end,
         parent_reference=parent_reference,
-        allow_children=False,
+        allow_children=allow_children,
     )
-    if children:
+    if children and not allow_children:
         raise NtfsMetadataError("NTFS INDX child pointers are unsupported")
+    return entries, children
+
+
+def parse_ntfs_index_block(
+    raw_block: bytes,
+    *,
+    parent_reference: int | None = None,
+    expected_vcn: int | None = None,
+) -> tuple[NtfsIndexEntry, ...]:
+    """Validate an INDX block and parse entries without exposing child pointers."""
+    entries, _children = _parse_ntfs_index_block(
+        raw_block, parent_reference=parent_reference, expected_vcn=expected_vcn
+    )
     return entries
 
 
@@ -894,13 +914,22 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         )
 
     def read_file_range(self, path, offset=0, length=1 << 20):
-        if not isinstance(offset, int) or not isinstance(length, int):
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(length, int)
+            or isinstance(length, bool)
+        ):
             raise NtfsMetadataError("invalid NTFS metadata read request")
+        if offset < 0 or length < 0:
+            raise NtfsMetadataError("negative NTFS read range")
+        if length > _MAX_READ_RANGE_BYTES:
+            raise NtfsMetadataError("NTFS read range exceeds the 1 MiB limit")
         if path == "/$MFT":
             data = self._mft_data
-            if offset < 0 or length < 0 or offset >= data.data_size or not length:
+            if offset >= data.data_size or not length:
                 return b""
-            length = min(length, data.data_size - offset, 1 << 20)
+            length = min(length, data.data_size - offset)
             return self._read_runs(data.runs, offset, length)
         _number, record = self._resolve(path)
         if record.is_directory:
@@ -918,17 +947,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if data is None:
             raise NtfsMetadataError("NTFS file has no unnamed DATA attribute")
         if data.resident_value is not None:
-            if (
-                offset < 0
-                or length < 0
-                or offset >= len(data.resident_value)
-                or not length
-            ):
+            if offset >= len(data.resident_value) or not length:
                 return b""
-            return data.resident_value[offset : offset + min(length, 1 << 20)]
-        if offset < 0 or length < 0 or offset >= data.data_size or not length:
+            return data.resident_value[offset : offset + length]
+        if offset >= data.data_size or not length:
             return b""
-        length = min(length, data.data_size - offset, 1 << 20)
+        length = min(length, data.data_size - offset)
         return self._read_runs(data.runs, offset, length)
 
     def _read_runs(self, runs, offset, length):
@@ -1042,10 +1066,14 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     raise NtfsMetadataError("NTFS $I30 child VCN is outside allocation")
                 visited_vcns.add(vcn)
                 block = self._read_runs(allocation.runs, vcn * block_size, block_size)
-                block_entries = parse_ntfs_index_block(
-                    block, parent_reference=parent_reference, expected_vcn=vcn
+                block_entries, block_children = _parse_ntfs_index_block(
+                    block,
+                    parent_reference=parent_reference,
+                    expected_vcn=vcn,
+                    allow_children=True,
                 )
                 entries.extend(block_entries)
+                pending.extend(block_children)
         unique: dict[tuple[str, int], NtfsIndexEntry] = {}
         names: set[str] = set()
         for entry in entries:
@@ -1057,7 +1085,20 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         return tuple(sorted(unique.values(), key=lambda item: item.name.lower()))
 
     def read_file(self, path):
-        return self.read_file_range(path, 0, self.file_size(path))
+        """Return the complete file, fetching it through bounded ranges."""
+        size = self.file_size(path)
+        output = bytearray()
+        offset = 0
+        while offset < size:
+            requested = min(_MAX_READ_RANGE_BYTES, size - offset)
+            chunk = self.read_file_range(path, offset, requested)
+            if len(chunk) != requested:
+                raise NtfsMetadataError(
+                    "short NTFS read while assembling complete file"
+                )
+            output.extend(chunk)
+            offset += len(chunk)
+        return bytes(output)
 
     def read_mft_record(self, record_number, *, reference=None):
         """Load one MFT record only after checked arithmetic and bounds checks."""

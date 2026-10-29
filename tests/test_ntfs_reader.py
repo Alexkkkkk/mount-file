@@ -11,7 +11,9 @@ from mountfile.ntfs_reader import (
     NtfsAttributeSummary,
     NtfsMetadataError,
     NtfsRun,
+    _parse_ntfs_index_block,
     _parse_runlist,
+    parse_ntfs_attribute_stream,
     parse_ntfs_file_name,
     parse_ntfs_index_block,
     parse_ntfs_index_root,
@@ -148,6 +150,54 @@ def test_decodes_bounded_signed_ntfs_runs():
 def test_rejects_sparse_ntfs_run():
     with pytest.raises(NtfsMetadataError, match="sparse"):
         _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+
+
+def test_rejects_attribute_name_that_overlaps_its_header():
+    raw = bytearray(_record(attr_type=0x30))
+    struct.pack_into("<I", raw, 0x18, 92)
+    struct.pack_into("<I", raw, 0x3C, 32)
+    raw[0x41] = 1
+    struct.pack_into("<H", raw, 0x42, 16)
+    struct.pack_into("<I", raw, 0x3C + 32, 0xFFFFFFFF)
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(bytes(raw))
+    with pytest.raises(NtfsMetadataError, match="name offset"):
+        parse_ntfs_attribute_stream(record)
+
+
+def test_validates_nested_indx_child_pointer_but_public_parser_remains_fail_closed():
+    block = bytearray(4096)
+    block[:4] = b"INDX"
+    struct.pack_into("<HH", block, 4, 0x28, 9)
+    struct.pack_into("<H", block, 0x28, 0xA55A)
+    for index in range(8):
+        struct.pack_into("<H", block, 0x2A + index * 2, 0x1000 + index)
+        struct.pack_into("<H", block, (index + 1) * 512 - 2, 0xA55A)
+    struct.pack_into("<IIII", block, 24, 24, 152, 152, 0)
+    key = bytearray(74)
+    struct.pack_into("<Q", key, 0, (3 << 48) | 5)
+    key[0x40] = 4
+    key[0x41] = 1
+    key[0x42:0x4A] = "file".encode("utf-16le")
+    struct.pack_into("<QHHI", block, 48, (3 << 48) | 9, 104, 74, 1)
+    block[64:138] = key
+    struct.pack_into("<Q", block, 48 + 104 - 8, 7)
+    struct.pack_into("<QHHI", block, 152, 0, 24, 0, 3)
+    struct.pack_into("<Q", block, 152 + 24 - 8, 8)
+
+    entries, children = _parse_ntfs_index_block(
+        bytes(block),
+        parent_reference=(3 << 48) | 5,
+        expected_vcn=0,
+        allow_children=True,
+    )
+    assert entries[0].name == "file"
+    assert children == (7, 8)
+    with pytest.raises(NtfsMetadataError, match="INDEX_ALLOCATION"):
+        from mountfile.ntfs_reader import parse_ntfs_index_block
+
+        parse_ntfs_index_block(bytes(block), parent_reference=(3 << 48) | 5)
 
 
 def test_rejects_ntfs_runlist_that_does_not_cover_declared_vcn_range():
@@ -444,3 +494,59 @@ def test_rejects_malformed_ntfs_logfile_restart_page(mutate, message):
     mutate(page)
     with pytest.raises(NtfsMetadataError, match=message):
         parse_ntfs_logfile_restart_area(bytes(page))
+
+
+def test_ntfs_read_file_returns_complete_large_file_in_bounded_ranges(monkeypatch):
+    from types import SimpleNamespace
+
+    from mountfile import ntfs_reader
+
+    payload = bytes(range(251)) * ((1 << 20) // 251 + 8)
+    record = SimpleNamespace(is_directory=False)
+    data = NtfsAttributeSummary(
+        type_code=0x80,
+        length=64,
+        nonresident=True,
+        name="",
+        lowest_vcn=0,
+        highest_vcn=0,
+        run_count=1,
+        runs=(NtfsRun(0, 0, (len(payload) + CLUSTER - 1) // CLUSTER),),
+        data_size=len(payload),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=10000))
+    reader._resolve = lambda _path: (1, record)
+    calls = []
+
+    def read_runs(_runs, offset, length):
+        calls.append((offset, length))
+        return payload[offset : offset + length]
+
+    reader._read_runs = read_runs
+    monkeypatch.setattr(
+        ntfs_reader, "parse_ntfs_attribute_stream", lambda *_a, **_k: (data,)
+    )
+
+    result = reader.read_file("/large.bin")
+
+    assert result == payload
+    assert calls == [(0, 1 << 20), (1 << 20, len(payload) - (1 << 20))]
+
+
+@pytest.mark.parametrize(
+    ("offset", "length", "message"),
+    [
+        (-1, 1, "negative NTFS read range"),
+        (0, -1, "negative NTFS read range"),
+        (True, 1, "invalid NTFS metadata read request"),
+        (0, False, "invalid NTFS metadata read request"),
+        (0, (1 << 20) + 1, "exceeds the 1 MiB limit"),
+    ],
+)
+def test_ntfs_read_file_range_rejects_invalid_or_excessive_requests(
+    offset, length, message
+):
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    with pytest.raises(NtfsMetadataError, match=message):
+        reader.read_file_range("/not-opened", offset, length)

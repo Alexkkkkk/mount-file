@@ -623,12 +623,12 @@ class NativeExt4Image(NativeExt3Image):
                 if reserved:
                     raise Ext3ReadError("extent index reserved field is nonzero")
                 previous_key = logical_start
+                child = child_lo | (child_hi << 32)
+                if not 0 < child < self.blocks_count:
+                    raise Ext3ReadError(
+                        "extent index block is outside filesystem bounds"
+                    )
                 if logical >= logical_start:
-                    child = child_lo | (child_hi << 32)
-                    if not 0 < child < self.blocks_count:
-                        raise Ext3ReadError(
-                            "extent index block is outside filesystem bounds"
-                        )
                     selected = (logical_start, child)
             if selected is None:
                 return 0, False
