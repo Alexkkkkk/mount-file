@@ -40,6 +40,7 @@ import atexit
 import fnmatch
 import os
 import shutil
+import stat
 import tempfile
 import threading
 import webbrowser
@@ -124,6 +125,7 @@ from .qt_compat import (
     TableExtendedSelection,
     TB_InstantPopup,
     TB_TextBesideIcon,
+    WidgetWithChildrenShortcut,
     exec_dialog,
     standard_icon,
 )
@@ -247,7 +249,7 @@ PANEL_LEGEND = (
 #: F3..F8 as shown by the function key bar (the F9 menu toggle stays a
 #: shortcut only, exactly like the reference window).
 FKEYS = (
-    ("F3", "Просмотр"),
+    ("F3", "Просмотр/HEX"),
     ("F4", "Правка"),
     ("F5", "Копирование"),
     ("F6", "Перемещение"),
@@ -394,22 +396,52 @@ class HexEditorPage(QWidget):
         find = QPushButton("Найти")
         find.clicked.connect(self.find)
         buttons.addWidget(find)
+        self.goto_button = QPushButton("Перейти…")
+        self.goto_button.clicked.connect(self.goto)
+        buttons.addWidget(self.goto_button)
         buttons.addStretch(1)
         back = QPushButton("Назад к панелям")
-        back.clicked.connect(self._close_callback)
+        back.clicked.connect(self.request_close)
         buttons.addWidget(back)
         layout.addLayout(buttons)
+        self._shortcut_actions = []
+        for shortcut, callback in (
+            ("Ctrl+S", self.save),
+            ("Ctrl+F", self.find),
+            ("Ctrl+G", self.goto),
+        ):
+            action = QAction(shortcut, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.setShortcutContext(WidgetWithChildrenShortcut)
+            action.triggered.connect(lambda *_args, slot=callback: slot())
+            self.addAction(action)
+            self._shortcut_actions.append(action)
         self._changed()
         self.hex_view.setFocus()
 
     def _changed(self):
         modified = self.hex_view.isModified()
-        self.save_button.setEnabled(modified)
-        self.status.setText("Есть несохранённые изменения" if modified else "Сохранено")
+        can_save = self._save_callback is not None
+        self.save_button.setEnabled(modified and can_save)
+        if not can_save:
+            self.status.setText(
+                "Изменения не сохраняются: том только для чтения"
+                if modified
+                else "Только чтение"
+            )
+        else:
+            self.status.setText(
+                "Есть несохранённые изменения" if modified else "Сохранено"
+            )
 
     def save(self):
-        if self.hex_view.isModified() and self._save_callback(self.hex_view.data()):
-            self.hex_view.setData(self.hex_view.data())
+        if not self.hex_view.isModified() or self._save_callback is None:
+            return
+        try:
+            if self._save_callback(self.hex_view.data()):
+                self.hex_view.setData(self.hex_view.data())
+        except Exception as exc:
+            QMessageBox.critical(self, "Сохранение HEX не удалось", str(exc))
 
     def find(self):
         value, ok = QInputDialog.getText(self, "Поиск байтов", "HEX или текст:")
@@ -421,6 +453,38 @@ class HexEditorPage(QWidget):
             needle = value.encode("utf-8")
         pos = self.hex_view.find(needle)
         self.status.setText("Найдено: 0x%X" % pos if pos >= 0 else "Не найдено")
+
+    def goto(self):
+        value, ok = QInputDialog.getText(
+            self, "Перейти к смещению", "Смещение (десятичное или 0x…):"
+        )
+        if not ok or not value:
+            return
+        try:
+            offset = int(value.strip(), 0)
+        except ValueError:
+            QMessageBox.warning(self, "Перейти к смещению", "Некорректное смещение.")
+            return
+        if not self.hex_view.goto(offset):
+            QMessageBox.information(
+                self, "Перейти к смещению", "Нет загруженных данных."
+            )
+        else:
+            actual = min(max(offset, 0), len(self.hex_view.data()) - 1)
+            self.status.setText("Смещение: 0x%X" % actual)
+
+    def request_close(self):
+        if self.hex_view.isModified():
+            answer = QMessageBox.warning(
+                self,
+                "Несохранённые изменения",
+                "Вернуться к панелям и отбросить изменения HEX?",
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                return
+        self._close_callback()
 
 
 class TextEditorDialog(QDialog):
@@ -536,15 +600,72 @@ def _encode_editable_text(text, encoding, bom, newline):
     return (b"\xef\xbb\xbf" + data) if bom else data
 
 
-def _atomic_write_local(path, data):
-    """Replace a local text file atomically without leaving partial contents."""
+def _local_file_identity(metadata):
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _file_contents_match(stream, expected):
+    offset = 0
+    while True:
+        chunk = stream.read(1 << 20)
+        if not chunk:
+            return offset == len(expected)
+        end = offset + len(chunk)
+        if end > len(expected) or expected[offset:end] != chunk:
+            return False
+        offset = end
+
+
+def _atomic_write_local(path, data, expected_data=None, expected_identity=None):
+    """Atomically replace a regular local file without clobbering later edits."""
     parent = os.path.dirname(os.path.abspath(path))
+    original = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(original.st_mode):
+        raise RuntimeError("refusing to replace a non-regular local file")
+    baseline = expected_identity or _local_file_identity(original)
+
+    def verify_unchanged():
+        current = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or _local_file_identity(current) != baseline
+        ):
+            raise RuntimeError(
+                "local file changed since it was opened; refusing to overwrite"
+            )
+        with open(path, "rb") as source:
+            opened = os.fstat(source.fileno())
+            # On Windows, fstat metadata can differ from path stat after
+            # os.replace; path identity is checked on both sides of this read.
+            if not stat.S_ISREG(opened.st_mode) or (
+                expected_data is not None
+                and not _file_contents_match(source, expected_data)
+            ):
+                raise RuntimeError(
+                    "local file changed since it was opened; refusing to overwrite"
+                )
+        current = os.stat(path, follow_symlinks=False)
+        if _local_file_identity(current) != baseline:
+            raise RuntimeError(
+                "local file changed since it was opened; refusing to overwrite"
+            )
+
+    verify_unchanged()
     fd, temp_path = tempfile.mkstemp(prefix=".mountfile-edit-", dir=parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        os.chmod(temp_path, stat.S_IMODE(original.st_mode))
+        verify_unchanged()
         os.replace(temp_path, path)
     finally:
         if os.path.exists(temp_path):
@@ -1125,7 +1246,7 @@ class TcPanel(QWidget):
         else:
             open_label = "Просмотр (F3)"
         add(open_label, lambda: self.open_row(self.table.currentRow()), bool(entry))
-        add("HEX-просмотр", self.win.f3_hex_view, is_file)
+        add("HEX-редактор", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
         add(
@@ -2481,6 +2602,10 @@ class MainWindow(QMainWindow):
 
     def _show_panels(self):
         """Return from an embedded tool page to the two file panels."""
+        current = self.workspace_stack.currentWidget()
+        if isinstance(current, HexEditorPage):
+            self.workspace_stack.removeWidget(current)
+            current.deleteLater()
         self.workspace_stack.setCurrentWidget(self.splitter)
         self.workspace_hint.setText("Образы дисков · просмотр и извлечение")
 
@@ -4029,6 +4154,7 @@ class MainWindow(QMainWindow):
                 self, "Просмотр", "Сначала выберите файл в активной панели."
             )
             return
+        local_identity = None
         try:
             full = p.join(entry["name"])
             if p.mode == "img":
@@ -4036,11 +4162,17 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as f:
                     data = f.read()
+                    # Snapshot the path metadata used by the atomic writer's
+                    # subsequent checks; expected_data also guards stale bytes.
+                    local_identity = _local_file_identity(
+                        os.stat(full, follow_symlinks=False)
+                    )
         except Exception as e:
             QMessageBox.critical(self, "Просмотр", str(e))
             return
 
         def save_edited(updated):
+            nonlocal data, local_identity
             answer = QMessageBox.warning(
                 self,
                 "Подтверждение записи HEX",
@@ -4059,27 +4191,27 @@ class MainWindow(QMainWindow):
                 parent = str(PurePosixPath(full).parent)
                 p.writer.write_file(parent, entry["name"], updated)
             else:
-                directory = os.path.dirname(full) or "."
-                fd, tmp = tempfile.mkstemp(prefix=".mountfile-hex-", dir=directory)
-                try:
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(updated)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(tmp, full)
-                finally:
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
+                _atomic_write_local(
+                    full,
+                    updated,
+                    expected_data=data,
+                    expected_identity=local_identity,
+                )
+                data = updated
+                local_identity = _local_file_identity(
+                    os.stat(full, follow_symlinks=False)
+                )
             p.refresh()
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
 
+        save_callback = save_edited if p.mode != "img" or p.writer is not None else None
         page = HexEditorPage(
             self,
             entry["name"],
             entry.get("size") or 0,
             data,
-            save_callback=save_edited,
+            save_callback=save_callback,
             close_callback=self._show_panels,
         )
         self._show_hex_page(page)
@@ -4111,6 +4243,7 @@ class MainWindow(QMainWindow):
             )
             return
         full = p.join(name)
+        local_identity = None
         try:
             if p.mode == "img":
                 if p.writer is None:
@@ -4120,6 +4253,7 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as stream:
                     data = stream.read(2 * 1024 * 1024 + 1)
+                    local_identity = _local_file_identity(os.fstat(stream.fileno()))
         except Exception as exc:
             QMessageBox.warning(self, "Правка", "Не удалось прочитать файл:\n%s" % exc)
             return
@@ -4168,7 +4302,12 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            _atomic_write_local(full, updated)
+            _atomic_write_local(
+                full,
+                updated,
+                expected_data=data,
+                expected_identity=local_identity,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Сохранение не удалось", str(exc))
             return
@@ -4591,6 +4730,19 @@ class MainWindow(QMainWindow):
         _ORPHAN_THREADS.append(updater)
 
     def closeEvent(self, e):
+        page = getattr(self, "workspace_stack", None)
+        page = page.currentWidget() if page is not None else None
+        if isinstance(page, HexEditorPage) and page.hex_view.isModified():
+            answer = QMessageBox.warning(
+                self,
+                "Несохранённые изменения",
+                "Выйти без сохранения изменений HEX?",
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                e.ignore()
+                return
         if self._text_tmp and text_editor.has_active_editors(self._text_tmp):
             QMessageBox.information(
                 self,

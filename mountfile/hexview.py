@@ -33,6 +33,13 @@ from .qt_compat import (
 )
 
 
+def _has_flag(flags, flag):
+    """Check a Qt flag while accepting both enum and integer flag values."""
+    flags_value = getattr(flags, "value", flags)
+    flag_value = getattr(flag, "value", flag)
+    return bool(int(flags_value) & int(flag_value))
+
+
 class HexView(QAbstractScrollArea):
     """Editable address/hex/ASCII byte editor.
 
@@ -64,6 +71,7 @@ class HexView(QAbstractScrollArea):
         self._cursor = 0
         self._dragging = False
         self._hex_nibble = 0
+        self._edit_mode = "hex"
         self._c_addr = QColor("#888888")
         self._c_hex = QColor("#222222")
         self._c_ascii = QColor("#005a9e")
@@ -81,7 +89,9 @@ class HexView(QAbstractScrollArea):
         self._redo.clear()
         self._cursor = 0 if self._data else -1
         self._sel_start = self._sel_end = 0
+        self._anchor = 0
         self._hex_nibble = 0
+        self._edit_mode = "hex"
         self._update_scroll()
         self.viewport().update()
         self.dataChanged.emit()
@@ -174,47 +184,75 @@ class HexView(QAbstractScrollArea):
             painter.drawText(
                 x_ascii, y, "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
             )
+        if (self.hasFocus() or self.viewport().hasFocus()) and 0 <= self._cursor < len(
+            self._data
+        ):
+            cursor_row, cursor_col = divmod(self._cursor, self.BYTES_PER_ROW)
+            if top <= cursor_row < top + rows_visible:
+                visible_row = cursor_row - top
+                cursor_y = (visible_row + 1) * self._line_h - self._line_h
+                if self._edit_mode == "hex":
+                    cursor_x = x_hex + cursor_col * 3 * c + self._hex_nibble * c
+                else:
+                    cursor_x = x_ascii + cursor_col * c
+                painter.setPen(QPen(self._c_cursor, 1))
+                painter.drawRect(cursor_x - 1, cursor_y + 1, c + 1, self._line_h - 2)
         painter.setPen(QPen(QColor("#dddddd")))
         painter.drawLine(x_hex - 8, 0, x_hex - 8, self.viewport().height())
         painter.drawLine(x_ascii - 8, 0, x_ascii - 8, self.viewport().height())
         painter.end()
 
-    def _pos_from_point(self, pos):
+    def _hit_test(self, pos):
+        """Return ``(offset, mode, nibble)`` for an address/hex/ASCII point."""
         c = self._char_w
-        x = pos.x() + self.horizontalScrollBar().value()
-        row = self.verticalScrollBar().value() + pos.y() // self._line_h
-        x_addr, x_hex, x_ascii = self._columns()
+        x = int(pos.x()) + self.horizontalScrollBar().value()
+        row = self.verticalScrollBar().value() + int(pos.y()) // self._line_h
+        _x_addr, x_hex, x_ascii = self._columns()
         if x >= x_ascii:
             col = (x - x_ascii) // c
+            mode = "ascii"
+            nibble = 0
         elif x >= x_hex:
-            col = (x - x_hex) // (3 * c)
+            in_cell = x - x_hex
+            col = in_cell // (3 * c)
+            mode = "hex"
+            nibble = 1 if in_cell % (3 * c) >= c else 0
         else:
             return None
         if not 0 <= col < self.BYTES_PER_ROW:
             return None
         off = row * self.BYTES_PER_ROW + col
-        return off if 0 <= off < len(self._data) else None
+        return (off, mode, nibble) if 0 <= off < len(self._data) else None
+
+    def _pos_from_point(self, pos):
+        hit = self._hit_test(pos)
+        return hit[0] if hit is not None else None
 
     def mousePressEvent(self, e):
-        off = self._pos_from_point(event_pos(e))
-        if off is not None:
+        hit = self._hit_test(event_pos(e))
+        if hit is not None:
+            off, mode, nibble = hit
             self.setFocus()
-            if e.modifiers() & CtrlModifier:
+            self._edit_mode = mode
+            self._hex_nibble = nibble if mode == "hex" else 0
+            if _has_flag(e.modifiers(), CtrlModifier):
                 self._sel_start, self._sel_end = 0, len(self._data)
             else:
                 self._anchor = off
                 self._sel_start = self._sel_end = off
                 self._cursor = off
-                self._hex_nibble = 0
             self._dragging = True
             self.viewport().update()
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
-        if self._dragging and e.buttons() & MOUSE_LEFT:
-            off = self._pos_from_point(event_pos(e))
-            if off is not None:
+        if self._dragging and _has_flag(e.buttons(), MOUSE_LEFT):
+            hit = self._hit_test(event_pos(e))
+            if hit is not None:
+                off, mode, nibble = hit
                 self._cursor = off
+                self._edit_mode = mode
+                self._hex_nibble = nibble if mode == "hex" else 0
                 self._sel_start, self._sel_end = sorted((self._anchor, off))
                 self._sel_end += 1
                 self.viewport().update()
@@ -225,11 +263,26 @@ class HexView(QAbstractScrollArea):
         super().mouseReleaseEvent(e)
 
     def _snapshot(self):
-        return bytes(self._data), self._cursor, self._sel_start, self._sel_end
+        return (
+            bytes(self._data),
+            self._cursor,
+            self._sel_start,
+            self._sel_end,
+            self._anchor,
+            self._hex_nibble,
+            self._edit_mode,
+        )
 
     def _restore(self, state):
         self._data = bytearray(state[0])
-        self._cursor, self._sel_start, self._sel_end = state[1:]
+        (
+            self._cursor,
+            self._sel_start,
+            self._sel_end,
+            self._anchor,
+            self._hex_nibble,
+            self._edit_mode,
+        ) = state[1:]
         self._update_scroll()
         self.viewport().update()
         self.dataChanged.emit()
@@ -257,6 +310,7 @@ class HexView(QAbstractScrollArea):
     def selectAll(self):
         self._sel_start, self._sel_end = 0, len(self._data)
         self._cursor = max(0, len(self._data) - 1)
+        self._anchor = 0
         self.viewport().update()
 
     def copy(self):
@@ -265,8 +319,10 @@ class HexView(QAbstractScrollArea):
             QApplication.clipboard().setText(bytes(self._data[lo:hi]).hex(" ").upper())
 
     def cut(self):
-        self.copy()
-        self.deleteSelection()
+        lo, hi = self.selectedRange()
+        if lo != hi:
+            self.copy()
+            self.deleteSelection()
 
     def paste(self):
         text = QApplication.clipboard().text().strip()
@@ -289,6 +345,8 @@ class HexView(QAbstractScrollArea):
             self._data[lo:hi] = payload
             self._cursor = lo + len(payload) - 1
             self._sel_start = self._sel_end = self._cursor
+            self._anchor = self._cursor
+            self._hex_nibble = 0
 
         self._edit(op)
 
@@ -303,6 +361,8 @@ class HexView(QAbstractScrollArea):
             del self._data[lo:hi]
             self._cursor = min(lo, len(self._data) - 1)
             self._sel_start = self._sel_end = max(0, self._cursor)
+            self._anchor = max(0, self._cursor)
+            self._hex_nibble = 0
 
         self._edit(op)
 
@@ -317,6 +377,8 @@ class HexView(QAbstractScrollArea):
         if pos >= 0:
             self._cursor = pos
             self._sel_start, self._sel_end = pos, pos + len(needle)
+            self._anchor = pos
+            self._hex_nibble = 0
             self._ensure_visible(pos)
             self.viewport().update()
         return pos
@@ -327,6 +389,8 @@ class HexView(QAbstractScrollArea):
         offset = max(0, min(int(offset), len(self._data) - 1))
         self._cursor = offset
         self._sel_start = self._sel_end = offset
+        self._anchor = offset
+        self._hex_nibble = 0
         self._ensure_visible(offset)
         self.viewport().update()
         return True
@@ -349,38 +413,43 @@ class HexView(QAbstractScrollArea):
         else:
             self._sel_start = self._sel_end = self._cursor
             self._anchor = self._cursor
+        self._hex_nibble = 0
         self._ensure_visible(self._cursor)
         self.viewport().update()
 
     def keyPressEvent(self, e):
         key = e.key()
-        ctrl = bool(e.modifiers() & CtrlModifier)
+        ctrl = _has_flag(e.modifiers(), CtrlModifier)
         text = e.text()
-        if ctrl and text.lower() == "z":
-            self.undo()
-            return
-        if ctrl and text.lower() == "y":
-            self.redo()
-            return
-        if ctrl and text.lower() == "c":
-            self.copy()
-            return
-        if ctrl and text.lower() == "x":
-            self.cut()
-            return
-        if ctrl and text.lower() == "v":
-            self.paste()
-            return
-        if ctrl and text.lower() == "a":
-            self.selectAll()
-            return
+        if ctrl:
+            # Qt key events may provide a control character (or no text) for
+            # Ctrl+key, so use the key code rather than QKeyEvent.text().
+            shortcut = chr(key).lower() if 0 <= key < 128 else ""
+            if shortcut == "z":
+                self.undo()
+                return
+            if shortcut == "y":
+                self.redo()
+                return
+            if shortcut == "c":
+                self.copy()
+                return
+            if shortcut == "x":
+                self.cut()
+                return
+            if shortcut == "v":
+                self.paste()
+                return
+            if shortcut == "a":
+                self.selectAll()
+                return
         if key == Key_Delete or key == Key_Backspace:
             self.deleteSelection()
             return
         if key == Key_Insert:
             self.insertBytes(b"\x00")
             return
-        extend = bool(e.modifiers() & ShiftModifier)
+        extend = _has_flag(e.modifiers(), ShiftModifier)
         if key == Key_Left:
             self._move(-1, extend)
             return
@@ -411,7 +480,7 @@ class HexView(QAbstractScrollArea):
             super().keyPressEvent(e)
             return
         ch = text[0]
-        if ch in "0123456789abcdefABCDEF":
+        if self._edit_mode == "hex" and ch in "0123456789abcdefABCDEF":
             value = int(ch, 16)
             pos = self._cursor
             nibble = self._hex_nibble
@@ -425,14 +494,23 @@ class HexView(QAbstractScrollArea):
                 )
                 self._cursor = min(len(self._data) - 1, pos + (1 if nibble else 0))
                 self._sel_start = self._sel_end = self._cursor
+                self._anchor = self._cursor
 
             self._edit(op)
             self._hex_nibble = 1 - nibble
+            self.viewport().update()
             return
         if 32 <= ord(ch) < 127:
             pos = self._cursor
+            if self._edit_mode != "ascii":
+                super().keyPressEvent(e)
+                return
+
             self._edit(lambda: self._data.__setitem__(pos, ord(ch)))
             self._cursor = min(len(self._data) - 1, pos + 1)
             self._sel_start = self._sel_end = self._cursor
+            self._anchor = self._cursor
+            self._hex_nibble = 0
+            self.viewport().update()
             return
         super().keyPressEvent(e)
