@@ -49,3 +49,18 @@ A second, distinct synthetic run is stored in [`ext2-10mib-aarch64.json`](ext2-1
 | combined iteration | 0.023445 s | 0.129058 s |
 
 The harness reports a `warm` cache label, but it does not flush or control the host page cache. This small synthetic workload is not representative enough to claim the issue's performance target is satisfied. It does not cover cold-cache access, directories with many entries, several file sizes, write workloads, other ext profiles, or other operating systems. The exact fixture and command are reproducible with [`run_ext2_smoke.sh`](../run_ext2_smoke.sh), which requires e2fsprogs and the optional `pytsk3` package.
+
+
+## Mixed-size and many-entry run (2026-10-29)
+
+[`ext2-matrix-aarch64.json`](ext2-matrix-aarch64.json) records a second workload on the same ARM64 host. It uses a 128 MiB clean ext2 image (4 KiB blocks, `dir_index` disabled), three differently sized files (text, 1 MiB, 8 MiB), and 16 small entries in a second directory. Seven measured iterations follow two warmups; backend order alternates. All 19 paths had matching sizes and SHA-256 between native and `pytsk3`.
+
+| Operation median per iteration | Native | `pytsk3` |
+|---|---:|---:|
+| `list_dir` | 0.000232 s | 0.004032 s |
+| `stat` | 0.000257 s | 0.008048 s |
+| 1 MiB-bounded `read_range` per path | 0.000106 s | 0.000040 s |
+| extraction of all 19 files | 0.000625 s | 0.000695 s |
+| combined iteration | 0.040292 s | 0.272564 s |
+
+These figures are specific to this generated fixture and warm-cache run. `pytsk3` was faster on bounded range reads; extraction was nearly tied. The combined iteration includes the harness's per-path work and must not be treated as a universal throughput measure. To reproduce the fixture and JSON, run [`run_ext2_matrix.sh`](../run_ext2_matrix.sh). This is still a small, synthetic, single-host sample and does not complete the broader benchmark acceptance criterion.
