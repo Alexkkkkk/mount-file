@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-"""Reproduce the read-only VFS benchmark published in docs/benchmarks.md.
-
-Generates the deterministic synthetic ext2 fixture locally (no binaries are
-committed) and runs benchmarks/bench_vfs.py against the native ext2 provider
-and the pytsk3 baseline. The image is never opened for writing by the
-benchmark itself.
-
-Usage:
-    scripts/run_vfs_benchmarks.sh [OUTPUT_DIR]
-
-Environment overrides:
-    PYTHON_BIN   python interpreter used for generation and the benchmark
-                 (default: /home/ubuntu/venv-mf/bin/python when present,
-                 otherwise python3)
-"""
+# Reproduce the read-only VFS benchmark published in docs/benchmarks.md.
+# Generates the deterministic synthetic ext2 fixture locally (no binaries are
+# committed) and runs benchmarks/bench_vfs.py against the native ext2 provider
+# and the pytsk3 baseline. The image is never opened for writing by the
+# benchmark itself.
+# Usage:
+#     scripts/run_vfs_benchmarks.sh [OUTPUT_DIR]
+# Environment overrides:
+#     PYTHON_BIN   python interpreter used for generation and the benchmark
+#                  (default: /home/ubuntu/venv-mf/bin/python when present,
+#                  otherwise python3)
 
 set -euo pipefail
 
