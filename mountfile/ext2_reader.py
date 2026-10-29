@@ -55,6 +55,7 @@ _MAX_DIRECTORY_BYTES = 64 * 1024 * 1024
 _MAX_DIRECTORY_ENTRIES = 1_000_000
 _MAX_CACHE_ITEMS = 4096
 _MAX_READ_RANGE_BYTES = 16 * 1024 * 1024
+_MAX_RANGE_INDIRECT_CACHE_ITEMS = 64
 
 
 @dataclass(frozen=True)
@@ -444,7 +445,13 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         self._inode_cache[number] = inode
         return inode
 
-    def _indirect_block(self, root: int, level: int, index: int) -> int:
+    def _indirect_block(
+        self,
+        root: int,
+        level: int,
+        index: int,
+        block_cache: dict[int, bytes] | None = None,
+    ) -> int:
         if root == 0:
             return 0
         entries_per_block = self.block_size // 4
@@ -455,13 +462,25 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         for depth in range(level, 0, -1):
             divisor = entries_per_block ** (depth - 1)
             slot, remaining = divmod(remaining, divisor)
-            block = self._read_block(pointer)
+            block = block_cache.get(pointer) if block_cache is not None else None
+            if block is None:
+                block = self._read_block(pointer)
+                if (
+                    block_cache is not None
+                    and len(block_cache) < _MAX_RANGE_INDIRECT_CACHE_ITEMS
+                ):
+                    block_cache[pointer] = block
             pointer = struct.unpack_from("<I", block, slot * 4)[0]
             if pointer == 0:
                 return 0
         return pointer
 
-    def _logical_block(self, inode: _Inode, logical: int) -> int:
+    def _logical_block(
+        self,
+        inode: _Inode,
+        logical: int,
+        block_cache: dict[int, bytes] | None = None,
+    ) -> int:
         if logical < 0:
             raise Ext2ReadError("negative logical block index")
         pointers = inode.block_pointers
@@ -470,13 +489,13 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         entries = self.block_size // 4
         index = logical - 12
         if index < entries:
-            return self._indirect_block(pointers[12], 1, index)
+            return self._indirect_block(pointers[12], 1, index, block_cache)
         index -= entries
         if index < entries**2:
-            return self._indirect_block(pointers[13], 2, index)
+            return self._indirect_block(pointers[13], 2, index, block_cache)
         index -= entries**2
         if index < entries**3:
-            return self._indirect_block(pointers[14], 3, index)
+            return self._indirect_block(pointers[14], 3, index, block_cache)
         raise Ext2ReadError("logical block exceeds ext2 pointer capacity")
 
     @staticmethod
@@ -638,16 +657,36 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             )
         position = offset
         output = bytearray()
+        indirect_cache: dict[int, bytes] = {}
         while remaining:
             logical = position // self.block_size
             in_block = position % self.block_size
-            amount = min(remaining, self.block_size - in_block)
-            block = self._logical_block(inode, logical)
-            if block == 0:
+            first_block = self._logical_block(inode, logical, indirect_cache)
+            if first_block == 0:
+                amount = min(remaining, self.block_size - in_block)
                 output.extend(b"\x00" * amount)
-            else:
-                data = self._read_block(block)
-                output.extend(data[in_block : in_block + amount])
+                position += amount
+                remaining -= amount
+                continue
+
+            self._validate_data_block(first_block)
+            run_blocks = 1
+            blocks_needed = math.ceil((in_block + remaining) / self.block_size)
+            while run_blocks < blocks_needed:
+                next_block = self._logical_block(
+                    inode, logical + run_blocks, indirect_cache
+                )
+                if next_block == 0 or next_block != first_block + run_blocks:
+                    break
+                self._validate_data_block(next_block)
+                run_blocks += 1
+
+            amount = min(remaining, run_blocks * self.block_size - in_block)
+            data = self._read_at(
+                first_block * self.block_size + in_block,
+                amount,
+            )
+            output.extend(data)
             position += amount
             remaining -= amount
         return bytes(output)
