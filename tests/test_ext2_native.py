@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -468,6 +469,8 @@ def test_native_ext2_rolls_back_and_verifies_restored_extent_hash(
 
     assert hash_calls == 4
     assert image.read_bytes() == before
+    assert not image.with_name(image.name + ".mountfile-ext2-recovery.json").exists()
+    assert not list(tmp_path.glob(".filesystem.ext2.mountfile-ext2-recovery-*.bin"))
 
 
 def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
@@ -525,7 +528,7 @@ def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
         writer.write_file("/not-restored.txt", b"staged only")
 
     assert image_write_opens == 3
-    assert hash_calls == 5
+    assert hash_calls == 4
     assert image.read_bytes() != before
     marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
     assert marker.is_file()
@@ -572,6 +575,108 @@ def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
     assert image.read_bytes() == before
     assert not marker.exists()
     assert not snapshot.exists()
+
+
+def test_native_ext2_recovers_after_process_dies_mid_commit(tmp_path):
+    partition = tmp_path / "partition.ext2"
+    _make_ext2(partition, size=8 * 1024 * 1024)
+    filesystem = partition.read_bytes()
+    prefix = b"before-partition" * 128
+    suffix = b"after-partition" * 128
+    offset = 4096
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"P" * (offset - len(prefix)) + prefix + filesystem + suffix)
+    volume_offset = offset
+    before = image.read_bytes()
+    crashed_temp = tmp_path / "crashed-temp"
+    crashed_temp.mkdir()
+    crash_script = f"""
+import os
+import tempfile
+from mountfile import ext2_native
+from mountfile.ext2_native import NativeExt2ImageWriter
+
+tempfile.tempdir = {str(crashed_temp)!r}
+image = {str(image)!r}
+real_open = open
+image_write_opens = 0
+
+class CrashDuringWrite:
+    def __init__(self, stream):
+        self.stream = stream
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+    def write(self, data):
+        count = max(1, len(data) // 2)
+        written = self.stream.write(data[:count])
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        os._exit(73)
+
+def crash_open(path, mode='r', *args, **kwargs):
+    global image_write_opens
+    stream = real_open(path, mode, *args, **kwargs)
+    if os.fspath(path) == image and mode == 'r+b':
+        image_write_opens += 1
+        if image_write_opens == 2:
+            return CrashDuringWrite(stream)
+    return stream
+
+ext2_native.open = crash_open
+writer = NativeExt2ImageWriter(image, offset={volume_offset}, volume_size={len(filesystem)})
+writer.write_file('/interrupted.txt', b'this transaction must roll back')
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_script],
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert crashed.returncode == 73, crashed.stdout + crashed.stderr
+    assert image.read_bytes() != before
+
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    assert recovery["format"] == 2
+    assert recovery["phase"] == "commit_in_progress"
+    snapshot = image.with_name(recovery["snapshot"])
+    assert snapshot.read_bytes() == filesystem
+
+    writer = NativeExt2ImageWriter(
+        image, offset=volume_offset, volume_size=len(filesystem)
+    )
+    assert image.read_bytes() == before
+    assert not marker.exists()
+    assert not snapshot.exists()
+    assert "interrupted.txt" not in {entry["name"] for entry in writer.list_dir("/")}
+    recovered_partition = tmp_path / "recovered.ext2"
+    recovered_partition.write_bytes(
+        image.read_bytes()[offset : offset + len(filesystem)]
+    )
+    _assert_e2fsck_clean(recovered_partition)
+
+
+def test_native_ext2_blocks_writes_for_dangling_recovery_marker_symlink(tmp_path):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    before = image.read_bytes()
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    try:
+        marker.symlink_to(tmp_path / "missing-marker-target")
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+
+    with pytest.raises(NativeExt2Error, match="recovery marker is a symbolic link"):
+        NativeExt2ImageWriter(image)
+
+    assert marker.is_symlink()
+    assert image.read_bytes() == before
 
 
 def test_native_ext2_rejects_concurrent_change_before_commit(tmp_path, monkeypatch):

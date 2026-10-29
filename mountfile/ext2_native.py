@@ -1221,7 +1221,7 @@ class NativeExt2ImageWriter:
         with self._locks_guard:
             self._lock = self._locks.setdefault(self.image_path, threading.RLock())
         with self._lock:
-            if os.path.exists(self._recovery_marker_path):
+            if os.path.lexists(self._recovery_marker_path):
                 with _image_process_lock(self.image_path):
                     self._recover_pending_transaction()
             self._fs = _Ext2FS(self.image_path, self.offset, self.volume_size)
@@ -1277,9 +1277,15 @@ class NativeExt2ImageWriter:
             raise
 
     def _preserve_recovery_snapshot(
-        self, rollback: str, original_hash: bytes
+        self,
+        rollback: str,
+        original_hash: bytes,
+        *,
+        phase: str = "commit_in_progress",
     ) -> tuple[str, str]:
-        """Persist rollback bytes and a fail-closed recovery marker beside image."""
+        """Persist a verified before-image and recovery marker beside the image."""
+        if phase not in {"commit_in_progress", "rollback_failed"}:
+            raise NativeExt2Error("invalid ext2 recovery phase")
         directory = os.path.dirname(self.image_path) or "."
         basename = os.path.basename(self.image_path)
         fd, snapshot = tempfile.mkstemp(
@@ -1309,10 +1315,17 @@ class NativeExt2ImageWriter:
                 raise NativeExt2Error("persistent rollback snapshot hash mismatch")
             self._fsync_parent(snapshot)
             snapshot_ready = True
-            current_hash = self._hash_source()
+            current_hash = self._hash_extent(
+                self.image_path, self.offset, self.filesystem_size
+            )
+            if phase == "commit_in_progress" and current_hash != original_hash:
+                raise NativeExt2Error(
+                    "image changed before ext2 recovery marker was established"
+                )
             image_stat = os.stat(self.image_path)
             marker = {
-                "format": 1,
+                "format": 2,
+                "phase": phase,
                 "image": self.image_path,
                 "offset": self.offset,
                 "size": self.filesystem_size,
@@ -1339,9 +1352,41 @@ class NativeExt2ImageWriter:
                 pass
             raise
 
+    @staticmethod
+    def _clear_recovery_snapshot(marker_path: str, snapshot: str) -> None:
+        """Remove the marker before its snapshot, preserving crash-safe ordering."""
+        if os.path.lexists(marker_path):
+            if os.path.islink(marker_path):
+                raise NativeExt2Error(
+                    "ext2 recovery marker became a symbolic link; refusing cleanup"
+                )
+            os.unlink(marker_path)
+            NativeExt2ImageWriter._fsync_parent(marker_path)
+        if os.path.lexists(snapshot):
+            if os.path.islink(snapshot):
+                raise NativeExt2Error(
+                    "ext2 recovery snapshot became a symbolic link; refusing cleanup"
+                )
+            os.unlink(snapshot)
+            NativeExt2ImageWriter._fsync_parent(snapshot)
+
+    def _mark_rollback_failed(self, marker_path: str) -> None:
+        """Tighten recovery to the exact post-failure image after rollback fails."""
+        with open(marker_path, "r", encoding="utf-8") as stream:
+            marker = json.load(stream)
+        if not isinstance(marker, dict) or marker.get("format") != 2:
+            raise NativeExt2Error("ext2 recovery marker changed during rollback")
+        image_stat = os.stat(self.image_path)
+        marker["phase"] = "rollback_failed"
+        marker["observed_sha256"] = self._hash_extent(
+            self.image_path, self.offset, self.filesystem_size
+        ).hex()
+        marker["mtime_ns"] = image_stat.st_mtime_ns
+        self._atomic_write_json(marker_path, marker)
+
     def _recover_pending_transaction(self) -> None:
         marker_path = self._recovery_marker_path
-        if not os.path.exists(marker_path):
+        if not os.path.lexists(marker_path):
             return
         if os.path.islink(marker_path):
             raise NativeExt2Error(
@@ -1354,8 +1399,15 @@ class NativeExt2ImageWriter:
             raise NativeExt2Error(
                 "ext2 recovery marker is unreadable; writes are blocked"
             ) from exc
-        if not isinstance(marker, dict) or marker.get("format") != 1:
+        if not isinstance(marker, dict) or marker.get("format") not in (1, 2):
             raise NativeExt2Error("unknown ext2 recovery marker; writes are blocked")
+        marker_format = marker["format"]
+        phase = marker.get("phase", "rollback_failed")
+        if marker_format == 2 and phase not in {
+            "commit_in_progress",
+            "rollback_failed",
+        }:
+            raise NativeExt2Error("unknown ext2 recovery phase; writes are blocked")
         try:
             size = int(marker["size"])
             offset = int(marker["offset"])
@@ -1415,17 +1467,22 @@ class NativeExt2ImageWriter:
                     raise NativeExt2Error(
                         "already-restored ext2 extent changed during recovery"
                     )
-                os.unlink(marker_path)
-                os.unlink(snapshot)
-                self._fsync_parent(marker_path)
+                self._clear_recovery_snapshot(marker_path, snapshot)
                 return
-            if (
+            if phase == "commit_in_progress" and marker_format == 2:
+                # The durable before-image is written before any in-place image
+                # mutation. If the process died during commit, restore only the
+                # selected filesystem extent; adjacent image bytes are untouched.
+                pass
+            elif phase == "rollback_failed" and (
                 image_stat.st_mtime_ns != int(marker["mtime_ns"])
                 or current_hash != observed_hash
             ):
                 raise NativeExt2Error(
                     "image changed since ext2 failure; automatic recovery refused"
                 )
+            elif phase != "rollback_failed":
+                raise NativeExt2Error("unknown ext2 recovery phase; writes are blocked")
             remaining = size
             with open(self.image_path, "r+b") as dst, open(snapshot, "rb") as src:
                 dst.seek(offset)
@@ -1445,9 +1502,7 @@ class NativeExt2ImageWriter:
                 raise NativeExt2Error(
                     "restored ext2 recovery extent failed SHA-256 verification"
                 )
-            os.unlink(marker_path)
-            os.unlink(snapshot)
-            self._fsync_parent(marker_path)
+            self._clear_recovery_snapshot(marker_path, snapshot)
         except NativeExt2Error:
             raise
         except (OSError, KeyError, TypeError, ValueError) as exc:
@@ -1559,6 +1614,9 @@ class NativeExt2ImageWriter:
             current_hash = self._copy_extent(rollback)
             if current_hash != original_hash:
                 raise NativeExt2Error("image changed while preparing rollback snapshot")
+            snapshot, marker = self._preserve_recovery_snapshot(
+                rollback, original_hash, phase="commit_in_progress"
+            )
             staged_hash = hashlib.sha256()
             remaining = self.filesystem_size
             try:
@@ -1581,29 +1639,33 @@ class NativeExt2ImageWriter:
                     raise NativeExt2Error(
                         "committed ext2 extent failed SHA-256 verification"
                     )
+                self._clear_recovery_snapshot(marker, snapshot)
             except Exception as exc:
                 try:
                     self._restore_extent(rollback, original_hash)
                 except Exception as rollback_exc:
                     try:
-                        snapshot, marker = self._preserve_recovery_snapshot(
-                            rollback, original_hash
-                        )
+                        self._mark_rollback_failed(marker)
                         recovery_detail = (
                             f"durable recovery snapshot: {snapshot}; marker: {marker}"
                         )
                     except Exception as preserve_exc:
-                        if "recovery snapshot retained at" in str(preserve_exc):
-                            recovery_detail = str(preserve_exc)
-                        else:
-                            recovery_detail = (
-                                "no durable recovery snapshot was established; "
-                                "the temporary rollback copy will be removed: "
-                                f"{preserve_exc}"
-                            )
+                        recovery_detail = (
+                            f"durable recovery snapshot retained at {snapshot}; "
+                            "recovery marker may need manual inspection: "
+                            f"{preserve_exc}"
+                        )
                     raise NativeExt2Error(
                         "ext2 commit and rollback both failed; "
                         f"{recovery_detail}; rollback error: {rollback_exc}"
+                    ) from exc
+                try:
+                    self._clear_recovery_snapshot(marker, snapshot)
+                except Exception as cleanup_exc:
+                    raise NativeExt2Error(
+                        "ext2 rollback succeeded but recovery sidecar cleanup failed; "
+                        "the image is restored; inspect remaining sidecars before retry: "
+                        f"{cleanup_exc}"
                     ) from exc
                 raise
 
