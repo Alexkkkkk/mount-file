@@ -55,7 +55,7 @@ PYTHONPATH="${REPO_ROOT}" "${PYTHON_BIN}" "${REPO_ROOT}/benchmarks/bench_vfs.py"
     --baseline both \
     --repeat 5 \
     --warmup 1 \
-    --cache-state warm \
+    --cache-state unspecified \
     --hash-image \
     --json-out "${OUTPUT_DIR}/bench_report.json"
 
