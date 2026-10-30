@@ -130,12 +130,21 @@ def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
-def test_jbd2_transaction_cannot_target_one_block_twice(tmp_path):
-    image_path = tmp_path / "duplicate-journal-target.img"
+@pytest.mark.parametrize("replay_journal", [False, True])
+def test_jbd2_transaction_cannot_target_one_block_twice(tmp_path, replay_journal):
+    image_path = tmp_path / f"duplicate-journal-target-{replay_journal}.img"
     _make_clean_journal_image(image_path, duplicate_target=True)
+    if replay_journal:
+        image = bytearray(image_path.read_bytes())
+        struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+        image_path.write_bytes(image)
 
     with pytest.raises(Ext3ReadError, match="targets a block more than once"):
-        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=replay_journal,
+        )
 
 
 @pytest.mark.parametrize("replay_journal", [False, True])

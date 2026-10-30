@@ -359,12 +359,18 @@ class NativeExt3Image(NativeExt2Image):
                 )
             cursor = 12
             targets = []
+            seen_targets: set[int] = set()
             last = False
             while cursor + 8 <= self.block_size:
                 target, flags = struct.unpack_from(">II", descriptor, cursor)
                 cursor += 8
                 if target == 0 or target >= self.blocks_count:
                     raise Ext3ReadError("JBD2 replay target is outside filesystem")
+                if target in seen_targets:
+                    raise Ext3ReadError(
+                        "JBD2 replay transaction targets a block more than once"
+                    )
+                seen_targets.add(target)
                 if journal_data_blocks is not None and target in journal_data_blocks:
                     raise Ext3ReadError(
                         "JBD2 replay target overlaps journal inode data"
