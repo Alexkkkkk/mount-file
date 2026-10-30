@@ -662,6 +662,60 @@ def test_attribute_list_merges_adjacent_nonresident_data_extents():
     assert reader.read_file_range("/large.bin", 0, 16) == b"x" * 16
 
 
+@pytest.mark.parametrize(
+    ("size_field", "extension_size"),
+    [
+        ("allocated_size", 3 * CLUSTER),
+        ("initialized_size", CLUSTER),
+    ],
+)
+def test_attribute_list_rejects_extents_with_conflicting_stream_sizes(
+    size_field, extension_size
+):
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x80, base_reference, lowest_vcn=0, attribute_id=5),
+            _attribute_list_entry(
+                0x80, extension_reference, lowest_vcn=1, attribute_id=0
+            ),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _nonresident_attribute(0x80, 5, 0, 0, 10, 2 * CLUSTER),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _nonresident_attribute(
+                    0x80,
+                    0,
+                    1,
+                    1,
+                    11,
+                    2 * CLUSTER,
+                    **{size_field: extension_size},
+                ),
+            ),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="disagree on allocated/initialized"):
+        reader._attributes_for_record(42, base_record)
+
+
 def test_attribute_list_rejects_data_extents_with_vcn_gap():
     from mountfile.ntfs_mft import parse_ntfs_file_record_header
 
@@ -859,6 +913,31 @@ def test_nonresident_attribute_rejects_inconsistent_sizes(
 
     with pytest.raises(NtfsMetadataError, match="sizes are inconsistent"):
         parse_ntfs_attribute_stream(record, cluster_count=TOTAL // SPC)
+
+
+def test_nonresident_stream_rejects_allocated_size_larger_than_runlist_capacity():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+    from mountfile.ntfs_reader import _validate_nonresident_data_stream
+
+    raw = _record_with_attributes(
+        (
+            _nonresident_attribute(
+                0x80,
+                1,
+                0,
+                0,
+                10,
+                100,
+                allocated_size=2 * CLUSTER,
+                initialized_size=100,
+            ),
+        )
+    )
+    record = parse_ntfs_file_record_header(raw)
+    (attribute,) = parse_ntfs_attribute_stream(record, cluster_count=TOTAL // SPC)
+
+    with pytest.raises(NtfsMetadataError, match="allocated size exceeds its runlist"):
+        _validate_nonresident_data_stream(attribute, CLUSTER, name="test")
 
 
 def test_ntfs_reads_zero_fill_bytes_beyond_initialized_size(monkeypatch):

@@ -12,8 +12,8 @@ from mountfile import vfs
 from mountfile.ext2_reader import (
     _EXT2_COMPR_FL,
     _EXT2_INDEX_FL,
-    _Inode,
     NativeExt2Image,
+    _Inode,
 )
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
