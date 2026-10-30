@@ -695,10 +695,22 @@ def parse_ntfs_standard_information(value: bytes) -> NtfsStandardInformation:
 
 
 def _parse_ntfs_upcase_table(raw: bytes) -> tuple[int, ...]:
-    """Parse the exact bounded 64K-entry UTF-16 NTFS upcase table."""
+    """Parse and validate the bounded 64K-entry UTF-16 NTFS upcase table."""
     if len(raw) != _UPCASE_TABLE_SIZE:
         raise NtfsMetadataError("NTFS $UpCase DATA stream has an invalid size")
-    return struct.unpack("<65536H", raw)
+    table = struct.unpack("<65536H", raw)
+    if any(table[mapped] != mapped for mapped in table):
+        raise NtfsMetadataError("NTFS $UpCase table contains a non-idempotent mapping")
+    if any(
+        table[codepoint] != codepoint for codepoint in range(ord("A"), ord("Z") + 1)
+    ):
+        raise NtfsMetadataError("NTFS $UpCase table changes an uppercase ASCII letter")
+    if any(
+        table[codepoint] != codepoint - 32
+        for codepoint in range(ord("a"), ord("z") + 1)
+    ):
+        raise NtfsMetadataError("NTFS $UpCase table has unsupported ASCII mappings")
+    return table
 
 
 def _validate_nonresident_data_stream(

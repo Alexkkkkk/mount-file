@@ -454,6 +454,16 @@ def test_ntfs_upcase_parser_rejects_noncanonical_table_sizes():
         _parse_ntfs_upcase_table(bytes(1024))
 
 
+def test_ntfs_upcase_parser_rejects_non_idempotent_mapping():
+    values = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        values[codepoint] = codepoint - 32
+    values[0x100] = 0x101
+    values[0x101] = 0x102
+    with pytest.raises(NtfsMetadataError, match="non-idempotent"):
+        _parse_ntfs_upcase_table(struct.pack("<65536H", *values))
+
+
 def test_rejects_unknown_ntfs_volume_flags():
     value = bytearray(12)
     value[8:10] = b"\x03\x01"
