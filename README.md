@@ -71,6 +71,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 - [Структура проекта](#структура-проекта)
 - [Ограничения](#ограничения)
 - [Участие в разработке](#участие-в-разработке)
+- [Поддержка проекта](#поддержка-проекта)
 - [Лицензия](#лицензия)
 
 ## Состав проекта
@@ -863,15 +864,30 @@ mount-file/
   образа, в который записываете.
 
 ## Участие в разработке
-
 1. Форк → ветка `feat/my-feature`.
 2. `pip install -e ".[dev]"` + `pre-commit install`.
 3. Тесты в `tests/`, коммиты в формате [Conventional Commits](https://www.conventionalcommits.org/).
 4. PR.
-
 Подробнее — [CONTRIBUTING.md](CONTRIBUTING.md). Вопросы по уязвимостям — по
 правилам [SECURITY.md](SECURITY.md), без публичных issue. Правила общения —
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
+
+## Поддержка проекта
+
+Если проект оказался полезен и вы хотите поддержать его развитие, можно отправить
+добровольный донат в сети **TON**:
+
+```text
+UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
+```
+
+- [Открыть адрес в TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
+- Сеть: **TON**
+- Назначение: поддержка разработки, тестирования и автоматизации MountFile
+
+Проверяйте адрес перед отправкой и не отправляйте на него активы из другой сети.
+Этот адрес предназначен только для добровольной поддержки и не является обещанием
+доходности, возврата средств или финансовой услугой.
 
 ## Лицензия
 
