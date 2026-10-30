@@ -13,6 +13,7 @@ from mountfile.ntfs_reader import (
     NtfsMetadataError,
     NtfsRun,
     _parse_ntfs_index_block,
+    _parse_ntfs_upcase_table,
     _parse_runlist,
     parse_ntfs_attribute_stream,
     parse_ntfs_file_name,
@@ -21,7 +22,6 @@ from mountfile.ntfs_reader import (
     parse_ntfs_logfile_restart_area,
     parse_ntfs_standard_information,
     parse_ntfs_volume_state,
-    _parse_ntfs_upcase_table,
     probe_ntfs_metadata,
     validate_ntfs_logfile_restart_pages,
 )
