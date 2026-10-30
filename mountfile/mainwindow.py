@@ -37,6 +37,7 @@ from .qt_compat import (
     SingleSelection,
     Stretch,
 )
+from .universal_fs_rw import UniversalFSRW
 from .vfs import (
     LegacyFallbackAvailableError,
     RecognizedFilesystemError,
@@ -44,7 +45,6 @@ from .vfs import (
     open_image_provider,
     volume_size_for_offset,
 )
-from .universal_fs_rw import UniversalFSRW
 
 
 class Node:
@@ -657,9 +657,7 @@ class MainWindow(QMainWindow):
         node = self._current_node()
         if node is None or self.writer is None:
             return
-        target_dir = (
-            node.path if node.is_dir else (posixpath.dirname(node.path) or "/")
-        )
+        target_dir = node.path if node.is_dir else (posixpath.dirname(node.path) or "/")
         src, _ = QFileDialog.getOpenFileName(self, "Import file", "")
         if not src:
             return
@@ -684,9 +682,7 @@ class MainWindow(QMainWindow):
         try:
             target_path = posixpath.join(target_dir, name)
             self.writer.write_file(target_path, data)
-            self.log_msg(
-                "Imported %s (%d bytes) -> %s" % (src, len(data), target_path)
-            )
+            self.log_msg("Imported %s (%d bytes) -> %s" % (src, len(data), target_path))
             self._refresh_dir(target_dir)
         except Exception as e:
             QMessageBox.critical(self, "Import failed", str(e))
@@ -695,9 +691,7 @@ class MainWindow(QMainWindow):
         node = self._current_node()
         if node is None or self.writer is None:
             return
-        target_dir = (
-            node.path if node.is_dir else (posixpath.dirname(node.path) or "/")
-        )
+        target_dir = node.path if node.is_dir else (posixpath.dirname(node.path) or "/")
         name, ok = QInputDialog.getText(
             self, "New folder", "Folder name in %s:" % target_dir
         )
@@ -756,6 +750,30 @@ class MainWindow(QMainWindow):
         if not self.model:
             return
 
+        if self.image_path:
+            offset = self.cmb_parts.currentData()
+            if offset is None:
+                offset = 0
+            try:
+                volume_size = volume_size_for_offset(self.image_path, offset)
+                replacement = open_image_provider(
+                    self.image_path, offset=offset, volume_size=volume_size
+                )
+            except Exception as e:
+                message = "Image changed, but the reader could not be reopened: %s" % e
+                self.log_msg(message)
+                QMessageBox.warning(self, "Refresh failed", message)
+                return False
+
+            old_provider = self.provider
+            self.provider = replacement
+            self.model.provider = replacement
+            if old_provider is not None and hasattr(old_provider, "close"):
+                try:
+                    old_provider.close()
+                except Exception as e:
+                    self.log_msg("Could not close stale image reader: %s" % e)
+
         def walk(node, parts):
             if not parts:
                 return node
@@ -768,6 +786,7 @@ class MainWindow(QMainWindow):
         node = walk(self.model.root, parts)
         if node is not None:
             self.model.reload(node)
+        return True
 
     def closeEvent(self, e):
         self._unmount()

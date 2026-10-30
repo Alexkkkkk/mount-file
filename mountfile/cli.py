@@ -51,6 +51,7 @@ from .timeline import (
     query_timeline,
 )
 from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
+from .universal_fs_rw import UniversalFSRW
 from .vfs import (
     Ext2ReadError,
     RecognizedFilesystemError,
@@ -58,7 +59,6 @@ from .vfs import (
     open_image_provider,
     volume_size_for_offset,
 )
-from .universal_fs_rw import UniversalFSRW
 from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
@@ -69,6 +69,7 @@ def cmd_capabilities(args):
     matrix = get_native_capability_matrix()
     print(json.dumps(matrix, ensure_ascii=False, indent=2, sort_keys=True))
     return OK
+
 
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
@@ -304,8 +305,7 @@ def cmd_read_range(args):
         raise ValueError("file offset must be non-negative")
     if args.length < 0 or args.length > _MAX_CLI_READ_RANGE_BYTES:
         raise ValueError(
-            "read length must be between 0 and %d bytes"
-            % _MAX_CLI_READ_RANGE_BYTES
+            "read length must be between 0 and %d bytes" % _MAX_CLI_READ_RANGE_BYTES
         )
     offset, _fstype, _desc = _select(args.image, args)
     provider, _backend = _provider(args.image, offset)

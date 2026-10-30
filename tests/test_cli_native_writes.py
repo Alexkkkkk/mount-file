@@ -52,9 +52,7 @@ def test_open_write_uses_bounded_universal_native_writer(monkeypatch):
     }
 
 
-def test_put_routes_absolute_target_path_through_native_writer(
-    monkeypatch, tmp_path
-):
+def test_put_routes_absolute_target_path_through_native_writer(monkeypatch, tmp_path):
     source = tmp_path / "payload.bin"
     source.write_bytes(b"payload")
     writer = _FakeWriter()
@@ -81,27 +79,36 @@ def test_mkdir_mv_and_recursive_rm_route_through_native_writer(monkeypatch):
     monkeypatch.setattr(cli, "_select", lambda *_args: (4096, "ext2", "volume"))
     monkeypatch.setattr(cli, "_open_write", lambda *_args, **_kwargs: writer)
 
-    assert cli.cmd_mkdir(
-        SimpleNamespace(yes=True, image="disk.img", path="/docs/new", backup=False)
-    ) == cli.OK
-    assert cli.cmd_mv(
-        SimpleNamespace(
-            yes=True,
-            image="disk.img",
-            path="/docs/old.txt",
-            new_name="new.txt",
-            backup=False,
+    assert (
+        cli.cmd_mkdir(
+            SimpleNamespace(yes=True, image="disk.img", path="/docs/new", backup=False)
         )
-    ) == cli.OK
-    assert cli.cmd_rm(
-        SimpleNamespace(
-            yes=True,
-            image="disk.img",
-            path="/docs/new",
-            recursive=True,
-            backup=False,
+        == cli.OK
+    )
+    assert (
+        cli.cmd_mv(
+            SimpleNamespace(
+                yes=True,
+                image="disk.img",
+                path="/docs/old.txt",
+                new_name="new.txt",
+                backup=False,
+            )
         )
-    ) == cli.OK
+        == cli.OK
+    )
+    assert (
+        cli.cmd_rm(
+            SimpleNamespace(
+                yes=True,
+                image="disk.img",
+                path="/docs/new",
+                recursive=True,
+                backup=False,
+            )
+        )
+        == cli.OK
+    )
 
     assert writer.calls == [
         ("mkdir", "/docs/new"),

@@ -685,9 +685,7 @@ class NativeExt4Image(NativeExt3Image):
                             "extent leaf does not start at its index key"
                         )
                     if expected_upper is not None and end > expected_upper:
-                        raise Ext3ReadError(
-                            "extent leaf exceeds its index child range"
-                        )
+                        raise Ext3ReadError("extent leaf exceeds its index child range")
                     physical_start = (start_hi << 32) | start_lo
                     if (
                         physical_start <= 0
@@ -732,9 +730,7 @@ class NativeExt4Image(NativeExt3Image):
                         "extent child does not start at its parent index key"
                     )
                 if expected_upper is not None and logical_start >= expected_upper:
-                    raise Ext3ReadError(
-                        "extent child index exceeds its parent range"
-                    )
+                    raise Ext3ReadError("extent child index exceeds its parent range")
                 child = child_lo | (child_hi << 32)
                 if not 0 < child < self.blocks_count:
                     raise Ext3ReadError(

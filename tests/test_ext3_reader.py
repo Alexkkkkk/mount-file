@@ -55,10 +55,14 @@ def _make_clean_journal_image(
     struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
     if duplicate_target:
         struct.pack_into(">II", journal, 1036, replay_target, 0x00000002)  # SAME_UUID
-        struct.pack_into(">II", journal, 1044, replay_target, 0x0000000A)  # LAST|SAME_UUID
+        struct.pack_into(
+            ">II", journal, 1044, replay_target, 0x0000000A
+        )  # LAST|SAME_UUID
         commit_offset = 4096
     else:
-        struct.pack_into(">II", journal, 1036, replay_target, 0x0000000A)  # LAST|SAME_UUID
+        struct.pack_into(
+            ">II", journal, 1036, replay_target, 0x0000000A
+        )  # LAST|SAME_UUID
         commit_offset = 3072
     struct.pack_into(">III", journal, commit_offset, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
