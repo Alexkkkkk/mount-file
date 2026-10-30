@@ -234,6 +234,7 @@ class NativeExfatWriter:
     def _directory_records(self, reader, cluster):
         raw = reader._read_directory_bytes(cluster)
         records = []
+        seen_names = set()
         pos = 0
         while pos + 32 <= len(raw):
             kind = raw[pos]
@@ -268,8 +269,12 @@ class NativeExfatWriter:
                 name = bytes(name_raw[: name_len * 2]).decode("utf-16le")
             except UnicodeDecodeError as exc:
                 raise ExfatWriteError("invalid exFAT filename encoding") from exc
-            if struct.unpack_from("<H", stream, 4)[0] != self._name_hash(name):
+            if struct.unpack_from("<H", stream, 4)[0] != reader._name_hash(name):
                 raise ExfatWriteError("exFAT filename hash mismatch")
+            name_key = reader._upcase_key(name)
+            if name_key in seen_names:
+                raise ExfatWriteError("duplicate exFAT filename under up-case mapping")
+            seen_names.add(name_key)
             records.append((name, pos, total, stream, raw[pos : pos + total]))
             pos += total
         return records
@@ -281,7 +286,11 @@ class NativeExfatWriter:
         current = reader.profile.root_cluster
         for index, wanted in enumerate(parts):
             record = next(
-                (x for x in self._directory_records(reader, current) if x[0] == wanted),
+                (
+                    x
+                    for x in self._directory_records(reader, current)
+                    if reader._upcase_key(x[0]) == reader._upcase_key(wanted)
+                ),
                 None,
             )
             if record is None:
@@ -312,14 +321,6 @@ class NativeExfatWriter:
         if not entry.is_dir:
             raise NotADirectoryError(parent)
         return entry.first_cluster, parts[-1]
-
-    @staticmethod
-    def _name_hash(name):
-        checksum = 0
-        for value in name.encode("utf-16le"):
-            checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
-            checksum = (checksum + value) & 0xFFFF
-        return checksum
 
     @staticmethod
     def _entry_checksum(entry_set):
@@ -596,7 +597,9 @@ class NativeExfatWriter:
             )
             return cluster, 0
 
-    def _make_entry_set(self, name, *, is_dir, first_cluster, size, no_fat_chain=False):
+    def _make_entry_set(
+        self, reader, name, *, is_dir, first_cluster, size, no_fat_chain=False
+    ):
         encoded = name.encode("utf-16le")
         if not encoded or len(encoded) % 2 or len(encoded) > 3 * 30:
             raise ExfatWriteError("filename exceeds bounded exFAT name-entry profile")
@@ -609,7 +612,7 @@ class NativeExfatWriter:
         result[33] = 0x02 if no_fat_chain else 0
         result[35] = len(encoded) // 2
         struct.pack_into("<Q", result, 40, size)
-        struct.pack_into("<H", result, 36, self._name_hash(name))
+        struct.pack_into("<H", result, 36, reader._name_hash(name))
         struct.pack_into("<I", result, 52, first_cluster if size or is_dir else 0)
         struct.pack_into("<Q", result, 56, size)
         padded = encoded.ljust(slots * 30, b"\xff")
@@ -676,7 +679,8 @@ class NativeExfatWriter:
                 if existing is None:
                     directory, name = self._parent(reader, path)
                     if any(
-                        x[0] == name for x in self._directory_records(reader, directory)
+                        reader._upcase_key(x[0]) == reader._upcase_key(name)
+                        for x in self._directory_records(reader, directory)
                     ):
                         raise FileExistsError(path)
                     count = (
@@ -706,6 +710,7 @@ class NativeExfatWriter:
                             chunk.ljust(reader.profile.cluster_size, b"\0"),
                         )
                     entry_set = self._make_entry_set(
+                        reader,
                         name,
                         is_dir=False,
                         first_cluster=clusters[0] if clusters else 0,
@@ -837,7 +842,7 @@ class NativeExfatWriter:
             ):
                 raise ExfatWriteError("cannot move an exFAT directory into itself")
             if any(
-                item[0] == new_name
+                reader._upcase_key(item[0]) == reader._upcase_key(new_name)
                 for item in self._directory_records(reader, destination_directory)
                 if not (same_directory and item[1] == record[1])
             ):
@@ -855,7 +860,7 @@ class NativeExfatWriter:
                     self._write_rel(
                         stream,
                         relative + 32 + 4,
-                        struct.pack("<H", self._name_hash(new_name)),
+                        struct.pack("<H", reader._name_hash(new_name)),
                     )
                     padded = encoded.ljust(slots * 30, b"\xff")
                     for index in range(slots):
@@ -868,7 +873,9 @@ class NativeExfatWriter:
                 else:
                     entry_set = bytearray(record[4])
                     entry_set[32 + 3] = len(encoded) // 2
-                    struct.pack_into("<H", entry_set, 32 + 4, self._name_hash(new_name))
+                    struct.pack_into(
+                        "<H", entry_set, 32 + 4, reader._name_hash(new_name)
+                    )
                     padded = encoded.ljust(slots * 30, b"\xff")
                     for index in range(slots):
                         base = 64 + index * 32
@@ -950,6 +957,7 @@ class NativeExfatWriter:
                     b"\0" * reader.profile.cluster_size,
                 )
                 entry_set = self._make_entry_set(
+                    reader,
                     name,
                     is_dir=True,
                     first_cluster=cluster,
