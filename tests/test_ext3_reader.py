@@ -123,6 +123,38 @@ def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
+@pytest.mark.parametrize("replay_journal", [False, True])
+def test_jbd2_transaction_cannot_target_its_own_journal_blocks(
+    tmp_path, replay_journal
+):
+    image_path = tmp_path / "journal-self-target.img"
+    _make_clean_journal_image(image_path, replay_target=40)
+    if replay_journal:
+        image = bytearray(image_path.read_bytes())
+        struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+        image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="target overlaps journal inode data"):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=replay_journal,
+        )
+
+
+def test_journal_data_block_scan_includes_single_indirect_blocks():
+    reader = NativeExt3Image.__new__(NativeExt3Image)
+    reader.blocks_count = 128
+    reader.block_size = 1024
+    pointer_table = struct.pack("<256I", 70, *([0] * 255))
+    reader._read_block = lambda _block: pointer_table
+    inode = SimpleNamespace(block_pointers=tuple(range(40, 52)) + (60, 0, 0))
+
+    physical_blocks = reader._journal_data_block_numbers(inode, 13)
+
+    assert physical_blocks == set(range(40, 52)) | {70}
+
+
 def test_truncated_journal_record_fails_closed(tmp_path):
     image_path = tmp_path / "truncated-journal.img"
     _make_clean_journal_image(image_path, truncate_commit=True)

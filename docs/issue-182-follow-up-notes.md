@@ -12,6 +12,8 @@ projects is copied by this change.
   journal inode. The ext3 reader uses that inode rather than assuming inode 8.
 - Successful read-only journal replay invalidates metadata caches so later
   reads observe the replay overlay consistently.
+- JBD2 transaction targets that overlap physical data blocks of the journal
+  inode are rejected in both clean scans and explicit read-only replay.
 - The bounded NTFS reader validates allocated, data and initialized sizes,
   rejects overlapping attribute-name regions, and returns zeroes beyond the
   initialized-size boundary.

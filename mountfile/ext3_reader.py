@@ -146,6 +146,20 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 logical block is outside journal inode")
         return self._journal_block(inode, logical)
 
+    def _journal_data_block_numbers(self, inode, journal_blocks) -> set[int]:
+        """Return all physical data blocks owned by the bounded journal inode."""
+        physical_blocks = set()
+        for logical in range(journal_blocks):
+            physical = self._logical_block(inode, logical)
+            if not 0 < physical < self.blocks_count:
+                raise Ext3ReadError(
+                    "JBD2 journal inode contains a sparse or out-of-range data block"
+                )
+            if physical in physical_blocks:
+                raise Ext3ReadError("JBD2 journal inode has duplicate data blocks")
+            physical_blocks.add(physical)
+        return physical_blocks
+
     @staticmethod
     def _jbd2_header(raw):
         if len(raw) < 12:
@@ -153,7 +167,12 @@ class NativeExt3Image(NativeExt2Image):
         return struct.unpack_from(">III", raw, 0)
 
     def _validate_jbd2_transaction(
-        self, inode, journal_blocks, logical, expected_sequence
+        self,
+        inode,
+        journal_blocks,
+        logical,
+        expected_sequence,
+        journal_data_blocks: set[int] | None = None,
     ) -> int:
         """Validate one bounded descriptor/data/commit chain.
 
@@ -179,6 +198,10 @@ class NativeExt3Image(NativeExt2Image):
             tag_count += 1
             if block_number == 0 or block_number >= self.blocks_count:
                 raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
+            if journal_data_blocks is not None and block_number in journal_data_blocks:
+                raise Ext3ReadError(
+                    "JBD2 descriptor target overlaps journal inode data"
+                )
             if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
                 raise Ext3ReadError("unsupported JBD2 descriptor tag flags")
             if not flags & _JBD2_TAG_SAME_UUID:
@@ -244,6 +267,7 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 ring geometry exceeds journal inode")
         if start != 0 and not first <= start < max_length:
             raise Ext3ReadError("JBD2 start is outside journal ring")
+        journal_data_blocks = self._journal_data_block_numbers(journal, journal_blocks)
         if sequence == 0 and start != 0:
             # Some e2fsprogs-created empty journals retain a nonzero head but
             # encode no transaction sequence.  Prove that the entire bounded
@@ -271,6 +295,7 @@ class NativeExt3Image(NativeExt2Image):
                 max_length=max_length,
                 journal_blocks=journal_blocks,
                 expected_sequence=sequence,
+                journal_data_blocks=journal_data_blocks,
             )
             self.journal_replayed = True
             return
@@ -289,12 +314,20 @@ class NativeExt3Image(NativeExt2Image):
                     max_length,
                     logical,
                     record_sequence,
+                    journal_data_blocks=journal_data_blocks,
                 )
                 + 1
             )
 
     def _replay_journal(
-        self, inode, *, start, max_length, journal_blocks, expected_sequence
+        self,
+        inode,
+        *,
+        start,
+        max_length,
+        journal_blocks,
+        expected_sequence,
+        journal_data_blocks: set[int] | None = None,
     ):
         """Replay classic committed JBD2 records into a read-only overlay.
 
@@ -328,6 +361,10 @@ class NativeExt3Image(NativeExt2Image):
                 cursor += 8
                 if target == 0 or target >= self.blocks_count:
                     raise Ext3ReadError("JBD2 replay target is outside filesystem")
+                if journal_data_blocks is not None and target in journal_data_blocks:
+                    raise Ext3ReadError(
+                        "JBD2 replay target overlaps journal inode data"
+                    )
                 if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
                     raise Ext3ReadError("unsupported JBD2 replay tag flags")
                 if not flags & _JBD2_TAG_SAME_UUID:
