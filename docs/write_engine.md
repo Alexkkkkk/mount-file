@@ -35,11 +35,15 @@ currently accepts only single-FAT volumes; multi-FAT/active-FAT profiles are
 rejected rather than interpreted using the first FAT. A range read fetches only
 the clusters and byte spans intersecting the requested range. The provider
 validates the main and backup boot regions, cluster chains and checksummed file
-entry sets. Its explicit `system_metadata()` audit checks allocation bitmap,
-upcase table and FAT/bitmap consistency, but that audit is not automatically
-performed by ordinary `list_dir`/`read_file_range` calls. The reader never
-writes the image. Mutations are provided separately through the explicitly
-bounded `NativeExfatRW` writer described below.
+entry sets. Opening the provider validates the allocation bitmap and the
+checksum-protected, full-range `$UpCase` table (compressed or uncompressed).
+The same volume-specific up-case mapping is used for `NameHash` verification,
+path lookup and writer-created or renamed entries. The allocation bitmap is
+authoritative: clusters traversed in FAT chains and `NoFatChain` contiguous
+streams must be marked allocated, while FAT entries for `NoFatChain` streams
+are ignored as required by exFAT. The reader never writes the image. Mutations
+are provided separately through the explicitly bounded `NativeExfatRW` writer
+described below.
 
 ### Native exFAT phase-one writes
 
@@ -193,8 +197,10 @@ features, unknown feature flags, indexed directories, compressed/encrypted/
 extent/inline inodes и symlink traversal отклоняются. `open_image_provider`
 автоматически выбирает этот read-only backend в GUI, CLI и MCP только при наличии
 точного размера раздела (или whole-image ext2 без таблицы разделов); остальные
-профили остаются на pytsk3/существующих fallback путях. Это не разрешение на
-запись и не FUSE export. `phase1_ext2_profile_candidate` по-прежнему означает
+профили не становятся автоматически читаемыми через этот provider. Распознанный,
+но неподдержанный ext profile отвергается; compatibility fallback на `pytsk3`
+возможен только для нераспознанного формата и при явном opt-in. Это не разрешение
+на запись и не FUSE export. `phase1_ext2_profile_candidate` по-прежнему означает
 только предварительное соответствие write profile. Writer обязан самостоятельно
 проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
 
@@ -242,8 +248,20 @@ exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
 
 The reader validates resident and nonresident metadata records, parent/sequence
-references and bounded `$I30` index roots/allocation blocks. It rejects malformed
-indexes, cycles, unsupported `ATTRIBUTE_LIST` streams, sparse/compressed/encrypted
-data, and path components outside its declared profile. Native NTFS writes remain
-disabled; the system-driver path is a separate explicit compatibility choice, not
-a substitute for `$LogFile`-aware native transactions.
+references and bounded `$I30` index roots/allocation blocks. It supports valid
+Unicode names for listing. If MFT record 10 exposes the exact-size, bounded
+unnamed `$UpCase` DATA stream, the reader validates and uses its 65,536-entry
+UTF-16 mapping, including fixed-point and ASCII invariants, for case-insensitive
+path lookup; otherwise Unicode lookup is exact-case only. Resident
+`$ATTRIBUTE_LIST` values are now decoded with bounded entry lengths, 8-byte
+alignment, UTF-16 names and MFT references. Type order, ASCII name/VCN order and
+duplicate keys are checked; Unicode collation uses a validated `$UpCase` table
+when available and is not guessed when absent. The reader still refuses extension-
+record resolution and nonresident attribute-list streams, so it cannot mistake a
+partial attribute for a complete stream. The entry layout follows [Microsoft's
+ATTRIBUTE_LIST_ENTRY definition](https://learn.microsoft.com/en-us/windows/win32/devnotes/attribute-list-entry)
+and the [Linux NTFS on-disk reference](https://flatcap.github.io/linux-ntfs/ntfs/attributes/attribute_list.html).
+The reader also rejects malformed indexes, cycles, sparse/compressed/encrypted
+data and invalid path components. Native NTFS writes remain disabled; the
+system-driver path is a separate explicit compatibility choice, not a substitute
+for `$LogFile`-aware native transactions.

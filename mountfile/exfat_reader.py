@@ -14,11 +14,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
-class ExfatReadError(ValueError):
+class ExfatReadError(RefusalError):
     """The selected exFAT profile or requested read is invalid."""
+
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
+        super().__init__(message, code)
 
 
 _EOC = 0xFFFFFFF8
@@ -56,6 +62,8 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         self.image_path = str(image_path)
         self.offset = offset
         self._stream = None
+        self._allocation_bitmap = None
+        self._upcase_table = None
         try:
             self._stream = Path(self.image_path).open("rb")
             self._image_size = os.fstat(self._stream.fileno()).st_size
@@ -98,11 +106,21 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _read_rel(self, relative, size):
         if self._stream is None:
             raise ExfatReadError("exFAT image is closed")
-        if relative < 0 or size < 0 or relative + size < relative:
-            raise ExfatReadError("negative or overflowing exFAT read")
+        checked_range(
+            relative,
+            size,
+            upper=self.volume_end - self.offset,
+            context="exFAT read exceeds selected volume bounds",
+            error_type=ExfatReadError,
+        )
         absolute = self.offset + relative
-        if absolute + size > self.volume_end or absolute + size > self._image_size:
-            raise ExfatReadError("exFAT read exceeds selected volume bounds")
+        checked_range(
+            absolute,
+            size,
+            upper=self._image_size,
+            context="exFAT read exceeds image bounds",
+            error_type=ExfatReadError,
+        )
         self._stream.seek(absolute)
         data = self._stream.read(size)
         if len(data) != size:
@@ -123,6 +141,16 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             + (cluster - 2) * self.profile.cluster_size
         )
 
+    def _require_allocated(self, cluster):
+        bitmap = self._allocation_bitmap
+        if bitmap is None:
+            return
+        bit = cluster - 2
+        if bit < 0 or bit // 8 >= len(bitmap):
+            raise ExfatReadError("exFAT allocation bitmap does not cover cluster")
+        if not bitmap[bit >> 3] & (1 << (bit & 7)):
+            raise ExfatReadError("exFAT stream references a cluster marked free")
+
     def _iter_chain(self, start, size=0, *, no_fat_chain=False):
         if not 2 <= start <= self.profile.cluster_count + 1:
             raise ExfatReadError("exFAT chain starts outside the data heap")
@@ -133,7 +161,9 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 or start + required > self.profile.cluster_count + 2
             ):
                 raise ExfatReadError("contiguous exFAT stream exceeds cluster capacity")
-            yield from range(start, start + required)
+            for cluster in range(start, start + required):
+                self._require_allocated(cluster)
+                yield cluster
             return
         seen = set()
         current = start
@@ -149,6 +179,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             count += 1
             if count > self.profile.cluster_count:
                 raise ExfatReadError("exFAT chain exceeds volume capacity")
+            self._require_allocated(current)
             yield current
             nxt = self._fat_entry(current)
             if nxt >= _EOC:
@@ -246,9 +277,58 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         return checksum
 
     @staticmethod
-    def _name_hash(name):
+    def _parse_upcase_table(data):
+        """Decode an exFAT up-case table and validate full Unicode coverage."""
+        if len(data) == 0x10000 * 2:
+            table = [value[0] for value in struct.iter_unpack("<H", data)]
+        else:
+            table = []
+            position = 0
+            while position < len(data):
+                if position + 2 > len(data):
+                    raise ExfatReadError("truncated exFAT up-case table word")
+                value = struct.unpack_from("<H", data, position)[0]
+                position += 2
+                if value == 0xFFFF:
+                    if position + 2 > len(data):
+                        raise ExfatReadError("truncated exFAT up-case identity run")
+                    count = struct.unpack_from("<H", data, position)[0]
+                    position += 2
+                    if count == 0 or len(table) + count > 0x10000:
+                        raise ExfatReadError(
+                            "invalid exFAT up-case identity run length"
+                        )
+                    table.extend(range(len(table), len(table) + count))
+                else:
+                    if len(table) >= 0x10000:
+                        raise ExfatReadError(
+                            "exFAT up-case table exceeds Unicode range"
+                        )
+                    table.append(value)
+        if len(table) != 0x10000:
+            raise ExfatReadError("exFAT up-case table does not cover Unicode range")
+        mandatory = list(range(128))
+        mandatory[ord("a") : ord("z") + 1] = range(ord("A"), ord("Z") + 1)
+        if table[:128] != mandatory:
+            raise ExfatReadError("exFAT up-case table has invalid mandatory mappings")
+        return tuple(table)
+
+    def _upcase_key(self, name):
+        table = self._upcase_table
+        if table is None:
+            raise ExfatReadError("exFAT up-case table is unavailable")
+        raw = name.encode("utf-16le")
+        result = bytearray(len(raw))
+        for position in range(0, len(raw), 2):
+            codepoint = raw[position] | (raw[position + 1] << 8)
+            mapped = table[codepoint]
+            result[position] = mapped & 0xFF
+            result[position + 1] = mapped >> 8
+        return bytes(result)
+
+    def _name_hash(self, name):
         checksum = 0
-        for value in name.encode("utf-16le"):
+        for value in self._upcase_key(name):
             checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
             checksum = (checksum + value) & 0xFFFF
         return checksum
@@ -256,6 +336,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _directory(self, cluster):
         raw = self._read_directory_bytes(cluster)
         entries = []
+        seen_names = set()
         pos = 0
         while pos + 32 <= len(raw):
             kind = raw[pos]
@@ -300,6 +381,10 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             stored_name_hash = struct.unpack_from("<H", stream, 4)[0]
             if stored_name_hash != self._name_hash(name):
                 raise ExfatReadError("exFAT filename hash mismatch")
+            name_key = self._upcase_key(name)
+            if name_key in seen_names:
+                raise ExfatReadError("duplicate exFAT filename under up-case mapping")
+            seen_names.add(name_key)
             entries.append(
                 _Entry(
                     name,
@@ -321,13 +406,17 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             kind = raw[pos]
             if kind == 0:
                 break
-            if kind == 0x81 and bitmap is None:
+            if kind == 0x81:
+                if bitmap is not None:
+                    raise ExfatReadError("exFAT allocation bitmap entry is duplicated")
                 bitmap = (
                     raw[pos + 1],
                     struct.unpack_from("<I", raw, pos + 20)[0],
                     struct.unpack_from("<Q", raw, pos + 24)[0],
                 )
-            elif kind == 0x82 and upcase is None:
+            elif kind == 0x82:
+                if upcase is not None:
+                    raise ExfatReadError("exFAT upcase table entry is duplicated")
                 upcase = (
                     struct.unpack_from("<I", raw, pos + 4)[0],
                     struct.unpack_from("<I", raw, pos + 20)[0],
@@ -338,16 +427,16 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         if upcase is None:
             raise ExfatReadError("exFAT upcase table entry is missing")
         bitmap_flags, bitmap_cluster, bitmap_size = bitmap
-        if bitmap_flags & 0xFE or bitmap_size < (self.profile.cluster_count + 7) // 8:
+        if bitmap_flags != 0 or bitmap_size < (self.profile.cluster_count + 7) // 8:
             raise ExfatReadError("exFAT allocation bitmap geometry is invalid")
         bitmap_data = self._read_stream(bitmap_cluster, bitmap_size, False)
-        for cluster in range(2, self.profile.cluster_count + 2):
-            bit = bool(bitmap_data[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7)))
-            fat_value = self._fat_entry(cluster)
-            if bit != (fat_value != 0):
-                raise ExfatReadError(
-                    "exFAT allocation bitmap/FAT metadata is inconsistent"
-                )
+        self._allocation_bitmap = bitmap_data
+        # The bitmap, not FAT nonzero-ness, describes allocation. FAT entries
+        # for NoFatChain streams are invalid and must not be interpreted.
+        for _ in self._iter_chain(self.profile.root_cluster, no_fat_chain=False):
+            pass
+        for _ in self._iter_chain(bitmap_cluster, bitmap_size, no_fat_chain=False):
+            pass
         upcase_checksum, upcase_cluster, upcase_size = upcase
         if (
             upcase_size == 0
@@ -361,6 +450,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             checksum = (checksum + value) & 0xFFFFFFFF
         if checksum != upcase_checksum:
             raise ExfatReadError("exFAT upcase table checksum mismatch")
+        self._upcase_table = self._parse_upcase_table(upcase_data)
         return {
             "bitmap_cluster": bitmap_cluster,
             "bitmap_size": bitmap_size,
@@ -386,7 +476,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 (
                     item
                     for item in self._directory(current.first_cluster)
-                    if item.name == part or item.name.casefold() == part.casefold()
+                    if self._upcase_key(item.name) == self._upcase_key(part)
                 ),
                 None,
             )
@@ -408,7 +498,11 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             }
             for item in sorted(
                 self._directory(entry.first_cluster),
-                key=lambda item: (not item.is_dir, item.name.casefold()),
+                key=lambda item: (
+                    not item.is_dir,
+                    self._upcase_key(item.name),
+                    item.name.encode("utf-16le"),
+                ),
             )
         ]
 

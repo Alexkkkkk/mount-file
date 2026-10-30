@@ -2039,6 +2039,12 @@ class SettingsDialog(QDialog):
         )
         self.btn_ai_detect.clicked.connect(self._detect_ollama)
         lay.addRow("Локальный AI:", self.btn_ai_detect)
+        self.btn_ai_install = QPushButton("Установить Ollama и модель")
+        self.btn_ai_install.setToolTip(
+            "Скачает официальный установщик Ollama и выбранную локальную модель"
+        )
+        self.btn_ai_install.clicked.connect(self._install_ollama)
+        lay.addRow("Автонастройка:", self.btn_ai_install)
         self.ed_ai_key = QLineEdit(str(tc_style.SETTINGS.get("ai_api_key") or ""))
         self.ed_ai_key.setEchoMode(EchoPassword)
         lay.addRow("Ключ API:", self.ed_ai_key)
@@ -2118,6 +2124,39 @@ class SettingsDialog(QDialog):
                 "ollama pull llama3.2:3b"
             )
         QMessageBox.warning(self, "AI не настроен", detail + "\n\n" + result["error"])
+
+    def _install_ollama(self):
+        """Launch the verified per-user Ollama installer after explicit consent."""
+        from .ollama_setup import DEFAULT_MODEL, OllamaSetupError
+
+        model = self.ed_ai_model.text().strip() or DEFAULT_MODEL
+        answer = QMessageBox.question(
+            self,
+            "Установить локальный AI?",
+            "MountFile скачает официальный установщик Ollama, проверит его цифровую "
+            "подпись и установит программу для текущего пользователя. Затем будет "
+            "загружена модель %s. Для Ollama нужно около 4 ГБ, а модель может занять "
+            "несколько гигабайт и потребовать дополнительное место. Нужен интернет.\n\n"
+            "Продолжить?" % model,
+            MB_Yes | MB_No,
+            MB_No,
+        )
+        if answer != MB_Yes:
+            return
+        try:
+            from .ollama_setup import launch_windows_ollama_setup
+
+            launch_windows_ollama_setup(model)
+        except OllamaSetupError as exc:
+            QMessageBox.warning(self, "Не удалось запустить установку", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Установка Ollama запущена",
+            "Установка и загрузка модели выполняются в отдельном окне PowerShell. "
+            "Дождитесь сообщения об успешном завершении, затем нажмите «Проверить и "
+            "настроить Ollama».",
+        )
 
 
 class MainWindow(QMainWindow):
@@ -3698,7 +3737,12 @@ class MainWindow(QMainWindow):
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
-        from .vfs import RecognizedFilesystemError, TskError, open_image_provider
+        from .vfs import (
+            LegacyFallbackAvailableError,
+            RecognizedFilesystemError,
+            TskError,
+            open_image_provider,
+        )
 
         try:
             panel.provider = open_image_provider(
@@ -3706,6 +3750,36 @@ class MainWindow(QMainWindow):
                 offset=offset,
                 volume_size=volume_size,
             )
+        except LegacyFallbackAvailableError as recognized_error:
+            answer = QMessageBox.question(
+                self,
+                "Попробовать legacy-парсер?",
+                "Встроенный reader не распознал формат тома. Попробовать The Sleuth Kit "
+                "для просмотра в режиме только чтения? Запись останется выключена.\n\n%s"
+                % recognized_error,
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                panel.provider = None
+                panel.refresh()
+                return False
+            try:
+                panel.provider = open_image_provider(
+                    self.image_path,
+                    offset=offset,
+                    volume_size=volume_size,
+                    allow_legacy_fallback=True,
+                )
+            except TskError as fallback_error:
+                panel.provider = None
+                panel.refresh()
+                QMessageBox.warning(
+                    self,
+                    "Не удалось открыть том",
+                    "Legacy reader не смог открыть том:\n%s" % fallback_error,
+                )
+                return False
         except RecognizedFilesystemError as recognized_error:
             panel.provider = None
             panel.refresh()
@@ -3760,24 +3834,36 @@ class MainWindow(QMainWindow):
 
         from .fat32 import Fat32, Fat32Error
 
-        fat_writer_ready = False
-        try:
-            fh = open(self.image_path, "r+b")
-        except OSError as e:
-            fh = None
-            fat_error = e
+        legacy_readonly = getattr(panel.provider, "backend_name", "") in (
+            "pytsk3",
+            "pytsk3-fallback",
+        )
+        fat_writer_ready = legacy_readonly
+        if legacy_readonly:
+            panel.writer = None
+            panel.writer_fh = None
+            panel.write_reason = "Legacy filesystem reader is explicitly read-only."
+            self.log_msg(
+                "Том @ offset %d открыт legacy-reader только для чтения" % offset
+            )
         else:
             try:
-                panel.writer = Fat32(fh, offset=offset)
-                panel.writer_fh = fh
-                panel.volume_label = "FAT32 ofs %d" % offset
-                self.log_msg(
-                    "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
-                )
-                fat_writer_ready = True
-            except Fat32Error as e:
-                fh.close()
+                fh = open(self.image_path, "r+b")
+            except OSError as e:
+                fh = None
                 fat_error = e
+            else:
+                try:
+                    panel.writer = Fat32(fh, offset=offset)
+                    panel.writer_fh = fh
+                    panel.volume_label = "FAT32 ofs %d" % offset
+                    self.log_msg(
+                        "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
+                    )
+                    fat_writer_ready = True
+                except Fat32Error as e:
+                    fh.close()
+                    fat_error = e
 
         # FAT32 keeps its native writer. The ordinary GUI enables writes only
         # for MountFile's in-process clean-ext2 profile; legacy debugfs is a

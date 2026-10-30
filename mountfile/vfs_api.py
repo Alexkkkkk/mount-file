@@ -7,6 +7,8 @@ routing remain in :mod:`mountfile.vfs`.
 
 from __future__ import annotations
 
+from mountfile.capabilities import VFS_READ_CAPABILITIES, VFS_WRITE_CAPABILITIES
+
 
 class ReadOnlyVFSStatMixin:
     """Expose a stable ``stat(path)`` result through the provider's own listing.
@@ -18,6 +20,21 @@ class ReadOnlyVFSStatMixin:
     """
 
     case_insensitive_paths = False
+    case_insensitive_ascii_paths = False
+
+    def _path_names_equal(self, requested: str, actual: str) -> bool:
+        """Compare one path component under this provider's namespace rules."""
+        if requested == actual:
+            return True
+        if self.case_insensitive_paths:
+            return requested.casefold() == actual.casefold()
+        if (
+            self.case_insensitive_ascii_paths
+            and requested.isascii()
+            and actual.isascii()
+        ):
+            return requested.lower() == actual.lower()
+        return False
 
     def stat(self, path: str) -> dict:
         if not isinstance(path, str) or "\x00" in path or "\\" in path:
@@ -44,18 +61,13 @@ class ReadOnlyVFSStatMixin:
             parent = "/" + "/".join(actual_parts) if actual_parts else "/"
             candidates = self.list_dir(parent)
             entry = next(
-                (item for item in candidates if item.get("name") == name), None
+                (
+                    item
+                    for item in candidates
+                    if self._path_names_equal(name, str(item.get("name", "")))
+                ),
+                None,
             )
-            if entry is None and self.case_insensitive_paths:
-                folded = name.casefold()
-                entry = next(
-                    (
-                        item
-                        for item in candidates
-                        if str(item.get("name", "")).casefold() == folded
-                    ),
-                    None,
-                )
             if entry is None:
                 raise FileNotFoundError("VFS path not found: " + "/".join(parts))
             actual_parts.append(str(entry["name"]))
@@ -74,7 +86,7 @@ class ReadOnlyVFSStatMixin:
     @property
     def read_capabilities(self) -> tuple[str, ...]:
         """Operations implemented by every reader using this API contract."""
-        return ("list", "stat", "read-range", "extract")
+        return VFS_READ_CAPABILITIES
 
     @property
     def write_capabilities(self) -> tuple[str, ...]:
@@ -84,7 +96,7 @@ class ReadOnlyVFSStatMixin:
         the provider contract prevents callers from inferring write support
         from the fact that a filesystem is browsable.
         """
-        return ()
+        return VFS_WRITE_CAPABILITIES
 
     @property
     def backend_status(self) -> dict:

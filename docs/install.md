@@ -78,7 +78,7 @@ python -m mountfile --help
 | Компонент | Статус | Назначение и ограничение |
 |---|---|---|
 | PyQt6 (в `requirements.txt` `>=6.11`) | основной для Win 10/11, Linux, macOS | GUI `main.py` |
-| `pytsk3` | optional extra `legacy-tsk`; fallback для форматов без native reader | сборка/колёса зависят от Python и платформы |
+| `pytsk3` | optional extra `legacy-tsk`; явно включаемый fallback только для форматов, не распознанных native routing | сборка/колёса зависят от Python и платформы; recognized unsupported/dirty profiles fail closed |
 | `debugfs` из e2fsprogs | явный library-level compatibility backend для ext2 вне native allowlist и ext3/4; не нужен для supported clean ext2 и не включается GUI автоматически | `debugfs.exe` в `PATH` либо WSL/e2fsprogs; устанавливается через меню компонентов или `install-components.bat` |
 | ImDisk Virtual Disk Driver | нужен для записи в NTFS/exFAT/FAT12/16-образы на Windows | устанавливается через меню компонентов; запуск MountFile от имени администратора; [сайт автора](https://ltr-data.se/opencode.html/) |
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |

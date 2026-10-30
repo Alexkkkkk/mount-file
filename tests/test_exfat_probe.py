@@ -15,6 +15,7 @@ from mountfile.exfat_probe import (
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.safety import RefusalCode
 from mountfile.universal_fs_rw import NativeExfatRW
 
 VOLUME_SIZE = 2 * 1024 * 1024
@@ -35,6 +36,25 @@ def _name_hash(name):
     for value in name.encode("utf-16le"):
         checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
         checksum = (checksum + value) & 0xFFFF
+    return checksum
+
+
+def _compressed_upcase_table():
+    # Identity mappings 0..0x60, ASCII a-z -> A-Z, identity through 0xE3,
+    # ä -> Ä, then identity through U+FFFF.
+    units = [0xFFFF, 97]
+    units.extend(range(ord("A"), ord("Z") + 1))
+    units.extend((0xFFFF, 105))
+    units.append(0x00C4)
+    units.extend((0xFFFF, 0x10000 - 0x00E5))
+    return struct.pack(f"<{len(units)}H", *units)
+
+
+def _upcase_checksum(data):
+    checksum = 0
+    for value in data:
+        checksum = ((checksum >> 1) | ((checksum & 1) << 31)) & 0xFFFFFFFF
+        checksum = (checksum + value) & 0xFFFFFFFF
     return checksum
 
 
@@ -120,6 +140,100 @@ def test_native_exfat_reads_a_bounded_file_entry_set(tmp_path):
         assert provider.read_file_range("/HELLO.TXT", 2, 5) == payload[2:7]
     finally:
         provider.close()
+
+
+def test_native_exfat_uses_upcase_table_for_name_hash_and_path_lookup(tmp_path):
+    path = tmp_path / "exfat-upcase-name.img"
+    payload = _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    root = 32 * 512
+    # The table leaves sharp-s as one UTF-16 code unit. Python casefold()
+    # expands it to "ss", which is not exFAT's table-based name matching.
+    name = "ß.txt"
+    raw[root + 99] = len(name)
+    struct.pack_into("<H", raw, root + 100, _name_hash("ß.TXT"))
+    raw[root + 130 : root + 160] = name.encode("utf-16le").ljust(30, b"\0")
+    struct.pack_into(
+        "<H", raw, root + 66, _entry_set_checksum(raw[root + 64 : root + 160])
+    )
+    path.write_bytes(raw)
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/ß.TXT") == payload
+        with pytest.raises(FileNotFoundError):
+            provider.file_size("/SS.TXT")
+    finally:
+        provider.close()
+
+
+def test_native_exfat_reads_nofatchain_when_fat_entry_is_invalid(tmp_path):
+    path = tmp_path / "exfat-nofat-chain.img"
+    payload = _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    root = 32 * 512
+    raw[root + 97] = 0x02
+    struct.pack_into(
+        "<H", raw, root + 66, _entry_set_checksum(raw[root + 64 : root + 160])
+    )
+    struct.pack_into("<I", raw, 24 * 512 + 3 * 4, 0)
+    path.write_bytes(raw)
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/HELLO.TXT") == payload
+    finally:
+        provider.close()
+
+
+def test_native_exfat_writer_uses_volume_upcase_table_for_new_names(tmp_path):
+    path = tmp_path / "exfat-writer-upcase.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    writer.write_file("/ß.txt", b"unicode payload")
+    writer.mkdir("/ä-dir")
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/ß.TXT") == b"unicode payload"
+        assert provider.list_dir("/Ä-DIR") == []
+        with pytest.raises(FileNotFoundError):
+            provider.file_size("/SS.TXT")
+    finally:
+        provider.close()
+
+
+def test_native_exfat_rejects_file_cluster_marked_free(tmp_path):
+    path = tmp_path / "exfat-free-file-cluster.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    raw[34 * 512] &= ~0x02  # cluster 3 is allocation bitmap bit 1
+    path.write_bytes(raw)
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match="cluster marked free"):
+            provider.read_file("/HELLO.TXT")
+    finally:
+        provider.close()
+
+
+def test_exfat_upcase_table_accepts_compressed_and_uncompressed_forms():
+    table = NativeExfatImage._parse_upcase_table(_compressed_upcase_table())
+    assert table[ord("a")] == ord("A")
+    assert table[ord("ä")] == ord("Ä")
+    assert table[ord("ß")] == ord("ß")
+
+    uncompressed = list(range(0x10000))
+    uncompressed[ord("a") : ord("z") + 1] = range(ord("A"), ord("Z") + 1)
+    raw = struct.pack("<65536H", *uncompressed)
+    assert NativeExfatImage._parse_upcase_table(raw) == tuple(uncompressed)
+
+
+@pytest.mark.parametrize("raw", [b"\xff\xff", b"\xff\xff\x00\x00", b"\x41\x00"])
+def test_exfat_upcase_table_rejects_truncated_or_incomplete_data(raw):
+    with pytest.raises(ExfatReadError, match="up-case"):
+        NativeExfatImage._parse_upcase_table(raw)
 
 
 def test_native_exfat_traverses_nested_paths_and_case_insensitive_stat(tmp_path):
@@ -241,6 +355,24 @@ def test_native_exfat_writer_rejects_nonzero_volume_flags_without_mutation(
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("operation", ["read", "write"])
+def test_native_exfat_writer_range_refusal_preserves_image(tmp_path, operation):
+    path = tmp_path / f"exfat-bounds-{operation}.img"
+    _image_with_volume_flags(path, 0)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    before = path.read_bytes()
+
+    with path.open("r+b") as stream:
+        with pytest.raises(ExfatWriteError) as caught:
+            if operation == "read":
+                writer._read_rel(stream, writer.extent_size - 1, 2)
+            else:
+                writer._write_rel(stream, writer.extent_size - 1, b"xy")
+
+    assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("directory_reader", ["_directory", "system_metadata"])
 def test_directory_limit_is_checked_before_reading_next_cluster(
     monkeypatch, directory_reader
@@ -301,9 +433,11 @@ def _tree_image(path):
     root[0] = 0x81
     struct.pack_into("<I", root, 20, 4)
     struct.pack_into("<Q", root, 24, 512)
+    upcase_data = _compressed_upcase_table()
     root[32] = 0x82
+    struct.pack_into("<I", root, 36, _upcase_checksum(upcase_data))
     struct.pack_into("<I", root, 52, 5)
-    struct.pack_into("<Q", root, 56, 512)
+    struct.pack_into("<Q", root, 56, len(upcase_data))
     root[64] = 0x85
     root[65] = 2
     payload = b"hello exFAT"
@@ -319,7 +453,7 @@ def _tree_image(path):
     region[32 * 512 : 33 * 512] = root
     region[33 * 512 : 33 * 512 + len(payload)] = payload
     region[34 * 512 : 35 * 512] = b"\x0f" + bytes(511)
-    region[35 * 512 : 36 * 512] = bytes(512)
+    region[35 * 512 : 35 * 512 + len(upcase_data)] = upcase_data
     path.write_bytes(region)
     return payload
 
@@ -329,7 +463,9 @@ def _tree_image(path):
     [
         ("missing_bitmap", "allocation bitmap entry is missing"),
         ("missing_upcase", "upcase table entry is missing"),
-        ("bitmap_fat_mismatch", "bitmap/FAT metadata is inconsistent"),
+        ("bitmap_system_cluster_free", "cluster marked free"),
+        ("bitmap_flags", "allocation bitmap geometry is invalid"),
+        ("duplicate_bitmap", "allocation bitmap entry is duplicated"),
         ("upcase_checksum", "upcase table checksum mismatch"),
     ],
 )
@@ -342,8 +478,12 @@ def test_native_exfat_reader_requires_valid_system_metadata(tmp_path, mutate, me
         raw[root] = 0
     elif mutate == "missing_upcase":
         raw[root + 32] = 0
-    elif mutate == "bitmap_fat_mismatch":
+    elif mutate == "bitmap_system_cluster_free":
         raw[34 * 512] ^= 0x04
+    elif mutate == "bitmap_flags":
+        raw[root + 1] = 1
+    elif mutate == "duplicate_bitmap":
+        raw[root + 160 : root + 192] = raw[root : root + 32]
     else:
         raw[35 * 512] = 1
     path.write_bytes(raw)

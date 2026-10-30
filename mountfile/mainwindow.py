@@ -38,6 +38,7 @@ from .qt_compat import (
     Stretch,
 )
 from .vfs import (
+    LegacyFallbackAvailableError,
     RecognizedFilesystemError,
     TskError,
     open_image_provider,
@@ -383,6 +384,35 @@ class MainWindow(QMainWindow):
             self.backend = backend_names.get(
                 getattr(self.provider, "backend_name", ""), "read-only provider"
             )
+        except LegacyFallbackAvailableError as native_err:
+            answer = QMessageBox.question(
+                self,
+                "Попробовать legacy-парсер?",
+                "Встроенный reader не распознал формат тома. Попробовать The Sleuth Kit "
+                "для просмотра в режиме только чтения? Это не включает запись.\n\n%s"
+                % native_err,
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                self.provider = None
+                return
+            try:
+                self.provider = open_image_provider(
+                    self.image_path,
+                    offset=offset,
+                    volume_size=volume_size,
+                    allow_legacy_fallback=True,
+                )
+                self.backend = "The Sleuth Kit (legacy fallback; read-only)"
+            except TskError as fallback_err:
+                self.provider = None
+                QMessageBox.warning(
+                    self,
+                    "Не удалось открыть том",
+                    "Legacy reader не смог открыть том:\n%s" % fallback_err,
+                )
+                return
         except RecognizedFilesystemError as native_err:
             self.provider = None
             QMessageBox.warning(
@@ -413,7 +443,15 @@ class MainWindow(QMainWindow):
         self.tree.selectionModel().currentChanged.connect(self.on_selection)
         self.tree.header().setSectionResizeMode(0, Stretch)
         self.log_msg("Volume mounted @ offset %d via %s" % (offset, self.backend))
-        self._open_writer(offset)
+        if getattr(self.provider, "backend_name", "") in (
+            "pytsk3",
+            "pytsk3-fallback",
+        ):
+            self.writer = None
+            self.writer_fh = None
+            self.log_msg("Legacy reader mounted read-only; image writing is disabled")
+        else:
+            self._open_writer(offset)
 
     def _open_writer(self, offset):
         try:

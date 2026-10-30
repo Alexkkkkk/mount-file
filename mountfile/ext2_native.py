@@ -20,13 +20,18 @@ import struct
 import tempfile
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 
 
 class NativeExt2Error(RuntimeError):
     """A request is unsafe or unsupported by the native ext2 profile."""
+
+    def __init__(self, message: str, code: RefusalCode | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class NativeExt2UnsafeError(NativeExt2Error):
@@ -248,12 +253,19 @@ class _Ext2FS:
 
     def _read_at(self, offset: int, length: int, absolute: bool = False) -> bytes:
         start = offset if absolute else self.offset + offset
-        end = start + length
-        if length < 0 or start < 0 or end > self.image_size:
-            raise NativeExt2Error("ext2 read is outside image bounds")
+        try:
+            checked_range(start, length, upper=self.image_size)
+        except RefusalError as exc:
+            raise NativeExt2Error(
+                "ext2 read is outside image bounds", exc.code
+            ) from exc
         if not absolute and hasattr(self, "filesystem_size"):
-            if start < self.offset or end > self.offset + self.filesystem_size:
-                raise NativeExt2Error("ext2 read is outside filesystem bounds")
+            try:
+                checked_range(offset, length, upper=self.filesystem_size)
+            except RefusalError as exc:
+                raise NativeExt2Error(
+                    "ext2 read is outside filesystem bounds", exc.code
+                ) from exc
         with self.path.open("rb") as stream:
             stream.seek(start)
             data = stream.read(length)
@@ -262,8 +274,12 @@ class _Ext2FS:
         return data
 
     def _write_at(self, offset: int, data: bytes) -> None:
-        if offset < 0 or offset + len(data) > self.filesystem_size:
-            raise NativeExt2Error("ext2 write is outside filesystem bounds")
+        try:
+            checked_range(offset, len(data), upper=self.filesystem_size)
+        except RefusalError as exc:
+            raise NativeExt2Error(
+                "ext2 write is outside filesystem bounds", exc.code
+            ) from exc
         with self.path.open("r+b") as stream:
             stream.seek(self.offset + offset)
             written = stream.write(data)
@@ -1096,7 +1112,8 @@ class _Ext2FS:
             _, _, children = self._dir_entries(inode_num)
             if any(item["name_bytes"] not in (b".", b"..") for item in children):
                 raise NativeExt2Error(
-                    "native ext2 phase 1 deletes only empty directories; recursive delete is unsupported"
+                    "native ext2 phase 1 deletes only empty directories; "
+                    "recursive delete is unsupported"
                 )
             if self._u16(raw, 26) != 2:
                 raise NativeExt2Error("unexpected ext2 directory link count")

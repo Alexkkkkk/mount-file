@@ -173,6 +173,19 @@ def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     _assert_e2fsck_clean(check_image)
 
 
+def test_native_ext2_writer_range_refusal_preserves_image_bytes(tmp_path):
+    image = tmp_path / "bounded-write.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+
+    with pytest.raises(NativeExt2Error) as caught:
+        writer._fs._write_at(writer._fs.filesystem_size - 1, b"overflow")
+
+    assert caught.value.code is ext2_native.RefusalCode.RANGE_OUT_OF_BOUNDS
+    assert image.read_bytes() == before
+
+
 def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
     tmp_path, monkeypatch
 ):

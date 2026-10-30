@@ -8,11 +8,15 @@ import pytest
 from mountfile import vfs
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
+    NtfsAttributeListEntry,
     NtfsAttributeSummary,
+    NtfsIndexEntry,
     NtfsMetadataError,
     NtfsRun,
     _parse_ntfs_index_block,
+    _parse_ntfs_upcase_table,
     _parse_runlist,
+    parse_ntfs_attribute_list,
     parse_ntfs_attribute_stream,
     parse_ntfs_file_name,
     parse_ntfs_index_block,
@@ -77,6 +81,69 @@ def _record(*, attr_type=0xFFFFFFFF, nonresident=False):
     return bytes(raw)
 
 
+def _record_with_attributes(attributes, *, sequence=3, base_file_reference=0):
+    raw = bytearray(_record())
+    attribute_offset = 0x38
+    attribute_bytes = b"".join(attributes) + struct.pack("<I", 0xFFFFFFFF)
+    raw[attribute_offset : attribute_offset + len(attribute_bytes)] = attribute_bytes
+    struct.pack_into("<I", raw, 0x18, attribute_offset + len(attribute_bytes))
+    struct.pack_into("<H", raw, 0x10, sequence)
+    struct.pack_into("<Q", raw, 0x20, base_file_reference)
+    return bytes(raw)
+
+
+def _resident_attribute(type_code, attribute_id, value, *, name=""):
+    encoded_name = name.encode("utf-16le")
+    value_offset = (24 + len(encoded_name) + 7) & ~7
+    length = (value_offset + len(value) + 7) & ~7
+    attribute = bytearray(length)
+    struct.pack_into(
+        "<IIBBHH", attribute, 0, type_code, length, 0, len(name), 24 if name else 0, 0
+    )
+    struct.pack_into("<H", attribute, 14, attribute_id)
+    struct.pack_into("<IH", attribute, 16, len(value), value_offset)
+    attribute[24 : 24 + len(encoded_name)] = encoded_name
+    attribute[value_offset : value_offset + len(value)] = value
+    return bytes(attribute)
+
+
+def _nonresident_attribute(
+    type_code,
+    attribute_id,
+    lowest_vcn,
+    highest_vcn,
+    lcn,
+    data_size,
+    *,
+    name="",
+):
+    encoded_name = name.encode("utf-16le")
+    runlist_offset = (64 + len(encoded_name) + 7) & ~7
+    runlist = bytes((0x11, 0x01, lcn, 0x00))
+    length = (runlist_offset + len(runlist) + 7) & ~7
+    attribute = bytearray(length)
+    struct.pack_into(
+        "<IIBBHHH",
+        attribute,
+        0,
+        type_code,
+        length,
+        1,
+        len(name),
+        64 if name else 0,
+        0,
+        attribute_id,
+    )
+    struct.pack_into("<qQ", attribute, 16, lowest_vcn, highest_vcn)
+    struct.pack_into("<H", attribute, 32, runlist_offset)
+    struct.pack_into("<Q", attribute, 40, (highest_vcn - lowest_vcn + 1) * CLUSTER)
+    struct.pack_into("<Q", attribute, 48, data_size)
+    struct.pack_into("<Q", attribute, 56, data_size)
+    attribute[64 : 64 + len(encoded_name)] = encoded_name
+    attribute[runlist_offset : runlist_offset + len(runlist)] = runlist
+    return bytes(attribute)
+
+
 def _image(tmp_path, record=None):
     image = bytearray(VOLUME_SIZE)
     image[:512] = _boot()
@@ -87,6 +154,74 @@ def _image(tmp_path, record=None):
     path = tmp_path / "ntfs.img"
     path.write_bytes(image)
     return path
+
+
+def _attribute_list_entry(
+    type_code, file_reference, *, lowest_vcn=0, attribute_id=1, name=""
+):
+    name_bytes = name.encode("utf-16le")
+    entry_length = (26 + len(name_bytes) + 7) & ~7
+    entry = bytearray(entry_length)
+    struct.pack_into(
+        "<IHBBqQH",
+        entry,
+        0,
+        type_code,
+        entry_length,
+        len(name),
+        26,
+        lowest_vcn,
+        file_reference,
+        attribute_id,
+    )
+    entry[26 : 26 + len(name_bytes)] = name_bytes
+    return bytes(entry)
+
+
+def _filename_index_entry(name, record_number):
+    encoded = name.encode("utf-16le")
+    key = bytearray(66 + len(encoded))
+    struct.pack_into("<Q", key, 0, (3 << 48) | 5)
+    key[64] = len(encoded) // 2
+    key[65] = 3
+    key[66:] = encoded
+    entry_length = (16 + len(key) + 7) & ~7
+    entry = bytearray(entry_length)
+    struct.pack_into(
+        "<QHHI", entry, 0, (3 << 48) | record_number, entry_length, len(key), 0
+    )
+    entry[16 : 16 + len(key)] = key
+    return bytes(entry)
+
+
+def _index_root_value(entries):
+    end_entry = struct.pack("<QHHI", 0, 16, 0, 2)
+    entry_bytes = b"".join(entries)
+    total_size = 16 + len(entry_bytes) + len(end_entry)
+    value = bytearray(16 + total_size)
+    struct.pack_into("<III", value, 16, 16, total_size, total_size)
+    value[32 : 32 + len(entry_bytes)] = entry_bytes
+    value[32 + len(entry_bytes) :] = end_entry
+    return bytes(value)
+
+
+def _unicode_upcase_table():
+    values = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        values[codepoint] = codepoint - 32
+    values[ord("é")] = ord("É")
+    return tuple(values)
+
+
+def _file_name_value(name, parent_reference, file_attributes=0):
+    encoded = name.encode("utf-16le")
+    value = bytearray(66 + len(encoded))
+    struct.pack_into("<Q", value, 0, parent_reference)
+    struct.pack_into("<I", value, 56, file_attributes)
+    value[64] = len(encoded) // 2
+    value[65] = 3
+    value[66:] = encoded
+    return bytes(value)
 
 
 def test_validates_backup_mft_mirror_and_attribute_end_marker(tmp_path):
@@ -121,6 +256,18 @@ def test_ntfs_without_explicit_extent_does_not_fall_back_to_pytsk3(
         vfs.open_image_provider(image_path)
 
 
+def test_ntfs_signature_outside_selected_extent_is_not_probed(tmp_path):
+    image_path = tmp_path / "neighbor-signature.img"
+    image = bytearray(512)
+    image[3:11] = b"NTFS    "
+    image_path.write_bytes(image)
+
+    with pytest.raises(vfs.LegacyFallbackAvailableError):
+        vfs.open_image_provider(
+            image_path, offset=0, volume_size=3, allow_legacy_fallback=False
+        )
+
+
 def test_rejects_backup_geometry_mismatch(tmp_path):
     image = bytearray(_image(tmp_path).read_bytes())
     struct.pack_into("<Q", image, VOLUME_SIZE - 512 + 0x28, TOTAL - 1)
@@ -150,6 +297,427 @@ def test_decodes_bounded_signed_ntfs_runs():
 def test_rejects_sparse_ntfs_run():
     with pytest.raises(NtfsMetadataError, match="sparse"):
         _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+
+
+def test_parses_bounded_attribute_list_entries_and_extension_references():
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    raw = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference),
+            _attribute_list_entry(0x80, base_reference, name="notes"),
+            _attribute_list_entry(
+                0x80,
+                extension_reference,
+                lowest_vcn=8,
+                attribute_id=0,
+                name="notes",
+            ),
+        )
+    )
+    entries = parse_ntfs_attribute_list(raw)
+
+    assert entries == (
+        NtfsAttributeListEntry(0x10, "", 0, base_reference, 1),
+        NtfsAttributeListEntry(0x80, "notes", 0, base_reference, 1),
+        NtfsAttributeListEntry(0x80, "notes", 8, extension_reference, 0),
+    )
+
+
+def test_attribute_list_uses_upcase_table_for_unicode_duplicate_keys():
+    table = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        table[codepoint] = codepoint - 32
+    table[0x00E9] = 0x00C9
+    table = tuple(table)
+    raw = _attribute_list_entry(0x80, (1 << 48) | 1, name="É") + _attribute_list_entry(
+        0x80, (1 << 48) | 2, name="é"
+    )
+
+    with pytest.raises(NtfsMetadataError, match="duplicate entry"):
+        parse_ntfs_attribute_list(raw, upcase_table=table)
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    [
+        (bytes(24), "header is truncated"),
+        (
+            struct.pack("<IHBBqQH", 0x80, 30, 0, 26, 0, (1 << 48) | 1, 0) + bytes(6),
+            "entry length is invalid",
+        ),
+        (_attribute_list_entry(0x80, 42), "zero sequence"),
+        (_attribute_list_entry(0x80, (1 << 48) | 1, lowest_vcn=-1), "negative"),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, name="\x00"),
+            "contains NUL",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1)
+            + _attribute_list_entry(0x10, (1 << 48) | 2),
+            "type order",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, name="zeta")
+            + _attribute_list_entry(0x80, (1 << 48) | 2, name="alpha"),
+            "name/VCN order",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, lowest_vcn=8, name="notes")
+            + _attribute_list_entry(0x80, (1 << 48) | 2, lowest_vcn=0, name="notes"),
+            "VCN order",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, name="notes")
+            + _attribute_list_entry(0x80, (1 << 48) | 2, name="notes"),
+            "duplicate entry",
+        ),
+        (_attribute_list_entry(0x20, (1 << 48) | 1), "must not reference itself"),
+        (bytearray((1 << 20) + 8), "invalid bounded length"),
+    ],
+)
+def test_rejects_malformed_attribute_list_entries(raw, message):
+    with pytest.raises(NtfsMetadataError, match=message):
+        parse_ntfs_attribute_list(raw)
+
+
+def test_rejects_invalid_upcase_table_for_attribute_list_collation():
+    raw = _attribute_list_entry(0x10, (1 << 48) | 1)
+    with pytest.raises(NtfsMetadataError, match=r"invalid \$UpCase table"):
+        parse_ntfs_attribute_list(raw, upcase_table=(0,))
+
+
+def test_attribute_stream_validates_resident_list_then_refuses_extension_resolution():
+    reference = (3 << 48) | 5
+    value = _attribute_list_entry(0x10, reference)
+    raw = bytearray(_record(attr_type=0x20))
+    attribute_offset = 0x38
+    attribute_length = (24 + len(value) + 7) & ~7
+    struct.pack_into("<I", raw, 0x18, attribute_offset + attribute_length + 4)
+    struct.pack_into("<I", raw, attribute_offset + 4, attribute_length)
+    struct.pack_into("<I", raw, attribute_offset + 16, len(value))
+    struct.pack_into("<H", raw, attribute_offset + 20, 24)
+    raw[attribute_offset + 24 : attribute_offset + 24 + len(value)] = value
+    struct.pack_into("<I", raw, attribute_offset + attribute_length, 0xFFFFFFFF)
+
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(bytes(raw))
+    with pytest.raises(NtfsMetadataError, match="extension-record resolution"):
+        parse_ntfs_attribute_stream(record)
+
+
+def test_attribute_stream_only_exposes_attribute_list_when_explicitly_enabled():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    value = _attribute_list_entry(0x10, base_reference, attribute_id=1)
+    record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, value),
+            ),
+            sequence=7,
+        )
+    )
+
+    with pytest.raises(NtfsMetadataError, match="extension-record resolution"):
+        parse_ntfs_attribute_stream(record)
+    with pytest.raises(NtfsMetadataError, match="must be a boolean"):
+        parse_ntfs_attribute_stream(record, allow_attribute_list=1)
+    attributes = parse_ntfs_attribute_stream(record, allow_attribute_list=True)
+    assert [
+        (attribute.type_code, attribute.attribute_id) for attribute in attributes
+    ] == [
+        (0x10, 1),
+        (0x20, 2),
+    ]
+
+
+def _attribute_list_reader(extension_record):
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(
+        boot=SimpleNamespace(cluster_count=TOTAL, cluster_size=CLUSTER)
+    )
+    reader._upcase_table = None
+    base_reference = (7 << 48) | 42
+
+    def read_mft_record(record_number, *, reference=None):
+        assert record_number == 43
+        assert reference == (8 << 48) | 43
+        return extension_record
+
+    reader.read_mft_record = read_mft_record
+    return reader, base_reference
+
+
+def test_attribute_list_resolves_extension_record_and_validates_attribute_id():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x30, 4, b"child-name"),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    attributes = reader._attributes_for_record(42, base_record)
+
+    assert [
+        (attribute.type_code, attribute.attribute_id) for attribute in attributes
+    ] == [
+        (0x20, 2),
+        (0x10, 1),
+        (0x30, 4),
+    ]
+    assert attributes[-1].resident_value == b"child-name"
+
+
+def test_attribute_list_rejects_extension_with_wrong_base_reference():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x30, 4, b"name"),),
+            sequence=8,
+            base_file_reference=(6 << 48) | 41,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="different base FILE record"):
+        reader._attributes_for_record(42, base_record)
+
+
+def test_attribute_list_rejects_stale_base_sequence_and_wrong_attribute_id():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    stale_base_list = b"".join(
+        (
+            _attribute_list_entry(0x10, (6 << 48) | 42, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, stale_base_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x30, 3, b"child-name"),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="base-record sequence"):
+        reader._attributes_for_record(42, base_record)
+
+    valid_base_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    valid_base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, valid_base_list),
+            ),
+            sequence=7,
+        )
+    )
+    with pytest.raises(NtfsMetadataError, match="does not identify one FILE attribute"):
+        reader._attributes_for_record(42, valid_base_record)
+
+
+def test_attribute_list_reads_bounded_nonresident_value():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    value = _attribute_list_entry(0x10, base_reference, attribute_id=1)
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _nonresident_attribute(0x20, 2, 0, 0, 10, len(value)),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(_record())
+    reader, _base_reference = _attribute_list_reader(extension_record)
+    reads = []
+
+    def read_runs(runs, offset, length):
+        reads.append((runs, offset, length))
+        return value
+
+    reader._read_runs = read_runs
+    attributes = reader._attributes_for_record(42, base_record)
+
+    assert attributes[-1].type_code == 0x10
+    assert reads[0][1:] == (0, len(value))
+
+
+def test_attribute_list_merges_adjacent_nonresident_data_extents():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x80, base_reference, lowest_vcn=0, attribute_id=5),
+            _attribute_list_entry(
+                0x80, extension_reference, lowest_vcn=1, attribute_id=0
+            ),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _nonresident_attribute(0x80, 5, 0, 0, 10, 2 * CLUSTER),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_nonresident_attribute(0x80, 9, 1, 1, 11, 2 * CLUSTER),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    attributes = reader._attributes_for_record(42, base_record)
+    data = next(attribute for attribute in attributes if attribute.type_code == 0x80)
+
+    assert data.lowest_vcn == 0
+    assert data.highest_vcn == 1
+    assert data.data_size == 2 * CLUSTER
+    assert [(run.vcn, run.lcn, run.length) for run in data.runs] == [
+        (0, 10, 1),
+        (1, 11, 1),
+    ]
+    reader._resolve = lambda _path: (42, base_record)
+    reader._read_runs = lambda _runs, _offset, length: b"x" * length
+    assert reader.file_size("/large.bin") == 2 * CLUSTER
+    assert reader.read_file_range("/large.bin", 0, 16) == b"x" * 16
+
+
+def test_attribute_list_rejects_data_extents_with_vcn_gap():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x80, base_reference, lowest_vcn=0, attribute_id=5),
+            _attribute_list_entry(
+                0x80, extension_reference, lowest_vcn=2, attribute_id=0
+            ),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _nonresident_attribute(0x80, 5, 0, 0, 10, 3 * CLUSTER),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_nonresident_attribute(0x80, 0, 2, 2, 11, 3 * CLUSTER),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="VCN gap or overlap"):
+        reader._attributes_for_record(42, base_record)
+
+
+@pytest.mark.parametrize(
+    ("nonresident", "flags", "message"),
+    [
+        (False, 0x0001, "compressed, encrypted or sparse"),
+        (False, 0x0004, "unknown flag bits"),
+        (True, 0x4000, "compressed, encrypted or sparse"),
+        (True, 0x0004, "unknown flag bits"),
+    ],
+)
+def test_attribute_stream_rejects_unsupported_and_unknown_flags(
+    nonresident, flags, message
+):
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    raw = bytearray(
+        _record(attr_type=0x80 if nonresident else 0x30, nonresident=nonresident)
+    )
+    attribute_length = 72 if nonresident else 24
+    if nonresident:
+        struct.pack_into("<I", raw, 0x3C, attribute_length)
+    struct.pack_into("<H", raw, 0x38 + 12, flags)
+    used = 0x38 + attribute_length + 4
+    struct.pack_into("<I", raw, 0x18, used)
+    struct.pack_into("<I", raw, 0x38 + attribute_length, 0xFFFFFFFF)
+
+    record = parse_ntfs_file_record_header(bytes(raw))
+    with pytest.raises(NtfsMetadataError, match=message):
+        parse_ntfs_attribute_stream(record)
 
 
 def test_rejects_attribute_name_that_overlaps_its_header():
@@ -268,6 +836,60 @@ def test_parses_bounded_index_root_file_name_entry():
         parse_ntfs_index_root(bytes(value))
 
 
+def test_ntfs_index_root_uses_upcase_table_for_unicode_collation():
+    table = _unicode_upcase_table()
+    sorted_index = _index_root_value(
+        [_filename_index_entry("Zebra", 42), _filename_index_entry("Éclair", 43)]
+    )
+    entries = parse_ntfs_index_root(sorted_index, upcase_table=table)
+    assert [entry.name for entry in entries] == ["Zebra", "Éclair"]
+
+    unsorted_index = _index_root_value(
+        [_filename_index_entry("Éclair", 42), _filename_index_entry("Zebra", 43)]
+    )
+    with pytest.raises(NtfsMetadataError, match="duplicate or unsorted"):
+        parse_ntfs_index_root(unsorted_index, upcase_table=table)
+
+
+def test_ntfs_index_root_rejects_casefold_duplicate_unicode_names():
+    duplicate_index = _index_root_value(
+        [_filename_index_entry("Éclair", 42), _filename_index_entry("éclair", 43)]
+    )
+    with pytest.raises(NtfsMetadataError, match="duplicate or unsorted"):
+        parse_ntfs_index_root(duplicate_index, upcase_table=_unicode_upcase_table())
+
+
+def test_ntfs_index_root_rejects_malformed_upcase_table():
+    with pytest.raises(NtfsMetadataError, match="invalid \\$UpCase table"):
+        parse_ntfs_index_root(_index_root_value([]), upcase_table=(0,))
+
+
+def test_native_ntfs_directory_reader_uses_upcase_collation(monkeypatch):
+    from types import SimpleNamespace
+
+    root_value = _index_root_value(
+        [_filename_index_entry("Éclair", 42), _filename_index_entry("Zebra", 43)]
+    )
+    root_attribute = NtfsAttributeSummary(
+        type_code=0x90,
+        length=len(root_value),
+        nonresident=False,
+        name="$I30",
+        resident_value=root_value,
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (root_attribute,),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader._upcase_table = _unicode_upcase_table()
+    root_record = SimpleNamespace(sequence_number=3)
+
+    with pytest.raises(NtfsMetadataError, match="duplicate or unsorted"):
+        reader.list_dir_by_record(5, root_record)
+
+
 def test_validates_indx_usa_before_parsing_entries():
     block = bytearray(4096)
     block[:4] = b"INDX"
@@ -338,6 +960,265 @@ def test_parses_resident_filename_and_standard_information_bounds():
         parse_ntfs_file_name(bytes(value[:65]))
     with pytest.raises(NtfsMetadataError, match="STANDARD_INFORMATION"):
         parse_ntfs_standard_information(bytes(47))
+
+
+def test_native_ntfs_index_entry_matches_child_filename_metadata(monkeypatch):
+    from types import SimpleNamespace
+
+    parent_reference = (3 << 48) | 5
+    filename = NtfsAttributeSummary(
+        type_code=0x30,
+        length=80,
+        nonresident=False,
+        name="",
+        resident_value=_file_name_value("éclair", parent_reference),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (filename,),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader._upcase_table = _unicode_upcase_table()
+    entry = NtfsIndexEntry((3 << 48) | 42, "Éclair", False)
+
+    assert reader._validate_index_entry_metadata(
+        entry, SimpleNamespace(is_directory=False), parent_reference
+    ) == (filename,)
+
+
+@pytest.mark.parametrize(
+    ("filename", "parent_reference", "file_attributes"),
+    [
+        ("other.txt", (3 << 48) | 5, 0),
+        ("Éclair", (4 << 48) | 5, 0),
+        ("Éclair", (3 << 48) | 5, 0x10000000),
+    ],
+)
+def test_native_ntfs_index_entry_rejects_inconsistent_child_filename(
+    monkeypatch, filename, parent_reference, file_attributes
+):
+    from types import SimpleNamespace
+
+    attribute = NtfsAttributeSummary(
+        type_code=0x30,
+        length=80,
+        nonresident=False,
+        name="",
+        resident_value=_file_name_value(filename, parent_reference, file_attributes),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (attribute,),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader._upcase_table = _unicode_upcase_table()
+    entry = NtfsIndexEntry((3 << 48) | 42, "Éclair", False)
+
+    with pytest.raises(NtfsMetadataError, match="disagrees with child FILE_NAME"):
+        reader._validate_index_entry_metadata(
+            entry, SimpleNamespace(is_directory=False), (3 << 48) | 5
+        )
+
+
+def test_native_ntfs_index_entry_rejects_mismatched_mft_directory_flag():
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    entry = NtfsIndexEntry((3 << 48) | 42, "folder", False)
+
+    with pytest.raises(NtfsMetadataError, match="directory flag disagrees"):
+        reader._validate_index_entry_metadata(
+            entry, SimpleNamespace(is_directory=True), (3 << 48) | 5
+        )
+
+
+@pytest.mark.parametrize("name", ["café.txt", "file-📁.txt"])
+def test_parses_unicode_ntfs_filename_and_directory_index_key(name):
+    encoded_name = name.encode("utf-16le")
+    name_units = len(encoded_name) // 2
+    filename = bytearray(66 + len(encoded_name))
+    struct.pack_into("<Q", filename, 0, (3 << 48) | 5)
+    filename[64] = name_units
+    filename[65] = 3
+    filename[66:] = encoded_name
+    assert parse_ntfs_file_name(bytes(filename)).name == name
+
+    key = bytearray(66 + len(encoded_name))
+    struct.pack_into("<Q", key, 0, (3 << 48) | 5)
+    key[64] = name_units
+    key[65] = 3
+    key[66:] = encoded_name
+    entry_length = (16 + len(key) + 7) & ~7
+    value = bytearray(32 + entry_length + 16)
+    total_size = 16 + entry_length + 16
+    struct.pack_into("<III", value, 16, 16, total_size, total_size)
+    struct.pack_into("<QHHI", value, 32, (3 << 48) | 42, entry_length, len(key), 0)
+    value[48 : 48 + len(key)] = key
+    struct.pack_into("<QHHI", value, 32 + entry_length, 0, 16, 0, 2)
+    entries = parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 5)
+    assert [entry.name for entry in entries] == [name]
+
+
+def test_ntfs_paths_use_exact_unicode_and_case_insensitive_ascii_lookup():
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reference = (3 << 48) | 42
+    root = SimpleNamespace(is_directory=True, sequence_number=3)
+    child = SimpleNamespace(is_directory=False, sequence_number=3)
+    reader.read_mft_record = lambda number, **_kwargs: root if number == 5 else child
+    reader._validate_index_entry_metadata = lambda *_args: ()
+    reader.list_dir_by_record = lambda *_args: (
+        NtfsIndexEntry(reference, "café.txt", False),
+        NtfsIndexEntry(reference + 1, "Readme.TXT", False),
+    )
+
+    assert reader._resolve("/café.txt")[0] == 42
+    assert reader._resolve("/README.txt")[0] == 43
+    with pytest.raises(NtfsMetadataError, match="component not found"):
+        reader._resolve("/CAFÉ.txt")
+
+    reader.list_dir = lambda _path: [
+        {"name": "café.txt", "is_dir": False, "size": 1},
+        {"name": "Readme.TXT", "is_dir": False, "size": 2},
+    ]
+    assert reader.stat("/café.txt")["size"] == 1
+    assert reader.stat("/README.txt")["name"] == "Readme.TXT"
+    with pytest.raises(FileNotFoundError):
+        reader.stat("/CAFÉ.txt")
+
+
+def test_ntfs_upcase_table_enables_unicode_case_insensitive_lookup(monkeypatch):
+    from types import SimpleNamespace
+
+    values = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        values[codepoint] = codepoint - 32
+    values[ord("é")] = ord("É")
+    values[ord("t")] = ord("T")
+    values[ord("x")] = ord("X")
+    raw = struct.pack("<65536H", *values)
+
+    table = _parse_ntfs_upcase_table(raw)
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader._upcase_table = table
+    assert reader._path_names_equal("CAFÉ.TXT", "café.txt")
+    assert reader._path_names_equal("file-📁.txt", "FILE-📁.TXT")
+    with pytest.raises(NtfsMetadataError, match="valid UTF-16"):
+        reader._path_names_equal("\ud800", "name")
+    with pytest.raises(NtfsMetadataError, match="255 UTF-16 code units"):
+        reader._path_names_equal("n" * 256, "name")
+
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader.read_mft_record = lambda number: object()
+    reader._read_runs = lambda runs, offset, length: raw
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (
+            NtfsAttributeSummary(
+                type_code=0x80,
+                length=64,
+                nonresident=True,
+                name="",
+                lowest_vcn=0,
+                highest_vcn=31,
+                run_count=1,
+                runs=(NtfsRun(0, 1, 32),),
+                data_size=len(raw),
+            ),
+        ),
+    )
+    reader.profile.boot.cluster_size = 4096
+    assert reader._load_upcase_table() == table
+
+    reference = (3 << 48) | 42
+    root = SimpleNamespace(is_directory=True, sequence_number=3)
+    child = SimpleNamespace(is_directory=False, sequence_number=3)
+    reader.read_mft_record = lambda number, **_kwargs: root if number == 5 else child
+    reader._validate_index_entry_metadata = lambda *_args: ()
+    reader.list_dir_by_record = lambda *_args: (
+        NtfsIndexEntry(reference, "café.txt", False),
+    )
+    assert reader._resolve("/CAFÉ.txt")[0] == 42
+
+    reader.list_dir = lambda _path: [{"name": "café.txt", "is_dir": False, "size": 1}]
+    assert reader.stat("/CAFÉ.txt")["name"] == "café.txt"
+
+
+def test_ntfs_upcase_parser_rejects_noncanonical_table_sizes():
+    with pytest.raises(NtfsMetadataError, match="invalid size"):
+        _parse_ntfs_upcase_table(bytes(1024))
+
+
+def test_ntfs_upcase_parser_rejects_non_idempotent_mapping():
+    values = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        values[codepoint] = codepoint - 32
+    values[0x100] = 0x101
+    values[0x101] = 0x102
+    with pytest.raises(NtfsMetadataError, match="non-idempotent"):
+        _parse_ntfs_upcase_table(struct.pack("<65536H", *values))
+
+
+@pytest.mark.parametrize(
+    "failure", ["missing-record", "missing-stream", "wrong-size", "invalid-table"]
+)
+def test_ntfs_upcase_load_failure_falls_back_to_safe_name_matching(
+    monkeypatch, failure
+):
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(
+        boot=SimpleNamespace(cluster_count=128, cluster_size=4096)
+    )
+    reader._upcase_table = None
+    raw = bytes(131072)
+    if failure == "invalid-table":
+        values = list(range(1 << 16))
+        for codepoint in range(ord("a"), ord("z") + 1):
+            values[codepoint] = codepoint - 32
+        values[0x100] = 0x101
+        values[0x101] = 0x102
+        raw = struct.pack("<65536H", *values)
+
+    if failure == "missing-record":
+
+        def _missing_record(_number):
+            raise NtfsMetadataError("MFT record not available")
+
+        reader.read_mft_record = _missing_record
+    else:
+        reader.read_mft_record = lambda _number: object()
+
+    if failure == "missing-stream":
+        attributes = ()
+    else:
+        data_size = len(raw) // 2 if failure == "wrong-size" else len(raw)
+        attributes = (
+            NtfsAttributeSummary(
+                type_code=0x80,
+                length=64,
+                nonresident=True,
+                name="",
+                lowest_vcn=0,
+                highest_vcn=31,
+                run_count=1,
+                runs=(NtfsRun(0, 1, 32),),
+                data_size=data_size,
+            ),
+        )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: attributes,
+    )
+    reader._read_runs = lambda *_args: raw
+
+    assert reader._load_upcase_table() is None
+    assert reader._path_names_equal("README.TXT", "Readme.txt")
+    assert not reader._path_names_equal("CAFÉ.txt", "café.txt")
 
 
 def test_rejects_unknown_ntfs_volume_flags():

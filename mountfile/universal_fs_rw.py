@@ -5,7 +5,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
 Расширяет UniversalFS записью через стратегии с явными ограничениями:
 
-  1. NativeFat32Writer  — FAT12/16/32, прямая правка FAT + LFN + каталогов
+  1. NativeFat32Writer  — bounded native FAT32 writer (FAT, LFN, каталоги)
   2. NativeExt2Writer   — ограниченный clean ext2 profile, in-process Python
   3. ExtDebugfsWriter   — явный legacy ext2/3/4 compatibility backend через `debugfs -w`
   4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
@@ -39,14 +39,18 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
+from mountfile.capabilities import (
+    NATIVE_WRITE_PROFILES_BY_STRATEGY,
+    RW_READ_CAPABILITIES,
+    RW_WRITE_CAPABILITIES,
+)
 from mountfile.rw.journal import Journal as _VerifiedJournal
+from mountfile.safety import RefusalError, checked_range
 
 try:
     import pytsk3
@@ -323,7 +327,7 @@ class FSInfo:
     total_size: int = 0
     writable: bool = False
     write_strategy: str = ""
-    read_capabilities: tuple[str, ...] = ("list", "read", "extract")
+    read_capabilities: tuple[str, ...] = RW_READ_CAPABILITIES
     write_capabilities: tuple[str, ...] = ()
     write_rejection_reason: str = ""
 
@@ -515,7 +519,7 @@ class RWBackend(ABC):
 # 4. NATIVE EXFAT (phase-one read + limited write)
 # =============================================================================
 class NativeExfatRW(RWBackend):
-    """Bounded exFAT writer: replace-in-place and same-directory rename only."""
+    """Bounded exFAT writer for profile-validated file and directory operations."""
 
     def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
         super().__init__(image, offset)
@@ -625,22 +629,21 @@ class Fat32RW(RWBackend):
         self._parse_bpb()
 
     def _read_at(self, offset: int, length: int) -> bytes:
-        if (
-            offset < 0
-            or length < 0
-            or offset + length < offset
-            or offset + length > self.volume_size
-        ):
-            raise ValueError("FAT read exceeds selected volume bounds")
+        try:
+            checked_range(offset, length, upper=self.volume_size)
+        except RefusalError as exc:
+            raise RefusalError(
+                "FAT read exceeds selected volume bounds", exc.code
+            ) from exc
         return super()._read_at(offset, length)
 
     def _write_at(self, offset: int, data: bytes) -> None:
-        if (
-            offset < 0
-            or offset + len(data) < offset
-            or offset + len(data) > self.volume_size
-        ):
-            raise ValueError("FAT write exceeds selected volume bounds")
+        try:
+            checked_range(offset, len(data), upper=self.volume_size)
+        except RefusalError as exc:
+            raise RefusalError(
+                "FAT write exceeds selected volume bounds", exc.code
+            ) from exc
         with self.image.open("r+b") as stream:
             stream.seek(self.offset + offset)
             written = stream.write(data)
@@ -2547,15 +2550,28 @@ class UniversalFSRW:
 
     @staticmethod
     def backend_status(info: FSInfo) -> dict:
-        """Return a serialisable, conservative operation capability matrix."""
-        read = ["list", "read", "extract"]
+        """Return a serialisable, conservative operation capability status."""
+        read = list(RW_READ_CAPABILITIES)
         writable = bool(info.writable)
         strategy = str(info.write_strategy or "")
-        if strategy in {"native", "native-ext2", "native-exfat-phase1"}:
-            write = ["write_file", "mkdir", "delete", "rename"]
-            reason = ""
+        native_profile = NATIVE_WRITE_PROFILES_BY_STRATEGY.get(strategy)
+        native_profile_matches = bool(
+            native_profile
+            and str(info.fs_type).casefold() == native_profile.filesystem.casefold()
+            and str(info.backend) == native_profile.backend
+        )
+        if strategy in NATIVE_WRITE_PROFILES_BY_STRATEGY:
+            if writable and native_profile_matches:
+                write = list(native_profile.write_capabilities)
+                reason = ""
+            else:
+                write = []
+                reason = (
+                    "native write strategy does not match the selected writable "
+                    "filesystem/backend profile"
+                )
         elif writable:
-            write = ["write_file", "mkdir", "delete", "rename"]
+            write = list(RW_WRITE_CAPABILITIES)
             reason = ""
         else:
             write = []
@@ -2634,7 +2650,8 @@ class UniversalFSRW:
         offset = self.offset if self.offset is not None else info.offset
         if getattr(info, "write_strategy", "") == "native-ext2":
             result["fsck"] = {
-                "skipped": "native ext2 metadata was validated after each staged mutation; no external repair tool was run"
+                "skipped": "native ext2 metadata was validated after each staged "
+                "mutation; no external repair tool was run"
             }
         elif fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
             command = ["e2fsck"]

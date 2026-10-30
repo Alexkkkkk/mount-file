@@ -23,6 +23,7 @@ from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 from mountfile.fat_reader import FatReadError, NativeFatImage
+from mountfile.safety import RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
@@ -82,6 +83,10 @@ class TskError(Exception):
 
 class RecognizedFilesystemError(TskError):
     """A recognized filesystem was rejected and must not use another format parser."""
+
+
+class LegacyFallbackAvailableError(RecognizedFilesystemError):
+    """An unknown format may be tried with the explicit read-only legacy reader."""
 
 
 _TRUE = frozenset(("1", "true", "yes", "on", "да"))
@@ -198,14 +203,45 @@ def _fmt_mtime(meta):
         return ""
 
 
-class TskImage(ReadOnlyVFSStatMixin):
-    """Browsable view of one filesystem inside a raw image at `offset`."""
+def _legacy_tsk_extent(image_path, offset, volume_size):
+    """Require pytsk3's native file handle to cover exactly the selected image.
 
-    def __init__(self, image_path, offset=0):
-        if pytsk3 is None:
-            raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
+    pytsk3.Img_Info opens the entire file and has no per-filesystem extent
+    limit in this wrapper. Until a bounded image adapter is available, the
+    compatibility fallback is safe only for an unpartitioned whole-image
+    filesystem.
+    """
+    try:
+        offset = int(offset)
+        image_size = os.path.getsize(image_path)
+        if volume_size is not None:
+            volume_size = int(volume_size)
+    except (OSError, TypeError, ValueError, OverflowError) as exc:
+        raise TskError(f"cannot validate legacy pytsk3 image extent: {exc}") from exc
+
+    if offset < 0 or image_size <= 0 or offset > image_size:
+        raise TskError("invalid legacy pytsk3 image extent")
+    if volume_size is not None and (
+        volume_size <= 0 or offset + volume_size > image_size
+    ):
+        raise TskError("selected filesystem extent exceeds image bounds")
+    if offset != 0 or (volume_size is not None and volume_size != image_size):
+        raise TskError(
+            "legacy pytsk3 fallback cannot safely constrain a selected partition; "
+            "refusing bounded extent"
+        )
+    return image_size
+
+
+class TskImage(ReadOnlyVFSStatMixin):
+    """Browsable legacy view for a filesystem spanning an entire image file."""
+
+    def __init__(self, image_path, offset=0, volume_size=None):
         self.image_path = str(image_path)
         self.offset = int(offset)
+        self.volume_size = _legacy_tsk_extent(self.image_path, self.offset, volume_size)
+        if pytsk3 is None:
+            raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
         self.backend_name = "pytsk3"
         self.img = None
         self.fs = None
@@ -325,11 +361,35 @@ def _has_ntfs_boot_magic(image_path, offset, volume_size):
             volume_size = int(volume_size)
         with open(image_path, "rb") as stream:
             image_size = os.fstat(stream.fileno()).st_size
-            if volume_size is not None and (
-                volume_size <= 0 or offset + volume_size > image_size
-            ):
-                raise TskError("selected filesystem extent exceeds image bounds")
-            if offset + 11 > image_size:
+            if volume_size is not None:
+                if volume_size <= 0:
+                    raise TskError("selected filesystem extent exceeds image bounds")
+                try:
+                    checked_range(
+                        offset,
+                        volume_size,
+                        upper=image_size,
+                        context="selected filesystem extent exceeds image bounds",
+                    )
+                except RefusalError as exc:
+                    raise TskError(str(exc)) from exc
+                try:
+                    checked_range(
+                        3,
+                        8,
+                        upper=volume_size,
+                        context="NTFS boot signature exceeds selected volume bounds",
+                    )
+                except RefusalError:
+                    return False
+            try:
+                checked_range(
+                    offset + 3,
+                    8,
+                    upper=image_size,
+                    context="NTFS boot signature exceeds image bounds",
+                )
+            except RefusalError:
                 return False
             stream.seek(offset + 3)
             return stream.read(8) == b"NTFS    "
@@ -418,8 +478,10 @@ def open_image_provider(
     Supported native profiles are always handled in-process. ``pytsk3`` is an
     optional compatibility backend for genuinely unrecognized formats and is
     only reachable when ``allow_legacy_fallback=True`` or
-    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. A recognized-but-unsupported
-    profile remains fail-closed regardless of this flag.
+    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. Since its image handle cannot enforce
+    a partition-sized read boundary, this fallback is limited to a filesystem
+    spanning the whole image file. A recognized-but-unsupported profile remains
+    fail-closed regardless of this flag.
     """
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         if volume_size is None:
@@ -504,9 +566,13 @@ def open_image_provider(
     if allow_legacy_fallback is None:
         allow_legacy_fallback = legacy_tsk_enabled()
     if not allow_legacy_fallback:
-        raise RecognizedFilesystemError(
+        raise LegacyFallbackAvailableError(
             "filesystem is not covered by the native offline providers; "
             "legacy pytsk3 fallback is disabled (set "
             "MOUNTFILE_ALLOW_LEGACY_TSK=1 or pass allow_legacy_fallback=True)"
         )
-    return TskImage(image_path, offset=offset)
+    try:
+        _legacy_tsk_extent(image_path, offset, volume_size)
+    except TskError as exc:
+        raise RecognizedFilesystemError(str(exc)) from exc
+    return TskImage(image_path, offset=offset, volume_size=volume_size)

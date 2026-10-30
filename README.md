@@ -41,10 +41,14 @@ Licensed under the MIT License - see the LICENSE file for details.
 > Подробности и безопасная локальная синхронизация — [в руководстве](docs/sync.md).
 
 > **Статус проекта.** Issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
-> это roadmap, а не заявление о готовой forensic-платформе. Штатно
-> поддерживается запись **только в FAT32**; DFIR-команды, AI-слой, YARA,
-> carving и универсальный RW-слой имеют экспериментальные или частичные
-> реализации. Подробности — в разделе [Ограничения](#ограничения).
+> это roadmap, а не заявление о готовой forensic-платформе. Native-запись
+> поддерживается в ограниченных профилях FAT32, ext2 и exFAT; это не означает
+> полную поддержку этих форматов или crash-safe транзакции при отключении
+> питания. ext3/ext4 и NTFS остаются read-only в native-пути. DFIR-команды,
+> AI-слой, YARA, carving и универсальный RW-слой имеют экспериментальные или
+> частичные реализации. Срез возможностей и критерии native FS ведутся в
+> [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182); подробности —
+> также в разделе [Ограничения](#ограничения).
 
 ## Содержание
 
@@ -89,9 +93,12 @@ Licensed under the MIT License - see the LICENSE file for details.
   профили FAT12/16/32, clean ext2/ext3/ext4, exFAT и NTFS. `pytsk3` — optional
   compatibility fallback для нераспознанных форматов. Узнанный, но dirty,
   повреждённый или неподдержанный native-профиль не передаётся другому parser-у.
-- **Запись в FAT32:** создание и перезапись файлов, длинные имена (LFN) и
-  имена 8.3, создание каталогов, переименование и удаление, выделение и
-  освобождение кластеров — собственным движком `mountfile/fat32.py`.
+- **Ограниченная native-запись:** FAT32 поддерживает создание/перезапись файлов,
+  каталоги, переименование и удаление; ограниченный clean ext2-профиль и
+  bounded exFAT-профиль также имеют native writer-ы. У каждого профиля есть
+  ограничения по состоянию тома, структурам и операциям; unsupported-профили
+  отклоняются, а не исправляются автоматически. Полная матрица приведена в
+  разделе [Ограничения](#ограничения).
 - **Авто-подбор рабочего тома:** поиск реальной файловой системы в дампах, где
   таблица разделов отсутствует или указывает на контейнер (см.
   [авто-подбор](#авто-подбор-рабочего-тома)).
@@ -152,15 +159,15 @@ Licensed under the MIT License - see the LICENSE file for details.
 |---|---|
 | Python | 3.10+ (`requires-python = ">=3.10"`; CI проверяет 3.10–3.12) |
 | Qt | PyQt6 ≥ 6.11 для основного приложения |
-| `pytsk3` | optional extra `legacy-tsk`; legacy чтение неподдержанных native-профилей |
+| `pytsk3` | optional extra `legacy-tsk`; явно включаемый compatibility fallback для форматов, не распознанных native routing |
 | REST API (необязательно) | `fastapi`, `uvicorn`, `httpx` |
 | AI-слой (необязательно) | `mcp[cli]`, `pydantic`, `openai` |
 | Системные пакеты (Linux) | `libgl1`, `libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0` |
 | Системные инструменты (по желанию) | `debugfs` для ext (на Windows — `debugfs.exe` или WSL с `e2fsprogs`); `ntfs-3g` для NTFS на Linux; ImDisk Virtual Disk Driver для NTFS/exFAT/FAT12/16 на Windows (нужен запуск от администратора) |
 
 `requirements.txt` — полный набор зависимостей для Python 3.10+. Обычная
-установка через `pip install .` включает PyQt6, а `pytsk3` подключается только
-через extra `legacy-tsk`; последние версии
+установка через `pip install .` включает PyQt6, а `pytsk3` устанавливается только
+через extra `legacy-tsk` и не включается как автоматический fallback; последние версии
 этих зависимостей указаны в `pyproject.toml`. Файлы и сценарии Win7/Python 3.8 сохранены как
 legacy-артефакты, но текущий пакет требует Python 3.10+, поэтому этот релиз не
 заявляет поддержку Windows 7.
@@ -249,8 +256,10 @@ python install_mountfile.py --dev         # дополнительно инст�
 | `--dry-run` | напечатать команды и ничего не выполнять |
 
 Скрипт идемпотентен: готовый `.venv` переиспользуется, повторный запуск ничего
-не ломает. В полном профиле `pytsk3` устанавливается как legacy fallback; в
-`--minimal` он не нужен. Если выбранный optional wheel недоступен, ошибка
+не ломает. В полном профиле `pytsk3` устанавливается как optional compatibility
+dependency, но runtime fallback всё равно требует явного opt-in; в `--minimal`
+он не нужен. Recognized unsupported/dirty native profiles завершаются отказом,
+а не переходят на `pytsk3`. Если выбранный optional wheel недоступен, ошибка
 показывается явно и не маскируется сообщением «Готово».
 Проверяются `pip check` и импорты выбранного профиля; ошибка не маскируется
 сообщением «Готово». Visual Studio C++ Build Tools не устанавливаются безусловно:
@@ -340,14 +349,14 @@ python -m mountfile {volumes,info,ls,get,put,mkdir,mv,rm,decode,split,autopick,
                      search,yara-scan,timestomp-scan,slack-extract,live-diff} …
 ```
 
-### Команды изменения образа (FAT32)
+### Команды изменения образа
 
 | Команда | Назначение | Запись в образ |
 |---|---|---:|
-| `put` | записать локальные файлы в образ | **да, FAT32** |
-| `mkdir` | создать каталог | **да, FAT32** |
-| `mv` | переименовать запись в том же каталоге | **да, FAT32** |
-| `rm` | удалить файл или каталог | **да, FAT32** |
+| `put` | записать локальные файлы в образ | зависит от backend и выбранного ограниченного профиля |
+| `mkdir` | создать каталог | зависит от backend и выбранного ограниченного профиля |
+| `mv` | переименовать запись в том же каталоге | зависит от backend и выбранного ограниченного профиля |
+| `rm` | удалить файл или каталог | зависит от backend и выбранного ограниченного профиля |
 
 Команды записи без `--yes` ничего не делают, показывают предупреждение и
 возвращают код **2**. Код возврата: `0` — успех, `1` — ошибка, `2` — нужно
@@ -492,7 +501,10 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
   имеют встроенную запись. Native ext2 использует allowlisted features и
   single-indirect blocks для файлов и каталогов (до `12 + block_size/4` data
   blocks на объект); sparse и double/triple-indirect не поддерживаются.
-  ext2 вне этого профиля, ext3/4 и NTFS остаются read-only в GUI и
+  Native FAT12/16 чтение поддержано, но запись — нет. Native exFAT writer
+  принимает только проверенный bounded профиль с одной FAT и нулевыми
+  `VolumeFlags`; unsupported/dirty metadata отвергается. ext2 вне этого
+  профиля, ext3/4 и NTFS остаются read-only в GUI и
 `WriteEngine`: legacy `debugfs` доступен только как явный library-level
 compatibility opt-in (`allow_legacy_debugfs=True`), а не как автоматический
 fallback (`debugfs.exe`/WSL на Windows).
@@ -821,12 +833,23 @@ mount-file/
   выключены до реализации проверяемого on-volume journal/recovery пути.
   Legacy `debugfs`, `ntfs-3g` и системные mount/drivers доступны только как
   отдельные compatibility пути там, где они явно разрешены.
+- **FAT write scope:** native FAT writer — только FAT32; FAT12/16 остаются
+  native read-only. Системная запись через ImDisk на Windows — отдельный
+  compatibility route и не расширяет native FAT writer profile.
+- **exFAT write scope:** native writer принимает только bounded single-FAT
+  профиль с `VolumeFlags == 0` и валидированной служебной metadata; это не
+  полная совместимость со всеми exFAT томами и не power-loss guarantee.
 - **Без `pytsk3`** работают bounded native readers FAT12/16/32, выбранных clean
   ext2/ext3/ext4 профилей, exFAT и NTFS. Каждый parser требует корректные bounds
   и fail-closed на dirty, неизвестных и повреждённых профилях.
 - Native FAT32, ext2 и exFAT write profiles не запускают внешние filesystem CLI.
   Если операция не входит в активный профиль, приложение явно отказывает в
   записи, а не сообщает об успехе после открытия тома только для чтения.
+- Версионируемый машинно-читаемый контракт операций native-профилей доступен в
+  `mountfile.capabilities.get_native_capability_matrix()` и используется для
+  сериализации VFS/RW capability status. Он описывает операции API, а не
+  заменяет проверку geometry/features конкретного образа и не обещает full FS
+  parity; точный volume всё равно должен пройти профильные validators.
 - Для неатомарных writer-ов `debugfs` и `ntfs-3g` перед каждой операцией записи
   создаётся временный снимок всего образа. Это повышает надёжность восстановления,
   но требует свободного места примерно под размер образа и может заметно увеличить
