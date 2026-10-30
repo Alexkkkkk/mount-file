@@ -26,6 +26,7 @@ def test_native_capability_matrix_is_unique_and_json_serialisable():
     snapshot = get_native_capability_matrix()
     assert json.loads(json.dumps(snapshot)) == snapshot
     assert snapshot["version"] == CAPABILITY_MATRIX_VERSION
+    assert all(profile["constraints"] for profile in snapshot["profiles"])
     assert {profile["filesystem"] for profile in snapshot["profiles"]} == {
         "FAT12",
         "FAT16",
@@ -54,6 +55,26 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
             assert profile.mode == "read-write"
             assert profile.read_capabilities == RW_READ_CAPABILITIES
             assert profile.write_capabilities == RW_WRITE_CAPABILITIES
+
+
+def test_matrix_exposes_profile_gates_and_does_not_advertise_unsafe_writers():
+    profiles = {
+        profile["profile_id"]: profile
+        for profile in get_native_capability_matrix()["profiles"]
+    }
+    assert not any(
+        profile["filesystem"] in {"ext3", "ext4", "NTFS"}
+        and profile["mode"] == "read-write"
+        for profile in profiles.values()
+    )
+    assert (
+        "No writes or complete crash-recovery guarantee."
+        in profiles["ext3-native-ro"]["constraints"]
+    )
+    assert any(
+        "metadata_csum" in item for item in profiles["ext4-native-ro"]["constraints"]
+    )
+    assert any("$LogFile" in item for item in profiles["ntfs-native-ro"]["constraints"])
 
 
 @pytest.mark.parametrize(
