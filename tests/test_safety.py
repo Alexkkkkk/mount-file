@@ -45,3 +45,19 @@ def test_checked_range_supports_parser_specific_error_subclasses():
     with pytest.raises(ParserRefusal) as caught:
         checked_range(8, 4, upper=10, error_type=ParserRefusal)
     assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+
+
+def test_checked_range_matches_exhaustive_small_integer_interval_contract():
+    for lower in range(4):
+        for upper in range(lower, 6):
+            for start in range(-1, 7):
+                for length in range(-1, 7):
+                    valid = lower <= start and length >= 0 and start + length <= upper
+                    if valid:
+                        assert checked_range(
+                            start, length, lower=lower, upper=upper
+                        ) == (start, start + length)
+                    else:
+                        with pytest.raises(RefusalError) as caught:
+                            checked_range(start, length, lower=lower, upper=upper)
+                        assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
