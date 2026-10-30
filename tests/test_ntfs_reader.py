@@ -8,6 +8,7 @@ import pytest
 from mountfile import vfs
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
+    NtfsAttributeListEntry,
     NtfsAttributeSummary,
     NtfsIndexEntry,
     NtfsMetadataError,
@@ -15,6 +16,7 @@ from mountfile.ntfs_reader import (
     _parse_ntfs_index_block,
     _parse_ntfs_upcase_table,
     _parse_runlist,
+    parse_ntfs_attribute_list,
     parse_ntfs_attribute_stream,
     parse_ntfs_file_name,
     parse_ntfs_index_block,
@@ -91,6 +93,28 @@ def _image(tmp_path, record=None):
     return path
 
 
+def _attribute_list_entry(
+    type_code, file_reference, *, lowest_vcn=0, attribute_id=1, name=""
+):
+    name_bytes = name.encode("utf-16le")
+    entry_length = (26 + len(name_bytes) + 7) & ~7
+    entry = bytearray(entry_length)
+    struct.pack_into(
+        "<IHBBqQH",
+        entry,
+        0,
+        type_code,
+        entry_length,
+        len(name),
+        26,
+        lowest_vcn,
+        file_reference,
+        attribute_id,
+    )
+    entry[26 : 26 + len(name_bytes)] = name_bytes
+    return bytes(entry)
+
+
 def test_validates_backup_mft_mirror_and_attribute_end_marker(tmp_path):
     profile = probe_ntfs_metadata(_image(tmp_path), volume_size=VOLUME_SIZE)
     assert profile.mirror_matches_mft is True
@@ -152,6 +176,114 @@ def test_decodes_bounded_signed_ntfs_runs():
 def test_rejects_sparse_ntfs_run():
     with pytest.raises(NtfsMetadataError, match="sparse"):
         _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+
+
+def test_parses_bounded_attribute_list_entries_and_extension_references():
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    raw = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference),
+            _attribute_list_entry(0x80, base_reference, name="notes"),
+            _attribute_list_entry(
+                0x80,
+                extension_reference,
+                lowest_vcn=8,
+                attribute_id=0,
+                name="notes",
+            ),
+        )
+    )
+    entries = parse_ntfs_attribute_list(raw)
+
+    assert entries == (
+        NtfsAttributeListEntry(0x10, "", 0, base_reference, 1),
+        NtfsAttributeListEntry(0x80, "notes", 0, base_reference, 1),
+        NtfsAttributeListEntry(0x80, "notes", 8, extension_reference, 0),
+    )
+
+
+def test_attribute_list_uses_upcase_table_for_unicode_duplicate_keys():
+    table = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        table[codepoint] = codepoint - 32
+    table[0x00E9] = 0x00C9
+    table = tuple(table)
+    raw = _attribute_list_entry(0x80, (1 << 48) | 1, name="É") + _attribute_list_entry(
+        0x80, (1 << 48) | 2, name="é"
+    )
+
+    with pytest.raises(NtfsMetadataError, match="duplicate entry"):
+        parse_ntfs_attribute_list(raw, upcase_table=table)
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    [
+        (bytes(24), "header is truncated"),
+        (
+            struct.pack("<IHBBqQH", 0x80, 30, 0, 26, 0, (1 << 48) | 1, 0) + bytes(6),
+            "entry length is invalid",
+        ),
+        (_attribute_list_entry(0x80, 42), "zero sequence"),
+        (_attribute_list_entry(0x80, (1 << 48) | 1, lowest_vcn=-1), "negative"),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, name="\x00"),
+            "contains NUL",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1)
+            + _attribute_list_entry(0x10, (1 << 48) | 2),
+            "type order",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, name="zeta")
+            + _attribute_list_entry(0x80, (1 << 48) | 2, name="alpha"),
+            "name/VCN order",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, lowest_vcn=8, name="notes")
+            + _attribute_list_entry(0x80, (1 << 48) | 2, lowest_vcn=0, name="notes"),
+            "VCN order",
+        ),
+        (
+            _attribute_list_entry(0x80, (1 << 48) | 1, name="notes")
+            + _attribute_list_entry(0x80, (1 << 48) | 2, name="notes"),
+            "duplicate entry",
+        ),
+        (_attribute_list_entry(0x20, (1 << 48) | 1), "must not reference itself"),
+        (bytearray((1 << 20) + 8), "invalid bounded length"),
+    ],
+)
+def test_rejects_malformed_attribute_list_entries(raw, message):
+    with pytest.raises(NtfsMetadataError, match=message):
+        parse_ntfs_attribute_list(raw)
+
+
+def test_rejects_invalid_upcase_table_for_attribute_list_collation():
+    raw = _attribute_list_entry(0x10, (1 << 48) | 1)
+    with pytest.raises(NtfsMetadataError, match=r"invalid \$UpCase table"):
+        parse_ntfs_attribute_list(raw, upcase_table=(0,))
+
+
+def test_attribute_stream_validates_resident_list_then_refuses_extension_resolution():
+    reference = (3 << 48) | 5
+    value = _attribute_list_entry(0x10, reference)
+    raw = bytearray(_record(attr_type=0x20))
+    attribute_offset = 0x38
+    attribute_length = (24 + len(value) + 7) & ~7
+    struct.pack_into("<I", raw, 0x18, attribute_offset + attribute_length + 4)
+    struct.pack_into("<I", raw, attribute_offset + 4, attribute_length)
+    struct.pack_into("<I", raw, attribute_offset + 16, len(value))
+    struct.pack_into("<H", raw, attribute_offset + 20, 24)
+    raw[attribute_offset + 24 : attribute_offset + 24 + len(value)] = value
+    struct.pack_into("<I", raw, attribute_offset + attribute_length, 0xFFFFFFFF)
+
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(bytes(raw))
+    with pytest.raises(NtfsMetadataError, match="extension-record resolution"):
+        parse_ntfs_attribute_stream(record)
 
 
 def test_rejects_attribute_name_that_overlaps_its_header():
