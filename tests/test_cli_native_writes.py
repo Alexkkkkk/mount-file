@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 from mountfile import cli
+from mountfile.capabilities import get_native_capability_matrix
 
 
 class _FakeWriter:
@@ -170,3 +171,13 @@ def test_read_range_writes_only_requested_bytes_to_new_output(
     assert output.read_bytes() == b"ylo"
     assert "Wrote 3 bytes" in capsys.readouterr().err
     assert reader.closed
+
+
+def test_capabilities_command_prints_canonical_matrix(capsys):
+    parsed = cli.build_parser().parse_args(["capabilities"])
+    assert parsed.func is cli.cmd_capabilities
+
+    result = cli.cmd_capabilities(SimpleNamespace())
+
+    assert result == cli.OK
+    assert json.loads(capsys.readouterr().out) == get_native_capability_matrix()

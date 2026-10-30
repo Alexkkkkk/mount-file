@@ -84,6 +84,12 @@ schema_version = matrix["version"]
 profiles = matrix["profiles"]
 ```
 
+Ту же versioned matrix можно получить из package CLI без открытия образа:
+
+```bash
+python -m mountfile capabilities
+```
+
 Матрица задаёт vocab интерфейсов VFS и `UniversalFSRW` и сверяется тестами с
 provider status. Она не классифицирует произвольное состояние image и не
 заменяет profile validators: malformed, dirty или unsupported volume всё равно

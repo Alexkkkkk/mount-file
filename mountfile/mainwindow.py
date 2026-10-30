@@ -479,12 +479,15 @@ class MainWindow(QMainWindow):
         self._set_write_enabled(True)
         status = self.writer.capability_status()
         if status["write_enabled"]:
+            profile = status.get("profile_id", status["backend"])
             self.log_msg(
-                "%s native write support enabled (offset %d)"
-                % (status["backend"], offset)
+                "%s native write support enabled (matrix v%s, offset %d)"
+                % (profile, status.get("matrix_version", "n/a"), offset)
             )
         else:
-            self.log_msg("Volume is read-only here (%s)" % status["write_rejection_reason"])
+            self.log_msg(
+                "Volume is read-only here (%s)" % status["write_rejection_reason"]
+            )
 
     def _close_writer(self):
         if self.writer is not None:

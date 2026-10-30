@@ -29,6 +29,7 @@ import sys
 
 from . import __version__
 from .autopick import auto_select, format_candidates, format_choice
+from .capabilities import get_native_capability_matrix
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .dfir_slack import read_file_slack
 from .dfir_timeline import export_timeline_csv
@@ -62,11 +63,19 @@ from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
+
+def cmd_capabilities(args):
+    """Print the versioned native profile matrix as machine-readable JSON."""
+    matrix = get_native_capability_matrix()
+    print(json.dumps(matrix, ensure_ascii=False, indent=2, sort_keys=True))
+    return OK
+
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
 COMMANDS = (
     "volumes",
     "info",
+    "capabilities",
     "ls",
     "stat",
     "read-range",
@@ -858,6 +867,11 @@ def build_parser():
     sp = sub.add_parser("info", help="image summary")
     _add_target(sp)
     sp.set_defaults(func=cmd_info)
+
+    sp = sub.add_parser(
+        "capabilities", help="print the versioned native read/write profile matrix"
+    )
+    sp.set_defaults(func=cmd_capabilities)
 
     sp = sub.add_parser("ls", help="list a directory inside the image")
     _add_target(sp)

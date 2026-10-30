@@ -81,3 +81,15 @@ def test_backend_status_is_explicitly_read_only_and_serialisable():
             "bounded writer profile"
         ),
     }
+
+
+def test_native_backend_status_identifies_canonical_matrix_profile():
+    class _NativeExt3Provider(_Provider):
+        backend_name = "native-ext3-ro"
+
+    provider = _NativeExt3Provider()
+    status = provider.backend_status
+    assert status["profile_id"] == "ext3-native-ro"
+    assert status["matrix_version"] >= 1
+    assert status["read_capabilities"] == ["list", "stat", "read-range", "extract"]
+    assert status["write_capabilities"] == []

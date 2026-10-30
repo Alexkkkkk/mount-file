@@ -45,6 +45,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
 from mountfile.capabilities import (
+    CAPABILITY_MATRIX_VERSION,
     NATIVE_WRITE_PROFILES_BY_STRATEGY,
     RW_READ_CAPABILITIES,
     RW_WRITE_CAPABILITIES,
@@ -2579,7 +2580,7 @@ class UniversalFSRW:
                 info.fs_type,
                 strategy or "read-only",
             )
-        return {
+        status = {
             "backend": info.backend,
             "mode": "read-write" if write else "read-only",
             "read_capabilities": read,
@@ -2587,6 +2588,10 @@ class UniversalFSRW:
             "write_enabled": bool(write),
             "write_rejection_reason": reason,
         }
+        if native_profile_matches:
+            status["profile_id"] = native_profile.profile_id
+            status["matrix_version"] = CAPABILITY_MATRIX_VERSION
+        return status
 
     def capability_status(self) -> dict:
         """Expose the selected backend's bounded operation support."""
