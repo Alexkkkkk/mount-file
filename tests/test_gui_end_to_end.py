@@ -116,7 +116,7 @@ def test_open_mount_write_refresh_delete(tmp_path, app, dialogs, monkeypatch):
         assert "HELLO.TXT" in win.info.toPlainText()
 
         # A write through the window's own writer appears after a refresh.
-        win.writer.write_file("/", "NEW.BIN", b"1234567")
+        win.writer.write_file("/NEW.BIN", b"1234567")
         win._refresh_dir("/")
         assert win.model.canFetchMore(QModelIndex())
         win.model.fetchMore(QModelIndex())
