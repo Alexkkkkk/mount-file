@@ -256,6 +256,18 @@ def test_ntfs_without_explicit_extent_does_not_fall_back_to_pytsk3(
         vfs.open_image_provider(image_path)
 
 
+def test_ntfs_signature_outside_selected_extent_is_not_probed(tmp_path):
+    image_path = tmp_path / "neighbor-signature.img"
+    image = bytearray(512)
+    image[3:11] = b"NTFS    "
+    image_path.write_bytes(image)
+
+    with pytest.raises(vfs.LegacyFallbackAvailableError):
+        vfs.open_image_provider(
+            image_path, offset=0, volume_size=3, allow_legacy_fallback=False
+        )
+
+
 def test_rejects_backup_geometry_mismatch(tmp_path):
     image = bytearray(_image(tmp_path).read_bytes())
     struct.pack_into("<Q", image, VOLUME_SIZE - 512 + 0x28, TOTAL - 1)
