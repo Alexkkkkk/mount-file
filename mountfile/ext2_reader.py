@@ -28,7 +28,9 @@ from mountfile.vfs_api import ReadOnlyVFSStatMixin
 class Ext2ReadError(RefusalError):
     """The ext2 profile or requested metadata is unsupported or malformed."""
 
-    def __init__(self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA):
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
         super().__init__(message, code)
 
 

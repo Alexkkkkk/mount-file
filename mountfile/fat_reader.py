@@ -24,7 +24,9 @@ from mountfile.vfs_api import ReadOnlyVFSStatMixin
 class FatReadError(RefusalError):
     """The selected FAT profile or requested read is invalid or unsupported."""
 
-    def __init__(self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA):
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
         super().__init__(message, code)
 
 

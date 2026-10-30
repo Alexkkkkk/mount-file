@@ -21,7 +21,9 @@ from mountfile.vfs_api import ReadOnlyVFSStatMixin
 class ExfatReadError(RefusalError):
     """The selected exFAT profile or requested read is invalid."""
 
-    def __init__(self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA):
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
         super().__init__(message, code)
 
 
