@@ -873,9 +873,10 @@ mount-file/
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
 
 ## Поддержка проекта
-
 Если проект оказался полезен и вы хотите поддержать его развитие, можно отправить
 добровольный донат в сети **TON**:
+
+Подробности и безопасные рекомендации собраны в [руководстве по поддержке](docs/donations.md).
 
 ```text
 UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
