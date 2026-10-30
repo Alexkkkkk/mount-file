@@ -22,4 +22,4 @@ UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
 ## Ссылки
 
 - [Репозиторий Mount File](https://github.com/Alexkkkkk/mount-file)
-- [Сообщить об уязвимости](../SECURITY.md)
+- [Сообщить об уязвимости](https://github.com/Alexkkkkk/mount-file/security/policy)
