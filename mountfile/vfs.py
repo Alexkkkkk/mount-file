@@ -84,6 +84,10 @@ class RecognizedFilesystemError(TskError):
     """A recognized filesystem was rejected and must not use another format parser."""
 
 
+class LegacyFallbackAvailableError(RecognizedFilesystemError):
+    """An unknown format may be tried with the explicit read-only legacy reader."""
+
+
 _TRUE = frozenset(("1", "true", "yes", "on", "да"))
 
 
@@ -504,7 +508,7 @@ def open_image_provider(
     if allow_legacy_fallback is None:
         allow_legacy_fallback = legacy_tsk_enabled()
     if not allow_legacy_fallback:
-        raise RecognizedFilesystemError(
+        raise LegacyFallbackAvailableError(
             "filesystem is not covered by the native offline providers; "
             "legacy pytsk3 fallback is disabled (set "
             "MOUNTFILE_ALLOW_LEGACY_TSK=1 or pass allow_legacy_fallback=True)"
