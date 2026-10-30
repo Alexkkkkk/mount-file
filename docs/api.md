@@ -94,7 +94,11 @@ native routing не распознал, и теперь отключён по у
 включения используйте `MOUNTFILE_ALLOW_LEGACY_TSK=1` или передайте
 `allow_legacy_fallback=True` в `open_image_provider`. Установка базового
 MountFile не требует `pytsk3`; native routing не запускает сеть, subprocess или
-системный mount.
+системный mount. Так как `pytsk3.Img_Info` открывает весь файл и текущий адаптер
+не может ограничить чтение размером раздела, legacy fallback разрешён только
+для файловой системы, занимающей весь файл-образ. Для раздела внутри disk image
+fallback fail-closed откажет; используйте native provider либо отдельный
+адаптер, который умеет ограничивать каждый read выбранным extent.
 
 ::: mountfile.vfs.open_image_provider
 

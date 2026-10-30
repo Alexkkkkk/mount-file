@@ -202,14 +202,45 @@ def _fmt_mtime(meta):
         return ""
 
 
-class TskImage(ReadOnlyVFSStatMixin):
-    """Browsable view of one filesystem inside a raw image at `offset`."""
+def _legacy_tsk_extent(image_path, offset, volume_size):
+    """Require pytsk3's native file handle to cover exactly the selected image.
 
-    def __init__(self, image_path, offset=0):
-        if pytsk3 is None:
-            raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
+    pytsk3.Img_Info opens the entire file and has no per-filesystem extent
+    limit in this wrapper. Until a bounded image adapter is available, the
+    compatibility fallback is safe only for an unpartitioned whole-image
+    filesystem.
+    """
+    try:
+        offset = int(offset)
+        image_size = os.path.getsize(image_path)
+        if volume_size is not None:
+            volume_size = int(volume_size)
+    except (OSError, TypeError, ValueError, OverflowError) as exc:
+        raise TskError(f"cannot validate legacy pytsk3 image extent: {exc}") from exc
+
+    if offset < 0 or image_size <= 0 or offset > image_size:
+        raise TskError("invalid legacy pytsk3 image extent")
+    if volume_size is not None and (
+        volume_size <= 0 or offset + volume_size > image_size
+    ):
+        raise TskError("selected filesystem extent exceeds image bounds")
+    if offset != 0 or (volume_size is not None and volume_size != image_size):
+        raise TskError(
+            "legacy pytsk3 fallback cannot safely constrain a selected partition; "
+            "refusing bounded extent"
+        )
+    return image_size
+
+
+class TskImage(ReadOnlyVFSStatMixin):
+    """Browsable legacy view for a filesystem spanning an entire image file."""
+
+    def __init__(self, image_path, offset=0, volume_size=None):
         self.image_path = str(image_path)
         self.offset = int(offset)
+        self.volume_size = _legacy_tsk_extent(self.image_path, self.offset, volume_size)
+        if pytsk3 is None:
+            raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
         self.backend_name = "pytsk3"
         self.img = None
         self.fs = None
@@ -422,8 +453,10 @@ def open_image_provider(
     Supported native profiles are always handled in-process. ``pytsk3`` is an
     optional compatibility backend for genuinely unrecognized formats and is
     only reachable when ``allow_legacy_fallback=True`` or
-    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. A recognized-but-unsupported
-    profile remains fail-closed regardless of this flag.
+    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. Since its image handle cannot enforce
+    a partition-sized read boundary, this fallback is limited to a filesystem
+    spanning the whole image file. A recognized-but-unsupported profile remains
+    fail-closed regardless of this flag.
     """
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         if volume_size is None:
@@ -513,4 +546,8 @@ def open_image_provider(
             "legacy pytsk3 fallback is disabled (set "
             "MOUNTFILE_ALLOW_LEGACY_TSK=1 or pass allow_legacy_fallback=True)"
         )
-    return TskImage(image_path, offset=offset)
+    try:
+        _legacy_tsk_extent(image_path, offset, volume_size)
+    except TskError as exc:
+        raise RecognizedFilesystemError(str(exc)) from exc
+    return TskImage(image_path, offset=offset, volume_size=volume_size)
