@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from mountfile import cli
@@ -107,3 +108,65 @@ def test_mkdir_mv_and_recursive_rm_route_through_native_writer(monkeypatch):
         ("delete", "/docs/new", True),
     ]
     assert writer.closed
+
+
+class _FakeReader:
+    backend_name = "native-test-ro"
+
+    def __init__(self):
+        self.closed = False
+
+    def stat(self, path):
+        return {
+            "path": path,
+            "name": "payload.bin",
+            "is_dir": False,
+            "size": 7,
+        }
+
+    def read_file_range(self, path, offset=0, length=1 << 20):
+        assert path == "/payload.bin"
+        return b"payload"[offset : offset + length]
+
+    def close(self):
+        self.closed = True
+
+
+def test_stat_reports_native_backend_and_path_metadata(monkeypatch, capsys):
+    reader = _FakeReader()
+    monkeypatch.setattr(cli, "_select", lambda *_args: (512, "ext4", "volume"))
+    monkeypatch.setattr(cli, "_provider", lambda *_args: (reader, "native-test-ro"))
+
+    result = cli.cmd_stat(SimpleNamespace(image="disk.img", path="/payload.bin"))
+
+    assert result == cli.OK
+    report = json.loads(capsys.readouterr().out)
+    assert report["filesystem"] == "ext4"
+    assert report["backend"] == "native-test-ro"
+    assert report["path"] == "/payload.bin"
+    assert report["size"] == 7
+    assert reader.closed
+
+
+def test_read_range_writes_only_requested_bytes_to_new_output(
+    monkeypatch, tmp_path, capsys
+):
+    reader = _FakeReader()
+    output = tmp_path / "range.bin"
+    monkeypatch.setattr(cli, "_select", lambda *_args: (512, "ntfs", "volume"))
+    monkeypatch.setattr(cli, "_provider", lambda *_args: (reader, "native-test-ro"))
+
+    result = cli.cmd_read_range(
+        SimpleNamespace(
+            image="disk.img",
+            path="/payload.bin",
+            file_offset=2,
+            length=3,
+            output=str(output),
+        )
+    )
+
+    assert result == cli.OK
+    assert output.read_bytes() == b"ylo"
+    assert "Wrote 3 bytes" in capsys.readouterr().err
+    assert reader.closed

@@ -68,6 +68,8 @@ COMMANDS = (
     "volumes",
     "info",
     "ls",
+    "stat",
+    "read-range",
     "autopick",
     "get",
     "put",
@@ -260,6 +262,58 @@ def cmd_ls(args):
             print("  %-10s  %s/" % ("<DIR>", item["name"]))
         else:
             print("  %-10s  %s" % (_fmt_size(item["size"]), item["name"]))
+    return OK
+
+
+def cmd_stat(args):
+    """Print native VFS metadata for one filesystem path as JSON."""
+    offset, fstype, desc = _select(args.image, args)
+    provider, backend = _provider(args.image, offset)
+    try:
+        metadata = provider.stat(_abs_path(args.path))
+        result = {
+            "image": args.image,
+            "volume_offset": offset,
+            "filesystem": fstype,
+            "volume": desc,
+            "backend": backend,
+            **metadata,
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    finally:
+        if hasattr(provider, "close"):
+            provider.close()
+    return OK
+
+
+_MAX_CLI_READ_RANGE_BYTES = 16 * 1024 * 1024
+
+
+def cmd_read_range(args):
+    """Read one bounded byte range; write raw bytes to a new file or stdout."""
+    if args.file_offset < 0:
+        raise ValueError("file offset must be non-negative")
+    if args.length < 0 or args.length > _MAX_CLI_READ_RANGE_BYTES:
+        raise ValueError(
+            "read length must be between 0 and %d bytes"
+            % _MAX_CLI_READ_RANGE_BYTES
+        )
+    offset, _fstype, _desc = _select(args.image, args)
+    provider, _backend = _provider(args.image, offset)
+    try:
+        data = provider.read_file_range(
+            _abs_path(args.path), offset=args.file_offset, length=args.length
+        )
+    finally:
+        if hasattr(provider, "close"):
+            provider.close()
+    if args.output:
+        with open(args.output, "xb") as output:
+            output.write(data)
+        print("Wrote %d bytes to %s" % (len(data), args.output), file=sys.stderr)
+    else:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
     return OK
 
 
@@ -809,6 +863,33 @@ def build_parser():
     _add_target(sp)
     sp.add_argument("path", nargs="?", default="/")
     sp.set_defaults(func=cmd_ls)
+
+    sp = sub.add_parser("stat", help="print metadata for a filesystem path")
+    _add_target(sp)
+    sp.add_argument("path", help="path inside the filesystem")
+    sp.set_defaults(func=cmd_stat)
+
+    sp = sub.add_parser(
+        "read-range", help="read a bounded byte range from a regular file"
+    )
+    _add_target(sp)
+    sp.add_argument("path", help="regular file path inside the filesystem")
+    sp.add_argument(
+        "--file-offset", type=_parse_offset, default=0, help="byte offset in the file"
+    )
+    sp.add_argument(
+        "--length",
+        type=_parse_offset,
+        default=1024 * 1024,
+        help="number of bytes to read (maximum 16 MiB)",
+    )
+    sp.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="create a new output file; raw bytes go to stdout when omitted",
+    )
+    sp.set_defaults(func=cmd_read_range)
 
     sp = sub.add_parser("get", help="extract a file or a directory")
     _add_target(sp)
