@@ -81,6 +81,69 @@ def _record(*, attr_type=0xFFFFFFFF, nonresident=False):
     return bytes(raw)
 
 
+def _record_with_attributes(attributes, *, sequence=3, base_file_reference=0):
+    raw = bytearray(_record())
+    attribute_offset = 0x38
+    attribute_bytes = b"".join(attributes) + struct.pack("<I", 0xFFFFFFFF)
+    raw[attribute_offset : attribute_offset + len(attribute_bytes)] = attribute_bytes
+    struct.pack_into("<I", raw, 0x18, attribute_offset + len(attribute_bytes))
+    struct.pack_into("<H", raw, 0x10, sequence)
+    struct.pack_into("<Q", raw, 0x20, base_file_reference)
+    return bytes(raw)
+
+
+def _resident_attribute(type_code, attribute_id, value, *, name=""):
+    encoded_name = name.encode("utf-16le")
+    value_offset = (24 + len(encoded_name) + 7) & ~7
+    length = (value_offset + len(value) + 7) & ~7
+    attribute = bytearray(length)
+    struct.pack_into(
+        "<IIBBHH", attribute, 0, type_code, length, 0, len(name), 24 if name else 0, 0
+    )
+    struct.pack_into("<H", attribute, 14, attribute_id)
+    struct.pack_into("<IH", attribute, 16, len(value), value_offset)
+    attribute[24 : 24 + len(encoded_name)] = encoded_name
+    attribute[value_offset : value_offset + len(value)] = value
+    return bytes(attribute)
+
+
+def _nonresident_attribute(
+    type_code,
+    attribute_id,
+    lowest_vcn,
+    highest_vcn,
+    lcn,
+    data_size,
+    *,
+    name="",
+):
+    encoded_name = name.encode("utf-16le")
+    runlist_offset = (64 + len(encoded_name) + 7) & ~7
+    runlist = bytes((0x11, 0x01, lcn, 0x00))
+    length = (runlist_offset + len(runlist) + 7) & ~7
+    attribute = bytearray(length)
+    struct.pack_into(
+        "<IIBBHHH",
+        attribute,
+        0,
+        type_code,
+        length,
+        1,
+        len(name),
+        64 if name else 0,
+        0,
+        attribute_id,
+    )
+    struct.pack_into("<qQ", attribute, 16, lowest_vcn, highest_vcn)
+    struct.pack_into("<H", attribute, 32, runlist_offset)
+    struct.pack_into("<Q", attribute, 40, (highest_vcn - lowest_vcn + 1) * CLUSTER)
+    struct.pack_into("<Q", attribute, 48, data_size)
+    struct.pack_into("<Q", attribute, 56, data_size)
+    attribute[64 : 64 + len(encoded_name)] = encoded_name
+    attribute[runlist_offset : runlist_offset + len(runlist)] = runlist
+    return bytes(attribute)
+
+
 def _image(tmp_path, record=None):
     image = bytearray(VOLUME_SIZE)
     image[:512] = _boot()
@@ -330,6 +393,289 @@ def test_attribute_stream_validates_resident_list_then_refuses_extension_resolut
     record = parse_ntfs_file_record_header(bytes(raw))
     with pytest.raises(NtfsMetadataError, match="extension-record resolution"):
         parse_ntfs_attribute_stream(record)
+
+
+def test_attribute_stream_only_exposes_attribute_list_when_explicitly_enabled():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    value = _attribute_list_entry(0x10, base_reference, attribute_id=1)
+    record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, value),
+            ),
+            sequence=7,
+        )
+    )
+
+    with pytest.raises(NtfsMetadataError, match="extension-record resolution"):
+        parse_ntfs_attribute_stream(record)
+    with pytest.raises(NtfsMetadataError, match="must be a boolean"):
+        parse_ntfs_attribute_stream(record, allow_attribute_list=1)
+    attributes = parse_ntfs_attribute_stream(record, allow_attribute_list=True)
+    assert [
+        (attribute.type_code, attribute.attribute_id) for attribute in attributes
+    ] == [
+        (0x10, 1),
+        (0x20, 2),
+    ]
+
+
+def _attribute_list_reader(extension_record):
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(
+        boot=SimpleNamespace(cluster_count=TOTAL, cluster_size=CLUSTER)
+    )
+    reader._upcase_table = None
+    base_reference = (7 << 48) | 42
+
+    def read_mft_record(record_number, *, reference=None):
+        assert record_number == 43
+        assert reference == (8 << 48) | 43
+        return extension_record
+
+    reader.read_mft_record = read_mft_record
+    return reader, base_reference
+
+
+def test_attribute_list_resolves_extension_record_and_validates_attribute_id():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x30, 4, b"child-name"),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    attributes = reader._attributes_for_record(42, base_record)
+
+    assert [
+        (attribute.type_code, attribute.attribute_id) for attribute in attributes
+    ] == [
+        (0x20, 2),
+        (0x10, 1),
+        (0x30, 4),
+    ]
+    assert attributes[-1].resident_value == b"child-name"
+
+
+def test_attribute_list_rejects_extension_with_wrong_base_reference():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x30, 4, b"name"),),
+            sequence=8,
+            base_file_reference=(6 << 48) | 41,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="different base FILE record"):
+        reader._attributes_for_record(42, base_record)
+
+
+def test_attribute_list_rejects_stale_base_sequence_and_wrong_attribute_id():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    stale_base_list = b"".join(
+        (
+            _attribute_list_entry(0x10, (6 << 48) | 42, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, stale_base_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x30, 3, b"child-name"),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="base-record sequence"):
+        reader._attributes_for_record(42, base_record)
+
+    valid_base_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(0x30, extension_reference, attribute_id=4),
+        )
+    )
+    valid_base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, valid_base_list),
+            ),
+            sequence=7,
+        )
+    )
+    with pytest.raises(NtfsMetadataError, match="does not identify one FILE attribute"):
+        reader._attributes_for_record(42, valid_base_record)
+
+
+def test_attribute_list_reads_bounded_nonresident_value():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    value = _attribute_list_entry(0x10, base_reference, attribute_id=1)
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _nonresident_attribute(0x20, 2, 0, 0, 10, len(value)),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(_record())
+    reader, _base_reference = _attribute_list_reader(extension_record)
+    reads = []
+
+    def read_runs(runs, offset, length):
+        reads.append((runs, offset, length))
+        return value
+
+    reader._read_runs = read_runs
+    attributes = reader._attributes_for_record(42, base_record)
+
+    assert attributes[-1].type_code == 0x10
+    assert reads[0][1:] == (0, len(value))
+
+
+def test_attribute_list_merges_adjacent_nonresident_data_extents():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x80, base_reference, lowest_vcn=0, attribute_id=5),
+            _attribute_list_entry(
+                0x80, extension_reference, lowest_vcn=1, attribute_id=0
+            ),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _nonresident_attribute(0x80, 5, 0, 0, 10, 2 * CLUSTER),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_nonresident_attribute(0x80, 9, 1, 1, 11, 2 * CLUSTER),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    attributes = reader._attributes_for_record(42, base_record)
+    data = next(attribute for attribute in attributes if attribute.type_code == 0x80)
+
+    assert data.lowest_vcn == 0
+    assert data.highest_vcn == 1
+    assert data.data_size == 2 * CLUSTER
+    assert [(run.vcn, run.lcn, run.length) for run in data.runs] == [
+        (0, 10, 1),
+        (1, 11, 1),
+    ]
+    reader._resolve = lambda _path: (42, base_record)
+    reader._read_runs = lambda _runs, _offset, length: b"x" * length
+    assert reader.file_size("/large.bin") == 2 * CLUSTER
+    assert reader.read_file_range("/large.bin", 0, 16) == b"x" * 16
+
+
+def test_attribute_list_rejects_data_extents_with_vcn_gap():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x80, base_reference, lowest_vcn=0, attribute_id=5),
+            _attribute_list_entry(
+                0x80, extension_reference, lowest_vcn=2, attribute_id=0
+            ),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _nonresident_attribute(0x80, 5, 0, 0, 10, 3 * CLUSTER),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_nonresident_attribute(0x80, 0, 2, 2, 11, 3 * CLUSTER),),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(NtfsMetadataError, match="VCN gap or overlap"):
+        reader._attributes_for_record(42, base_record)
 
 
 @pytest.mark.parametrize(
