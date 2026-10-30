@@ -7,6 +7,8 @@ routing remain in :mod:`mountfile.vfs`.
 
 from __future__ import annotations
 
+from mountfile.capabilities import VFS_READ_CAPABILITIES, VFS_WRITE_CAPABILITIES
+
 
 class ReadOnlyVFSStatMixin:
     """Expose a stable ``stat(path)`` result through the provider's own listing.
@@ -74,7 +76,7 @@ class ReadOnlyVFSStatMixin:
     @property
     def read_capabilities(self) -> tuple[str, ...]:
         """Operations implemented by every reader using this API contract."""
-        return ("list", "stat", "read-range", "extract")
+        return VFS_READ_CAPABILITIES
 
     @property
     def write_capabilities(self) -> tuple[str, ...]:
@@ -84,7 +86,7 @@ class ReadOnlyVFSStatMixin:
         the provider contract prevents callers from inferring write support
         from the fact that a filesystem is browsable.
         """
-        return ()
+        return VFS_WRITE_CAPABILITIES
 
     @property
     def backend_status(self) -> dict:

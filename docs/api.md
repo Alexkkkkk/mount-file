@@ -50,6 +50,22 @@ replay_journal=True)`: он строит bounded in-memory overlay из committe
 descriptor/data/commit records, не изменяет исходный образ и отклоняет revoke,
 checksum, неизвестные feature flags, повреждённые или неполные транзакции.
 
+Текущий операционный контракт bounded native profiles можно получить как
+detached JSON-compatible snapshot:
+
+```python
+from mountfile.capabilities import get_native_capability_matrix
+
+matrix = get_native_capability_matrix()
+schema_version = matrix["version"]
+profiles = matrix["profiles"]
+```
+
+Матрица задаёт vocab интерфейсов VFS и `UniversalFSRW` и сверяется тестами с
+provider status. Она не классифицирует произвольное состояние image и не
+заменяет profile validators: malformed, dirty или unsupported volume всё равно
+отвергается при open.
+
 `pytsk3` остаётся optional compatibility fallback только для форматов, которые
 native routing не распознал, и теперь отключён по умолчанию. Для его явного
 включения используйте `MOUNTFILE_ALLOW_LEGACY_TSK=1` или передайте
