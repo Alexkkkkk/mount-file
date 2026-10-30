@@ -39,8 +39,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
@@ -52,6 +50,7 @@ from mountfile.capabilities import (
     RW_WRITE_CAPABILITIES,
 )
 from mountfile.rw.journal import Journal as _VerifiedJournal
+from mountfile.safety import RefusalError, checked_range
 
 try:
     import pytsk3
@@ -630,22 +629,21 @@ class Fat32RW(RWBackend):
         self._parse_bpb()
 
     def _read_at(self, offset: int, length: int) -> bytes:
-        if (
-            offset < 0
-            or length < 0
-            or offset + length < offset
-            or offset + length > self.volume_size
-        ):
-            raise ValueError("FAT read exceeds selected volume bounds")
+        try:
+            checked_range(offset, length, upper=self.volume_size)
+        except RefusalError as exc:
+            raise RefusalError(
+                "FAT read exceeds selected volume bounds", exc.code
+            ) from exc
         return super()._read_at(offset, length)
 
     def _write_at(self, offset: int, data: bytes) -> None:
-        if (
-            offset < 0
-            or offset + len(data) < offset
-            or offset + len(data) > self.volume_size
-        ):
-            raise ValueError("FAT write exceeds selected volume bounds")
+        try:
+            checked_range(offset, len(data), upper=self.volume_size)
+        except RefusalError as exc:
+            raise RefusalError(
+                "FAT write exceeds selected volume bounds", exc.code
+            ) from exc
         with self.image.open("r+b") as stream:
             stream.seek(self.offset + offset)
             written = stream.write(data)
@@ -2652,7 +2650,8 @@ class UniversalFSRW:
         offset = self.offset if self.offset is not None else info.offset
         if getattr(info, "write_strategy", "") == "native-ext2":
             result["fsck"] = {
-                "skipped": "native ext2 metadata was validated after each staged mutation; no external repair tool was run"
+                "skipped": "native ext2 metadata was validated after each staged "
+                "mutation; no external repair tool was run"
             }
         elif fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
             command = ["e2fsck"]

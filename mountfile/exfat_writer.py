@@ -20,10 +20,15 @@ from pathlib import Path
 
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 
 
 class ExfatWriteError(RuntimeError):
     """The bounded native exFAT write profile rejected the operation."""
+
+    def __init__(self, message: str, code: RefusalCode | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class _NoFreeDirectorySlot(ExfatWriteError):
@@ -201,9 +206,13 @@ class NativeExfatWriter:
             raise ExfatWriteError(str(exc)) from exc
 
     def _read_rel(self, stream, relative, size):
-        absolute = self.offset + relative
-        if relative < 0 or size < 0 or absolute + size > self.offset + self.extent_size:
-            raise ExfatWriteError("exFAT staged access exceeds selected extent")
+        try:
+            start, _ = checked_range(relative, size, upper=self.extent_size)
+        except RefusalError as exc:
+            raise ExfatWriteError(
+                "exFAT staged access exceeds selected extent", exc.code
+            ) from exc
+        absolute = self.offset + start
         stream.seek(absolute)
         data = stream.read(size)
         if len(data) != size:
@@ -211,9 +220,13 @@ class NativeExfatWriter:
         return data
 
     def _write_rel(self, stream, relative, data):
-        absolute = self.offset + relative
-        if relative < 0 or absolute + len(data) > self.offset + self.extent_size:
-            raise ExfatWriteError("exFAT staged write exceeds selected extent")
+        try:
+            start, _ = checked_range(relative, len(data), upper=self.extent_size)
+        except RefusalError as exc:
+            raise ExfatWriteError(
+                "exFAT staged write exceeds selected extent", exc.code
+            ) from exc
+        absolute = self.offset + start
         stream.seek(absolute)
         if stream.write(data) != len(data):
             raise ExfatWriteError("short write to staged exFAT image")

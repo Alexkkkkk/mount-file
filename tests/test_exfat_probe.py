@@ -15,6 +15,7 @@ from mountfile.exfat_probe import (
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.safety import RefusalCode
 from mountfile.universal_fs_rw import NativeExfatRW
 
 VOLUME_SIZE = 2 * 1024 * 1024
@@ -238,6 +239,24 @@ def test_native_exfat_writer_rejects_nonzero_volume_flags_without_mutation(
     with pytest.raises(ExfatWriteError, match="nonzero volume flags"):
         NativeExfatWriter(path, volume_size=VOLUME_SIZE)
 
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["read", "write"])
+def test_native_exfat_writer_range_refusal_preserves_image(tmp_path, operation):
+    path = tmp_path / f"exfat-bounds-{operation}.img"
+    _image_with_volume_flags(path, 0)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    before = path.read_bytes()
+
+    with path.open("r+b") as stream:
+        with pytest.raises(ExfatWriteError) as caught:
+            if operation == "read":
+                writer._read_rel(stream, writer.extent_size - 1, 2)
+            else:
+                writer._write_rel(stream, writer.extent_size - 1, b"xy")
+
+    assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
     assert path.read_bytes() == before
 
 
