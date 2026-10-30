@@ -413,6 +413,10 @@ def test_ntfs_upcase_table_enables_unicode_case_insensitive_lookup(monkeypatch):
     reader._upcase_table = table
     assert reader._path_names_equal("CAFÉ.TXT", "café.txt")
     assert reader._path_names_equal("file-📁.txt", "FILE-📁.TXT")
+    with pytest.raises(NtfsMetadataError, match="valid UTF-16"):
+        reader._path_names_equal("\ud800", "name")
+    with pytest.raises(NtfsMetadataError, match="255 UTF-16 code units"):
+        reader._path_names_equal("n" * 256, "name")
 
     reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
     reader.read_mft_record = lambda number: object()
@@ -462,6 +466,65 @@ def test_ntfs_upcase_parser_rejects_non_idempotent_mapping():
     values[0x101] = 0x102
     with pytest.raises(NtfsMetadataError, match="non-idempotent"):
         _parse_ntfs_upcase_table(struct.pack("<65536H", *values))
+
+
+@pytest.mark.parametrize(
+    "failure", ["missing-record", "missing-stream", "wrong-size", "invalid-table"]
+)
+def test_ntfs_upcase_load_failure_falls_back_to_safe_name_matching(
+    monkeypatch, failure
+):
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(
+        boot=SimpleNamespace(cluster_count=128, cluster_size=4096)
+    )
+    reader._upcase_table = None
+    raw = bytes(131072)
+    if failure == "invalid-table":
+        values = list(range(1 << 16))
+        for codepoint in range(ord("a"), ord("z") + 1):
+            values[codepoint] = codepoint - 32
+        values[0x100] = 0x101
+        values[0x101] = 0x102
+        raw = struct.pack("<65536H", *values)
+
+    if failure == "missing-record":
+
+        def _missing_record(_number):
+            raise NtfsMetadataError("MFT record not available")
+
+        reader.read_mft_record = _missing_record
+    else:
+        reader.read_mft_record = lambda _number: object()
+
+    if failure == "missing-stream":
+        attributes = ()
+    else:
+        data_size = len(raw) // 2 if failure == "wrong-size" else len(raw)
+        attributes = (
+            NtfsAttributeSummary(
+                type_code=0x80,
+                length=64,
+                nonresident=True,
+                name="",
+                lowest_vcn=0,
+                highest_vcn=31,
+                run_count=1,
+                runs=(NtfsRun(0, 1, 32),),
+                data_size=data_size,
+            ),
+        )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: attributes,
+    )
+    reader._read_runs = lambda *_args: raw
+
+    assert reader._load_upcase_table() is None
+    assert reader._path_names_equal("README.TXT", "Readme.txt")
+    assert not reader._path_names_equal("CAFÉ.txt", "café.txt")
 
 
 def test_rejects_unknown_ntfs_volume_flags():

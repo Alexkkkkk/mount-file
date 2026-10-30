@@ -931,12 +931,19 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         except NtfsMetadataError:
             return None
 
-    def _name_key(self, name: str):
+    def _name_key(self, name: str) -> tuple[int, ...]:
         """Return a conservative NTFS comparison key for one path component."""
+        try:
+            encoded = name.encode("utf-16le")
+        except UnicodeEncodeError as exc:
+            raise NtfsMetadataError("NTFS path component is not valid UTF-16") from exc
+        if len(encoded) > 255 * 2:
+            raise NtfsMetadataError("NTFS path component exceeds 255 UTF-16 code units")
         table = getattr(self, "_upcase_table", None)
         if table is None:
-            return name.lower() if name.isascii() else name
-        encoded = name.encode("utf-16le")
+            if name.isascii():
+                encoded = name.lower().encode("utf-16le")
+            return struct.unpack(f"<{len(encoded) // 2}H", encoded)
         units = struct.unpack(f"<{len(encoded) // 2}H", encoded)
         return tuple(table[unit] for unit in units)
 
@@ -1164,8 +1171,8 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 )
                 entries.extend(block_entries)
                 pending.extend(block_children)
-        unique: dict[tuple[str, int], NtfsIndexEntry] = {}
-        names: set[str] = set()
+        unique: dict[tuple[tuple[int, ...], int], NtfsIndexEntry] = {}
+        names: set[tuple[int, ...]] = set()
         for entry in entries:
             folded = self._name_key(entry.name)
             if folded in names:
