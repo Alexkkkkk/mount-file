@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from mountfile import vfs
-from mountfile.ext2_reader import _EXT2_COMPR_FL, _EXT2_INDEX_FL, _Inode
+from mountfile.ext2_reader import Ext2ReadError, _EXT2_COMPR_FL, _EXT2_INDEX_FL, _Inode
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
@@ -385,6 +385,10 @@ def test_ext4_range_coalesces_contiguous_extent_blocks():
     reader.block_size = 4
     reader.blocks_count = 200
     reader._resolve = lambda _path: inode
+    validated = []
+    reader._validate_data_block_run = lambda first, count: validated.append(
+        (first, count)
+    )
     reads = []
 
     def read_at(offset, length):
@@ -397,6 +401,7 @@ def test_ext4_range_coalesces_contiguous_extent_blocks():
         (401 + index) & 0xFF for index in range(27)
     )
     assert reads == [(401, 27)]
+    assert validated == [(100, 7)]
 
 
 def _extent_inode(root, *, logical_size=8 * 1024):
@@ -417,6 +422,73 @@ def _extent_reader(blocks_count=64, blocks=None):
     blocks = blocks or {}
     reader._extent_block = lambda block: blocks[block]
     return reader
+
+
+def _extent_data_reader(first_physical, *, free_blocks=(), unwritten=False):
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.block_size = 4
+    reader.first_data_block = 0
+    reader.blocks_count = 200
+    reader.blocks_per_group = 200
+    reader.feature_ro_compat = 0
+    reader._gdt_blocks = 0
+    reader._primary_metadata_start = 0
+    reader._primary_metadata_end = 0
+    descriptor = SimpleNamespace(
+        block_bitmap=2,
+        inode_bitmap=3,
+        inode_table=4,
+        inode_table_blocks=2,
+        first_block=0,
+        end_block=200,
+    )
+    reader._group_descriptor = lambda _group: descriptor
+    bitmap = bytearray(b"\xff" * 25)
+    for block in free_blocks:
+        bitmap[block // 8] &= ~(1 << (block % 8))
+    reader._bitmap = lambda _group, inode: bytes(bitmap)
+    reader._has_super_backup = lambda _group, _sparse: False
+    inode = _extent_inode(bytes(60), logical_size=8)
+    reader._resolve = lambda _path: inode
+    reader._extent_map = lambda _inode, logical: (
+        first_physical + logical,
+        unwritten,
+    )
+    reads = []
+
+    def read_at(offset, length):
+        reads.append((offset, length))
+        return b"D" * length
+
+    reader._read_at = read_at
+    return reader, reads
+
+
+@pytest.mark.parametrize(
+    ("first_physical", "free_blocks", "unwritten", "error"),
+    [
+        (100, (), False, None),
+        (100, (101,), False, "free block"),
+        (2, (), False, "block bitmap"),
+        (100, (101,), True, "free block"),
+    ],
+)
+def test_ext4_extent_data_is_validated_before_return_or_zero_fill(
+    first_physical, free_blocks, unwritten, error
+):
+    reader, reads = _extent_data_reader(
+        first_physical, free_blocks=free_blocks, unwritten=unwritten
+    )
+
+    if error:
+        with pytest.raises(Ext2ReadError, match=error):
+            reader.read_file_range("/FILE", 0, 8)
+        assert reads == []
+        return
+
+    expected = bytes(8) if unwritten else b"D" * 8
+    assert reader.read_file_range("/FILE", 0, 8) == expected
+    assert reads == ([] if unwritten else [(first_physical * 4, 8)])
 
 
 def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
