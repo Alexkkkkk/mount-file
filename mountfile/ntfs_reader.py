@@ -27,6 +27,7 @@ from mountfile.ntfs_probe import (
     parse_ntfs_boot_sector,
     probe_ntfs_boot_sector,
 )
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 _ATTRIBUTE_END = 0xFFFFFFFF
@@ -43,8 +44,13 @@ _LOGFILE_CLEAN_DISMOUNT = 0x0002
 _LOGFILE_KNOWN_FLAGS = _LOGFILE_CLEAN_DISMOUNT | 0x0001
 
 
-class NtfsMetadataError(ValueError):
+class NtfsMetadataError(RefusalError):
     """NTFS metadata is malformed, inconsistent, or outside the selected extent."""
+
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
+        super().__init__(message, code)
 
 
 @dataclass(frozen=True)
@@ -236,10 +242,27 @@ def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestar
 
 
 def _read_exact(stream, absolute: int, size: int, image_size: int, end: int) -> bytes:
-    if absolute < 0 or size < 0 or absolute + size < absolute or absolute + size > end:
-        raise NtfsMetadataError("NTFS metadata read exceeds selected volume bounds")
-    if absolute + size > image_size:
-        raise NtfsMetadataError("NTFS metadata read exceeds image bounds")
+    try:
+        checked_range(
+            absolute,
+            size,
+            lower=0,
+            upper=end,
+            context="NTFS metadata read exceeds selected volume bounds",
+            error_type=NtfsMetadataError,
+        )
+        checked_range(
+            absolute,
+            size,
+            lower=0,
+            upper=image_size,
+            context="NTFS metadata read exceeds image bounds",
+            error_type=NtfsMetadataError,
+        )
+    except NtfsMetadataError as exc:
+        # Keep the long-standing human-readable NTFS errors stable while
+        # exposing a machine-readable refusal code to callers.
+        raise NtfsMetadataError(str(exc), RefusalCode.RANGE_OUT_OF_BOUNDS) from exc
     stream.seek(absolute)
     data = stream.read(size)
     if len(data) != size:
