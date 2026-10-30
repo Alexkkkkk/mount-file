@@ -16,12 +16,13 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+
 from mountfile.ext_probe import (
     ExtProbeError,
     ExtSuperblockProfile,
     probe_ext_superblock,
 )
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
