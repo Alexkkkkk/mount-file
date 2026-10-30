@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.ext_probe import (
     ExtProbeError,
     ExtSuperblockProfile,
@@ -25,8 +25,11 @@ from mountfile.ext_probe import (
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
-class Ext2ReadError(ValueError):
+class Ext2ReadError(RefusalError):
     """The ext2 profile or requested metadata is unsupported or malformed."""
+
+    def __init__(self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA):
+        super().__init__(message, code)
 
 
 _COMPAT_HAS_JOURNAL = 0x0004
@@ -239,13 +242,20 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
     def _read_at(self, relative_offset: int, size: int) -> bytes:
         if self._stream is None:
             raise Ext2ReadError("filesystem image is closed")
-        if relative_offset < 0 or size < 0:
-            raise Ext2ReadError("negative filesystem read range")
-        end = relative_offset + size
-        if end < relative_offset or end > self.filesystem_size:
-            raise Ext2ReadError("filesystem read exceeds selected partition bounds")
-        if self.offset + end > self._image_size:
-            raise Ext2ReadError("filesystem read exceeds image bounds")
+        _, end = checked_range(
+            relative_offset,
+            size,
+            upper=self.filesystem_size,
+            context="filesystem read exceeds selected partition bounds",
+            error_type=Ext2ReadError,
+        )
+        checked_range(
+            self.offset + relative_offset,
+            size,
+            upper=self._image_size,
+            context="filesystem read exceeds image bounds",
+            error_type=Ext2ReadError,
+        )
         with self._lock:
             self._stream.seek(self.offset + relative_offset)
             data = self._stream.read(size)

@@ -14,11 +14,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
-class ExfatReadError(ValueError):
+class ExfatReadError(RefusalError):
     """The selected exFAT profile or requested read is invalid."""
+
+    def __init__(self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA):
+        super().__init__(message, code)
 
 
 _EOC = 0xFFFFFFF8
@@ -98,11 +102,21 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _read_rel(self, relative, size):
         if self._stream is None:
             raise ExfatReadError("exFAT image is closed")
-        if relative < 0 or size < 0 or relative + size < relative:
-            raise ExfatReadError("negative or overflowing exFAT read")
+        checked_range(
+            relative,
+            size,
+            upper=self.volume_end - self.offset,
+            context="exFAT read exceeds selected volume bounds",
+            error_type=ExfatReadError,
+        )
         absolute = self.offset + relative
-        if absolute + size > self.volume_end or absolute + size > self._image_size:
-            raise ExfatReadError("exFAT read exceeds selected volume bounds")
+        checked_range(
+            absolute,
+            size,
+            upper=self._image_size,
+            context="exFAT read exceeds image bounds",
+            error_type=ExfatReadError,
+        )
         self._stream.seek(absolute)
         data = self._stream.read(size)
         if len(data) != size:

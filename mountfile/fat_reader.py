@@ -17,11 +17,15 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
-class FatReadError(ValueError):
+class FatReadError(RefusalError):
     """The selected FAT profile or requested read is invalid or unsupported."""
+
+    def __init__(self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA):
+        super().__init__(message, code)
 
 
 _MAX_READ_RANGE_BYTES = 16 * 1024 * 1024
@@ -271,13 +275,22 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
     def _read_absolute(self, absolute: int, size: int, *, image_only=False) -> bytes:
         if self._stream is None:
             raise FatReadError("filesystem image is closed")
-        if absolute < 0 or size < 0 or absolute + size < absolute:
-            raise FatReadError("negative or overflowing FAT read range")
         if not image_only:
-            if absolute < self.offset or absolute + size > self.volume_end:
-                raise FatReadError("FAT read exceeds selected volume bounds")
-        if absolute + size > self._image_size:
-            raise FatReadError("FAT read exceeds image bounds")
+            checked_range(
+                absolute,
+                size,
+                lower=self.offset,
+                upper=self.volume_end,
+                context="FAT read exceeds selected volume bounds",
+                error_type=FatReadError,
+            )
+        checked_range(
+            absolute,
+            size,
+            upper=self._image_size,
+            context="FAT read exceeds image bounds",
+            error_type=FatReadError,
+        )
         with self._lock:
             self._stream.seek(absolute)
             data = self._stream.read(size)
@@ -286,8 +299,13 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         return data
 
     def _read_at(self, relative: int, size: int) -> bytes:
-        if relative < 0 or size < 0 or relative + size < relative:
-            raise FatReadError("negative or overflowing FAT read range")
+        checked_range(
+            relative,
+            size,
+            upper=self.volume_end - self.offset,
+            context="FAT read exceeds selected volume bounds",
+            error_type=FatReadError,
+        )
         return self._read_absolute(self.offset + relative, size)
 
     def _fat_entry(self, cluster: int) -> int:
