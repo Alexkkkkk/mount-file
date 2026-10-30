@@ -541,6 +541,19 @@ def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
     assert reader._extent_map(inode, 0) == (0, False)
 
 
+def test_ext4_extent_leaf_must_start_at_parent_index_key():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 1, 0)
+    struct.pack_into("<IIH", root, 12, 2, 40, 0)
+    leaf = bytearray(1024)
+    struct.pack_into("<HHHH", leaf, 0, 0xF30A, 1, 84, 0)
+    struct.pack_into("<IHHI", leaf, 12, 3, 1, 0, 50)
+
+    reader = _extent_reader(blocks={40: bytes(leaf)})
+    with pytest.raises(Ext3ReadError, match="does not start at its index key"):
+        reader._extent_map(_extent_inode(root), 3)
+
+
 def test_ext4_preallocation_past_eof_is_not_exposed_by_block_mapping():
     root = bytearray(60)
     struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)

@@ -642,6 +642,8 @@ class NativeExt4Image(NativeExt3Image):
         node = struct.pack("<15I", *inode.block_pointers)
         visited: set[int] = set()
         expected_depth = None
+        expected_lower = None
+        expected_upper = None
         for current_depth in range(_MAX_EXTENT_TREE_DEPTH + 1):
             if len(node) < 12:
                 raise Ext3ReadError("short extent header")
@@ -674,6 +676,18 @@ class NativeExt4Image(NativeExt3Image):
                     end = start + length
                     if end <= start or end > 1 << 32:
                         raise Ext3ReadError("extent logical range overflow")
+                    if (
+                        pos == 0
+                        and expected_lower is not None
+                        and start != expected_lower
+                    ):
+                        raise Ext3ReadError(
+                            "extent leaf does not start at its index key"
+                        )
+                    if expected_upper is not None and end > expected_upper:
+                        raise Ext3ReadError(
+                            "extent leaf exceeds its index child range"
+                        )
                     physical_start = (start_hi << 32) | start_lo
                     if (
                         physical_start <= 0
@@ -696,6 +710,7 @@ class NativeExt4Image(NativeExt3Image):
             expected_depth = node_depth - 1
             previous_key = -1
             selected = None
+            index_entries = []
             for pos in range(entries):
                 off = 12 + pos * 12
                 logical_start, child_lo, child_hi, reserved = struct.unpack_from(
@@ -708,19 +723,40 @@ class NativeExt4Image(NativeExt3Image):
                 if reserved:
                     raise Ext3ReadError("extent index reserved field is nonzero")
                 previous_key = logical_start
+                if (
+                    expected_lower is not None
+                    and pos == 0
+                    and logical_start != expected_lower
+                ):
+                    raise Ext3ReadError(
+                        "extent child does not start at its parent index key"
+                    )
+                if expected_upper is not None and logical_start >= expected_upper:
+                    raise Ext3ReadError(
+                        "extent child index exceeds its parent range"
+                    )
                 child = child_lo | (child_hi << 32)
                 if not 0 < child < self.blocks_count:
                     raise Ext3ReadError(
                         "extent index block is outside filesystem bounds"
                     )
+                index_entries.append((logical_start, child))
                 if logical >= logical_start:
-                    selected = (logical_start, child)
+                    selected = pos
             if selected is None:
                 return 0, False
-            if selected[1] in visited:
+            selected_lower, selected_block = index_entries[selected]
+            selected_upper = (
+                index_entries[selected + 1][0]
+                if selected + 1 < len(index_entries)
+                else expected_upper
+            )
+            if selected_block in visited:
                 raise Ext3ReadError("cyclic extent tree")
-            visited.add(selected[1])
-            node = self._extent_block(selected[1])
+            visited.add(selected_block)
+            expected_lower = selected_lower
+            expected_upper = selected_upper
+            node = self._extent_block(selected_block)
         raise Ext3ReadError("extent tree exceeds conservative depth limit")
 
     def _logical_block(self, inode: _Inode, logical: int) -> int:
