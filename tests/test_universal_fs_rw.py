@@ -462,7 +462,7 @@ def test_tsk_image_can_release_and_reopen_backing_handle(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(vfs, "pytsk3", fake_tsk)
 
-    provider = vfs.TskImage(str(image), offset=512)
+    provider = vfs.TskImage(str(image))
     provider.close()
     assert provider.fs is None
     assert provider.img is None
@@ -471,6 +471,7 @@ def test_tsk_image_can_release_and_reopen_backing_handle(tmp_path, monkeypatch):
     assert provider.fs is not None
     assert provider.img is not None
     assert [item[0] for item in opened] == ["img", "fs", "img", "fs"]
+    assert [item[1] for item in opened if item[0] == "fs"] == [0, 0]
 
 
 def test_failed_overwrite_allocation_preserves_original_file(tmp_path, monkeypatch):
