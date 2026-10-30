@@ -611,11 +611,20 @@ class NativeExt4Image(NativeExt3Image):
         return self._read_block(block)
 
     def _extent_map(self, inode: _Inode, logical: int) -> tuple[int, bool]:
-        """Return (physical block, unwritten) or (0, False) for a hole."""
+        """Map a visible logical block; never expose ext4 preallocation past i_size.
+
+        Extents may legitimately cover preallocated blocks after EOF. The read
+        API clamps byte ranges to ``inode.size``; this lower-level mapping API
+        also refuses direct requests outside the rounded-up logical file range.
+        Unwritten extents inside that range remain zero-filled by the reader.
+        """
         if not inode.flags & _EXT4_EXTENTS_FL:
             return super()._logical_block(inode, logical), False
         if logical < 0 or logical >= 1 << 32:
             raise Ext3ReadError("logical extent index is outside uint32")
+        logical_blocks = (inode.size + self.block_size - 1) // self.block_size
+        if logical >= logical_blocks:
+            raise Ext3ReadError("logical extent lookup exceeds inode size")
         cache = getattr(self, "_extent_cache_last", None)
         if cache is None:
             cache = self._extent_cache_last = {}
