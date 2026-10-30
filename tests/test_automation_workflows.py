@@ -83,6 +83,7 @@ def test_auto_merge_requires_trust_label_head_match_and_all_gates():
     for name in (
         "CI-Gate",
         "quality-gate",
+        "security-gate",
         "dependency-review",
         "Verify (status, secrets, versions, tests)",
     ):
@@ -246,6 +247,9 @@ def test_ci_guardian_deduplicates_incidents_and_closes_on_recovery():
 def test_security_audit_is_blocking_and_self_heal_is_pr_only():
     security = workflow("security.yml")
     self_heal = workflow("self-heal.yml")
+    assert "name: security-gate" in security
+    assert "needs: [analyze, dependency-review, pip-audit]" in security
+    assert "github.event_name != 'workflow_dispatch'" not in security
     assert "continue-on-error: true" not in security
     assert "pip-audit -r requirements.txt --desc on || true" not in security
     assert "pip-audit -r requirements-win7.txt --desc on || true" not in security

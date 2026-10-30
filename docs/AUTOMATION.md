@@ -8,7 +8,7 @@
 |---|---|---|---:|---:|
 | CI | push/PR/nightly | Python 3.10–3.12, Linux/Windows/macOS, integration, GUI, build | нет | нет |
 | Quality | push/PR/manual | ruff, black, isort, compileall, actionlint | нет | нет |
-| Security | push/PR/weekly | CodeQL, dependency review, pip-audit | нет | нет |
+| Security | push/PR/weekly/manual | CodeQL, dependency review, pip-audit, unified `security-gate` | нет | нет |
 | Autofix | main/manual/ChatOps | только isort + black, затем тесты | PR | только через обычные gates |
 | Self-heal | failure trusted main + opt-in | анализ логов и предложение patch PR | PR | нет |
 | CI Guardian | workflow completion | deduplicated incident issue, recovery close | issues only | нет |
@@ -32,7 +32,7 @@ Guardian не редактирует исходники и не закрывае
 
 ## Security policy
 
-`pip-audit` является настоящим blocking gate: ошибка vulnerability scan больше не подавляется `|| true`. Если dependency audit требует временного исключения, оно должно быть оформлено явно в repository policy и отдельном reviewed PR, а не скрыто в workflow.
+`pip-audit` является настоящим blocking gate: ошибка vulnerability scan больше не подавляется `|| true`. `security-gate` агрегирует CodeQL, dependency review и pip-audit; на PR все применимые проверки обязаны завершиться успешно, а manual/push режимы корректно пропускают только неприменимый dependency review. Auto-merge ждёт именно этот единый gate. Если dependency audit требует временного исключения, оно должно быть оформлено явно в repository policy и отдельном reviewed PR, а не скрыто в workflow.
 
 Все third-party Actions закреплены полными commit SHA. Workflow permissions минимальны по умолчанию. Maintenance workflows используют общий concurrency lock и не применяют force-push.
 
