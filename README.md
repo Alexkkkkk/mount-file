@@ -73,6 +73,7 @@ ext, exFAT и NTFS, а также ограниченная native-запись �
 - [Структура проекта](#структура-проекта)
 - [Ограничения](#ограничения)
 - [Участие в разработке](#участие-в-разработке)
+- [Поддержка проекта](#поддержка-проекта)
 - [Лицензия](#лицензия)
 
 ## Состав проекта
@@ -876,15 +877,41 @@ mount-file/
   образа, в который записываете.
 
 ## Участие в разработке
-
 1. Форк → ветка `feat/my-feature`.
 2. `pip install -e ".[dev]"` + `pre-commit install`.
 3. Тесты в `tests/`, коммиты в формате [Conventional Commits](https://www.conventionalcommits.org/).
 4. PR.
-
 Подробнее — [CONTRIBUTING.md](CONTRIBUTING.md). Вопросы по уязвимостям — по
 правилам [SECURITY.md](SECURITY.md), без публичных issue. Правила общения —
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
+
+## Поддержка проекта
+
+![Реклама поддержки open-source проектов](docs/assets/project-donation-ad.png)
+
+Готовая рекламная кампания и макеты находятся в [документации по донатам](docs/donation-campaign.md).
+Если проект оказался полезен и вы хотите поддержать его развитие, можно отправить
+добровольный донат в сети **TON**:
+
+Подробности и безопасные рекомендации собраны в [руководстве по поддержке](docs/donations.md).
+
+```text
+UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
+```
+
+- [Открыть TON-кошелёк для оплаты](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation)
+- [Открыть адрес в TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
+- Сеть: **TON**
+- Назначение: поддержка разработки, тестирования и автоматизации MountFile
+
+![QR-код для доната в TON](docs/assets/ton-donation-qr.png)
+
+Отсканируйте QR-код приложением TON-кошелька или используйте payment link выше.
+Сумма не задана — выберите её самостоятельно перед подтверждением транзакции.
+
+Проверяйте адрес перед отправкой и не отправляйте на него активы из другой сети.
+Этот адрес предназначен только для добровольной поддержки и не является обещанием
+доходности, возврата средств или финансовой услугой.
 
 ## Лицензия
 
@@ -926,3 +953,16 @@ SOFTWARE.
 ```
 
 [LICENSE](LICENSE) © 2026 Alexkkkkk.
+
+<!-- DONATION-CAMPAIGN -->
+## Support the next release
+
+![Support open-source projects](https://raw.githubusercontent.com/Alexkkkkk/mount-file/main/docs/assets/project-donation-ad.png)
+
+Your support funds the next release: development, testing, documentation, and maintenance.
+
+**Donate in TON:** `UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv`
+
+[Open in a TON wallet](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=Project%20support) · [Verify in TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv) · [Read the campaign](https://github.com/Alexkkkkk/mount-file/blob/main/docs/donation-campaign.md)
+
+Donations are voluntary. Check the address and network before sending. Never share a seed phrase, private key, or confirmation code.
