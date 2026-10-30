@@ -50,6 +50,27 @@ replay_journal=True)`: он строит bounded in-memory overlay из committe
 descriptor/data/commit records, не изменяет исходный образ и отклоняет revoke,
 checksum, неизвестные feature flags, повреждённые или неполные транзакции.
 
+### Семантика метаданных bounded providers
+
+Общие поля `stat` — `path`, `name`, `is_dir`, `size` и `date`; отдельные
+providers могут добавлять поля вроде `kind` или `inode`. Это parser view, а не
+полная POSIX metadata model. Наличие `kind`/`inode` не означает поддержки
+восстановления владельца, режима доступа или link graph.
+
+`date` остаётся строкой, предоставленной конкретным reader-ом, и может быть
+пустой. ext2 выводит mtime обычного файла; FAT выводит доступную ему дату;
+exFAT и NTFS в текущем VFS listing возвращают пустое значение. Формат,
+точность, timezone и наличие времён создания/доступа не нормализуются между
+форматами; поле нельзя использовать как нормализованный UTC timeline timestamp.
+
+Общий VFS contract не предоставляет owner/group, POSIX permissions/ACL,
+xattrs, число или семантику hard links и все timestamps. NTFS reader открывает
+только unnamed `$DATA`; alternate data streams не перечисляются и не извлекаются
+через этот API. ext2 может обозначить тип записи как `symlink`, но это не
+обещание следования по ссылке: callers не должны трактовать имя/`kind` как
+разрешённый host path. Неподдержанное чтение или изменение такого объекта должно
+завершаться явным отказом.
+
 Текущий операционный контракт bounded native profiles можно получить как
 detached JSON-compatible snapshot:
 

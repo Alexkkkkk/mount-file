@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
 from test_fat_reader import _make_fat1216_image
 
+from mountfile.safety import RefusalCode
 from mountfile.universal_fs_rw import Fat32RW
 
 
@@ -115,9 +116,15 @@ def test_native_fat_metadata_writes_cannot_cross_selected_extent(tmp_path):
     backend = Fat32RW(image, offset=0, volume_size=selected_size)
     try:
         with pytest.raises(
+            ValueError, match="FAT read exceeds selected volume bounds"
+        ) as caught:
+            backend._read_at(selected_size - 1, 2)
+        assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+        with pytest.raises(
             ValueError, match="FAT write exceeds selected volume bounds"
-        ):
+        ) as caught:
             backend._write_at(selected_size - 1, b"XX")
+        assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
     finally:
         backend.close()
 
