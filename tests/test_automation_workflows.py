@@ -232,3 +232,21 @@ def test_workflow_quality_validation_is_integrity_checked():
     assert "actionlint" in text
     assert "sha256sum --check" in text
     assert "collected no tests" not in text
+
+
+def test_ci_guardian_deduplicates_incidents_and_closes_on_recovery():
+    text = workflow("ci-guardian.yml")
+    assert "workflow_run:" in text
+    assert "issues.create" in text
+    assert "ci-failure" in text
+    assert "issues.update" in text
+    assert "does not modify source code" in text
+
+
+def test_security_audit_is_blocking_and_self_heal_is_pr_only():
+    security = workflow("security.yml")
+    self_heal = workflow("self-heal.yml")
+    assert "continue-on-error: true" not in security
+    assert "pip-audit -r requirements.txt --desc on || true" not in security
+    assert "pip-audit -r requirements-win7.txt --desc on || true" not in security
+    assert 'AUTO_APPROVE_PATCHES: "false"' in self_heal

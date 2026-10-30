@@ -66,8 +66,9 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # ID упавшего запуска — агент скачает именно его логи
           GITHUB_RUN_ID: ${{ github.event.workflow_run.id }}
-          # Разрешаем автоматическое создание PR (без ручного подтверждения)
-          AUTO_APPROVE_PATCHES: "true"
+          # Автоматически создать PR можно, но approve/merge всегда остаются
+          # за review и существующими branch-protection gates.
+          AUTO_APPROVE_PATCHES: "false"
           GIT_ENABLED: "true"
           # Исключаем сам workflow самолечения, чтобы избежать бесконечного цикла
           EXCLUDED_WORKFLOW_NAMES: "Self-Heal on Failure"
