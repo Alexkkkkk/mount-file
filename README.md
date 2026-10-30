@@ -881,9 +881,15 @@ mount-file/
 UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
 ```
 
+- [Открыть TON-кошелёк для оплаты](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation)
 - [Открыть адрес в TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
 - Сеть: **TON**
 - Назначение: поддержка разработки, тестирования и автоматизации MountFile
+
+![QR-код для доната в TON](docs/assets/ton-donation-qr.png)
+
+Отсканируйте QR-код приложением TON-кошелька или используйте payment link выше.
+Сумма не задана — выберите её самостоятельно перед подтверждением транзакции.
 
 Проверяйте адрес перед отправкой и не отправляйте на него активы из другой сети.
 Этот адрес предназначен только для добровольной поддержки и не является обещанием
