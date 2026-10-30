@@ -38,6 +38,9 @@ _MAX_RUNLIST_BYTES = 1 << 20
 _ATTRIBUTE_FLAG_COMPRESSED = 0x0001
 _ATTRIBUTE_FLAG_ENCRYPTED = 0x4000
 _ATTRIBUTE_FLAG_SPARSE = 0x8000
+_ATTRIBUTE_KNOWN_FLAGS = (
+    _ATTRIBUTE_FLAG_COMPRESSED | _ATTRIBUTE_FLAG_ENCRYPTED | _ATTRIBUTE_FLAG_SPARSE
+)
 _VOLUME_KNOWN_FLAGS = 0x807F
 _LOGFILE_PAGE_SIZE = 4096
 _MAX_READ_RANGE_BYTES = 1 << 20
@@ -516,6 +519,12 @@ def parse_ntfs_attribute_stream(
         resident_value = None
         data_size = 0
         flags = struct.unpack_from("<H", raw, pos + 12)[0]
+        if flags & ~_ATTRIBUTE_KNOWN_FLAGS:
+            raise NtfsMetadataError("NTFS attribute contains unknown flag bits")
+        if flags:
+            raise NtfsMetadataError(
+                "compressed, encrypted or sparse NTFS attributes are unsupported"
+            )
         if nonresident:
             if length < 64:
                 raise NtfsMetadataError(
@@ -527,14 +536,6 @@ def parse_ntfs_attribute_stream(
                 raise NtfsMetadataError("invalid NTFS attribute VCN range")
             if run_offset < 64 or run_offset >= length:
                 raise NtfsMetadataError("NTFS runlist offset is outside the attribute")
-            if flags & (
-                _ATTRIBUTE_FLAG_COMPRESSED
-                | _ATTRIBUTE_FLAG_ENCRYPTED
-                | _ATTRIBUTE_FLAG_SPARSE
-            ):
-                raise NtfsMetadataError(
-                    "compressed, encrypted or sparse NTFS attributes are unsupported"
-                )
             runs = _parse_runlist(
                 raw[pos + run_offset : pos + length],
                 cluster_count,
@@ -588,16 +589,20 @@ def _parse_ntfs_index_entries(
     end: int,
     parent_reference: int | None = None,
     allow_children: bool = False,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
     """Parse bounded FILE_NAME index entries and return child VCNs."""
     if start < 0 or end < start or end > len(value):
         raise NtfsMetadataError("NTFS index entries exceed the attribute")
     if len(value) < 32:
         raise NtfsMetadataError("NTFS index value is truncated")
+    if upcase_table is not None and len(upcase_table) != _UPCASE_TABLE_ENTRIES:
+        raise NtfsMetadataError("NTFS index received an invalid $UpCase table")
     result: list[NtfsIndexEntry] = []
     children: list[int] = []
     previous_name = ""
-    names: set[str] = set()
+    previous_key: tuple[int, ...] | None = None
+    names: set[object] = set()
     pos = start
     while pos < end:
         if pos + 16 > end:
@@ -653,11 +658,19 @@ def _parse_ntfs_index_entries(
             raise NtfsMetadataError(
                 "NTFS index name contains an invalid path component"
             )
-        folded = name.lower() if name.isascii() else name
-        previous_is_ascii = previous_name is not None and previous_name.isascii()
-        if folded in names or (
-            name.isascii() and previous_is_ascii and folded < previous_name.lower()
-        ):
+        if upcase_table is not None:
+            encoded_name = name.encode("utf-16le")
+            units = struct.unpack(f"<{len(encoded_name) // 2}H", encoded_name)
+            folded: object = tuple(upcase_table[unit] for unit in units)
+            unsorted = previous_key is not None and folded < previous_key
+            previous_key = folded
+        else:
+            folded = name.lower() if name.isascii() else name
+            previous_is_ascii = previous_name is not None and previous_name.isascii()
+            unsorted = (
+                name.isascii() and previous_is_ascii and folded < previous_name.lower()
+            )
+        if folded in names or unsorted:
             raise NtfsMetadataError("NTFS index names are duplicate or unsorted")
         names.add(folded)
         previous_name = name
@@ -672,13 +685,35 @@ def _parse_ntfs_index_entries(
     raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
 
 
+def _validate_index_upcase_table(
+    upcase_table: tuple[int, ...] | None,
+) -> tuple[int, ...] | None:
+    if upcase_table is None:
+        return None
+    try:
+        table = tuple(upcase_table)
+    except TypeError as exc:
+        raise NtfsMetadataError("NTFS index received an invalid $UpCase table") from exc
+    if len(table) != _UPCASE_TABLE_ENTRIES or any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > 0xFFFF
+        for value in table
+    ):
+        raise NtfsMetadataError("NTFS index received an invalid $UpCase table")
+    return table
+
+
 def parse_ntfs_index_root(
     value: bytes,
     *,
     parent_reference: int | None = None,
     allow_index_allocation: bool = False,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Parse a resident INDEX_ROOT value containing bounded FILE_NAME keys."""
+    upcase_table = _validate_index_upcase_table(upcase_table)
     if len(value) < 32:
         raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
     entry_offset, total_size, allocated_size = struct.unpack_from("<III", value, 16)
@@ -697,6 +732,7 @@ def parse_ntfs_index_root(
         end=end,
         parent_reference=parent_reference,
         allow_children=allow_index_allocation,
+        upcase_table=upcase_table,
     )
     return entries
 
@@ -707,6 +743,7 @@ def _parse_ntfs_index_block(
     parent_reference: int | None = None,
     expected_vcn: int | None = None,
     allow_children: bool = False,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
     """Validate an INDX block's USA and parse its bounded index entries."""
     if len(raw_block) < 512 or len(raw_block) % 512:
@@ -745,6 +782,7 @@ def _parse_ntfs_index_block(
         end=end,
         parent_reference=parent_reference,
         allow_children=allow_children,
+        upcase_table=upcase_table,
     )
     if children and not allow_children:
         raise NtfsMetadataError("NTFS INDX child pointers are unsupported")
@@ -756,10 +794,15 @@ def parse_ntfs_index_block(
     *,
     parent_reference: int | None = None,
     expected_vcn: int | None = None,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Validate an INDX block and parse entries without exposing child pointers."""
+    upcase_table = _validate_index_upcase_table(upcase_table)
     entries, _children = _parse_ntfs_index_block(
-        raw_block, parent_reference=parent_reference, expected_vcn=expected_vcn
+        raw_block,
+        parent_reference=parent_reference,
+        expected_vcn=expected_vcn,
+        upcase_table=upcase_table,
     )
     return entries
 
@@ -1091,16 +1134,13 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if not record.is_directory:
             raise NtfsMetadataError("NTFS path is not a directory")
         entries = self.list_dir_by_record(record_number, record)
+        parent_reference = record_number | (record.sequence_number << 48)
         result = []
         for entry in entries:
             child_number = entry.reference & ((1 << 48) - 1)
             child = self.read_mft_record(child_number, reference=entry.reference)
-            if child.is_directory != entry.is_directory:
-                raise NtfsMetadataError("NTFS index directory flag disagrees with MFT")
-            child_attrs = parse_ntfs_attribute_stream(
-                child,
-                cluster_count=self.profile.boot.cluster_count,
-                upcase_table=getattr(self, "_upcase_table", None),
+            child_attrs = self._validate_index_entry_metadata(
+                entry, child, parent_reference
             )
             data = next(
                 (a for a in child_attrs if a.type_code == 0x80 and not a.name), None
@@ -1245,12 +1285,53 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             )
             if match is None:
                 raise NtfsMetadataError(f"NTFS path component not found: {part}")
-            number = match.reference & ((1 << 48) - 1)
-            if number in visited:
+            child_number = match.reference & ((1 << 48) - 1)
+            if child_number in visited:
                 raise NtfsMetadataError("NTFS directory tree contains a cycle")
-            visited.add(number)
-            record = self.read_mft_record(number, reference=match.reference)
+            visited.add(child_number)
+            parent_reference = number | (record.sequence_number << 48)
+            child_record = self.read_mft_record(child_number, reference=match.reference)
+            self._validate_index_entry_metadata(match, child_record, parent_reference)
+            number, record = child_number, child_record
         return number, record
+
+    def _validate_index_entry_metadata(self, entry, child_record, parent_reference):
+        """Cross-check a directory index key against the child's MFT names."""
+        if child_record.is_directory != entry.is_directory:
+            raise NtfsMetadataError("NTFS index directory flag disagrees with MFT")
+        attributes = parse_ntfs_attribute_stream(
+            child_record,
+            cluster_count=self.profile.boot.cluster_count,
+            upcase_table=getattr(self, "_upcase_table", None),
+        )
+        file_name_attributes = [
+            attribute for attribute in attributes if attribute.type_code == 0x30
+        ]
+        if not file_name_attributes:
+            raise NtfsMetadataError("NTFS index child has no FILE_NAME attribute")
+
+        matching_name = False
+        for attribute in file_name_attributes:
+            if (
+                attribute.name
+                or attribute.nonresident
+                or attribute.resident_value is None
+            ):
+                raise NtfsMetadataError(
+                    "NTFS FILE_NAME attribute layout is unsupported"
+                )
+            file_name = parse_ntfs_file_name(attribute.resident_value)
+            if (
+                file_name.parent_reference == parent_reference
+                and self._path_names_equal(file_name.name, entry.name)
+                and bool(file_name.file_attributes & 0x10000000) == entry.is_directory
+            ):
+                matching_name = True
+        if not matching_name:
+            raise NtfsMetadataError(
+                "NTFS directory index entry disagrees with child FILE_NAME metadata"
+            )
+        return attributes
 
     def list_dir_by_record(self, record_number, record):
         attrs = parse_ntfs_attribute_stream(
@@ -1278,6 +1359,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             end=16 + total_size,
             parent_reference=parent_reference,
             allow_children=bool(index_flags & 1),
+            upcase_table=getattr(self, "_upcase_table", None),
         )
         entries = list(root_entries)
         if index_flags & 1:
@@ -1310,6 +1392,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     parent_reference=parent_reference,
                     expected_vcn=vcn,
                     allow_children=True,
+                    upcase_table=getattr(self, "_upcase_table", None),
                 )
                 entries.extend(block_entries)
                 pending.extend(block_children)

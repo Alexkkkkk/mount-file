@@ -115,6 +115,52 @@ def _attribute_list_entry(
     return bytes(entry)
 
 
+def _filename_index_entry(name, record_number):
+    encoded = name.encode("utf-16le")
+    key = bytearray(66 + len(encoded))
+    struct.pack_into("<Q", key, 0, (3 << 48) | 5)
+    key[64] = len(encoded) // 2
+    key[65] = 3
+    key[66:] = encoded
+    entry_length = (16 + len(key) + 7) & ~7
+    entry = bytearray(entry_length)
+    struct.pack_into(
+        "<QHHI", entry, 0, (3 << 48) | record_number, entry_length, len(key), 0
+    )
+    entry[16 : 16 + len(key)] = key
+    return bytes(entry)
+
+
+def _index_root_value(entries):
+    end_entry = struct.pack("<QHHI", 0, 16, 0, 2)
+    entry_bytes = b"".join(entries)
+    total_size = 16 + len(entry_bytes) + len(end_entry)
+    value = bytearray(16 + total_size)
+    struct.pack_into("<III", value, 16, 16, total_size, total_size)
+    value[32 : 32 + len(entry_bytes)] = entry_bytes
+    value[32 + len(entry_bytes) :] = end_entry
+    return bytes(value)
+
+
+def _unicode_upcase_table():
+    values = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        values[codepoint] = codepoint - 32
+    values[ord("é")] = ord("É")
+    return tuple(values)
+
+
+def _file_name_value(name, parent_reference, file_attributes=0):
+    encoded = name.encode("utf-16le")
+    value = bytearray(66 + len(encoded))
+    struct.pack_into("<Q", value, 0, parent_reference)
+    struct.pack_into("<I", value, 56, file_attributes)
+    value[64] = len(encoded) // 2
+    value[65] = 3
+    value[66:] = encoded
+    return bytes(value)
+
+
 def test_validates_backup_mft_mirror_and_attribute_end_marker(tmp_path):
     profile = probe_ntfs_metadata(_image(tmp_path), volume_size=VOLUME_SIZE)
     assert profile.mirror_matches_mft is True
@@ -286,6 +332,36 @@ def test_attribute_stream_validates_resident_list_then_refuses_extension_resolut
         parse_ntfs_attribute_stream(record)
 
 
+@pytest.mark.parametrize(
+    ("nonresident", "flags", "message"),
+    [
+        (False, 0x0001, "compressed, encrypted or sparse"),
+        (False, 0x0004, "unknown flag bits"),
+        (True, 0x4000, "compressed, encrypted or sparse"),
+        (True, 0x0004, "unknown flag bits"),
+    ],
+)
+def test_attribute_stream_rejects_unsupported_and_unknown_flags(
+    nonresident, flags, message
+):
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    raw = bytearray(
+        _record(attr_type=0x80 if nonresident else 0x30, nonresident=nonresident)
+    )
+    attribute_length = 72 if nonresident else 24
+    if nonresident:
+        struct.pack_into("<I", raw, 0x3C, attribute_length)
+    struct.pack_into("<H", raw, 0x38 + 12, flags)
+    used = 0x38 + attribute_length + 4
+    struct.pack_into("<I", raw, 0x18, used)
+    struct.pack_into("<I", raw, 0x38 + attribute_length, 0xFFFFFFFF)
+
+    record = parse_ntfs_file_record_header(bytes(raw))
+    with pytest.raises(NtfsMetadataError, match=message):
+        parse_ntfs_attribute_stream(record)
+
+
 def test_rejects_attribute_name_that_overlaps_its_header():
     raw = bytearray(_record(attr_type=0x30))
     struct.pack_into("<I", raw, 0x18, 92)
@@ -402,6 +478,60 @@ def test_parses_bounded_index_root_file_name_entry():
         parse_ntfs_index_root(bytes(value))
 
 
+def test_ntfs_index_root_uses_upcase_table_for_unicode_collation():
+    table = _unicode_upcase_table()
+    sorted_index = _index_root_value(
+        [_filename_index_entry("Zebra", 42), _filename_index_entry("Éclair", 43)]
+    )
+    entries = parse_ntfs_index_root(sorted_index, upcase_table=table)
+    assert [entry.name for entry in entries] == ["Zebra", "Éclair"]
+
+    unsorted_index = _index_root_value(
+        [_filename_index_entry("Éclair", 42), _filename_index_entry("Zebra", 43)]
+    )
+    with pytest.raises(NtfsMetadataError, match="duplicate or unsorted"):
+        parse_ntfs_index_root(unsorted_index, upcase_table=table)
+
+
+def test_ntfs_index_root_rejects_casefold_duplicate_unicode_names():
+    duplicate_index = _index_root_value(
+        [_filename_index_entry("Éclair", 42), _filename_index_entry("éclair", 43)]
+    )
+    with pytest.raises(NtfsMetadataError, match="duplicate or unsorted"):
+        parse_ntfs_index_root(duplicate_index, upcase_table=_unicode_upcase_table())
+
+
+def test_ntfs_index_root_rejects_malformed_upcase_table():
+    with pytest.raises(NtfsMetadataError, match="invalid \\$UpCase table"):
+        parse_ntfs_index_root(_index_root_value([]), upcase_table=(0,))
+
+
+def test_native_ntfs_directory_reader_uses_upcase_collation(monkeypatch):
+    from types import SimpleNamespace
+
+    root_value = _index_root_value(
+        [_filename_index_entry("Éclair", 42), _filename_index_entry("Zebra", 43)]
+    )
+    root_attribute = NtfsAttributeSummary(
+        type_code=0x90,
+        length=len(root_value),
+        nonresident=False,
+        name="$I30",
+        resident_value=root_value,
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (root_attribute,),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader._upcase_table = _unicode_upcase_table()
+    root_record = SimpleNamespace(sequence_number=3)
+
+    with pytest.raises(NtfsMetadataError, match="duplicate or unsorted"):
+        reader.list_dir_by_record(5, root_record)
+
+
 def test_validates_indx_usa_before_parsing_entries():
     block = bytearray(4096)
     block[:4] = b"INDX"
@@ -474,6 +604,78 @@ def test_parses_resident_filename_and_standard_information_bounds():
         parse_ntfs_standard_information(bytes(47))
 
 
+def test_native_ntfs_index_entry_matches_child_filename_metadata(monkeypatch):
+    from types import SimpleNamespace
+
+    parent_reference = (3 << 48) | 5
+    filename = NtfsAttributeSummary(
+        type_code=0x30,
+        length=80,
+        nonresident=False,
+        name="",
+        resident_value=_file_name_value("éclair", parent_reference),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (filename,),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader._upcase_table = _unicode_upcase_table()
+    entry = NtfsIndexEntry((3 << 48) | 42, "Éclair", False)
+
+    assert reader._validate_index_entry_metadata(
+        entry, SimpleNamespace(is_directory=False), parent_reference
+    ) == (filename,)
+
+
+@pytest.mark.parametrize(
+    ("filename", "parent_reference", "file_attributes"),
+    [
+        ("other.txt", (3 << 48) | 5, 0),
+        ("Éclair", (4 << 48) | 5, 0),
+        ("Éclair", (3 << 48) | 5, 0x10000000),
+    ],
+)
+def test_native_ntfs_index_entry_rejects_inconsistent_child_filename(
+    monkeypatch, filename, parent_reference, file_attributes
+):
+    from types import SimpleNamespace
+
+    attribute = NtfsAttributeSummary(
+        type_code=0x30,
+        length=80,
+        nonresident=False,
+        name="",
+        resident_value=_file_name_value(filename, parent_reference, file_attributes),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (attribute,),
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader._upcase_table = _unicode_upcase_table()
+    entry = NtfsIndexEntry((3 << 48) | 42, "Éclair", False)
+
+    with pytest.raises(NtfsMetadataError, match="disagrees with child FILE_NAME"):
+        reader._validate_index_entry_metadata(
+            entry, SimpleNamespace(is_directory=False), (3 << 48) | 5
+        )
+
+
+def test_native_ntfs_index_entry_rejects_mismatched_mft_directory_flag():
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    entry = NtfsIndexEntry((3 << 48) | 42, "folder", False)
+
+    with pytest.raises(NtfsMetadataError, match="directory flag disagrees"):
+        reader._validate_index_entry_metadata(
+            entry, SimpleNamespace(is_directory=True), (3 << 48) | 5
+        )
+
+
 @pytest.mark.parametrize("name", ["café.txt", "file-📁.txt"])
 def test_parses_unicode_ntfs_filename_and_directory_index_key(name):
     encoded_name = name.encode("utf-16le")
@@ -509,6 +711,7 @@ def test_ntfs_paths_use_exact_unicode_and_case_insensitive_ascii_lookup():
     root = SimpleNamespace(is_directory=True, sequence_number=3)
     child = SimpleNamespace(is_directory=False, sequence_number=3)
     reader.read_mft_record = lambda number, **_kwargs: root if number == 5 else child
+    reader._validate_index_entry_metadata = lambda *_args: ()
     reader.list_dir_by_record = lambda *_args: (
         NtfsIndexEntry(reference, "café.txt", False),
         NtfsIndexEntry(reference + 1, "Readme.TXT", False),
@@ -576,6 +779,7 @@ def test_ntfs_upcase_table_enables_unicode_case_insensitive_lookup(monkeypatch):
     root = SimpleNamespace(is_directory=True, sequence_number=3)
     child = SimpleNamespace(is_directory=False, sequence_number=3)
     reader.read_mft_record = lambda number, **_kwargs: root if number == 5 else child
+    reader._validate_index_entry_metadata = lambda *_args: ()
     reader.list_dir_by_record = lambda *_args: (
         NtfsIndexEntry(reference, "café.txt", False),
     )
