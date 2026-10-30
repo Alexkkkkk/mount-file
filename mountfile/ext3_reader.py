@@ -192,12 +192,16 @@ class NativeExt3Image(NativeExt2Image):
         cursor = 12
         tag_count = 0
         last = False
+        target_blocks: set[int] = set()
         while cursor + 8 <= self.block_size:
             block_number, flags = struct.unpack_from(">II", descriptor, cursor)
             cursor += 8
             tag_count += 1
             if block_number == 0 or block_number >= self.blocks_count:
                 raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
+            if block_number in target_blocks:
+                raise Ext3ReadError("JBD2 transaction targets a block more than once")
+            target_blocks.add(block_number)
             if journal_data_blocks is not None and block_number in journal_data_blocks:
                 raise Ext3ReadError(
                     "JBD2 descriptor target overlaps journal inode data"

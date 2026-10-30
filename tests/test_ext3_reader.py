@@ -28,6 +28,7 @@ def _make_clean_journal_image(
     journal_inode=8,
     declared_journal_inode=None,
     replay_target=21,
+    duplicate_target=False,
 ):
     _make_image(path, compat=0x000C)
     image = bytearray(path.read_bytes())
@@ -52,8 +53,14 @@ def _make_clean_journal_image(
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
     struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
-    struct.pack_into(">II", journal, 1036, replay_target, 0x0000000A)  # LAST|SAME_UUID
-    struct.pack_into(">III", journal, 3072, 0xC03B3998, 2, commit_sequence)
+    if duplicate_target:
+        struct.pack_into(">II", journal, 1036, replay_target, 0x00000002)  # SAME_UUID
+        struct.pack_into(">II", journal, 1044, replay_target, 0x0000000A)  # LAST|SAME_UUID
+        commit_offset = 4096
+    else:
+        struct.pack_into(">II", journal, 1036, replay_target, 0x0000000A)  # LAST|SAME_UUID
+        commit_offset = 3072
+    struct.pack_into(">III", journal, commit_offset, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
         struct.pack_into(">I", image, 43 * 1024 + 8, 0)
     path.write_bytes(image)
@@ -120,6 +127,14 @@ def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
     image_path = tmp_path / "mismatched-journal.img"
     _make_clean_journal_image(image_path, commit_sequence=8)
     with pytest.raises(Ext3ReadError, match="sequence/type mismatch"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_jbd2_transaction_cannot_target_one_block_twice(tmp_path):
+    image_path = tmp_path / "duplicate-journal-target.img"
+    _make_clean_journal_image(image_path, duplicate_target=True)
+
+    with pytest.raises(Ext3ReadError, match="targets a block more than once"):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
