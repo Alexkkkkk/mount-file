@@ -84,12 +84,41 @@ def _image_lock(path):
 
 def _image_identity(path):
     """Return a stable full-image identity or fail if it changes while hashing."""
+    path = Path(path)
+    try:
+        link_info = path.lstat()
+    except OSError as exc:
+        raise ExfatWriteError("cannot inspect exFAT image path") from exc
+    reparse_point = bool(
+        getattr(link_info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+    if stat.S_ISLNK(link_info.st_mode) or reparse_point:
+        raise ExfatWriteError(
+            "exFAT image target must not be a symlink or reparse point"
+        )
+    if not stat.S_ISREG(link_info.st_mode):
+        raise ExfatWriteError("exFAT image target is not a regular file")
+    if getattr(link_info, "st_nlink", 1) != 1:
+        raise ExfatWriteError("exFAT image target must not have multiple hard links")
+
     digest = hashlib.sha256()
     try:
-        with open(path, "rb") as stream:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "rb") as stream:
             before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                raise ExfatWriteError("exFAT image is not a regular file")
+            same_path_object = os.name == "nt" or (
+                (link_info.st_dev, link_info.st_ino) == (before.st_dev, before.st_ino)
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or getattr(before, "st_nlink", 1) != 1
+                or not same_path_object
+            ):
+                raise ExfatWriteError("exFAT image path changed during validation")
             while True:
                 chunk = stream.read(1 << 20)
                 if not chunk:
@@ -121,7 +150,8 @@ class NativeExfatWriter:
     def __init__(self, image_path, *, offset=0, volume_size=None):
         if volume_size is None:
             raise ExfatWriteError("exFAT writer requires an explicit volume extent")
-        self.image = Path(image_path)
+        self.image = Path(os.path.abspath(os.fspath(image_path)))
+        _image_identity(self.image)
         self.offset = int(offset)
         self.volume_size = int(volume_size)
         try:

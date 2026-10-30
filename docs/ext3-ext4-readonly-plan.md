@@ -1,10 +1,10 @@
 # План: conservative read-only ext3/ext4 profiles
 
-Статус: план и safety-инварианты; часть read-only этапов реализована. Текущий `NativeExt3Image` поддерживает только явно запрошенный, ограниченный in-memory replay классического JBD2 descriptor/data/commit формата. Это не полноценное journal recovery и не разрешение на запись.
+Статус на 2026-10-29: документ описывает safety-инварианты и будущие этапы; часть read-only профилей уже реализована в `main` (`c63e10f`). `NativeExt3Image` допускает только явно запрошенный ограниченный in-memory replay классического JBD2 descriptor/data/commit формата. Это не полноценное journal recovery и не разрешение на запись. Текущий bounded ext4 reader поддерживает ограниченный classic/extent профиль; `64BIT`, `flex_bg`, `bigalloc` и `metadata_csum` остаются неподдержанными и fail-closed. Native ext3/ext4 writers отсутствуют. Актуальная capability-матрица и статус draft PR находятся в [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
 
 ## 1. Цель и границы
 
-Добавить в существующие `mountfile/ext2_reader.py` и `mountfile/vfs.py` два явно ограниченных профиля: `native-ext3-ro` для classic inode pointers + linear directories + JBD2 validation и `native-ext4-ro` для того же чтения с отдельно включаемыми extents и 64-bit/group layouts.
+Развивать существующие `mountfile/ext2_reader.py` и `mountfile/vfs.py` как явно ограниченные профили: `native-ext3-ro` для classic inode pointers + linear directories + JBD2 validation и `native-ext4-ro` для bounded classic/extent reads. Включение 64-bit/group layouts остаётся будущим этапом и требует отдельной реализации и тестов; его нельзя считать частью текущего профиля.
 
 Оба профиля открывают image только `rb`, требуют явные `offset` и `volume_size`, не исправляют metadata и не имеют writer API. Обычный режим отвергает активный journal. Только явный `replay_journal=True` включает ограниченный memory-only replay; source image не изменяется. Любой неизвестный feature bit, dirty/recovery state, checksum mismatch, malformed layout, overflow или выход за выбранный extent означает fail-closed ошибку. Если обнаружен ext superblock, отказ native-профиля не должен незаметно переключаться на `pytsk3`; fallback допустим только для нераспознанных ext-образов или отдельного opt-in legacy режима.
 

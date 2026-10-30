@@ -117,6 +117,7 @@ class NativeExt3Image(NativeExt2Image):
             )
 
     def __init__(self, image_path, offset=0, volume_size=None, *, replay_journal=False):
+        self._extent_cache_last = {}
         self._journal_overlay: dict[int, bytes] = {}
         self.journal_replayed = False
         super().__init__(image_path, offset=offset, volume_size=volume_size)
@@ -562,6 +563,14 @@ class NativeExt4Image(NativeExt3Image):
             return super()._logical_block(inode, logical), False
         if logical < 0 or logical >= 1 << 32:
             raise Ext3ReadError("logical extent index is outside uint32")
+        cache = getattr(self, "_extent_cache_last", None)
+        if cache is None:
+            cache = self._extent_cache_last = {}
+        cached = cache.get(inode.number)
+        if cached is not None:
+            start, end, physical_start, unwritten = cached
+            if start <= logical < end:
+                return physical_start + logical - start, unwritten
         node = struct.pack("<15I", *inode.block_pointers)
         visited: set[int] = set()
         expected_depth = None
@@ -606,6 +615,14 @@ class NativeExt4Image(NativeExt3Image):
                     previous_end = end
                     if start <= logical < end:
                         physical = physical_start + (logical - start)
+                        if len(cache) >= 4096:
+                            cache.clear()
+                        cache[inode.number] = (
+                            start,
+                            end,
+                            physical_start,
+                            unwritten,
+                        )
                         return physical, unwritten
                 return 0, False
             expected_depth = node_depth - 1
@@ -662,13 +679,40 @@ class NativeExt4Image(NativeExt3Image):
         while remaining:
             logical = position // self.block_size
             in_block = position % self.block_size
-            amount = min(remaining, self.block_size - in_block)
             physical, unwritten = self._extent_map(inode, logical)
-            if physical == 0 or unwritten:
+            blocks_needed = (
+                in_block + remaining + self.block_size - 1
+            ) // self.block_size
+            if physical == 0:
+                amount = min(remaining, self.block_size - in_block)
+                output.extend(b"\x00" * amount)
+            elif unwritten:
+                run_blocks = 1
+                while run_blocks < blocks_needed:
+                    next_physical, next_unwritten = self._extent_map(
+                        inode, logical + run_blocks
+                    )
+                    if not next_unwritten or next_physical == 0:
+                        break
+                    run_blocks += 1
+                amount = min(remaining, run_blocks * self.block_size - in_block)
                 output.extend(b"\x00" * amount)
             else:
-                data = self._read_block(physical)
-                output.extend(data[in_block : in_block + amount])
+                run_blocks = 1
+                while run_blocks < blocks_needed:
+                    next_physical, next_unwritten = self._extent_map(
+                        inode, logical + run_blocks
+                    )
+                    if next_unwritten or next_physical != physical + run_blocks:
+                        break
+                    run_blocks += 1
+                amount = min(remaining, run_blocks * self.block_size - in_block)
+                output.extend(
+                    self._read_at(
+                        physical * self.block_size + in_block,
+                        amount,
+                    )
+                )
             position += amount
             remaining -= amount
         return bytes(output)

@@ -369,6 +369,36 @@ def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
         reader._extent_map(inode, 2)
 
 
+def test_ext4_range_coalesces_contiguous_extent_blocks():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)
+    struct.pack_into("<IHHI", root, 12, 0, 8, 0, 100)
+    inode = _Inode(
+        number=12,
+        mode=0x8000,
+        size=28,
+        flags=0x00080000,
+        mtime=0,
+        block_pointers=struct.unpack("<15I", root),
+    )
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.block_size = 4
+    reader.blocks_count = 200
+    reader._resolve = lambda _path: inode
+    reads = []
+
+    def read_at(offset, length):
+        reads.append((offset, length))
+        return bytes((offset + index) & 0xFF for index in range(length))
+
+    reader._read_at = read_at
+
+    assert reader.read_file_range("/FILE", 1, 27) == bytes(
+        (401 + index) & 0xFF for index in range(27)
+    )
+    assert reads == [(401, 27)]
+
+
 def _extent_inode(root, *, logical_size=8 * 1024):
     root = bytes(root).ljust(60, b"\x00")
     return _Inode(

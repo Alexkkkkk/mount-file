@@ -178,6 +178,7 @@ def _open_rooted_directory(root, path, create=False):
 
 
 _COPY_CHUNK_SIZE = 1 << 20
+_DEFAULT_PROVIDER_READ_LIMIT = 1 << 20
 
 
 def _write_provider_contents(provider, src_path, output):
@@ -192,9 +193,19 @@ def _write_provider_contents(provider, src_path, output):
     size = get_size(src_path)
     if not isinstance(size, int) or size < 0:
         raise ExtractError("provider returned an invalid file size")
+    provider_limit = getattr(
+        provider, "max_read_range_bytes", _DEFAULT_PROVIDER_READ_LIMIT
+    )
+    if (
+        not isinstance(provider_limit, int)
+        or isinstance(provider_limit, bool)
+        or provider_limit <= 0
+    ):
+        provider_limit = _DEFAULT_PROVIDER_READ_LIMIT
+    chunk_size = min(_COPY_CHUNK_SIZE, provider_limit)
     written = 0
     while written < size:
-        requested = min(_COPY_CHUNK_SIZE, size - written)
+        requested = min(chunk_size, size - written)
         chunk = read_range(src_path, written, requested)
         if not chunk:
             raise ExtractError("provider returned a short read during extraction")

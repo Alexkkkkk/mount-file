@@ -788,6 +788,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
 
     backend_name = "native-ntfs-metadata-ro"
     case_insensitive_paths = True
+    max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
     def __init__(self, image_path, offset=0, volume_size=None):
         if volume_size is None:

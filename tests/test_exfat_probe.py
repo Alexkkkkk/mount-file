@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Synthetic tests for the bounded exFAT boot-region probe."""
 
+import os
 import struct
 from types import SimpleNamespace
 
@@ -364,6 +365,40 @@ def test_native_exfat_writer_replaces_and_renames_with_staging(tmp_path):
         assert provider.read_file("/RENAMED.TXT") == b"updated"
     finally:
         provider.close()
+
+
+def test_native_exfat_writer_rejects_symlink_target_without_mutation(tmp_path):
+    target = tmp_path / "exfat-target.img"
+    alias = tmp_path / "exfat-symlink.img"
+    _tree_image(target)
+    original = target.read_bytes()
+    try:
+        alias.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    with pytest.raises(ExfatWriteError, match="must not be a symlink"):
+        NativeExfatWriter(alias, volume_size=VOLUME_SIZE)
+
+    assert alias.is_symlink()
+    assert target.read_bytes()[:VOLUME_SIZE] == original
+
+
+def test_native_exfat_writer_rejects_hardlinked_target_without_mutation(tmp_path):
+    target = tmp_path / "exfat-target.img"
+    alias = tmp_path / "exfat-hardlink.img"
+    _tree_image(target)
+    original = target.read_bytes()
+    try:
+        os.link(target, alias)
+    except OSError as exc:
+        pytest.skip(f"hard link creation is unavailable: {exc}")
+
+    with pytest.raises(ExfatWriteError, match="multiple hard links"):
+        NativeExfatWriter(target, volume_size=VOLUME_SIZE)
+
+    assert target.read_bytes()[:VOLUME_SIZE] == original
+    assert alias.read_bytes()[:VOLUME_SIZE] == original
 
 
 def test_exfat_writer_refuses_to_overwrite_concurrent_outside_extent_change(

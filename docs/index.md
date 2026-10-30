@@ -1,9 +1,12 @@
 # Mount File
 
 **Mount File** — локальный файловый менеджер для raw-образов дисков и дампов
-NAND/eMMC. Он умеет читать таблицы MBR/GPT, находить тома, просматривать и
-извлекать файлы через The Sleuth Kit (`pytsk3`), а также изменять **только
-FAT32-образы** встроенным движком.
+NAND/eMMC. Он умеет читать таблицы MBR/GPT, находить тома и просматривать или
+извлекать данные из поддерживаемых bounded-профилей FAT12/16/32, ext2/3/4,
+exFAT и NTFS встроенными pure-Python readers. Ограниченная native-запись
+доступна для FAT32, clean allowlisted ext2 и выбранного exFAT профиля.
+Актуальный датированный статус и критерии этой работы ведутся в
+[issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
 
 Работа ведётся с файлом образа. Проект не прошивает исходное устройство и не
 обещает восстановление повреждённых данных.
@@ -13,8 +16,8 @@ FAT32-образы** встроенным движком.
 | Задача | Точка входа | Что важно знать |
 |---|---|---|
 | Полный GUI и CLI | `main.py`, `python -m mountfile` | GUI требует Qt; CLI Qt не требует |
-| Просмотр/извлечение | `mountfile/cli.py`, `mountfile/vfs.py` | чтение прочих ФС зависит от `pytsk3` и `libtsk` |
-| Запись | `mountfile/fat32.py` | `put`, `mkdir`, `mv`, `rm` работают только с FAT32 |
+| Просмотр/извлечение | `mountfile/cli.py`, `mountfile/vfs.py` | native readers работают без `pytsk3` только для перечисленных bounded-профилей; legacy fallback — отдельный opt-in |
+| Native-запись | `mountfile/universal_fs_rw.py` и профильные writers | ограниченные операции для FAT32, clean allowlisted ext2 и выбранного exFAT профиля; возможности зависят от backend/profile |
 | Монтирование ОС | `mountfile.py` | отдельный инструмент, использует системный механизм mount |
 | AI-слой | `mountfile/ai/`, `mountfile_ai.py` | бэкенд и сетевой вызов включаются явно |
 | DFIR-утилиты | `mountfile_dfir.py` | grep по raw-файлу, timeline, timestomp, SHA-256 |
@@ -40,6 +43,9 @@ python main.py path\to\image.img
 в [CLI](cli.md), интерфейс — в [GUI](gui.md).
 Экспериментальные библиотечные интерфейсы описаны в [API reference](api.md),
 а сценарии запуска — в [Demos](demos.md).
+Актуальную machine-readable матрицу native operations можно получить через
+`mountfile.capabilities.get_native_capability_matrix()`; она описывает API
+контракт, а не полное покрытие всех вариантов файловых систем.
 
 ## Безопасная модель работы
 
@@ -56,9 +62,14 @@ python main.py path\to\image.img
 
 ## Ограничения
 
-- Запись, переименование и удаление реализованы только для FAT32.
-- Без `pytsk3` встроенный движок покрывает FAT32; NTFS, EXT и другие ФС читать
-  нельзя. Доступные типы также зависят от установленной сборки `libtsk`.
+- Native-запись ограничена профилями FAT32, clean allowlisted ext2 и exFAT;
+  FAT12/16, ext3/ext4 и NTFS остаются read-only в native-пути. Legacy/system
+  writers — отдельные compatibility routes, а не native capability.
+- Native readers не требуют `pytsk3` для bounded accepted-профилей FAT12/16/32,
+  ext2/3/4, exFAT и NTFS. Это не полное покрытие каждого варианта формата:
+  неизвестные, dirty, повреждённые или неподдержанные профили отклоняются.
+  `pytsk3`/`libtsk` — optional opt-in fallback для нераспознанных форматов;
+  распознанный unsupported профиль не передаётся ему автоматически.
 - Сырые NAND-данные OOB/ECC не преобразуются; нужен образ пользовательской
   области без этих данных.
 - AI не является антивирусом и не подтверждает выводы без результата
