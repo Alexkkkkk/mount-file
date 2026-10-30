@@ -4,6 +4,7 @@
 import struct
 
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from mountfile import vfs
 from mountfile.ntfs_reader import (
@@ -859,6 +860,29 @@ def test_rejects_ntfs_runlist_that_does_not_cover_declared_vcn_range():
             lowest_vcn=0,
             highest_vcn=2,
         )
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    raw=st.binary(max_size=64), cluster_count=st.integers(min_value=1, max_value=4096)
+)
+def test_arbitrary_ntfs_runlists_are_rejected_or_return_bounded_extents(
+    raw, cluster_count
+):
+    try:
+        runs = _parse_runlist(raw, cluster_count)
+    except NtfsMetadataError:
+        return
+
+    assert runs
+    expected_vcn = 0
+    for run in runs:
+        assert run.vcn == expected_vcn
+        assert run.length > 0
+        assert run.lcn is not None
+        assert 0 <= run.lcn < cluster_count
+        assert run.lcn + run.length <= cluster_count
+        expected_vcn += run.length
 
 
 def test_nonresident_attribute_preserves_allocated_and_initialized_sizes():
