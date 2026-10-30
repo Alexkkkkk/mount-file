@@ -459,6 +459,7 @@ def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
         block_pointers=struct.unpack("<15I", root),
     )
     reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.block_size = 1024
     reader.blocks_count = BLOCKS_COUNT
 
     with pytest.raises(Ext3ReadError, match="extent physical range is out of bounds"):
@@ -509,6 +510,7 @@ def _extent_inode(root, *, logical_size=8 * 1024):
 
 def _extent_reader(blocks_count=64, blocks=None):
     reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.block_size = 1024
     reader.blocks_count = blocks_count
     blocks = blocks or {}
     reader._extent_block = lambda block: blocks[block]
@@ -528,6 +530,18 @@ def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
     assert reader._extent_map(inode, 2) == (50, False)
     assert reader._extent_map(inode, 3) == (51, False)
     assert reader._extent_map(inode, 0) == (0, False)
+
+
+def test_ext4_preallocation_past_eof_is_not_exposed_by_block_mapping():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)
+    struct.pack_into("<IHHI", root, 12, 0, 4, 0, 50)
+    reader = _extent_reader()
+    inode = _extent_inode(root, logical_size=2 * 1024)
+
+    assert reader._extent_map(inode, 1) == (51, False)
+    with pytest.raises(Ext3ReadError, match="exceeds inode size"):
+        reader._extent_map(inode, 2)
 
 
 def test_ext4_rejects_out_of_bounds_unselected_extent_index_sibling():
