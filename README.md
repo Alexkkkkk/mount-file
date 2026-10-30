@@ -873,6 +873,10 @@ mount-file/
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
 
 ## Поддержка проекта
+
+![Реклама поддержки open-source проектов](docs/assets/project-donation-ad.png)
+
+Готовая рекламная кампания и макеты находятся в [документации по донатам](docs/donation-campaign.md).
 Если проект оказался полезен и вы хотите поддержать его развитие, можно отправить
 добровольный донат в сети **TON**:
 
