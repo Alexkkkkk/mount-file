@@ -23,6 +23,7 @@ from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 from mountfile.fat_reader import FatReadError, NativeFatImage
+from mountfile.safety import RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
@@ -360,11 +361,35 @@ def _has_ntfs_boot_magic(image_path, offset, volume_size):
             volume_size = int(volume_size)
         with open(image_path, "rb") as stream:
             image_size = os.fstat(stream.fileno()).st_size
-            if volume_size is not None and (
-                volume_size <= 0 or offset + volume_size > image_size
-            ):
-                raise TskError("selected filesystem extent exceeds image bounds")
-            if offset + 11 > image_size:
+            if volume_size is not None:
+                if volume_size <= 0:
+                    raise TskError("selected filesystem extent exceeds image bounds")
+                try:
+                    checked_range(
+                        offset,
+                        volume_size,
+                        upper=image_size,
+                        context="selected filesystem extent exceeds image bounds",
+                    )
+                except RefusalError as exc:
+                    raise TskError(str(exc)) from exc
+                try:
+                    checked_range(
+                        3,
+                        8,
+                        upper=volume_size,
+                        context="NTFS boot signature exceeds selected volume bounds",
+                    )
+                except RefusalError:
+                    return False
+            try:
+                checked_range(
+                    offset + 3,
+                    8,
+                    upper=image_size,
+                    context="NTFS boot signature exceeds image bounds",
+                )
+            except RefusalError:
                 return False
             stream.seek(offset + 3)
             return stream.read(8) == b"NTFS    "
