@@ -552,6 +552,26 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _perform_write(self, refresh_path, operation):
+        """Run one mutation without an image reader holding the target open.
+
+        Windows does not allow the staged writer to atomically replace an image
+        while the GUI's read handle is open. Close that handle before mutation,
+        then reopen the bounded provider and refresh the affected tree branch
+        whether the operation succeeds or raises.
+        """
+        if self.image_path and self.provider is not None:
+            provider = self.provider
+            if hasattr(provider, "close"):
+                provider.close()
+            self.provider = None
+            if self.model is not None:
+                self.model.provider = None
+        try:
+            return operation()
+        finally:
+            self._refresh_dir(refresh_path)
+
     def save_hex(self):
         """Replace the selected file through the mounted native writer."""
         node = self._current_node()
@@ -573,10 +593,9 @@ class MainWindow(QMainWindow):
             return
         try:
             parent = posixpath.dirname(node.path) or "/"
-            self.writer.write_file(node.path, data)
+            self._perform_write(parent, lambda: self.writer.write_file(node.path, data))
             self.hex_view.setData(data)
             self.log_msg("HEX changes saved: %s (%d bytes)" % (node.path, len(data)))
-            self._refresh_dir(parent)
         except Exception as e:
             QMessageBox.critical(self, "HEX save failed", str(e))
 
@@ -681,9 +700,10 @@ class MainWindow(QMainWindow):
             return
         try:
             target_path = posixpath.join(target_dir, name)
-            self.writer.write_file(target_path, data)
+            self._perform_write(
+                target_dir, lambda: self.writer.write_file(target_path, data)
+            )
             self.log_msg("Imported %s (%d bytes) -> %s" % (src, len(data), target_path))
-            self._refresh_dir(target_dir)
         except Exception as e:
             QMessageBox.critical(self, "Import failed", str(e))
 
@@ -699,9 +719,8 @@ class MainWindow(QMainWindow):
             return
         try:
             target_path = posixpath.join(target_dir, name.strip())
-            self.writer.mkdir(target_path)
+            self._perform_write(target_dir, lambda: self.writer.mkdir(target_path))
             self.log_msg("Created folder %s" % target_path)
-            self._refresh_dir(target_dir)
         except Exception as e:
             QMessageBox.critical(self, "mkdir failed", str(e))
 
@@ -717,9 +736,10 @@ class MainWindow(QMainWindow):
             return
         try:
             target_path = posixpath.join(parent, new_name.strip())
-            self.writer.rename(node.path, target_path)
+            self._perform_write(
+                parent, lambda: self.writer.rename(node.path, target_path)
+            )
             self.log_msg("Renamed %s -> %s" % (node.path, target_path))
-            self._refresh_dir(parent)
         except Exception as e:
             QMessageBox.critical(self, "Rename failed", str(e))
 
@@ -740,9 +760,11 @@ class MainWindow(QMainWindow):
         if ret != MB_Yes:
             return
         try:
-            self.writer.delete(node.path, recursive=node.is_dir)
+            self._perform_write(
+                parent,
+                lambda: self.writer.delete(node.path, recursive=node.is_dir),
+            )
             self.log_msg("Deleted %s" % node.path)
-            self._refresh_dir(parent)
         except Exception as e:
             QMessageBox.critical(self, "Delete failed", str(e))
 
