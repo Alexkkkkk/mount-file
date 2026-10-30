@@ -37,8 +37,10 @@ file carving. SQLite хранит SHA-256, дедуплицированные ch
 `open_image_provider` открывает выбранный bounded filesystem profile. Providers
 поддерживают `list_dir`, `stat`, `read_file_range` и `read_file`; extraction
 использует тот же bounded range API. `stat` возвращает metadata выбранной записи
-и фактический регистр имени из образа. FAT и NTFS включают предусмотренный их
-reader-ом case-insensitive lookup; для ext namespace он остаётся case-sensitive.
+и фактический регистр имени из образа. FAT поддерживает предусмотренный reader-ом
+case-insensitive lookup. NTFS использует проверенную таблицу `$UpCase` для
+Unicode-сравнения, если её bounded stream доступен; иначе Unicode-имена требуют
+точного регистра. Для ext namespace lookup остаётся case-sensitive.
 Каждый native provider также публикует `backend_status`: сериализуемый словарь
 с backend name, read/write capabilities, режимом и явной причиной отказа от
 записи. Пустой `write_capabilities` означает именно read-only native profile,

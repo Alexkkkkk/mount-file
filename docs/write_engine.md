@@ -244,8 +244,12 @@ exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
 
 The reader validates resident and nonresident metadata records, parent/sequence
-references and bounded `$I30` index roots/allocation blocks. It rejects malformed
-indexes, cycles, unsupported `ATTRIBUTE_LIST` streams, sparse/compressed/encrypted
-data, and path components outside its declared profile. Native NTFS writes remain
-disabled; the system-driver path is a separate explicit compatibility choice, not
-a substitute for `$LogFile`-aware native transactions.
+references and bounded `$I30` index roots/allocation blocks. It supports valid
+Unicode names for listing. If MFT record 10 exposes the exact-size, bounded
+unnamed `$UpCase` DATA stream, the reader validates and uses its 65,536-entry
+UTF-16 mapping for case-insensitive path lookup; otherwise Unicode lookup is
+exact-case only. It rejects malformed indexes, cycles, unsupported
+`ATTRIBUTE_LIST` streams, sparse/compressed/encrypted data, and invalid path
+components. Native NTFS writes remain disabled; the system-driver path is a
+separate explicit compatibility choice, not a substitute for `$LogFile`-aware
+native transactions.

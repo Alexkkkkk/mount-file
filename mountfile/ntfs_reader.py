@@ -40,6 +40,8 @@ _ATTRIBUTE_FLAG_SPARSE = 0x8000
 _VOLUME_KNOWN_FLAGS = 0x807F
 _LOGFILE_PAGE_SIZE = 4096
 _MAX_READ_RANGE_BYTES = 1 << 20
+_UPCASE_TABLE_ENTRIES = 1 << 16
+_UPCASE_TABLE_SIZE = _UPCASE_TABLE_ENTRIES * 2
 _LOGFILE_CLEAN_DISMOUNT = 0x0002
 _LOGFILE_KNOWN_FLAGS = _LOGFILE_CLEAN_DISMOUNT | 0x0001
 
@@ -515,21 +517,18 @@ def _parse_ntfs_index_entries(
             name = key[0x42:name_end].decode("utf-16le")
         except UnicodeDecodeError as exc:
             raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-        if (
-            not name.isascii()
-            or name in (".", "..")
-            or "/" in name
-            or "\\" in name
-            or "\x00" in name
-        ):
+        if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
             raise NtfsMetadataError(
-                "NTFS index name is outside the native ASCII profile"
+                "NTFS index name contains an invalid path component"
             )
-        folded = name.lower()
-        if folded in names or (previous_name and folded < previous_name):
+        folded = name.lower() if name.isascii() else name
+        previous_is_ascii = previous_name is not None and previous_name.isascii()
+        if folded in names or (
+            name.isascii() and previous_is_ascii and folded < previous_name.lower()
+        ):
             raise NtfsMetadataError("NTFS index names are duplicate or unsorted")
         names.add(folded)
-        previous_name = folded
+        previous_name = name
         result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
         if flags & 1:
             if not allow_children or entry_length < 24 + key_length:
@@ -674,8 +673,8 @@ def parse_ntfs_file_name(value: bytes) -> NtfsFileName:
         name = value[66:end].decode("utf-16le")
     except UnicodeDecodeError as exc:
         raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-    if not name.isascii() or any(c in name for c in ("/", "\\", "\x00")):
-        raise NtfsMetadataError("NTFS FILE_NAME is outside the native ASCII profile")
+    if name in (".", "..") or any(c in name for c in ("/", "\\", "\x00")):
+        raise NtfsMetadataError("NTFS FILE_NAME contains an invalid path component")
     return NtfsFileName(
         parent_reference,
         name,
@@ -693,6 +692,13 @@ def parse_ntfs_standard_information(value: bytes) -> NtfsStandardInformation:
         struct.unpack_from("<I", value, 40)[0],
         struct.unpack_from("<I", value, 44)[0],
     )
+
+
+def _parse_ntfs_upcase_table(raw: bytes) -> tuple[int, ...]:
+    """Parse the exact bounded 64K-entry UTF-16 NTFS upcase table."""
+    if len(raw) != _UPCASE_TABLE_SIZE:
+        raise NtfsMetadataError("NTFS $UpCase DATA stream has an invalid size")
+    return struct.unpack("<65536H", raw)
 
 
 def _validate_nonresident_data_stream(
@@ -807,10 +813,11 @@ __all__ = [
 
 
 class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
-    """Read-only access to validated unnamed DATA of MFT record 0 only."""
+    """Read-only access to the validated bounded NTFS tree and unnamed DATA."""
 
     backend_name = "native-ntfs-metadata-ro"
-    case_insensitive_paths = True
+    case_insensitive_paths = False
+    case_insensitive_ascii_paths = True
     max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
     def __init__(self, image_path, offset=0, volume_size=None):
@@ -828,6 +835,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
             None,
         )
+        self._upcase_table: tuple[int, ...] | None = None
         if self._mft_data is None:
             self.close()
             raise NtfsMetadataError("MFT record 0 has no unnamed DATA stream")
@@ -864,6 +872,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 self._read_runs(logfile_data.runs, 0, 2 * _LOGFILE_PAGE_SIZE)
             )
             self.profile = replace(self.profile, logfile_restart=self.logfile_restart)
+            self._upcase_table = self._load_upcase_table()
         except Exception:
             self.close()
             raise
@@ -875,6 +884,54 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     def reopen(self):
         if self._stream.closed:
             self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
+
+    def _load_upcase_table(self) -> tuple[int, ...] | None:
+        """Load $UpCase only when its unnamed DATA stream has the exact size."""
+        try:
+            record = self.read_mft_record(10)
+            attributes = parse_ntfs_attribute_stream(
+                record, cluster_count=self.profile.boot.cluster_count
+            )
+        except NtfsMetadataError:
+            return None
+        data_streams = [
+            attribute
+            for attribute in attributes
+            if attribute.type_code == 0x80 and not attribute.name
+        ]
+        if len(data_streams) != 1:
+            return None
+        data = data_streams[0]
+        if data.resident_value is not None:
+            raw = data.resident_value
+        else:
+            if data.data_size != _UPCASE_TABLE_SIZE:
+                return None
+            try:
+                _validate_nonresident_data_stream(
+                    data, self.profile.boot.cluster_size, name="$UpCase"
+                )
+                raw = self._read_runs(data.runs, 0, _UPCASE_TABLE_SIZE)
+            except NtfsMetadataError:
+                return None
+        try:
+            return _parse_ntfs_upcase_table(raw)
+        except NtfsMetadataError:
+            return None
+
+    def _name_key(self, name: str):
+        """Return a conservative NTFS comparison key for one path component."""
+        table = getattr(self, "_upcase_table", None)
+        if table is None:
+            return name.lower() if name.isascii() else name
+        encoded = name.encode("utf-16le")
+        units = struct.unpack(f"<{len(encoded) // 2}H", encoded)
+        return tuple(table[unit] for unit in units)
+
+    def _path_names_equal(self, requested: str, actual: str) -> bool:
+        if requested == actual:
+            return True
+        return self._name_key(requested) == self._name_key(actual)
 
     def list_dir(self, path="/"):
         record_number, record = self._resolve(path)
@@ -1013,11 +1070,8 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if not isinstance(path, str) or not path.startswith("/"):
             raise NtfsMetadataError("NTFS path must be absolute")
         parts = [part for part in path.split("/") if part]
-        if any(
-            not part.isascii() or part in (".", "..") or "\\" in part or "\x00" in part
-            for part in parts
-        ):
-            raise NtfsMetadataError("NTFS path is outside the native ASCII profile")
+        if any(part in (".", "..") or "\\" in part or "\x00" in part for part in parts):
+            raise NtfsMetadataError("NTFS path contains an invalid component")
         number = 5
         record = self.read_mft_record(number)
         visited = {number}
@@ -1026,7 +1080,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 (
                     item
                     for item in self.list_dir_by_record(number, record)
-                    if item.name.lower() == part.lower()
+                    if self._path_names_equal(item.name, part)
                 ),
                 None,
             )
@@ -1101,7 +1155,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         unique: dict[tuple[str, int], NtfsIndexEntry] = {}
         names: set[str] = set()
         for entry in entries:
-            folded = entry.name.casefold()
+            folded = self._name_key(entry.name)
             if folded in names:
                 raise NtfsMetadataError("NTFS directory index contains duplicate names")
             names.add(folded)

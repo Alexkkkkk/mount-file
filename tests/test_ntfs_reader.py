@@ -9,6 +9,7 @@ from mountfile import vfs
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsAttributeSummary,
+    NtfsIndexEntry,
     NtfsMetadataError,
     NtfsRun,
     _parse_ntfs_index_block,
@@ -20,6 +21,7 @@ from mountfile.ntfs_reader import (
     parse_ntfs_logfile_restart_area,
     parse_ntfs_standard_information,
     parse_ntfs_volume_state,
+    _parse_ntfs_upcase_table,
     probe_ntfs_metadata,
     validate_ntfs_logfile_restart_pages,
 )
@@ -338,6 +340,118 @@ def test_parses_resident_filename_and_standard_information_bounds():
         parse_ntfs_file_name(bytes(value[:65]))
     with pytest.raises(NtfsMetadataError, match="STANDARD_INFORMATION"):
         parse_ntfs_standard_information(bytes(47))
+
+
+@pytest.mark.parametrize("name", ["café.txt", "file-📁.txt"])
+def test_parses_unicode_ntfs_filename_and_directory_index_key(name):
+    encoded_name = name.encode("utf-16le")
+    name_units = len(encoded_name) // 2
+    filename = bytearray(66 + len(encoded_name))
+    struct.pack_into("<Q", filename, 0, (3 << 48) | 5)
+    filename[64] = name_units
+    filename[65] = 3
+    filename[66:] = encoded_name
+    assert parse_ntfs_file_name(bytes(filename)).name == name
+
+    key = bytearray(66 + len(encoded_name))
+    struct.pack_into("<Q", key, 0, (3 << 48) | 5)
+    key[64] = name_units
+    key[65] = 3
+    key[66:] = encoded_name
+    entry_length = (16 + len(key) + 7) & ~7
+    value = bytearray(32 + entry_length + 16)
+    total_size = 16 + entry_length + 16
+    struct.pack_into("<III", value, 16, 16, total_size, total_size)
+    struct.pack_into("<QHHI", value, 32, (3 << 48) | 42, entry_length, len(key), 0)
+    value[48 : 48 + len(key)] = key
+    struct.pack_into("<QHHI", value, 32 + entry_length, 0, 16, 0, 2)
+    entries = parse_ntfs_index_root(bytes(value), parent_reference=(3 << 48) | 5)
+    assert [entry.name for entry in entries] == [name]
+
+
+def test_ntfs_paths_use_exact_unicode_and_case_insensitive_ascii_lookup():
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reference = (3 << 48) | 42
+    root = SimpleNamespace(is_directory=True, sequence_number=3)
+    child = SimpleNamespace(is_directory=False, sequence_number=3)
+    reader.read_mft_record = lambda number, **_kwargs: root if number == 5 else child
+    reader.list_dir_by_record = lambda *_args: (
+        NtfsIndexEntry(reference, "café.txt", False),
+        NtfsIndexEntry(reference + 1, "Readme.TXT", False),
+    )
+
+    assert reader._resolve("/café.txt")[0] == 42
+    assert reader._resolve("/README.txt")[0] == 43
+    with pytest.raises(NtfsMetadataError, match="component not found"):
+        reader._resolve("/CAFÉ.txt")
+
+    reader.list_dir = lambda _path: [
+        {"name": "café.txt", "is_dir": False, "size": 1},
+        {"name": "Readme.TXT", "is_dir": False, "size": 2},
+    ]
+    assert reader.stat("/café.txt")["size"] == 1
+    assert reader.stat("/README.txt")["name"] == "Readme.TXT"
+    with pytest.raises(FileNotFoundError):
+        reader.stat("/CAFÉ.txt")
+
+
+def test_ntfs_upcase_table_enables_unicode_case_insensitive_lookup(monkeypatch):
+    from types import SimpleNamespace
+
+    values = list(range(1 << 16))
+    for codepoint in range(ord("a"), ord("z") + 1):
+        values[codepoint] = codepoint - 32
+    values[ord("é")] = ord("É")
+    values[ord("t")] = ord("T")
+    values[ord("x")] = ord("X")
+    raw = struct.pack("<65536H", *values)
+
+    table = _parse_ntfs_upcase_table(raw)
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader._upcase_table = table
+    assert reader._path_names_equal("CAFÉ.TXT", "café.txt")
+    assert reader._path_names_equal("file-📁.txt", "FILE-📁.TXT")
+
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=128))
+    reader.read_mft_record = lambda number: object()
+    reader._read_runs = lambda runs, offset, length: raw
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_attribute_stream",
+        lambda *_args, **_kwargs: (
+            NtfsAttributeSummary(
+                type_code=0x80,
+                length=64,
+                nonresident=True,
+                name="",
+                lowest_vcn=0,
+                highest_vcn=31,
+                run_count=1,
+                runs=(NtfsRun(0, 1, 32),),
+                data_size=len(raw),
+            ),
+        ),
+    )
+    reader.profile.boot.cluster_size = 4096
+    assert reader._load_upcase_table() == table
+
+    reference = (3 << 48) | 42
+    root = SimpleNamespace(is_directory=True, sequence_number=3)
+    child = SimpleNamespace(is_directory=False, sequence_number=3)
+    reader.read_mft_record = lambda number, **_kwargs: root if number == 5 else child
+    reader.list_dir_by_record = lambda *_args: (
+        NtfsIndexEntry(reference, "café.txt", False),
+    )
+    assert reader._resolve("/CAFÉ.txt")[0] == 42
+
+    reader.list_dir = lambda _path: [{"name": "café.txt", "is_dir": False, "size": 1}]
+    assert reader.stat("/CAFÉ.txt")["name"] == "café.txt"
+
+
+def test_ntfs_upcase_parser_rejects_noncanonical_table_sizes():
+    with pytest.raises(NtfsMetadataError, match="invalid size"):
+        _parse_ntfs_upcase_table(bytes(1024))
 
 
 def test_rejects_unknown_ntfs_volume_flags():
