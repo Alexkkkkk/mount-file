@@ -244,8 +244,20 @@ exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
 
 The reader validates resident and nonresident metadata records, parent/sequence
-references and bounded `$I30` index roots/allocation blocks. It rejects malformed
-indexes, cycles, unsupported `ATTRIBUTE_LIST` streams, sparse/compressed/encrypted
-data, and path components outside its declared profile. Native NTFS writes remain
-disabled; the system-driver path is a separate explicit compatibility choice, not
-a substitute for `$LogFile`-aware native transactions.
+references and bounded `$I30` index roots/allocation blocks. It supports valid
+Unicode names for listing. If MFT record 10 exposes the exact-size, bounded
+unnamed `$UpCase` DATA stream, the reader validates and uses its 65,536-entry
+UTF-16 mapping, including fixed-point and ASCII invariants, for case-insensitive
+path lookup; otherwise Unicode lookup is exact-case only. Resident
+`$ATTRIBUTE_LIST` values are now decoded with bounded entry lengths, 8-byte
+alignment, UTF-16 names and MFT references. Type order, ASCII name/VCN order and
+duplicate keys are checked; Unicode collation uses a validated `$UpCase` table
+when available and is not guessed when absent. The reader still refuses extension-
+record resolution and nonresident attribute-list streams, so it cannot mistake a
+partial attribute for a complete stream. The entry layout follows [Microsoft's
+ATTRIBUTE_LIST_ENTRY definition](https://learn.microsoft.com/en-us/windows/win32/devnotes/attribute-list-entry)
+and the [Linux NTFS on-disk reference](https://flatcap.github.io/linux-ntfs/ntfs/attributes/attribute_list.html).
+The reader also rejects malformed indexes, cycles, sparse/compressed/encrypted
+data and invalid path components. Native NTFS writes remain disabled; the
+system-driver path is a separate explicit compatibility choice, not a substitute
+for `$LogFile`-aware native transactions.
