@@ -116,6 +116,8 @@ def _nonresident_attribute(
     data_size,
     *,
     name="",
+    allocated_size=None,
+    initialized_size=None,
 ):
     encoded_name = name.encode("utf-16le")
     runlist_offset = (64 + len(encoded_name) + 7) & ~7
@@ -136,9 +138,14 @@ def _nonresident_attribute(
     )
     struct.pack_into("<qQ", attribute, 16, lowest_vcn, highest_vcn)
     struct.pack_into("<H", attribute, 32, runlist_offset)
-    struct.pack_into("<Q", attribute, 40, (highest_vcn - lowest_vcn + 1) * CLUSTER)
+    run_capacity = (highest_vcn - lowest_vcn + 1) * CLUSTER
+    if allocated_size is None:
+        allocated_size = max(data_size, run_capacity)
+    if initialized_size is None:
+        initialized_size = data_size
+    struct.pack_into("<Q", attribute, 40, allocated_size)
     struct.pack_into("<Q", attribute, 48, data_size)
-    struct.pack_into("<Q", attribute, 56, data_size)
+    struct.pack_into("<Q", attribute, 56, initialized_size)
     attribute[64 : 64 + len(encoded_name)] = encoded_name
     attribute[runlist_offset : runlist_offset + len(runlist)] = runlist
     return bytes(attribute)
@@ -734,6 +741,28 @@ def test_rejects_attribute_name_that_overlaps_its_header():
         parse_ntfs_attribute_stream(record)
 
 
+def test_rejects_ntfs_resident_attribute_name_overlapping_value():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    attribute = bytearray(_resident_attribute(0x30, 1, b"vv", name="A"))
+    struct.pack_into("<H", attribute, 20, 24)
+    record = parse_ntfs_file_record_header(_record_with_attributes((bytes(attribute),)))
+
+    with pytest.raises(NtfsMetadataError, match="name overlaps its resident value"):
+        parse_ntfs_attribute_stream(record)
+
+
+def test_rejects_ntfs_nonresident_attribute_name_overlapping_runlist():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    attribute = bytearray(_nonresident_attribute(0x80, 1, 0, 0, 10, 8, name="x"))
+    struct.pack_into("<H", attribute, 32, 64)
+    record = parse_ntfs_file_record_header(_record_with_attributes((bytes(attribute),)))
+
+    with pytest.raises(NtfsMetadataError, match="name overlaps its runlist"):
+        parse_ntfs_attribute_stream(record, cluster_count=TOTAL // SPC)
+
+
 def test_validates_nested_indx_child_pointer_but_public_parser_remains_fail_closed():
     block = bytearray(4096)
     block[:4] = b"INDX"
@@ -776,6 +805,88 @@ def test_rejects_ntfs_runlist_that_does_not_cover_declared_vcn_range():
             lowest_vcn=0,
             highest_vcn=2,
         )
+
+
+def test_nonresident_attribute_preserves_allocated_and_initialized_sizes():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    raw = _record_with_attributes(
+        (
+            _nonresident_attribute(
+                0x80,
+                1,
+                0,
+                0,
+                10,
+                8,
+                allocated_size=CLUSTER,
+                initialized_size=4,
+            ),
+        )
+    )
+    record = parse_ntfs_file_record_header(raw)
+    (attribute,) = parse_ntfs_attribute_stream(record, cluster_count=TOTAL // SPC)
+
+    assert attribute.allocated_size == CLUSTER
+    assert attribute.data_size == 8
+    assert attribute.initialized_size == 4
+
+
+@pytest.mark.parametrize(
+    ("allocated_size", "data_size", "initialized_size"),
+    [(7, 8, 4), (4096, 8, 9)],
+)
+def test_nonresident_attribute_rejects_inconsistent_sizes(
+    allocated_size, data_size, initialized_size
+):
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    raw = _record_with_attributes(
+        (
+            _nonresident_attribute(
+                0x80,
+                1,
+                0,
+                0,
+                10,
+                data_size,
+                allocated_size=allocated_size,
+                initialized_size=initialized_size,
+            ),
+        )
+    )
+    record = parse_ntfs_file_record_header(raw)
+
+    with pytest.raises(NtfsMetadataError, match="sizes are inconsistent"):
+        parse_ntfs_attribute_stream(record, cluster_count=TOTAL // SPC)
+
+
+def test_ntfs_reads_zero_fill_bytes_beyond_initialized_size(monkeypatch):
+    from types import SimpleNamespace
+
+    attribute = NtfsAttributeSummary(
+        type_code=0x80,
+        length=72,
+        nonresident=True,
+        name="",
+        lowest_vcn=0,
+        highest_vcn=0,
+        run_count=1,
+        runs=(NtfsRun(0, 0, 1),),
+        data_size=8,
+        attribute_id=1,
+        allocated_size=CLUSTER,
+        initialized_size=4,
+    )
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=10000))
+    reader._resolve = lambda _path: (1, SimpleNamespace(is_directory=False))
+    reader._attributes_for_record = lambda _number, _record: (attribute,)
+    reader._read_runs = lambda _runs, _offset, length: b"S" * length
+
+    assert reader.read_file_range("/file", 0, 8) == b"S" * 4 + bytes(4)
+    assert reader.read_file_range("/file", 4, 4) == bytes(4)
+    assert reader.read_file_range("/file", 2, 4) == b"SS" + bytes(2)
 
 
 def test_mft_record_loader_validates_record_number_and_sequence():

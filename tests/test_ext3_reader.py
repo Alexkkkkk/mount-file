@@ -9,22 +9,38 @@ from types import SimpleNamespace
 import pytest
 
 from mountfile import vfs
-from mountfile.ext2_reader import _EXT2_COMPR_FL, _EXT2_INDEX_FL, _Inode
+from mountfile.ext2_reader import (
+    _EXT2_COMPR_FL,
+    _EXT2_INDEX_FL,
+    _Inode,
+    NativeExt2Image,
+)
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
 
 def _make_clean_journal_image(
-    path, *, descriptor_sequence=7, commit_sequence=7, truncate_commit=False
+    path,
+    *,
+    descriptor_sequence=7,
+    commit_sequence=7,
+    truncate_commit=False,
+    journal_inode=8,
+    declared_journal_inode=None,
+    replay_target=21,
 ):
     _make_image(path, compat=0x000C)
     image = bytearray(path.read_bytes())
     sb = memoryview(image)[1024:2048]
     filesystem_uuid = b"0123456789abcdef"
     sb[0x68:0x78] = filesystem_uuid
-    # inode 8: a five-block internal journal at blocks 40..44. The final
+    declared = (
+        journal_inode if declared_journal_inode is None else declared_journal_inode
+    )
+    struct.pack_into("<I", sb, 0xE0, declared)
+    # The selected internal journal inode contains five blocks at 40..44. The final
     # zero block is the terminator for the non-wrapping replay range.
-    inode = 5 * 1024 + 7 * 128
+    inode = 5 * 1024 + (journal_inode - 1) * 128
     struct.pack_into("<H", image, inode, 0x8000 | 0o600)
     struct.pack_into("<I", image, inode + 4, 5 * 1024)
     struct.pack_into("<5I", image, inode + 40, 40, 41, 42, 43, 44)
@@ -36,7 +52,7 @@ def _make_clean_journal_image(
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
     struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
-    struct.pack_into(">II", journal, 1036, 21, 0x0000000A)  # LAST|SAME_UUID
+    struct.pack_into(">II", journal, 1036, replay_target, 0x0000000A)  # LAST|SAME_UUID
     struct.pack_into(">III", journal, 3072, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
         struct.pack_into(">I", image, 43 * 1024 + 8, 0)
@@ -58,6 +74,25 @@ def test_clean_journal_with_bounded_transaction_is_readable(tmp_path):
         assert provider.backend_name == "native-ext3-ro"
     finally:
         provider.close()
+
+
+def test_declared_nonstandard_internal_journal_inode_is_used(tmp_path):
+    image_path = tmp_path / "journal-inode-9.img"
+    _make_clean_journal_image(image_path, journal_inode=9)
+
+    provider = NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+    try:
+        assert provider.profile.journal_inode == 9
+    finally:
+        provider.close()
+
+
+def test_declared_journal_inode_mismatch_fails_closed(tmp_path):
+    image_path = tmp_path / "journal-inode-mismatch.img"
+    _make_clean_journal_image(image_path, journal_inode=8, declared_journal_inode=9)
+
+    with pytest.raises(Ext3ReadError, match="valid file mode"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
 def test_real_clean_empty_ext3_supports_native_directory_reads(tmp_path):
@@ -105,14 +140,25 @@ def test_journal_with_nonzero_start_is_recovery_required(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
-def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
+def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
     image_path = tmp_path / "replay-journal.img"
-    _make_clean_journal_image(image_path)
+    _make_clean_journal_image(image_path, replay_target=3)
     image = bytearray(image_path.read_bytes())
     payload = bytes([0xA7]) * 1024
     image[40 * 1024 + 2 * 1024 : 40 * 1024 + 3 * 1024] = payload
     struct.pack_into(">I", image, 40 * 1024 + 24, 1)
     image_path.write_bytes(image)
+
+    original_bitmap = NativeExt2Image._bitmap
+    pre_overlay_bitmaps = []
+
+    def track_bitmap(reader, group, *, inode):
+        result = original_bitmap(reader, group, inode=inode)
+        if not inode and not reader._journal_overlay:
+            pre_overlay_bitmaps.append(result)
+        return result
+
+    monkeypatch.setattr(NativeExt2Image, "_bitmap", track_bitmap)
 
     provider = NativeExt3Image(
         image_path,
@@ -121,8 +167,11 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
     )
     try:
         assert provider.journal_replayed is True
-        assert provider._read_at(21 * 1024, 1024) == payload
-        assert image_path.read_bytes()[21 * 1024 : 22 * 1024] != payload
+        assert pre_overlay_bitmaps
+        assert provider._block_bitmap_cache == {}
+        assert provider._bitmap(0, inode=False) == payload
+        assert provider._read_at(3 * 1024, 1024) == payload
+        assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
     finally:
         provider.close()
 

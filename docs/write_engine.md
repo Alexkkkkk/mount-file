@@ -204,6 +204,14 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 только предварительное соответствие write profile. Writer обязан самостоятельно
 проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
 
+Ограниченный `NativeExt3Image` проверяет объявленный в superblock номер internal
+JBD2 journal inode и читает именно этот inode; external journal devices остаются
+запрещены. Активный журнал по умолчанию отклоняется. Только явный
+`replay_journal=True` включает read-only overlay для поддерживаемого классического
+descriptor/data/commit формата; после публикации overlay metadata-кэши очищаются,
+чтобы дальнейшие reads видели согласованное представление. Это ограниченная
+проверка/просмотр, не полноценное JBD2 recovery и не разрешение на запись.
+
 ## Ограничения и риски
 
 * Native FAT mutations enforce the selected extent and use a same-directory
@@ -246,6 +254,10 @@ boot sectors, `$MFT`/`$MFTMirr`, FILE-record USA fixups, bounded attribute strea
 and runlists, `$Volume` dirty flags, and clean `$LogFile` restart pages before
 exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
+
+For nonresident attributes the reader retains and checks the on-disk allocated,
+data and initialized sizes. Bounded reads expose zero bytes after `initialized_size`
+up to `data_size`, without returning stale physical bytes from the allocated run.
 
 The reader validates resident and nonresident metadata records, parent/sequence
 references and bounded `$I30` index roots/allocation blocks. It supports valid

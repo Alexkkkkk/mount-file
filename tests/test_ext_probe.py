@@ -19,6 +19,7 @@ def _image(
     incompat=0x0002,
     ro_compat=0x0003,
     blocks_high=0,
+    journal_inode=8,
 ):
     image_size = block_size * blocks
     image = bytearray(image_size)
@@ -36,6 +37,7 @@ def _image(
     struct.pack_into("<I", sb, 0x5C, compat)
     struct.pack_into("<I", sb, 0x60, incompat)
     struct.pack_into("<I", sb, 0x64, ro_compat)
+    struct.pack_into("<I", sb, 0xE0, journal_inode)
     struct.pack_into("<I", sb, 0x150, blocks_high)
     sb[0x78:0x7C] = b"TEST"
     return bytes(image)
@@ -57,6 +59,7 @@ def test_journal_and_recovery_flags_keep_profile_read_only():
 
     assert profile.fs_type == "ext3"
     assert profile.has_journal
+    assert profile.journal_inode == 8
     assert profile.journal_recovery_needed
     assert not profile.clean_unmounted
     assert not profile.phase1_ext2_profile_candidate
@@ -71,8 +74,17 @@ def test_external_journal_device_is_not_misclassified_as_unjournaled_ext2():
 
     assert profile.fs_type == "ext3"
     assert profile.has_journal
+    assert profile.journal_inode is None
     assert not profile.phase1_ext2_profile_candidate
     assert any("JBD2" in reason for reason in profile.write_gate_reasons)
+
+
+@pytest.mark.parametrize("journal_inode", [0, 17, 0xFFFFFFFF])
+def test_internal_journal_inode_must_be_in_inode_table(journal_inode):
+    image = _image(compat=0x000C, journal_inode=journal_inode)
+
+    with pytest.raises(ExtProbeError, match="journal inode is outside inode table"):
+        probe_ext_superblock(io.BytesIO(image))
 
 
 def test_ext4_features_are_not_mistaken_for_ext2_block_pointers():

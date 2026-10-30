@@ -212,7 +212,10 @@ class NativeExt3Image(NativeExt2Image):
         return commit_logical
 
     def _validate_empty_journal(self, *, replay_journal=False) -> None:
-        journal = self._read_inode(8)
+        journal_inode = self.profile.journal_inode
+        if journal_inode is None:
+            raise Ext3ReadError("internal JBD2 journal inode is not declared")
+        journal = self._read_inode(journal_inode)
         if not journal.is_regular:
             raise Ext3ReadError("journal inode is not a regular file")
         if journal.size < self.block_size or journal.size % self.block_size:
@@ -373,6 +376,15 @@ class NativeExt3Image(NativeExt2Image):
                 "JBD2 replay reaches end of non-wrapping log without terminator"
             )
         self._journal_overlay = overlay
+        # Metadata loaded while resolving the journal inode predates this
+        # overlay. Drop every cache whose values are sourced through _read_at
+        # so subsequent structural reads observe one coherent replayed view.
+        self._group_cache.clear()
+        self._block_bitmap_cache.clear()
+        self._inode_bitmap_cache.clear()
+        self._inode_cache.clear()
+        self._directory_cache.clear()
+        self._extent_cache_last.clear()
 
     def _read_at(self, relative_offset: int, size: int) -> bytes:
         """Read the image and overlay only committed journal blocks."""
