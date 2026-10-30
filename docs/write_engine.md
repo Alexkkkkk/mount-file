@@ -35,11 +35,15 @@ currently accepts only single-FAT volumes; multi-FAT/active-FAT profiles are
 rejected rather than interpreted using the first FAT. A range read fetches only
 the clusters and byte spans intersecting the requested range. The provider
 validates the main and backup boot regions, cluster chains and checksummed file
-entry sets. Its explicit `system_metadata()` audit checks allocation bitmap,
-upcase table and FAT/bitmap consistency, but that audit is not automatically
-performed by ordinary `list_dir`/`read_file_range` calls. The reader never
-writes the image. Mutations are provided separately through the explicitly
-bounded `NativeExfatRW` writer described below.
+entry sets. Opening the provider validates the allocation bitmap and the
+checksum-protected, full-range `$UpCase` table (compressed or uncompressed).
+The same volume-specific up-case mapping is used for `NameHash` verification,
+path lookup and writer-created or renamed entries. The allocation bitmap is
+authoritative: clusters traversed in FAT chains and `NoFatChain` contiguous
+streams must be marked allocated, while FAT entries for `NoFatChain` streams
+are ignored as required by exFAT. The reader never writes the image. Mutations
+are provided separately through the explicitly bounded `NativeExfatRW` writer
+described below.
 
 ### Native exFAT phase-one writes
 
