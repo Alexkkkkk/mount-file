@@ -28,6 +28,12 @@ projects is copied by this change.
   `tools/fuzz_exfat_probe.py` target seeds valid geometry plus checksum, backup
   geometry and selected-volume boundary failures without overwriting corpus
   entries. Fuzz coverage now includes NTFS and exFAT, not every filesystem.
+- A Python-built minimal ext4 image exercises native VFS routing, inline extent
+  reads, a nonzero selected-partition offset, range reads, and unchanged-image
+  behavior without requiring `mke2fs`. A corrupt extent header is rejected
+  fail-closed; the real `mke2fs` image test remains optional integration
+  coverage. This fixture covers one narrow ext4 layout, not broader ext4
+  feature support.
 
 Run a bounded local campaign on Linux with the optional fuzz dependency:
 
@@ -38,9 +44,10 @@ uv run --extra fuzz python tools/fuzz_exfat_probe.py /tmp/mountfile-exfat-corpus
 
 ## Suggested follow-up backlog
 
-1. Build self-contained Python filesystem-image fixtures/builders where they
-   reduce dependence on optional tools such as `mke2fs`; keep real-image tests
-   as additional integration coverage when those tools are available.
+1. Continue adding self-contained Python filesystem-image fixtures/builders for
+   other profiles where they reduce dependence on optional tools such as
+   `mke2fs`; keep real-image tests as additional integration coverage when
+   those tools are available. The ext4 fixture above is a first, narrow case.
 2. Extend property-based and coverage-guided fuzzing from NTFS/exFAT to the
    remaining bounded on-disk parsers. Seed cases should include valid structures
    and malformed boundary cases; fuzzing complements, but does not replace,
