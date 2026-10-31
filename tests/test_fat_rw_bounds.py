@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
@@ -130,6 +132,54 @@ def test_native_fat_metadata_writes_cannot_cross_selected_extent(tmp_path):
 
     with image.open("rb") as stream:
         stream.seek(selected_size)
+        assert stream.read(len(sentinel)) == sentinel
+
+
+@given(delta=st.integers(min_value=-32, max_value=2), length=st.integers(0, 32))
+@settings(
+    max_examples=40,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_native_fat_write_range_property_preserves_selected_extent_boundary(
+    tmp_path, delta, length
+):
+    # make_fat32_image truncates and rebuilds the volume for every generated case.
+    image = tmp_path / "property-boundary.img"
+    make_fat32_image(image)
+    volume_size = image.stat().st_size
+    sentinel = b"FOLLOWING-PARTITION-SENTINEL".ljust(64, b"S")
+    with image.open("ab") as stream:
+        stream.write(sentinel)
+
+    tail_start = volume_size - 32
+    with image.open("rb") as stream:
+        stream.seek(tail_start)
+        tail_before = stream.read(32)
+
+    offset = volume_size + delta
+    payload = b"P" * length
+    allowed = 0 <= offset <= volume_size and offset + length <= volume_size
+    backend = Fat32RW(image, offset=0, volume_size=volume_size)
+    try:
+        if allowed:
+            backend._write_at(offset, payload)
+        else:
+            with pytest.raises(
+                ValueError, match="FAT write exceeds selected volume bounds"
+            ):
+                backend._write_at(offset, payload)
+    finally:
+        backend.close()
+
+    expected_tail = bytearray(tail_before)
+    if allowed:
+        tail_offset = offset - tail_start
+        expected_tail[tail_offset : tail_offset + length] = payload
+    with image.open("rb") as stream:
+        stream.seek(tail_start)
+        assert stream.read(32) == bytes(expected_tail)
+        stream.seek(volume_size)
         assert stream.read(len(sentinel)) == sentinel
 
 
