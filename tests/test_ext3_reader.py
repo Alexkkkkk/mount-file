@@ -16,12 +16,60 @@ from mountfile import vfs
 from mountfile.ext2_reader import (
     _EXT2_COMPR_FL,
     _EXT2_INDEX_FL,
+    _EXT4_EXTENTS_FL,
     Ext2ReadError,
     NativeExt2Image,
     _Inode,
 )
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
-from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
+from tests.test_ext2_reader import (
+    BLOCK_SIZE,
+    BLOCKS_COUNT,
+    INODE_TABLE_BLOCK,
+    ROOT_DIR_BLOCK,
+    _dir_block,
+    _make_image,
+    _put_inode,
+)
+
+
+def _extent_root_for_block(block):
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)
+    struct.pack_into("<IHHI", root, 12, 0, 1, 0, block)
+    return struct.unpack("<15I", root)
+
+
+def _make_ext4_extent_image(path):
+    image = bytearray(
+        _make_image(path, compat=0x0008, incompat=0x0042, ro_compat=0x0003)
+    )
+    file_data = b"hello ext4!"
+    _put_inode(
+        image,
+        2,
+        mode=0x4000 | 0o755,
+        size=BLOCK_SIZE,
+        pointers=_extent_root_for_block(ROOT_DIR_BLOCK),
+        flags=_EXT4_EXTENTS_FL,
+    )
+    _put_inode(
+        image,
+        11,
+        mode=0x8000 | 0o644,
+        size=len(file_data),
+        pointers=_extent_root_for_block(21),
+        flags=_EXT4_EXTENTS_FL,
+        mtime=1,
+    )
+
+    root_directory = _dir_block([(".", 2, 2), ("..", 2, 2), ("hello.txt", 11, 1)])
+    root_start = ROOT_DIR_BLOCK * BLOCK_SIZE
+    image[root_start : root_start + BLOCK_SIZE] = root_directory
+    file_start = 21 * BLOCK_SIZE
+    image[file_start : file_start + len(file_data)] = file_data
+    path.write_bytes(image)
+    return bytes(image)
 
 
 def _make_clean_journal_image(
@@ -770,6 +818,46 @@ def test_ext4_extent_tree_depth_is_bounded():
     reader = _extent_reader()
     with pytest.raises(Ext3ReadError, match="depth|header"):
         reader._extent_map(_extent_inode(root), 0)
+
+
+def test_synthetic_ext4_extent_image_reads_through_bounded_vfs(tmp_path):
+    image_path = tmp_path / "synthetic-ext4.img"
+    filesystem_image = _make_ext4_extent_image(image_path)
+    prefix = b"partition-prefix"
+    suffix = b"trailing-image-data"
+    selected_image = prefix + filesystem_image + suffix
+    image_path.write_bytes(selected_image)
+
+    provider = vfs.open_image_provider(
+        image_path, offset=len(prefix), volume_size=len(filesystem_image)
+    )
+    try:
+        assert provider.backend_name == "native-ext4-ro"
+        assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+        assert provider.read_file("/hello.txt") == b"hello ext4!"
+        assert provider.read_file_range("/hello.txt", 6, 4) == b"ext4"
+    finally:
+        provider.close()
+
+    assert image_path.read_bytes() == selected_image
+
+
+def test_synthetic_ext4_extent_corruption_fails_closed_without_writes(tmp_path):
+    image_path = tmp_path / "corrupt-synthetic-ext4.img"
+    image = bytearray(_make_ext4_extent_image(image_path))
+    file_inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (11 - 1) * 128 + 40
+    struct.pack_into("<H", image, file_inode_offset, 0)
+    image_path.write_bytes(image)
+    original = image_path.read_bytes()
+
+    provider = vfs.open_image_provider(image_path, volume_size=len(image))
+    try:
+        with pytest.raises(Ext3ReadError):
+            provider.read_file("/hello.txt")
+    finally:
+        provider.close()
+
+    assert image_path.read_bytes() == original
 
 
 def test_extent_profile_reads_a_real_clean_ext4_image(tmp_path):
