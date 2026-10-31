@@ -4,27 +4,49 @@
 import shutil
 import struct
 import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
 
 from mountfile import vfs
-from mountfile.ext2_reader import _EXT2_COMPR_FL, _EXT2_INDEX_FL, _Inode
+from mountfile.ext2_reader import (
+    _EXT2_COMPR_FL,
+    _EXT2_INDEX_FL,
+    NativeExt2Image,
+    _Inode,
+)
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from tests.test_ext2_reader import BLOCKS_COUNT, _make_image
 
 
 def _make_clean_journal_image(
-    path, *, descriptor_sequence=7, commit_sequence=7, truncate_commit=False
+    path,
+    *,
+    descriptor_sequence=7,
+    commit_sequence=7,
+    truncate_commit=False,
+    journal_inode=8,
+    declared_journal_inode=None,
+    replay_target=21,
+    duplicate_target=False,
+    wrap_replay=False,
 ):
     _make_image(path, compat=0x000C)
     image = bytearray(path.read_bytes())
     sb = memoryview(image)[1024:2048]
     filesystem_uuid = b"0123456789abcdef"
     sb[0x68:0x78] = filesystem_uuid
-    # inode 8: a five-block internal journal at blocks 40..44. The final
+    declared = (
+        journal_inode if declared_journal_inode is None else declared_journal_inode
+    )
+    struct.pack_into("<I", sb, 0xE0, declared)
+    # The selected internal journal inode contains five blocks at 40..44. The final
     # zero block is the terminator for the non-wrapping replay range.
-    inode = 5 * 1024 + 7 * 128
+    inode = 5 * 1024 + (journal_inode - 1) * 128
     struct.pack_into("<H", image, inode, 0x8000 | 0o600)
     struct.pack_into("<I", image, inode + 4, 5 * 1024)
     struct.pack_into("<5I", image, inode + 40, 40, 41, 42, 43, 44)
@@ -35,9 +57,25 @@ def _make_clean_journal_image(
     struct.pack_into(">II", journal, 20, 1, 0)
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
-    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
-    struct.pack_into(">II", journal, 1036, 21, 0x0000000A)  # LAST|SAME_UUID
-    struct.pack_into(">III", journal, 3072, 0xC03B3998, 2, commit_sequence)
+    descriptor_logical, commit_logical = (4, 2) if wrap_replay else (1, 3)
+    descriptor_offset = descriptor_logical * 1024
+    struct.pack_into(
+        ">III", journal, descriptor_offset, 0xC03B3998, 1, descriptor_sequence
+    )
+    if duplicate_target:
+        struct.pack_into(
+            ">II", journal, descriptor_offset + 12, replay_target, 0x00000002
+        )  # SAME_UUID
+        struct.pack_into(
+            ">II", journal, descriptor_offset + 20, replay_target, 0x0000000A
+        )  # LAST|SAME_UUID
+        commit_offset = (descriptor_logical + 3) * 1024
+    else:
+        struct.pack_into(
+            ">II", journal, descriptor_offset + 12, replay_target, 0x0000000A
+        )  # LAST|SAME_UUID
+        commit_offset = commit_logical * 1024
+    struct.pack_into(">III", journal, commit_offset, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
         struct.pack_into(">I", image, 43 * 1024 + 8, 0)
     path.write_bytes(image)
@@ -56,6 +94,41 @@ def test_clean_journal_with_bounded_transaction_is_readable(tmp_path):
     provider = NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
     try:
         assert provider.backend_name == "native-ext3-ro"
+    finally:
+        provider.close()
+
+
+def test_declared_nonstandard_internal_journal_inode_is_used(tmp_path):
+    image_path = tmp_path / "journal-inode-9.img"
+    _make_clean_journal_image(image_path, journal_inode=9)
+
+    provider = NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+    try:
+        assert provider.profile.journal_inode == 9
+    finally:
+        provider.close()
+
+
+def test_declared_journal_inode_mismatch_fails_closed(tmp_path):
+    image_path = tmp_path / "journal-inode-mismatch.img"
+    _make_clean_journal_image(image_path, journal_inode=8, declared_journal_inode=9)
+
+    with pytest.raises(Ext3ReadError, match="valid file mode"):
+        NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
+
+
+def test_synthetic_clean_ext3_routes_through_vfs_without_e2fsprogs(tmp_path):
+    image_path = tmp_path / "synthetic-clean-ext3.img"
+    _make_clean_journal_image(image_path)
+
+    provider = vfs.open_image_provider(image_path, volume_size=BLOCKS_COUNT * 1024)
+    try:
+        assert provider.backend_name == "native-ext3-ro"
+        entries = {entry["name"]: entry for entry in provider.list_dir("/")}
+        assert entries["hello.txt"]["size"] == 11
+        assert provider.stat("/hello.txt")["size"] == 11
+        assert provider.read_file_range("/hello.txt", 1, 4) == b"ello"
+        assert provider.read_file_range("/hello.txt", 11, 4) == b""
     finally:
         provider.close()
 
@@ -88,6 +161,63 @@ def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
+@pytest.mark.parametrize("replay_journal", [False, True])
+def test_jbd2_transaction_cannot_target_one_block_twice(tmp_path, replay_journal):
+    image_path = tmp_path / f"duplicate-journal-target-{replay_journal}.img"
+    _make_clean_journal_image(image_path, duplicate_target=True)
+    if replay_journal:
+        image = bytearray(image_path.read_bytes())
+        struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+        image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="targets a block more than once"):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=replay_journal,
+        )
+
+
+@pytest.mark.parametrize("replay_journal", [False, True])
+@example(journal_block=40)
+@example(journal_block=41)
+@example(journal_block=42)
+@example(journal_block=43)
+@example(journal_block=44)
+@given(journal_block=st.integers(min_value=40, max_value=44))
+@settings(max_examples=5, derandomize=True)
+def test_jbd2_transaction_cannot_target_its_own_journal_blocks(
+    replay_journal, journal_block
+):
+    with TemporaryDirectory() as tempdir:
+        image_path = Path(tempdir) / "journal-self-target.img"
+        _make_clean_journal_image(image_path, replay_target=journal_block)
+        if replay_journal:
+            image = bytearray(image_path.read_bytes())
+            struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+            image_path.write_bytes(image)
+
+        with pytest.raises(Ext3ReadError, match="target overlaps journal inode data"):
+            NativeExt3Image(
+                image_path,
+                volume_size=BLOCKS_COUNT * 1024,
+                replay_journal=replay_journal,
+            )
+
+
+def test_journal_data_block_scan_includes_single_indirect_blocks():
+    reader = NativeExt3Image.__new__(NativeExt3Image)
+    reader.blocks_count = 128
+    reader.block_size = 1024
+    pointer_table = struct.pack("<256I", 70, *([0] * 255))
+    reader._read_block = lambda _block: pointer_table
+    inode = SimpleNamespace(block_pointers=tuple(range(40, 52)) + (60, 0, 0))
+
+    physical_blocks = reader._journal_data_block_numbers(inode, 13)
+
+    assert physical_blocks == set(range(40, 52)) | {70}
+
+
 def test_truncated_journal_record_fails_closed(tmp_path):
     image_path = tmp_path / "truncated-journal.img"
     _make_clean_journal_image(image_path, truncate_commit=True)
@@ -105,14 +235,25 @@ def test_journal_with_nonzero_start_is_recovery_required(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
-def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
+def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
     image_path = tmp_path / "replay-journal.img"
-    _make_clean_journal_image(image_path)
+    _make_clean_journal_image(image_path, replay_target=3)
     image = bytearray(image_path.read_bytes())
     payload = bytes([0xA7]) * 1024
     image[40 * 1024 + 2 * 1024 : 40 * 1024 + 3 * 1024] = payload
     struct.pack_into(">I", image, 40 * 1024 + 24, 1)
     image_path.write_bytes(image)
+
+    original_bitmap = NativeExt2Image._bitmap
+    pre_overlay_bitmaps = []
+
+    def track_bitmap(reader, group, *, inode):
+        result = original_bitmap(reader, group, inode=inode)
+        if not inode and not reader._journal_overlay:
+            pre_overlay_bitmaps.append(result)
+        return result
+
+    monkeypatch.setattr(NativeExt2Image, "_bitmap", track_bitmap)
 
     provider = NativeExt3Image(
         image_path,
@@ -121,10 +262,48 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path):
     )
     try:
         assert provider.journal_replayed is True
-        assert provider._read_at(21 * 1024, 1024) == payload
-        assert image_path.read_bytes()[21 * 1024 : 22 * 1024] != payload
+        assert pre_overlay_bitmaps
+        assert provider._block_bitmap_cache == {}
+        assert provider._bitmap(0, inode=False) == payload
+        assert provider._read_at(3 * 1024, 1024) == payload
+        assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
     finally:
         provider.close()
+
+
+def test_explicit_journal_replay_supports_ring_wraparound(tmp_path):
+    image_path = tmp_path / "wrapped-replay-journal.img"
+    _make_clean_journal_image(image_path, replay_target=3, wrap_replay=True)
+    image = bytearray(image_path.read_bytes())
+    payload = bytes([0xB8]) * 1024
+    image[40 * 1024 + 1 * 1024 : 40 * 1024 + 2 * 1024] = payload
+    struct.pack_into(">I", image, 40 * 1024 + 24, 4)
+    image_path.write_bytes(image)
+
+    provider = NativeExt3Image(
+        image_path, volume_size=BLOCKS_COUNT * 1024, replay_journal=True
+    )
+    try:
+        assert provider.journal_replayed is True
+        assert provider._read_at(3 * 1024, 1024) == payload
+        assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
+    finally:
+        provider.close()
+
+
+def test_wrapped_replay_partial_record_fails_closed(tmp_path):
+    image_path = tmp_path / "wrapped-replay-partial.img"
+    _make_clean_journal_image(image_path, replay_target=3, wrap_replay=True)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 4)
+    struct.pack_into(">III", image, 43 * 1024, 0xC03B3998, 1, 8)
+    struct.pack_into(">II", image, 43 * 1024 + 12, 3, 0x0000000A)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="exceeds journal bounds"):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * 1024, replay_journal=True
+        )
 
 
 def test_active_journal_replay_rejects_empty_first_descriptor(tmp_path):
@@ -363,6 +542,7 @@ def test_ext4_rejects_extent_whose_full_physical_range_exceeds_filesystem():
         block_pointers=struct.unpack("<15I", root),
     )
     reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.block_size = 1024
     reader.blocks_count = BLOCKS_COUNT
 
     with pytest.raises(Ext3ReadError, match="extent physical range is out of bounds"):
@@ -413,6 +593,7 @@ def _extent_inode(root, *, logical_size=8 * 1024):
 
 def _extent_reader(blocks_count=64, blocks=None):
     reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.block_size = 1024
     reader.blocks_count = blocks_count
     blocks = blocks or {}
     reader._extent_block = lambda block: blocks[block]
@@ -432,6 +613,31 @@ def test_ext4_synthetic_extent_index_and_leaf_are_read_only_and_bounded():
     assert reader._extent_map(inode, 2) == (50, False)
     assert reader._extent_map(inode, 3) == (51, False)
     assert reader._extent_map(inode, 0) == (0, False)
+
+
+def test_ext4_extent_leaf_must_start_at_parent_index_key():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 1, 0)
+    struct.pack_into("<IIH", root, 12, 2, 40, 0)
+    leaf = bytearray(1024)
+    struct.pack_into("<HHHH", leaf, 0, 0xF30A, 1, 84, 0)
+    struct.pack_into("<IHHI", leaf, 12, 3, 1, 0, 50)
+
+    reader = _extent_reader(blocks={40: bytes(leaf)})
+    with pytest.raises(Ext3ReadError, match="does not start at its index key"):
+        reader._extent_map(_extent_inode(root), 3)
+
+
+def test_ext4_preallocation_past_eof_is_not_exposed_by_block_mapping():
+    root = bytearray(60)
+    struct.pack_into("<HHHHI", root, 0, 0xF30A, 1, 4, 0, 0)
+    struct.pack_into("<IHHI", root, 12, 0, 4, 0, 50)
+    reader = _extent_reader()
+    inode = _extent_inode(root, logical_size=2 * 1024)
+
+    assert reader._extent_map(inode, 1) == (51, False)
+    with pytest.raises(Ext3ReadError, match="exceeds inode size"):
+        reader._extent_map(inode, 2)
 
 
 def test_ext4_rejects_out_of_bounds_unselected_extent_index_sibling():

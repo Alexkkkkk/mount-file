@@ -15,6 +15,7 @@ from mountfile.exfat_probe import (
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.extract import extract_file
 from mountfile.safety import RefusalCode
 from mountfile.universal_fs_rw import NativeExfatRW
 
@@ -246,6 +247,7 @@ def test_native_exfat_traverses_nested_paths_and_case_insensitive_stat(tmp_path)
     try:
         assert provider.stat("/nested/report.txt")["size"] == len(b"nested report")
         assert provider.read_file_range("/NESTED/report.txt", 7, 6) == b"report"
+        assert provider.read_file("/NESTED/report.txt") == b"nested report"
         assert provider.list_dir("/nested") == [
             {"name": "Report.TXT", "is_dir": False, "size": 13, "date": ""}
         ]
@@ -275,7 +277,11 @@ def test_exfat_range_read_fetches_only_clusters_and_bytes_requested():
     reader = NativeExfatImage.__new__(NativeExfatImage)
     reader.profile = SimpleNamespace(cluster_size=512, cluster_count=10)
     entry = SimpleNamespace(
-        is_dir=False, size=4096, first_cluster=2, no_fat_chain=False
+        is_dir=False,
+        size=4096,
+        first_cluster=2,
+        no_fat_chain=False,
+        valid_data_length=4096,
     )
     reader._find = lambda _path: entry
     yielded = []
@@ -304,7 +310,11 @@ def test_exfat_range_read_rejects_chain_shorter_than_requested_range():
     reader = NativeExfatImage.__new__(NativeExfatImage)
     reader.profile = SimpleNamespace(cluster_size=512, cluster_count=10)
     entry = SimpleNamespace(
-        is_dir=False, size=4096, first_cluster=2, no_fat_chain=False
+        is_dir=False,
+        size=4096,
+        first_cluster=2,
+        no_fat_chain=False,
+        valid_data_length=4096,
     )
     reader._find = lambda _path: entry
     reader._iter_chain = lambda *_args, **_kwargs: iter((2, 3))
@@ -422,7 +432,7 @@ def test_exfat_writer_directory_records_use_bounded_reader_limit(monkeypatch):
     assert reads == [(1024, 512)]
 
 
-def _tree_image(path):
+def _tree_image(path, *, valid_data_length=None):
     region = bytearray(VOLUME_SIZE)
     region[: 24 * 512] = _region()
     struct.pack_into("<I", region, 24 * 512 + 2 * 4, 0xFFFFFFFF)
@@ -444,7 +454,9 @@ def _tree_image(path):
     root[96] = 0xC0
     root[99] = 9
     struct.pack_into("<H", root, 100, _name_hash("HELLO.TXT"))
-    struct.pack_into("<Q", root, 104, len(payload))
+    if valid_data_length is None:
+        valid_data_length = len(payload)
+    struct.pack_into("<Q", root, 104, valid_data_length)
     struct.pack_into("<I", root, 116, 3)
     struct.pack_into("<Q", root, 120, len(payload))
     root[128] = 0xC1
@@ -456,6 +468,70 @@ def _tree_image(path):
     region[35 * 512 : 35 * 512 + len(upcase_data)] = upcase_data
     path.write_bytes(region)
     return payload
+
+
+@pytest.mark.parametrize("valid_data_length", [0, 5, 11])
+def test_native_exfat_zero_fills_invalid_file_tail_on_read_and_extract(
+    tmp_path, valid_data_length
+):
+    path = tmp_path / f"exfat-vdl-{valid_data_length}.img"
+    payload = _tree_image(path, valid_data_length=valid_data_length)
+    expected = payload[:valid_data_length] + bytes(len(payload) - valid_data_length)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.file_size("/HELLO.TXT") == len(payload)
+        assert provider.read_file("/HELLO.TXT") == expected
+        destination = tmp_path / f"extracted-{valid_data_length}.bin"
+        assert extract_file(provider, "/HELLO.TXT", destination) == len(payload)
+        assert destination.read_bytes() == expected
+    finally:
+        provider.close()
+
+
+def test_native_exfat_range_crossing_vdl_returns_zeroes_and_respects_eof(tmp_path):
+    path = tmp_path / "exfat-vdl-range.img"
+    _tree_image(path, valid_data_length=5)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file_range("/HELLO.TXT", 3, 5) == b"lo" + bytes(3)
+        assert provider.read_file_range("/HELLO.TXT", 5, 3) == bytes(3)
+        assert provider.read_file_range("/HELLO.TXT", 10, 8) == bytes(1)
+        assert provider.read_file_range("/HELLO.TXT", 11, 1) == b""
+    finally:
+        provider.close()
+
+
+def test_native_exfat_rejects_valid_data_length_larger_than_data_length(tmp_path):
+    path = tmp_path / "exfat-vdl-too-large.img"
+    _tree_image(path, valid_data_length=12)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match="ValidDataLength exceeds DataLength"):
+            provider.list_dir("/")
+    finally:
+        provider.close()
+
+
+def test_native_exfat_rejects_directory_vdl_different_from_data_length(tmp_path):
+    path = tmp_path / "exfat-directory-vdl-mismatch.img"
+    _tree_image(path, valid_data_length=5)
+    raw = bytearray(path.read_bytes())
+    entry_start = 32 * 512 + 64
+    struct.pack_into("<H", raw, entry_start + 4, 0x10)
+    entry_set = bytearray(raw[entry_start : entry_start + 96])
+    struct.pack_into("<H", entry_set, 2, _entry_set_checksum(entry_set))
+    raw[entry_start : entry_start + 96] = entry_set
+    path.write_bytes(raw)
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(
+            ExfatReadError,
+            match="directory ValidDataLength differs from DataLength",
+        ):
+            provider.list_dir("/")
+    finally:
+        provider.close()
 
 
 @pytest.mark.parametrize(

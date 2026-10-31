@@ -57,6 +57,8 @@ def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x00
     struct.pack_into("<I", sb, 0x5C, compat)
     struct.pack_into("<I", sb, 0x60, incompat)
     struct.pack_into("<I", sb, 0x64, ro_compat)
+    if compat & 0x0004 and not incompat & 0x0008:
+        struct.pack_into("<I", sb, 0xE0, 8)
     sb[0x78:0x7C] = b"TEST"
 
     # Primary group descriptor: bitmaps at 3/4 and inode table at blocks 5-8.
