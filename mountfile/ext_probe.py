@@ -150,6 +150,7 @@ class ExtSuperblockProfile:
     label: str
     clean_unmounted: bool
     has_journal: bool
+    journal_inode: int | None
     journal_recovery_needed: bool
     unknown_incompat_features: int
     unknown_ro_compat_features: int
@@ -294,6 +295,12 @@ def _probe_stream(
     has_journal = bool(
         feature_compat & _COMPAT_HAS_JOURNAL or feature_incompat & _INCOMPAT_JOURNAL_DEV
     )
+    journal_inode = None
+    if has_journal and not feature_incompat & _INCOMPAT_JOURNAL_DEV:
+        journal_inode_value = _u32(superblock, 0xE0)
+        if not 1 <= journal_inode_value <= inodes_count:
+            raise ExtProbeError("internal journal inode is outside inode table")
+        journal_inode = journal_inode_value
     recovery_needed = bool(feature_incompat & _INCOMPAT_RECOVER)
     ext4_markers = bool(
         feature_incompat & _EXT4_MARKERS_INCOMPAT
@@ -311,7 +318,7 @@ def _probe_stream(
             "journaled or ext4-featured profiles are read-only in this phase"
         )
     if has_journal:
-        reasons.append("JBD2 journal support and replay are not implemented")
+        reasons.append("JBD2 journaled profiles are outside the Phase-1 ext2 writer")
     if recovery_needed:
         reasons.append("superblock marks the filesystem as needing journal recovery")
     if not state_clean:
@@ -409,6 +416,7 @@ def _probe_stream(
         label=superblock[0x78:0x88].split(b"\x00", 1)[0].decode("utf-8", "replace"),
         clean_unmounted=state_clean and not recovery_needed,
         has_journal=has_journal,
+        journal_inode=journal_inode,
         journal_recovery_needed=recovery_needed,
         unknown_incompat_features=unknown_incompat,
         unknown_ro_compat_features=unknown_ro_compat,

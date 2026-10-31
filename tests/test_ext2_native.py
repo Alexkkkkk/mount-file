@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
 """Regression coverage for the in-process, limited-profile ext2 writer."""
 
+import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -70,7 +72,20 @@ def test_native_ext2_file_and_directory_crud_is_consistent(tmp_path):
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
 
+    root_links_before = writer._fs._u16(writer._fs._read_inode(2), 26)
     writer.mkdir("/evidence")
+    assert writer._fs._u16(writer._fs._read_inode(2), 26) == root_links_before + 1
+    directory_entry = writer._fs._lookup_child(2, b"evidence")
+    assert directory_entry is not None
+    directory_inode = directory_entry["inode"]
+    assert writer._fs._u16(writer._fs._read_inode(directory_inode), 26) == 2
+    _, _, directory_entries = writer._fs._dir_entries(directory_inode)
+    dot_entries = {
+        item["name_bytes"]: item["inode"]
+        for item in directory_entries
+        if item["name_bytes"] in (b".", b"..")
+    }
+    assert dot_entries == {b".": directory_inode, b"..": 2}
     writer.write_file("/evidence/one.bin", b"first\x00payload")
     assert writer.read_file("/evidence/one.bin") == b"first\x00payload"
     writer.write_file("/evidence/one.bin", b"replacement" * 300)
@@ -186,6 +201,39 @@ def test_native_ext2_writer_range_refusal_preserves_image_bytes(tmp_path):
     assert image.read_bytes() == before
 
 
+def test_native_ext2_mkdir_preflights_parent_link_overflow_before_allocation(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "link-overflow.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    parent_raw = writer._fs._read_inode(2)
+    struct.pack_into("<H", parent_raw, 26, 0xFFFF)
+    writer._fs._write_inode(2, parent_raw)
+    before = image.read_bytes()
+
+    allocations = []
+    allocate_inode = ext2_native._Ext2FS._allocate_inode
+    allocate_block = ext2_native._Ext2FS._allocate_block
+
+    def record_inode_allocation(fs, *args, **kwargs):
+        allocations.append("inode")
+        return allocate_inode(fs, *args, **kwargs)
+
+    def record_block_allocation(fs, *args, **kwargs):
+        allocations.append("block")
+        return allocate_block(fs, *args, **kwargs)
+
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_inode", record_inode_allocation)
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_block", record_block_allocation)
+
+    with pytest.raises(NativeExt2Error, match="parent link counter overflow"):
+        writer.mkdir("/refused")
+
+    assert allocations == []
+    assert image.read_bytes() == before
+
+
 def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
     tmp_path, monkeypatch
 ):
@@ -295,7 +343,7 @@ def test_native_ext2_rejects_corrupt_single_indirect_directory_map(
     entries_per_block = (writer.block_size - 24) // entry_size
     for index in range(12 * entries_per_block + 1):
         writer.write_file(
-            "/grown/%04d-" % index + "x" * 250,
+            f"/grown/{index:04d}-" + "x" * 250,
             b"",
         )
 
@@ -463,24 +511,24 @@ def test_native_ext2_rolls_back_and_verifies_restored_extent_hash(
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
     before = image.read_bytes()
-    hash_source = writer._hash_source
+    hash_stream = writer._hash_stream
     hash_calls = 0
 
-    def reject_committed_hash():
+    def reject_committed_hash(stream, offset, size):
         nonlocal hash_calls
         hash_calls += 1
-        digest = hash_source()
-        if hash_calls == 3:
+        digest = hash_stream(stream, offset, size)
+        if hash_calls == 2:
             return b"\x00" * len(digest)
         return digest
 
-    monkeypatch.setattr(writer, "_hash_source", reject_committed_hash)
+    monkeypatch.setattr(writer, "_hash_stream", reject_committed_hash)
     with pytest.raises(
         NativeExt2Error, match="committed ext2 extent failed SHA-256 verification"
     ):
         writer.write_file("/not-committed.txt", b"staged only")
 
-    assert hash_calls == 4
+    assert hash_calls == 7
     assert image.read_bytes() == before
     assert not image.with_name(image.name + ".mountfile-ext2-recovery.json").exists()
     assert not list(tmp_path.glob(".filesystem.ext2.mountfile-ext2-recovery-*.bin"))
@@ -493,16 +541,16 @@ def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
     before = image.read_bytes()
-    hash_source = writer._hash_source
+    hash_stream = writer._hash_stream
     hash_calls = 0
     image_write_opens = 0
     original_open = open
 
-    def reject_committed_hash():
+    def reject_committed_hash(stream, offset, size):
         nonlocal hash_calls
         hash_calls += 1
-        digest = hash_source()
-        if hash_calls == 3:
+        digest = hash_stream(stream, offset, size)
+        if hash_calls == 2:
             return b"\x00" * len(digest)
         return digest
 
@@ -532,23 +580,25 @@ def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
                 return ShortWriteStream(stream)
         return stream
 
-    monkeypatch.setattr(writer, "_hash_source", reject_committed_hash)
+    monkeypatch.setattr(writer, "_hash_stream", reject_committed_hash)
     monkeypatch.setattr(ext2_native, "open", short_rollback_open, raising=False)
     with pytest.raises(
         NativeExt2Error,
-        match="commit and rollback both failed.*short write while restoring ext2 extent",
+        match="commit and rollback both failed.*short write while restoring ext2 recovery snapshot",
     ):
         writer.write_file("/not-restored.txt", b"staged only")
 
     assert image_write_opens == 3
-    assert hash_calls == 4
+    assert hash_calls == 6
     assert image.read_bytes() != before
     marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
     assert marker.is_file()
     recovery = json.loads(marker.read_text(encoding="utf-8"))
     snapshot = image.with_name(recovery["snapshot"])
+    staged_snapshot = image.with_name(recovery["staged_snapshot"])
     assert snapshot.is_file()
     assert snapshot.read_bytes() == before
+    assert staged_snapshot.is_file()
 
     # External edits after the failure must not be overwritten by recovery.
     pending_image = image.read_bytes()
@@ -588,6 +638,7 @@ def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
     assert image.read_bytes() == before
     assert not marker.exists()
     assert not snapshot.exists()
+    assert not staged_snapshot.exists()
 
 
 def test_native_ext2_recovers_after_process_dies_mid_commit(tmp_path):
@@ -660,10 +711,14 @@ writer.write_file('/interrupted.txt', b'this transaction must roll back')
     marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
     assert marker.is_file()
     recovery = json.loads(marker.read_text(encoding="utf-8"))
-    assert recovery["format"] == 2
+    assert recovery["format"] == 3
     assert recovery["phase"] == "commit_in_progress"
     snapshot = image.with_name(recovery["snapshot"])
+    staged_snapshot = image.with_name(recovery["staged_snapshot"])
     assert snapshot.read_bytes() == filesystem
+    assert len(recovery["staged_sha256"]) == 64
+    assert staged_snapshot.is_file()
+    assert staged_snapshot.stat().st_size == len(filesystem)
 
     recovery_crash_script = f"""
 import os
@@ -720,6 +775,7 @@ NativeExt2ImageWriter(image, offset={volume_offset}, volume_size={len(filesystem
     assert image.read_bytes() == before
     assert not marker.exists()
     assert not snapshot.exists()
+    assert not staged_snapshot.exists()
     assert "interrupted.txt" not in {entry["name"] for entry in writer.list_dir("/")}
     recovered_partition = tmp_path / "recovered.ext2"
     recovered_partition.write_bytes(
@@ -744,7 +800,7 @@ from mountfile.ext2_native import NativeExt2ImageWriter
 tempfile.tempdir = {str(crash_temp)!r}
 image = {str(image)!r}
 
-def crash_before_cleanup(self, marker_path, snapshot):
+def crash_before_cleanup(self, marker_path, snapshot, staged_snapshot=None):
     os._exit(75)
 
 NativeExt2ImageWriter._clear_recovery_snapshot = crash_before_cleanup
@@ -768,7 +824,67 @@ writer.write_file('/unacknowledged.txt', b'commit was not acknowledged')
     writer = NativeExt2ImageWriter(image)
     assert image.read_bytes() == before
     assert not marker.exists()
+    assert not image.with_name(recovery["snapshot"]).exists()
+    assert not image.with_name(recovery["staged_snapshot"]).exists()
     assert "unacknowledged.txt" not in {entry["name"] for entry in writer.list_dir("/")}
+
+
+def test_native_ext2_cleanup_failure_after_commit_does_not_roll_back(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "cleanup-failure.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+
+    def fail_cleanup(marker_path, snapshot, staged_snapshot=None):
+        raise OSError("injected sidecar cleanup failure")
+
+    monkeypatch.setattr(writer, "_clear_recovery_snapshot", fail_cleanup)
+    with pytest.raises(NativeExt2Error, match="commit is verified and durable"):
+        writer.write_file("/committed.txt", b"do not undo a verified commit")
+
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert image.read_bytes() != before
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    assert (
+        NativeExt2ImageWriter._hash_extent(str(image), 0, len(before)).hex()
+        == recovery["staged_sha256"]
+    )
+    assert image.with_name(recovery["snapshot"]).is_file()
+    assert image.with_name(recovery["staged_snapshot"]).is_file()
+
+
+def test_native_ext2_refuses_to_overwrite_unknown_commit_bytes(tmp_path):
+    image = tmp_path / "external-change.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+    after = bytearray(before)
+    after[0] ^= 1
+    rollback = tmp_path / "before.ext2"
+    staged = tmp_path / "staged.ext2"
+    rollback.write_bytes(before)
+    staged.write_bytes(after)
+    snapshot, staged_snapshot, _staged_hash, marker_path = (
+        writer._preserve_recovery_snapshot(
+            str(rollback), hashlib.sha256(before).digest(), str(staged)
+        )
+    )
+
+    external = bytearray(before)
+    external[0] ^= 2
+    image.write_bytes(external)
+    with pytest.raises(
+        NativeExt2Error, match="outside the verified before/after snapshots"
+    ):
+        NativeExt2ImageWriter(image)
+
+    assert image.read_bytes() == external
+    assert os.path.isfile(marker_path)
+    assert os.path.isfile(snapshot)
+    assert os.path.isfile(staged_snapshot)
 
 
 def test_native_ext2_blocks_writes_for_dangling_recovery_marker_symlink(tmp_path):
