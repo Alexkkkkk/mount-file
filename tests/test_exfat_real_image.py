@@ -23,7 +23,7 @@ def test_real_exfat_unicode_write_and_rename_pass_read_only_fsck(tmp_path):
     if not mkfs or not fsck:
         pytest.skip("install exfatprogs to run the real-image consistency test")
 
-    image_size = 64 * 1024 * 1024
+    image_size = 16 * 1024 * 1024
     image = tmp_path / "issue-182-real-exfat.img"
     with image.open("wb") as stream:
         stream.truncate(image_size)
@@ -42,23 +42,34 @@ def test_real_exfat_unicode_write_and_rename_pass_read_only_fsck(tmp_path):
         reader.close()
 
     payload = bytes(range(256)) * 23 + b"cluster-boundary"
+    replacement = b"replacement-after-truncate"
+    nested_payload = bytes(reversed(range(256))) * 23 + b"nested-boundary"
     writer = NativeExfatWriter(image, volume_size=image_size)
     writer.write_file("/Report-é.txt", payload)
-    writer.rename("/rEPORT-É.txt", "/résumé-é.txt")
+    writer.write_file("/report-É.TXT", replacement)
+    writer.mkdir("/Nested")
+    writer.write_file("/Nested/Quarterly-über.txt", nested_payload)
+    writer.rename("/Nested/quarterly-ÜBER.txt", "/résumé-final-é.txt")
+    writer.delete("/Nested")
+    writer.write_file("/empty.bin", b"")
 
     reader = NativeExfatImage(image, volume_size=image_size)
     try:
-        assert reader.file_size("/RÉSUMÉ-é.txt") == len(payload)
-        assert reader.read_file("/résumé-é.txt") == payload
-        assert reader.read_file_range("/RÉSUMÉ-é.txt", 4090, 37) == payload[4090:4127]
-        assert reader.list_dir("/") == [
-            {
-                "name": "résumé-é.txt",
-                "is_dir": False,
-                "size": len(payload),
-                "date": "",
-            }
-        ]
+        assert reader.file_size("/REPORT-é.TXT") == len(replacement)
+        assert reader.read_file("/report-É.txt") == replacement
+        assert reader.file_size("/RÉSUMÉ-FINAL-É.TXT") == len(nested_payload)
+        assert reader.read_file("/résumé-final-é.txt") == nested_payload
+        assert (
+            reader.read_file_range("/RÉSUMÉ-FINAL-É.TXT", 4090, 37)
+            == nested_payload[4090:4127]
+        )
+        assert reader.file_size("/empty.bin") == 0
+        assert reader.read_file("/empty.bin") == b""
+        entries = {entry["name"]: entry for entry in reader.list_dir("/")}
+        assert set(entries) == {"Report-é.txt", "résumé-final-é.txt", "empty.bin"}
+        assert entries["Report-é.txt"]["size"] == len(replacement)
+        assert entries["résumé-final-é.txt"]["size"] == len(nested_payload)
+        assert entries["empty.bin"]["size"] == 0
     finally:
         reader.close()
 

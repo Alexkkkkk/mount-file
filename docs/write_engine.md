@@ -63,11 +63,12 @@ power-loss recovery protocol. A rejected commit, short write or failed read-back
 discards the stage; unsupported or ambiguous metadata still fails closed.
 
 The Linux integration suite also formats a disposable image with `mkfs.exfat`,
-creates and renames a Unicode file through the native writer, checks mixed-case
-lookup and range reads, then runs `fsck.exfat -n` on a separate copy. It verifies
-that the checker accepts the image and leaves its copy byte-identical. Linux CI
-installs `exfatprogs`; other platforms keep the synthetic exFAT tests and report
-the Linux-only real-image check as an explicit skip.
+then exercises replacement after shrinking, nested-file creation, cross-directory
+Unicode rename, empty-directory removal and a zero-length file. It checks
+mixed-case lookup and range reads, then runs `fsck.exfat -n` on a separate copy
+and verifies that the checker accepts the image without changing that copy.
+Linux CI installs `exfatprogs`; other platforms keep the synthetic exFAT tests
+and report the Linux-only real-image check as an explicit skip.
 
 ## Использование
 
