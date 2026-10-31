@@ -815,6 +815,7 @@ class NativeExt4Image(NativeExt3Image):
                     if not next_unwritten or next_physical == 0:
                         break
                     run_blocks += 1
+                self._validate_data_block_run(physical, run_blocks)
                 amount = min(remaining, run_blocks * self.block_size - in_block)
                 output.extend(b"\x00" * amount)
             else:
@@ -826,6 +827,7 @@ class NativeExt4Image(NativeExt3Image):
                     if next_unwritten or next_physical != physical + run_blocks:
                         break
                     run_blocks += 1
+                self._validate_data_block_run(physical, run_blocks)
                 amount = min(remaining, run_blocks * self.block_size - in_block)
                 output.extend(
                     self._read_at(
