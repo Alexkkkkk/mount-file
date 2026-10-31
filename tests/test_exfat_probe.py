@@ -6,6 +6,8 @@ import struct
 from types import SimpleNamespace
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from mountfile import vfs
 from mountfile.exfat_probe import (
@@ -88,6 +90,50 @@ def _region(sector_size=512):
     return bytes(region)
 
 
+def _refresh_exfat_region_checksums(region, sector_size):
+    for start in (0, 12 * sector_size):
+        checksum = exfat_boot_checksum(
+            bytes(region[start : start + 11 * sector_size]), sector_size=sector_size
+        )
+        checksum_sector = start + 11 * sector_size
+        for offset in range(0, sector_size, 4):
+            struct.pack_into("<I", region, checksum_sector + offset, checksum)
+
+
+@st.composite
+def _generated_exfat_geometry_cases(draw):
+    cluster_count = draw(st.integers(min_value=1, max_value=128))
+    return {
+        "sector_size": draw(st.sampled_from((512, 1024, 2048, 4096))),
+        "cluster_shift": draw(st.integers(min_value=0, max_value=13)),
+        "cluster_count": cluster_count,
+        "root_cluster": draw(st.integers(min_value=2, max_value=cluster_count + 1)),
+        "main_flags": draw(st.integers(min_value=0, max_value=0x0F)),
+        "main_percent": draw(st.integers(min_value=0, max_value=100)),
+        "backup_flags": draw(st.integers(min_value=0, max_value=0x0F)),
+        "backup_percent": draw(st.integers(min_value=0, max_value=255)),
+    }
+
+
+def _generated_valid_exfat_region(case):
+    sector_size = case["sector_size"]
+    sectors_per_cluster = 1 << case["cluster_shift"]
+    volume_length = 32 + case["cluster_count"] * sectors_per_cluster
+    region = bytearray(_region(sector_size))
+    for start, flags, percent in (
+        (0, case["main_flags"], case["main_percent"]),
+        (12 * sector_size, case["backup_flags"], case["backup_percent"]),
+    ):
+        struct.pack_into("<Q", region, start + 0x48, volume_length)
+        struct.pack_into("<I", region, start + 0x5C, case["cluster_count"])
+        struct.pack_into("<I", region, start + 0x60, case["root_cluster"])
+        struct.pack_into("<H", region, start + 0x6A, flags)
+        region[start + 0x6D] = case["cluster_shift"]
+        region[start + 0x70] = percent
+    _refresh_exfat_region_checksums(region, sector_size)
+    return bytes(region), volume_length * sector_size
+
+
 def _image_with_volume_flags(path, flags):
     region = bytearray(_region())
     struct.pack_into("<H", region, 0x6A, flags)
@@ -113,6 +159,41 @@ def test_parses_exfat_geometry_and_checksum():
 def test_parses_larger_exfat_sector_sizes(sector_size):
     profile = parse_exfat_boot_region(_region(sector_size), volume_size=VOLUME_SIZE)
     assert profile.bytes_per_sector == sector_size
+
+
+@settings(max_examples=150, deadline=None)
+@given(case=_generated_exfat_geometry_cases())
+def test_generated_exfat_geometry_and_backup_status_are_bounded(case):
+    region, volume_size = _generated_valid_exfat_region(case)
+    profile = parse_exfat_boot_region(region, volume_size=volume_size)
+
+    assert profile.bytes_per_sector == case["sector_size"]
+    assert profile.sectors_per_cluster == 1 << case["cluster_shift"]
+    assert profile.cluster_size <= 32 * 1024 * 1024
+    assert profile.volume_length * profile.bytes_per_sector == volume_size
+    assert profile.cluster_count == case["cluster_count"]
+    assert profile.root_cluster == case["root_cluster"]
+    assert profile.volume_flags == case["main_flags"]
+    assert profile.percent_in_use == case["main_percent"]
+    assert (
+        profile.cluster_heap_offset
+        + profile.cluster_count * profile.sectors_per_cluster
+        <= profile.volume_length
+    )
+    assert (
+        profile.fat_offset + profile.fat_length * profile.number_of_fats
+        <= profile.volume_length
+    )
+
+
+@settings(max_examples=100, deadline=None)
+@given(byte_offset=st.integers(min_value=200, max_value=509))
+def test_generated_reserved_boot_byte_corruption_is_detected_by_checksum(byte_offset):
+    region = bytearray(_region())
+    region[byte_offset] ^= 1
+
+    with pytest.raises(ExfatProbeError, match="boot-region checksum"):
+        parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
 
 
 def test_vfs_probe_uses_partition_offset(tmp_path):
