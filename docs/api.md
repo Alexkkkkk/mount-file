@@ -72,9 +72,12 @@ providers могут добавлять поля вроде `kind` или `inode
 
 `date` остаётся строкой, предоставленной конкретным reader-ом, и может быть
 пустой. ext2 выводит mtime обычного файла; FAT выводит доступную ему дату;
-exFAT и NTFS в текущем VFS listing возвращают пустое значение. Формат,
-точность, timezone и наличие времён создания/доступа не нормализуются между
-форматами; поле нельзя использовать как нормализованный UTC timeline timestamp.
+exFAT выводит время последнего изменения и отдельно create/modified/accessed
+timestamps вместе с сырым DOS attribute mask; NTFS в текущем VFS listing
+возвращает пустое значение. exFAT сохраняет timezone offset только если он
+помечен valid на носителе; без valid bit значение остаётся local/naive.
+Формат, точность и timezone не нормализуются между форматами, поэтому `date`
+нельзя использовать как нормализованный UTC timeline timestamp.
 
 Общий VFS contract не предоставляет owner/group, POSIX permissions/ACL,
 xattrs, число или семантику hard links и все timestamps. NTFS reader открывает
