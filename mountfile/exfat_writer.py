@@ -334,7 +334,7 @@ class NativeExfatWriter:
         checksum = 0
         for index, value in enumerate(entry_set):
             if index in (2, 3):
-                value = 0
+                continue
             checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
             checksum = (checksum + value) & 0xFFFF
         return checksum
@@ -622,7 +622,7 @@ class NativeExfatWriter:
         struct.pack_into("<H", result, 36, reader._name_hash(name))
         struct.pack_into("<I", result, 52, first_cluster if size or is_dir else 0)
         struct.pack_into("<Q", result, 56, size)
-        padded = encoded.ljust(slots * 30, b"\xff")
+        padded = encoded.ljust(slots * 30, b"\0")
         for index in range(slots):
             base = 64 + index * 32
             result[base] = 0xC1
@@ -879,7 +879,7 @@ class NativeExfatWriter:
                         relative + 32 + 4,
                         struct.pack("<H", reader._name_hash(new_name)),
                     )
-                    padded = encoded.ljust(slots * 30, b"\xff")
+                    padded = encoded.ljust(slots * 30, b"\0")
                     for index in range(slots):
                         self._write_rel(
                             stream,
@@ -893,7 +893,7 @@ class NativeExfatWriter:
                     struct.pack_into(
                         "<H", entry_set, 32 + 4, reader._name_hash(new_name)
                     )
-                    padded = encoded.ljust(slots * 30, b"\xff")
+                    padded = encoded.ljust(slots * 30, b"\0")
                     for index in range(slots):
                         base = 64 + index * 32
                         entry_set[base + 2 : base + 32] = padded[

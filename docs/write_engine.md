@@ -62,6 +62,16 @@ can still race in the final identity-check/replacement window. This is not a
 power-loss recovery protocol. A rejected commit, short write or failed read-back
 discards the stage; unsupported or ambiguous metadata still fails closed.
 
+The Linux integration suite also formats a disposable image with `mkfs.exfat`,
+then exercises replacement after shrinking, nested-file creation, cross-directory
+Unicode rename, empty-directory removal and a zero-length file. It checks
+mixed-case lookup and range reads, then runs `fsck.exfat -n` on a separate copy
+and verifies that the checker accepts the image without changing that copy. A
+second real image uses 512-byte clusters to force root-directory growth and is
+checked through the same independent oracle. Linux CI installs `exfatprogs`;
+other platforms keep the synthetic exFAT tests and report the Linux-only
+real-image checks as explicit skips.
+
 ## Использование
 
 ```python
