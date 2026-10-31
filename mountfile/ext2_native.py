@@ -23,7 +23,7 @@ import time
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.safety import RefusalCode, RefusalError, checked_range, code_for_message
 
 
 class NativeExt2Error(RuntimeError):
@@ -31,7 +31,11 @@ class NativeExt2Error(RuntimeError):
 
     def __init__(self, message: str, code: RefusalCode | None = None):
         super().__init__(message)
-        self.code = code
+        self.code = RefusalCode(code) if code is not None else code_for_message(message)
+
+    @property
+    def category(self):
+        return RefusalError(str(self), self.code).category
 
 
 class NativeExt2UnsafeError(NativeExt2Error):
@@ -166,7 +170,8 @@ class _Ext2FS:
             raise NativeExt2Error("unsupported ext2 inode size")
         if self.state != 1 or self.incompat & 0x0004:
             raise NativeExt2UnsafeError(
-                "ext2 volume is dirty or requires journal recovery; refusing writes"
+                "ext2 volume is dirty or requires journal recovery; refusing writes",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
             )
         if self.compat & ~_ALLOWED_COMPAT:
             raise NativeExt2Error("unsupported ext2 compatible feature flags")
@@ -1093,7 +1098,10 @@ class _Ext2FS:
         self._insert_entry(parent, name, inode_num, 2)
         parent_raw = self._read_inode(parent)
         if self._u16(parent_raw, 26) != links:
-            raise NativeExt2Error("ext2 parent link count changed during mkdir")
+            raise NativeExt2Error(
+                "ext2 parent link count changed during mkdir",
+                RefusalCode.CONCURRENT_CHANGE,
+            )
         struct.pack_into("<H", parent_raw, 26, links + 1)
         self._touch_inode(parent_raw)
         self._write_inode(parent, parent_raw)
@@ -1818,7 +1826,8 @@ class NativeExt2ImageWriter:
     def _commit(self, staged: str, original_hash: bytes) -> None:
         if self._hash_source() != original_hash:
             raise NativeExt2Error(
-                "image changed concurrently; staged write was discarded"
+                "image changed concurrently; staged write was discarded",
+                RefusalCode.CONCURRENT_CHANGE,
             )
         with tempfile.TemporaryDirectory(prefix="mountfile-ext2-rollback-") as work:
             rollback = os.path.join(work, "original.ext2")

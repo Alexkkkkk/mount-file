@@ -56,3 +56,24 @@ def test_tsk_image_refuses_selected_partition_before_opening_pytsk(
         vfs.TskImage(image_path, offset=4096, volume_size=4096)
 
     assert open_calls == []
+
+
+def test_tsk_image_read_range_has_typed_bounds_and_keeps_eof_clipping():
+    class File:
+        class Info:
+            class Meta:
+                size = 4
+
+            meta = Meta()
+
+        info = Info()
+
+        def read_random(self, offset, length):
+            return b"abcd"[offset : offset + length]
+
+    image = object.__new__(vfs.TskImage)
+    image.fs = type("FS", (), {"open": lambda self, path: File()})()
+    assert image.read_file_range("/file", 1, 99) == b"bcd"
+    with pytest.raises(vfs.TskError) as caught:
+        image.read_file_range("/file", -1, 1)
+    assert caught.value.code is vfs.RefusalCode.RANGE_OUT_OF_BOUNDS
