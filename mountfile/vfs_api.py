@@ -21,6 +21,12 @@ class ReadOnlyVFSStatMixin:
 
     case_insensitive_paths = False
 
+    def path_component_matches(self, actual: str, requested: str) -> bool:
+        """Compare one name using the provider's filesystem semantics."""
+        if actual == requested:
+            return True
+        return self.case_insensitive_paths and actual.casefold() == requested.casefold()
+
     def stat(self, path: str) -> dict:
         if not isinstance(path, str) or "\x00" in path or "\\" in path:
             raise ValueError("invalid VFS path")
@@ -46,18 +52,13 @@ class ReadOnlyVFSStatMixin:
             parent = "/" + "/".join(actual_parts) if actual_parts else "/"
             candidates = self.list_dir(parent)
             entry = next(
-                (item for item in candidates if item.get("name") == name), None
+                (
+                    item
+                    for item in candidates
+                    if self.path_component_matches(str(item.get("name", "")), name)
+                ),
+                None,
             )
-            if entry is None and self.case_insensitive_paths:
-                folded = name.casefold()
-                entry = next(
-                    (
-                        item
-                        for item in candidates
-                        if str(item.get("name", "")).casefold() == folded
-                    ),
-                    None,
-                )
             if entry is None:
                 raise FileNotFoundError("VFS path not found: " + "/".join(parts))
             actual_parts.append(str(entry["name"]))
