@@ -20,7 +20,7 @@ from pathlib import Path
 
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.safety import RefusalCode, RefusalError, checked_range, code_for_message
 
 
 class ExfatWriteError(RuntimeError):
@@ -28,7 +28,11 @@ class ExfatWriteError(RuntimeError):
 
     def __init__(self, message: str, code: RefusalCode | None = None):
         super().__init__(message)
-        self.code = code
+        self.code = RefusalCode(code) if code is not None else code_for_message(message)
+
+    @property
+    def category(self):
+        return RefusalError(str(self), self.code).category
 
 
 class _NoFreeDirectorySlot(ExfatWriteError):
@@ -154,7 +158,10 @@ class NativeExfatWriter:
 
     def __init__(self, image_path, *, offset=0, volume_size=None):
         if volume_size is None:
-            raise ExfatWriteError("exFAT writer requires an explicit volume extent")
+            raise ExfatWriteError(
+                "exFAT writer requires an explicit volume extent",
+                RefusalCode.RANGE_OUT_OF_BOUNDS,
+            )
         self.image = Path(os.path.abspath(os.fspath(image_path)))
         _image_identity(self.image)
         self.offset = int(offset)
@@ -194,7 +201,7 @@ class NativeExfatWriter:
             raise ExfatWriteError("exFAT paths must be absolute")
         parts = [part for part in path.split("/") if part]
         if any(part in (".", "..") or "\x00" in part for part in parts):
-            raise ExfatWriteError("unsafe exFAT path")
+            raise ExfatWriteError("unsafe exFAT path", RefusalCode.UNSAFE)
         return parts
 
     def _reader(self, stage):
@@ -633,7 +640,8 @@ class NativeExfatWriter:
         try:
             if _image_identity(self.image) != self._source_image_identity:
                 raise ExfatWriteError(
-                    "source image changed concurrently; refusing commit"
+                    "source image changed concurrently; refusing commit",
+                    RefusalCode.CONCURRENT_CHANGE,
                 )
             staged_identity = _image_identity(stage)
             os.replace(stage, self.image)

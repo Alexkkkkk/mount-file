@@ -3,7 +3,12 @@
 
 import pytest
 
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.safety import (
+    RefusalCategory,
+    RefusalCode,
+    RefusalError,
+    checked_range,
+)
 
 
 @pytest.mark.parametrize(
@@ -61,3 +66,21 @@ def test_checked_range_matches_exhaustive_small_integer_interval_contract():
                         with pytest.raises(RefusalError) as caught:
                             checked_range(start, length, lower=lower, upper=upper)
                         assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+
+
+@pytest.mark.parametrize(
+    ("message", "code", "category"),
+    [
+        ("unsupported ext2 feature", RefusalCode.UNSUPPORTED_PROFILE, RefusalCategory.UNSUPPORTED),
+        ("volume is dirty; recovery required", RefusalCode.DIRTY_OR_RECOVERY_REQUIRED, RefusalCategory.DIRTY_RECOVERY),
+        ("corrupt metadata checksum", RefusalCode.MALFORMED_METADATA, RefusalCategory.CORRUPT),
+        ("selected extent is outside image bounds", RefusalCode.RANGE_OUT_OF_BOUNDS, RefusalCategory.OUT_OF_BOUNDS),
+        ("image changed concurrently", RefusalCode.CONCURRENT_CHANGE, RefusalCategory.CONCURRENT_CHANGE),
+        ("refusing unsafe path", RefusalCode.UNSAFE, RefusalCategory.UNSAFE),
+    ],
+)
+def test_legacy_messages_have_typed_taxonomy(message, code, category):
+    refusal = RefusalError(message)
+    assert refusal.code is code
+    assert refusal.category is category
+    assert str(refusal) == message

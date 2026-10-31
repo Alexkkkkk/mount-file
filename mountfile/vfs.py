@@ -23,7 +23,7 @@ from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 from mountfile.fat_reader import FatReadError, NativeFatImage
-from mountfile.safety import RefusalError, checked_range
+from mountfile.safety import RefusalCode, RefusalError, checked_range, code_for_message
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
@@ -78,7 +78,13 @@ except ImportError:  # pragma: no cover
 
 
 class TskError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code or code_for_message(message)
+
+    @property
+    def category(self):
+        return RefusalError(str(self), self.code).category
 
 
 class RecognizedFilesystemError(TskError):
@@ -312,9 +318,19 @@ class TskImage(ReadOnlyVFSStatMixin):
     def read_file_range(self, path, offset=0, length=1 << 20):
         f = self._open(path)
         size = int(f.info.meta.size)
+        try:
+            checked_range(offset, 0, upper=size, context="VFS file read offset")
+            if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+                checked_range(0, length, upper=0, context="VFS file read length")
+            length = min(length, size - offset)
+            _, end = checked_range(
+                offset, length, upper=size, context="VFS file read range"
+            )
+        except RefusalError as exc:
+            raise TskError(str(exc), exc.code) from exc
         if offset >= size:
             return b""
-        length = min(length, size - offset)
+        length = end - offset
         chunks = []
         got = 0
         while got < length:
