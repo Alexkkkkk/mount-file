@@ -2,11 +2,7 @@
 """Property and harness tests for exFAT boot-region parsing."""
 
 from mountfile.exfat_probe import ExfatProbeError, parse_exfat_boot_region
-from tools.fuzz_exfat_probe import (
-    _build_target,
-    _seed_corpus,
-    _valid_seed_input,
-)
+from tools.fuzz_exfat_probe import _build_target, _seed_corpus, _valid_seed_input
 
 
 def test_exfat_fuzz_target_accepts_valid_seed_and_handles_malformed_seeds(tmp_path):
