@@ -1592,12 +1592,11 @@ def test_rejects_malformed_ntfs_logfile_restart_page(mutate, message):
         parse_ntfs_logfile_restart_area(bytes(page))
 
 
-def test_ntfs_read_file_returns_complete_large_file_in_bounded_ranges(monkeypatch):
+def test_ntfs_read_file_returns_complete_large_file_in_bounded_ranges():
     from types import SimpleNamespace
 
-    from mountfile import ntfs_reader
-
     payload = bytes(range(251)) * ((1 << 20) // 251 + 8)
+    cluster_count = (len(payload) + CLUSTER - 1) // CLUSTER
     record = SimpleNamespace(is_directory=False)
     data = NtfsAttributeSummary(
         type_code=0x80,
@@ -1605,14 +1604,17 @@ def test_ntfs_read_file_returns_complete_large_file_in_bounded_ranges(monkeypatc
         nonresident=True,
         name="",
         lowest_vcn=0,
-        highest_vcn=0,
+        highest_vcn=cluster_count - 1,
         run_count=1,
-        runs=(NtfsRun(0, 0, (len(payload) + CLUSTER - 1) // CLUSTER),),
+        runs=(NtfsRun(0, 0, cluster_count),),
         data_size=len(payload),
     )
     reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
-    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_count=10000))
+    reader.profile = SimpleNamespace(
+        boot=SimpleNamespace(cluster_count=10000, cluster_size=CLUSTER)
+    )
     reader._resolve = lambda _path: (1, record)
+    reader._attributes_for_record = lambda _number, _record: (data,)
     calls = []
 
     def read_runs(_runs, offset, length):
@@ -1620,9 +1622,6 @@ def test_ntfs_read_file_returns_complete_large_file_in_bounded_ranges(monkeypatc
         return payload[offset : offset + length]
 
     reader._read_runs = read_runs
-    monkeypatch.setattr(
-        ntfs_reader, "parse_ntfs_attribute_stream", lambda *_a, **_k: (data,)
-    )
 
     result = reader.read_file("/large.bin")
 
