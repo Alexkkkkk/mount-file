@@ -281,13 +281,9 @@ def _probe_stream(
         raise ExtProbeError("ext filesystem exceeds selected partition bounds")
     if offset + filesystem_size > image_size:
         raise ExtProbeError("ext filesystem exceeds image bounds")
-    if (
-        group_descriptor_size < 32
-        or group_descriptor_size > block_size
-        or group_descriptor_size % 8
-    ):
+    if group_descriptor_size not in (32, 64):
         raise ExtProbeError("invalid ext group-descriptor size")
-    if feature_incompat & _INCOMPAT_64BIT and group_descriptor_size < 64:
+    if feature_incompat & _INCOMPAT_64BIT and group_descriptor_size != 64:
         raise ExtProbeError("64-bit ext profile requires 64-byte group descriptors")
     if not feature_incompat & _INCOMPAT_64BIT and group_descriptor_size != 32:
         raise ExtProbeError("non-64-bit ext profile has a non-classic descriptor size")
