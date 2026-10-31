@@ -605,8 +605,12 @@ class NativeExt4Image(NativeExt3Image):
         )
         if len(raw) < 64:
             raise Ext3ReadError("64-bit group descriptor is truncated")
-        low_bitmap, low_inode_bitmap, low_inode_table = struct.unpack_from("<III", raw, 0)
-        high_bitmap, high_inode_bitmap, high_inode_table = struct.unpack_from("<III", raw, 32)
+        low_bitmap, low_inode_bitmap, low_inode_table = struct.unpack_from(
+            "<III", raw, 0
+        )
+        high_bitmap, high_inode_bitmap, high_inode_table = struct.unpack_from(
+            "<III", raw, 32
+        )
         block_bitmap = low_bitmap | (high_bitmap << 32)
         inode_bitmap = low_inode_bitmap | (high_inode_bitmap << 32)
         inode_table = low_inode_table | (high_inode_table << 32)
@@ -629,7 +633,9 @@ class NativeExt4Image(NativeExt3Image):
         for index, (left_start, left_stop) in enumerate(ranges):
             for right_start, right_stop in ranges[index + 1 :]:
                 if left_start < right_stop and right_start < left_stop:
-                    raise Ext3ReadError("64-bit group descriptor metadata ranges overlap")
+                    raise Ext3ReadError(
+                        "64-bit group descriptor metadata ranges overlap"
+                    )
         sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
         if self._has_super_backup(group, sparse):
             backup_end = min(end_block, first_block + 1 + self._gdt_blocks)
