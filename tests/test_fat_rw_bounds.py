@@ -4,8 +4,9 @@
 import sys
 from pathlib import Path
 
-from hypothesis import HealthCheck, given, settings, strategies as st
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
