@@ -118,19 +118,27 @@ engine.close()
   `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
   расширении каталога pointer block, bitmap/counters и directory map проходят
   read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
-  Перед изменением image writer сохраняет и fsync-ит проверенный before-image
-  выбранного ext2 extent рядом с образом, затем атомарно публикует
-  `<image>.mountfile-ext2-recovery.json` marker и fsync-ит родительский каталог.
-  После внезапного завершения процесса следующий native writer сверяет identity
-  image и SHA-256 snapshot, восстанавливает только выбранный extent, делает
-  read-back и удаляет marker до snapshot. Process-crash tests покрывают
-  прерывание commit, повторного recovery и завершённый commit до удаления marker.
-  При обычном отказе rollback marker
+  Перед изменением image writer сохраняет и fsync-ит рядом с образом проверенные
+  before- и staged after-image выбранного ext2 extent, затем атомарно публикует
+  `<image>.mountfile-ext2-recovery.json` marker формата 3 и fsync-ит родительский
+  каталог. При восстановлении сверяются identity image и SHA-256 обеих копий;
+  rollback разрешён только когда каждый 512-байтовый сектор совпадает с одним из
+  двух сохранённых состояний. Неизвестные/повреждённые данные, внешнее изменение
+  или legacy commit-marker без after-image оставляют sidecars на месте и блокируют
+  дальнейшую запись вместо безусловной перезаписи. Snapshot открываются с проверкой
+  типа/размера файла и удерживаются через один и тот же file descriptor до окончания
+  проверки и восстановления. Ошибка очистки sidecar после подтверждённого commit не
+  запускает rollback. Подтверждённый rollback охватывает только выбранный extent,
+  проверяется read-back, затем marker удаляется до sidecars. Process-crash tests
+  покрывают прерывание commit, повторного recovery
+  и завершённый commit до удаления marker. При обычном отказе rollback marker
   дополнительно привязывается к точному post-failure extent и mtime; любое
   последующее изменение блокирует автоматическое восстановление. Не редактируйте
   image и не удаляйте sidecar-файлы, пока recovery не завершён. Это не заменяет
   backup и не является универсальной power-loss гарантией для всех файловых
-  систем, устройств и ОС;
+  систем, устройств и ОС. Межпроцессный lock advisory: редактор, который его
+  игнорирует, всё ещё может изменить image одновременно с commit/recovery; проверки
+  read-back обнаруживают многие такие изменения, но не устраняют все race conditions.
   directory fsync применяется там, где ОС его поддерживает.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с
