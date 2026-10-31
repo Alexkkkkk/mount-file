@@ -50,6 +50,13 @@ replay_journal=True)`: он строит bounded in-memory overlay из committe
 descriptor/data/commit records, не изменяет исходный образ и отклоняет revoke,
 checksum, неизвестные feature flags, повреждённые или неполные транзакции.
 
+NTFS reader разрешает resident `$ATTRIBUTE_LIST` и extension FILE records для
+обычных файлов и каталогов только после проверки sequence-bearing MFT reference,
+ссылки extension record на базовую запись и точного совпадения атрибута. Он
+объединяет только непрерывные VCN extents и возвращает нули за `ValidDataLength`.
+Nonresident `$ATTRIBUTE_LIST` и `$MFT`, которому нужны extension records для
+bootstrap, отвергаются; NTFS остаётся read-only и `$LogFile` не проигрывается.
+
 ### Семантика метаданных bounded providers
 
 Общие поля `stat` — `path`, `name`, `is_dir`, `size` и `date`; отдельные
