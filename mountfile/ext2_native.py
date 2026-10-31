@@ -1070,6 +1070,10 @@ class _Ext2FS:
         parent, name, _ = self._parent_and_name(path)
         if self._lookup_child(parent, name) is not None:
             raise FileExistsError(path)
+        parent_raw = self._read_inode(parent)
+        links = self._u16(parent_raw, 26)
+        if links == 0xFFFF:
+            raise NativeExt2Error("ext2 parent link counter overflow")
         inode_num = self._allocate_inode(
             (parent - 1) // self.inodes_per_group, is_dir=True
         )
@@ -1087,9 +1091,8 @@ class _Ext2FS:
         self._write_inode(inode_num, child)
         self._insert_entry(parent, name, inode_num, 2)
         parent_raw = self._read_inode(parent)
-        links = self._u16(parent_raw, 26)
-        if links == 0xFFFF:
-            raise NativeExt2Error("ext2 parent link counter overflow")
+        if self._u16(parent_raw, 26) != links:
+            raise NativeExt2Error("ext2 parent link count changed during mkdir")
         struct.pack_into("<H", parent_raw, 26, links + 1)
         self._touch_inode(parent_raw)
         self._write_inode(parent, parent_raw)
