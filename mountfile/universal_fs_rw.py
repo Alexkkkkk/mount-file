@@ -51,7 +51,12 @@ from mountfile.capabilities import (
     RW_WRITE_CAPABILITIES,
 )
 from mountfile.rw.journal import Journal as _VerifiedJournal
-from mountfile.safety import RefusalError, checked_range
+from mountfile.safety import (
+    RefusalCode,
+    RefusalError,
+    RefusalRuntimeError,
+    checked_range,
+)
 
 try:
     import pytsk3
@@ -331,6 +336,7 @@ class FSInfo:
     read_capabilities: tuple[str, ...] = RW_READ_CAPABILITIES
     write_capabilities: tuple[str, ...] = ()
     write_rejection_reason: str = ""
+    write_rejection_code: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -2546,6 +2552,7 @@ class UniversalFSRW:
                 "read_capabilities": tuple(capabilities["read_capabilities"]),
                 "write_capabilities": tuple(capabilities["write_capabilities"]),
                 "write_rejection_reason": capabilities["write_rejection_reason"],
+                "write_rejection_code": capabilities["write_rejection_code"],
             }
         )
 
@@ -2561,6 +2568,7 @@ class UniversalFSRW:
             and str(info.fs_type).casefold() == native_profile.filesystem.casefold()
             and str(info.backend) == native_profile.backend
         )
+        rejection_code = None
         if strategy in NATIVE_WRITE_PROFILES_BY_STRATEGY:
             if writable and native_profile_matches:
                 write = list(native_profile.write_capabilities)
@@ -2571,6 +2579,11 @@ class UniversalFSRW:
                     "native write strategy does not match the selected writable "
                     "filesystem/backend profile"
                 )
+                rejection_code = (
+                    RefusalCode.UNSUPPORTED_PROFILE.value
+                    if not native_profile_matches
+                    else RefusalCode.OPERATION_NOT_SUPPORTED.value
+                )
         elif writable:
             write = list(RW_WRITE_CAPABILITIES)
             reason = ""
@@ -2580,6 +2593,7 @@ class UniversalFSRW:
                 info.fs_type,
                 strategy or "read-only",
             )
+            rejection_code = RefusalCode.OPERATION_NOT_SUPPORTED.value
         status = {
             "backend": info.backend,
             "mode": "read-write" if write else "read-only",
@@ -2587,6 +2601,7 @@ class UniversalFSRW:
             "write_capabilities": write,
             "write_enabled": bool(write),
             "write_rejection_reason": reason,
+            "write_rejection_code": rejection_code,
         }
         if native_profile_matches:
             status["profile_id"] = native_profile.profile_id
@@ -2600,9 +2615,12 @@ class UniversalFSRW:
     def _require_operation(self, operation: str) -> None:
         status = self.capability_status()
         if operation not in status["write_capabilities"]:
-            raise RuntimeError(
-                "%s is unsupported for %s: %s"
-                % (operation, status["backend"], status["write_rejection_reason"])
+            reason = status["write_rejection_reason"] or (
+                "operation is not advertised by the selected profile"
+            )
+            raise RefusalRuntimeError(
+                "%s is unsupported for %s: %s" % (operation, status["backend"], reason),
+                RefusalCode.OPERATION_NOT_SUPPORTED,
             )
 
     def list(self, path: str = "/") -> list[FSEntry]:

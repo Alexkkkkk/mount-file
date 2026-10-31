@@ -44,7 +44,11 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 Каждый native provider также публикует `backend_status`: сериализуемый словарь
 с backend name, read/write capabilities, режимом и явной причиной отказа от
 записи. Пустой `write_capabilities` означает именно read-only native profile,
-а не скрытый переход на `debugfs`, `ntfs-3g` или системный mount.
+а не скрытый переход на `debugfs`, `ntfs-3g` или системный mount. В фасаде
+`UniversalFSRW.capability_status()` и `FSInfo.to_dict()` поле
+`write_rejection_code` содержит стабильный refusal code для profile-level отказа
+или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
+`write_rejection_reason` не следует разбирать приложениям.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
 другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
 проверенного classic JBD2 существует только явный `open_native_ext3(...,
@@ -112,6 +116,13 @@ MountFile не требует `pytsk3`; native routing не запускает �
 для файловой системы, занимающей весь файл-образ. Для раздела внутри disk image
 fallback fail-closed откажет; используйте native provider либо отдельный
 адаптер, который умеет ограничивать каждый read выбранным extent.
+
+Отклонение mutation на фасадном capability gate выбрасывает
+`RefusalRuntimeError`, совместимый с прежним `RuntimeError` контрактом. У него
+есть стабильные поля `code` и `category`, а `to_dict()` возвращает JSON-совместимые
+`code`, `category` и исходное human-readable `message`. Такой gate выполняется
+до создания backup, записи audit journal и вызова backend; это правило относится
+только к отказу capability gate, а не заменяет транзакционные гарантии writer-а.
 
 ::: mountfile.vfs.open_image_provider
 

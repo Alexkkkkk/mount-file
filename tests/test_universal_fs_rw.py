@@ -12,8 +12,10 @@ from mountfile import universal_fs_rw
 from mountfile.rw.universal import FsType as RWFsType
 from mountfile.rw.universal import Mode as RWMode
 from mountfile.rw.universal import create_rw
+from mountfile.safety import RefusalCategory, RefusalCode, RefusalRuntimeError
 from mountfile.universal_fs_rw import (
     Fat32RW,
+    FSInfo,
     LoopMountRW,
     UniversalFSRW,
     _image_path_parent_name,
@@ -221,8 +223,82 @@ def test_native_fat_capability_matrix_is_explicit(tmp_path):
         ]
         assert fs.info().write_capabilities == tuple(status["write_capabilities"])
         assert fs.info().write_rejection_reason == ""
+        assert fs.info().write_rejection_code is None
     finally:
         fs.close()
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments"),
+    [
+        ("write_file", ("/NEW.TXT", b"blocked")),
+        ("mkdir", ("/NEW-DIR",)),
+        ("delete", ("/EXISTING.TXT",)),
+        ("rename", ("/OLD.TXT", "/NEW.TXT")),
+    ],
+)
+def test_typed_capability_refusal_precedes_backup_journal_and_backend(
+    tmp_path, operation, arguments
+):
+    image = tmp_path / "readonly.img"
+    original = b"unchanged image"
+    image.write_bytes(original)
+    calls = []
+
+    class Backend:
+        def info(self):
+            return FSInfo(
+                fs_type="ntfs",
+                offset=0,
+                backend="native-ntfs-ro",
+                write_strategy="native-ntfs-ro",
+            )
+
+        def write_file(self, *args):
+            calls.append(("backend", "write_file", args))
+
+        def mkdir(self, *args):
+            calls.append(("backend", "mkdir", args))
+
+        def delete(self, *args):
+            calls.append(("backend", "delete", args))
+
+        def rename(self, *args):
+            calls.append(("backend", "rename", args))
+
+    class Backup:
+        def create(self):
+            calls.append(("backup",))
+
+    class Journal:
+        def log(self, operation):
+            calls.append(("journal", operation))
+
+    fs = UniversalFSRW.__new__(UniversalFSRW)
+    fs.image = image
+    fs.backend = Backend()
+    fs.backup = Backup()
+    fs.journal = Journal()
+    fs._auto_backup = True
+    fs._backup_path = None
+
+    status = fs.capability_status()
+    assert status["write_rejection_code"] == "operation_not_supported"
+    with pytest.raises(RefusalRuntimeError) as caught:
+        getattr(fs, operation)(*arguments)
+
+    refusal = caught.value
+    assert isinstance(refusal, RuntimeError)
+    assert refusal.code is RefusalCode.OPERATION_NOT_SUPPORTED
+    assert refusal.category is RefusalCategory.UNSUPPORTED
+    assert refusal.to_dict() == {
+        "code": "operation_not_supported",
+        "category": "unsupported",
+        "message": str(refusal),
+    }
+    assert calls == []
+    assert fs._backup_path is None
+    assert image.read_bytes() == original
 
 
 @pytest.mark.parametrize("fs_type", ["ext3", "ext4", "NTFS"])
