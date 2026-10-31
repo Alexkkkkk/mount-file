@@ -829,7 +829,6 @@ class NativeExfatWriter:
             raise ExfatWriteError("root directory cannot be renamed")
         src_path = "/" + "/".join(src_parts)
         dst_path = "/" + "/".join(dst_parts)
-        src_parent_path = "/" + "/".join(src_parts[:-1])
         dst_parent_path = "/" + "/".join(dst_parts[:-1])
         new_name = dst_parts[-1]
 
@@ -843,10 +842,20 @@ class NativeExfatWriter:
                 raise NotADirectoryError(dst_parent_path)
             destination_directory, _ = self._parent(reader, dst_path)
             source_entry = reader._find(src_path)
-            same_directory = src_parent_path == dst_parent_path
-            if source_entry.is_dir and (
-                dst_parent_path == src_path
-                or dst_parent_path.startswith(src_path.rstrip("/") + "/")
+            same_directory = len(src_parts[:-1]) == len(dst_parts[:-1]) and all(
+                reader._upcase_key(source_part) == reader._upcase_key(destination_part)
+                for source_part, destination_part in zip(
+                    src_parts[:-1], dst_parts[:-1], strict=True
+                )
+            )
+            destination_parent_key = tuple(
+                reader._upcase_key(part) for part in dst_parts[:-1]
+            )
+            source_directory_key = tuple(reader._upcase_key(part) for part in src_parts)
+            if (
+                source_entry.is_dir
+                and destination_parent_key[: len(source_directory_key)]
+                == source_directory_key
             ):
                 raise ExfatWriteError("cannot move an exFAT directory into itself")
             if any(
