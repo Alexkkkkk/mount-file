@@ -146,6 +146,20 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 logical block is outside journal inode")
         return self._journal_block(inode, logical)
 
+    def _journal_data_block_numbers(self, inode, journal_blocks) -> set[int]:
+        """Return all physical data blocks owned by the bounded journal inode."""
+        physical_blocks = set()
+        for logical in range(journal_blocks):
+            physical = self._logical_block(inode, logical)
+            if not 0 < physical < self.blocks_count:
+                raise Ext3ReadError(
+                    "JBD2 journal inode contains a sparse or out-of-range data block"
+                )
+            if physical in physical_blocks:
+                raise Ext3ReadError("JBD2 journal inode has duplicate data blocks")
+            physical_blocks.add(physical)
+        return physical_blocks
+
     @staticmethod
     def _jbd2_header(raw):
         if len(raw) < 12:
@@ -153,7 +167,12 @@ class NativeExt3Image(NativeExt2Image):
         return struct.unpack_from(">III", raw, 0)
 
     def _validate_jbd2_transaction(
-        self, inode, journal_blocks, logical, expected_sequence
+        self,
+        inode,
+        journal_blocks,
+        logical,
+        expected_sequence,
+        journal_data_blocks: set[int] | None = None,
     ) -> int:
         """Validate one bounded descriptor/data/commit chain.
 
@@ -173,12 +192,20 @@ class NativeExt3Image(NativeExt2Image):
         cursor = 12
         tag_count = 0
         last = False
+        target_blocks: set[int] = set()
         while cursor + 8 <= self.block_size:
             block_number, flags = struct.unpack_from(">II", descriptor, cursor)
             cursor += 8
             tag_count += 1
             if block_number == 0 or block_number >= self.blocks_count:
                 raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
+            if block_number in target_blocks:
+                raise Ext3ReadError("JBD2 transaction targets a block more than once")
+            target_blocks.add(block_number)
+            if journal_data_blocks is not None and block_number in journal_data_blocks:
+                raise Ext3ReadError(
+                    "JBD2 descriptor target overlaps journal inode data"
+                )
             if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
                 raise Ext3ReadError("unsupported JBD2 descriptor tag flags")
             if not flags & _JBD2_TAG_SAME_UUID:
@@ -212,7 +239,10 @@ class NativeExt3Image(NativeExt2Image):
         return commit_logical
 
     def _validate_empty_journal(self, *, replay_journal=False) -> None:
-        journal = self._read_inode(8)
+        journal_inode = self.profile.journal_inode
+        if journal_inode is None:
+            raise Ext3ReadError("internal JBD2 journal inode is not declared")
+        journal = self._read_inode(journal_inode)
         if not journal.is_regular:
             raise Ext3ReadError("journal inode is not a regular file")
         if journal.size < self.block_size or journal.size % self.block_size:
@@ -241,6 +271,7 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("JBD2 ring geometry exceeds journal inode")
         if start != 0 and not first <= start < max_length:
             raise Ext3ReadError("JBD2 start is outside journal ring")
+        journal_data_blocks = self._journal_data_block_numbers(journal, journal_blocks)
         if sequence == 0 and start != 0:
             # Some e2fsprogs-created empty journals retain a nonzero head but
             # encode no transaction sequence.  Prove that the entire bounded
@@ -268,6 +299,7 @@ class NativeExt3Image(NativeExt2Image):
                 max_length=max_length,
                 journal_blocks=journal_blocks,
                 expected_sequence=sequence,
+                journal_data_blocks=journal_data_blocks,
             )
             self.journal_replayed = True
             return
@@ -286,12 +318,20 @@ class NativeExt3Image(NativeExt2Image):
                     max_length,
                     logical,
                     record_sequence,
+                    journal_data_blocks=journal_data_blocks,
                 )
                 + 1
             )
 
     def _replay_journal(
-        self, inode, *, start, max_length, journal_blocks, expected_sequence
+        self,
+        inode,
+        *,
+        start,
+        max_length,
+        journal_blocks,
+        expected_sequence,
+        journal_data_blocks: set[int] | None = None,
     ):
         """Replay classic committed JBD2 records into a read-only overlay.
 
@@ -319,12 +359,22 @@ class NativeExt3Image(NativeExt2Image):
                 )
             cursor = 12
             targets = []
+            seen_targets: set[int] = set()
             last = False
             while cursor + 8 <= self.block_size:
                 target, flags = struct.unpack_from(">II", descriptor, cursor)
                 cursor += 8
                 if target == 0 or target >= self.blocks_count:
                     raise Ext3ReadError("JBD2 replay target is outside filesystem")
+                if target in seen_targets:
+                    raise Ext3ReadError(
+                        "JBD2 replay transaction targets a block more than once"
+                    )
+                seen_targets.add(target)
+                if journal_data_blocks is not None and target in journal_data_blocks:
+                    raise Ext3ReadError(
+                        "JBD2 replay target overlaps journal inode data"
+                    )
                 if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
                     raise Ext3ReadError("unsupported JBD2 replay tag flags")
                 if not flags & _JBD2_TAG_SAME_UUID:
@@ -373,6 +423,15 @@ class NativeExt3Image(NativeExt2Image):
                 "JBD2 replay reaches end of non-wrapping log without terminator"
             )
         self._journal_overlay = overlay
+        # Metadata loaded while resolving the journal inode predates this
+        # overlay. Drop every cache whose values are sourced through _read_at
+        # so subsequent structural reads observe one coherent replayed view.
+        self._group_cache.clear()
+        self._block_bitmap_cache.clear()
+        self._inode_bitmap_cache.clear()
+        self._inode_cache.clear()
+        self._directory_cache.clear()
+        self._extent_cache_last.clear()
 
     def _read_at(self, relative_offset: int, size: int) -> bytes:
         """Read the image and overlay only committed journal blocks."""
@@ -558,11 +617,20 @@ class NativeExt4Image(NativeExt3Image):
         return self._read_block(block)
 
     def _extent_map(self, inode: _Inode, logical: int) -> tuple[int, bool]:
-        """Return (physical block, unwritten) or (0, False) for a hole."""
+        """Map a visible logical block; never expose ext4 preallocation past i_size.
+
+        Extents may legitimately cover preallocated blocks after EOF. The read
+        API clamps byte ranges to ``inode.size``; this lower-level mapping API
+        also refuses direct requests outside the rounded-up logical file range.
+        Unwritten extents inside that range remain zero-filled by the reader.
+        """
         if not inode.flags & _EXT4_EXTENTS_FL:
             return super()._logical_block(inode, logical), False
         if logical < 0 or logical >= 1 << 32:
             raise Ext3ReadError("logical extent index is outside uint32")
+        logical_blocks = (inode.size + self.block_size - 1) // self.block_size
+        if logical >= logical_blocks:
+            raise Ext3ReadError("logical extent lookup exceeds inode size")
         cache = getattr(self, "_extent_cache_last", None)
         if cache is None:
             cache = self._extent_cache_last = {}
@@ -574,6 +642,8 @@ class NativeExt4Image(NativeExt3Image):
         node = struct.pack("<15I", *inode.block_pointers)
         visited: set[int] = set()
         expected_depth = None
+        expected_lower = None
+        expected_upper = None
         for current_depth in range(_MAX_EXTENT_TREE_DEPTH + 1):
             if len(node) < 12:
                 raise Ext3ReadError("short extent header")
@@ -606,6 +676,16 @@ class NativeExt4Image(NativeExt3Image):
                     end = start + length
                     if end <= start or end > 1 << 32:
                         raise Ext3ReadError("extent logical range overflow")
+                    if (
+                        pos == 0
+                        and expected_lower is not None
+                        and start != expected_lower
+                    ):
+                        raise Ext3ReadError(
+                            "extent leaf does not start at its index key"
+                        )
+                    if expected_upper is not None and end > expected_upper:
+                        raise Ext3ReadError("extent leaf exceeds its index child range")
                     physical_start = (start_hi << 32) | start_lo
                     if (
                         physical_start <= 0
@@ -628,6 +708,7 @@ class NativeExt4Image(NativeExt3Image):
             expected_depth = node_depth - 1
             previous_key = -1
             selected = None
+            index_entries = []
             for pos in range(entries):
                 off = 12 + pos * 12
                 logical_start, child_lo, child_hi, reserved = struct.unpack_from(
@@ -640,19 +721,38 @@ class NativeExt4Image(NativeExt3Image):
                 if reserved:
                     raise Ext3ReadError("extent index reserved field is nonzero")
                 previous_key = logical_start
+                if (
+                    expected_lower is not None
+                    and pos == 0
+                    and logical_start != expected_lower
+                ):
+                    raise Ext3ReadError(
+                        "extent child does not start at its parent index key"
+                    )
+                if expected_upper is not None and logical_start >= expected_upper:
+                    raise Ext3ReadError("extent child index exceeds its parent range")
                 child = child_lo | (child_hi << 32)
                 if not 0 < child < self.blocks_count:
                     raise Ext3ReadError(
                         "extent index block is outside filesystem bounds"
                     )
+                index_entries.append((logical_start, child))
                 if logical >= logical_start:
-                    selected = (logical_start, child)
+                    selected = pos
             if selected is None:
                 return 0, False
-            if selected[1] in visited:
+            selected_lower, selected_block = index_entries[selected]
+            selected_upper = (
+                index_entries[selected + 1][0]
+                if selected + 1 < len(index_entries)
+                else expected_upper
+            )
+            if selected_block in visited:
                 raise Ext3ReadError("cyclic extent tree")
-            visited.add(selected[1])
-            node = self._extent_block(selected[1])
+            visited.add(selected_block)
+            expected_lower = selected_lower
+            expected_upper = selected_upper
+            node = self._extent_block(selected_block)
         raise Ext3ReadError("extent tree exceeds conservative depth limit")
 
     def _logical_block(self, inode: _Inode, logical: int) -> int:

@@ -101,6 +101,8 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
 
     assert status["backend"] == profile.backend
     assert status["mode"] == profile.mode
+    assert status["profile_id"] == profile.profile_id
+    assert status["matrix_version"] == CAPABILITY_MATRIX_VERSION
     assert status["read_capabilities"] == list(profile.read_capabilities)
     assert status["write_capabilities"] == list(profile.write_capabilities)
     assert status["write_enabled"] is True

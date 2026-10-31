@@ -11,10 +11,10 @@
     python -m mountfile mv  dump.img /docs/old.txt new.txt --yes
     python -m mountfile rm  dump.img /docs/old.txt --yes
 
-Read commands prefer bounded pure-Python FAT12/16/32 and ext profiles, then use
-The Sleuth Kit when the explicit optional legacy backend is installed. Write
-commands use the built-in FAT32 engine. Commands that modify the image (put,
-mkdir, mv, rm) refuse to run without --yes.
+Read commands prefer bounded pure-Python filesystem providers, then use The
+Sleuth Kit only when the explicit optional legacy backend is enabled. Write
+commands route through the native profile selected by UniversalFSRW. Commands
+that modify the image (put, mkdir, mv, rm) refuse to run without --yes.
 """
 
 from __future__ import annotations
@@ -22,12 +22,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import shutil
 import sqlite3
 import sys
 
 from . import __version__
 from .autopick import auto_select, format_candidates, format_choice
+from .capabilities import get_native_capability_matrix
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .dfir_slack import read_file_slack
 from .dfir_timeline import export_timeline_csv
@@ -35,7 +37,7 @@ from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
 from .evidence import EvidenceManifestError, create_evidence_manifest
 from .extract import ExtractError, extract_path
-from .fat32 import Fat32, Fat32Error, Fat32Provider
+from .fat32 import Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
@@ -49,6 +51,7 @@ from .timeline import (
     query_timeline,
 )
 from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
+from .universal_fs_rw import UniversalFSRW
 from .vfs import (
     Ext2ReadError,
     RecognizedFilesystemError,
@@ -60,12 +63,23 @@ from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
 
+
+def cmd_capabilities(args):
+    """Print the versioned native profile matrix as machine-readable JSON."""
+    matrix = get_native_capability_matrix()
+    print(json.dumps(matrix, ensure_ascii=False, indent=2, sort_keys=True))
+    return OK
+
+
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
 COMMANDS = (
     "volumes",
     "info",
+    "capabilities",
     "ls",
+    "stat",
+    "read-range",
     "autopick",
     "get",
     "put",
@@ -97,6 +111,7 @@ _READ_ERRORS = (
     TskError,
     ExtractError,
     EvidenceManifestError,
+    RuntimeError,
     OSError,
     ValueError,
     Rt809Error,
@@ -179,18 +194,22 @@ def _provider(image, offset, volume_size=None):
 
 
 def _open_write(image, offset, backup=False):
-    """Open the image for writing and return an open (handle, Fat32) pair."""
+    """Open the explicitly bounded native writer selected for this volume."""
     if backup:
         bak = image + ".bak"
         shutil.copy2(image, bak)
         print("Backup written: %s" % bak)
-    fh = open(image, "r+b")
     try:
-        fs = Fat32(fh, offset)
-    except Exception:
-        fh.close()
-        raise
-    return fh, fs
+        volume_size = volume_size_for_offset(image, offset)
+        return UniversalFSRW(
+            image,
+            offset=offset,
+            volume_size=volume_size,
+            auto_backup=False,
+            allow_legacy_mount=False,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise Fat32Error(str(exc)) from exc
 
 
 def _warn(path):
@@ -256,6 +275,57 @@ def cmd_ls(args):
     return OK
 
 
+def cmd_stat(args):
+    """Print native VFS metadata for one filesystem path as JSON."""
+    offset, fstype, desc = _select(args.image, args)
+    provider, backend = _provider(args.image, offset)
+    try:
+        metadata = provider.stat(_abs_path(args.path))
+        result = {
+            "image": args.image,
+            "volume_offset": offset,
+            "filesystem": fstype,
+            "volume": desc,
+            "backend": backend,
+            **metadata,
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    finally:
+        if hasattr(provider, "close"):
+            provider.close()
+    return OK
+
+
+_MAX_CLI_READ_RANGE_BYTES = 16 * 1024 * 1024
+
+
+def cmd_read_range(args):
+    """Read one bounded byte range; write raw bytes to a new file or stdout."""
+    if args.file_offset < 0:
+        raise ValueError("file offset must be non-negative")
+    if args.length < 0 or args.length > _MAX_CLI_READ_RANGE_BYTES:
+        raise ValueError(
+            "read length must be between 0 and %d bytes" % _MAX_CLI_READ_RANGE_BYTES
+        )
+    offset, _fstype, _desc = _select(args.image, args)
+    provider, _backend = _provider(args.image, offset)
+    try:
+        data = provider.read_file_range(
+            _abs_path(args.path), offset=args.file_offset, length=args.length
+        )
+    finally:
+        if hasattr(provider, "close"):
+            provider.close()
+    if args.output:
+        with open(args.output, "xb") as output:
+            output.write(data)
+        print("Wrote %d bytes to %s" % (len(data), args.output), file=sys.stderr)
+    else:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    return OK
+
+
 def cmd_get(args):
     offset, fstype, desc = _select(args.image, args)
     provider, backend = _provider(args.image, offset)
@@ -274,24 +344,24 @@ def cmd_put(args):
     if not args.yes:
         _warn(args.image)
         return NEED_CONFIRM
-    offset, fstype, _ = _select(args.image, args)
+    offset, _, _ = _select(args.image, args)
     dest = _abs_path(args.dest)
     for src in args.local:
         if not os.path.isfile(src):
             raise Fat32Error("no such local file: %s" % src)
-    fh, fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write(args.image, offset, backup=args.backup)
     try:
         for src in args.local:
             with open(src, "rb") as f:
                 data = f.read()
             name = os.path.basename(src)
-            fs.write_file(dest, name, data)
+            fs.write_file(posixpath.join(dest, name), data)
             print(
                 "Wrote %s (%d bytes) -> %s%s"
                 % (src, len(data), dest if dest != "/" else "/", name)
             )
     finally:
-        fh.close()
+        fs.close()
     return OK
 
 
@@ -300,13 +370,12 @@ def cmd_mkdir(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    parent, name = _split_dir(args.path)
-    fh, fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write(args.image, offset, backup=args.backup)
     try:
-        fs.mkdir(parent, name)
+        fs.mkdir(_abs_path(args.path))
         print("Created directory %s" % _abs_path(args.path))
     finally:
-        fh.close()
+        fs.close()
     return OK
 
 
@@ -315,12 +384,16 @@ def cmd_mv(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    fh, fs = _open_write(args.image, offset, backup=args.backup)
+    source = _abs_path(args.path)
+    if not args.new_name or args.new_name in (".", "..") or "/" in args.new_name:
+        raise Fat32Error("new name must be one filename component")
+    destination = posixpath.join(posixpath.dirname(source), args.new_name)
+    fs = _open_write(args.image, offset, backup=args.backup)
     try:
-        fs.rename(_abs_path(args.path), args.new_name)
-        print("Renamed %s -> %s" % (_abs_path(args.path), args.new_name))
+        fs.rename(source, destination)
+        print("Renamed %s -> %s" % (source, destination))
     finally:
-        fh.close()
+        fs.close()
     return OK
 
 
@@ -329,20 +402,18 @@ def cmd_rm(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    fh, fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write(args.image, offset, backup=args.backup)
     try:
-        entry = fs.delete(_abs_path(args.path), recursive=args.recursive)
+        fs.delete(_abs_path(args.path), recursive=args.recursive)
         print(
-            "Deleted %s (%s, %d bytes)%s"
+            "Deleted %s%s"
             % (
                 _abs_path(args.path),
-                "dir" if entry.is_dir else "file",
-                entry.size,
-                " with its contents" if args.recursive and entry.is_dir else "",
+                " (recursive)" if args.recursive else "",
             )
         )
     finally:
-        fh.close()
+        fs.close()
     return OK
 
 
@@ -797,10 +868,42 @@ def build_parser():
     _add_target(sp)
     sp.set_defaults(func=cmd_info)
 
+    sp = sub.add_parser(
+        "capabilities", help="print the versioned native read/write profile matrix"
+    )
+    sp.set_defaults(func=cmd_capabilities)
+
     sp = sub.add_parser("ls", help="list a directory inside the image")
     _add_target(sp)
     sp.add_argument("path", nargs="?", default="/")
     sp.set_defaults(func=cmd_ls)
+
+    sp = sub.add_parser("stat", help="print metadata for a filesystem path")
+    _add_target(sp)
+    sp.add_argument("path", help="path inside the filesystem")
+    sp.set_defaults(func=cmd_stat)
+
+    sp = sub.add_parser(
+        "read-range", help="read a bounded byte range from a regular file"
+    )
+    _add_target(sp)
+    sp.add_argument("path", help="regular file path inside the filesystem")
+    sp.add_argument(
+        "--file-offset", type=_parse_offset, default=0, help="byte offset in the file"
+    )
+    sp.add_argument(
+        "--length",
+        type=_parse_offset,
+        default=1024 * 1024,
+        help="number of bytes to read (maximum 16 MiB)",
+    )
+    sp.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="create a new output file; raw bytes go to stdout when omitted",
+    )
+    sp.set_defaults(func=cmd_read_range)
 
     sp = sub.add_parser("get", help="extract a file or a directory")
     _add_target(sp)
@@ -808,27 +911,29 @@ def build_parser():
     sp.add_argument("-o", "--output", default=".", help="host output directory")
     sp.set_defaults(func=cmd_get)
 
-    sp = sub.add_parser("put", help="copy local files into the image (FAT32)")
+    sp = sub.add_parser(
+        "put", help="copy files into an image through its supported native writer"
+    )
     _add_target(sp)
     sp.add_argument("local", nargs="+", help="local file(s) to write")
     sp.add_argument("--dest", default="/", help="directory inside the image")
     sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_put)
 
-    sp = sub.add_parser("mkdir", help="create a directory (FAT32)")
+    sp = sub.add_parser("mkdir", help="create a directory in a supported profile")
     _add_target(sp)
     sp.add_argument("path", help="directory to create, e.g. /docs/new")
     sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_mkdir)
 
-    sp = sub.add_parser("mv", help="rename an entry (FAT32)")
+    sp = sub.add_parser("mv", help="rename an entry in a supported profile")
     _add_target(sp)
     sp.add_argument("path", help="path of the file or directory to rename")
     sp.add_argument("new_name", help="new name inside the same directory")
     sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_mv)
 
-    sp = sub.add_parser("rm", help="delete a file or directory (FAT32)")
+    sp = sub.add_parser("rm", help="delete an entry in a supported profile")
     _add_target(sp)
     sp.add_argument("path")
     sp.add_argument(

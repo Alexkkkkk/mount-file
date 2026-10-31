@@ -204,6 +204,16 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 только предварительное соответствие write profile. Writer обязан самостоятельно
 проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
 
+Ограниченный `NativeExt3Image` проверяет объявленный в superblock номер internal
+JBD2 journal inode и читает именно этот inode; external journal devices остаются
+запрещены. Активный журнал по умолчанию отклоняется. Только явный
+`replay_journal=True` включает read-only overlay для поддерживаемого классического
+descriptor/data/commit формата; после публикации overlay metadata-кэши очищаются,
+чтобы дальнейшие reads видели согласованное представление. Это ограниченная
+проверка/просмотр, не полноценное JBD2 recovery и не разрешение на запись.
+Descriptor targets, указывающие на data-блоки самого journal inode, отвергаются
+как при clean scan, так и при явном read-only replay.
+
 ## Ограничения и риски
 
 * Native FAT mutations enforce the selected extent and use a same-directory
@@ -247,6 +257,10 @@ and runlists, `$Volume` dirty flags, and clean `$LogFile` restart pages before
 exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
 
+For nonresident attributes the reader retains and checks the on-disk allocated,
+data and initialized sizes. Bounded reads expose zero bytes after `initialized_size`
+up to `data_size`, without returning stale physical bytes from the allocated run.
+
 The reader validates resident and nonresident metadata records, parent/sequence
 references and bounded `$I30` index roots/allocation blocks. It supports valid
 Unicode names for listing. If MFT record 10 exposes the exact-size, bounded
@@ -256,9 +270,10 @@ path lookup; otherwise Unicode lookup is exact-case only. Resident
 `$ATTRIBUTE_LIST` values are now decoded with bounded entry lengths, 8-byte
 alignment, UTF-16 names and MFT references. Type order, ASCII name/VCN order and
 duplicate keys are checked; Unicode collation uses a validated `$UpCase` table
-when available and is not guessed when absent. The reader still refuses extension-
-record resolution and nonresident attribute-list streams, so it cannot mistake a
-partial attribute for a complete stream. The entry layout follows [Microsoft's
+when available and is not guessed when absent. Bounded `ATTRIBUTE_LIST` resolution
+supports validated extension-record references and contiguous nonresident extents;
+nested extension lists, VCN gaps/overlaps and conflicting stream sizes fail closed.
+The entry layout follows [Microsoft's
 ATTRIBUTE_LIST_ENTRY definition](https://learn.microsoft.com/en-us/windows/win32/devnotes/attribute-list-entry)
 and the [Linux NTFS on-disk reference](https://flatcap.github.io/linux-ntfs/ntfs/attributes/attribute_list.html).
 The reader also rejects malformed indexes, cycles, sparse/compressed/encrypted
