@@ -99,6 +99,8 @@ class NtfsAttributeSummary:
     resident_value: bytes | None = None
     data_size: int = 0
     attribute_id: int = 0
+    allocated_size: int | None = None
+    initialized_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -530,6 +532,7 @@ def parse_ntfs_attribute_stream(
         runs: tuple[NtfsRun, ...] = ()
         resident_value = None
         data_size = 0
+        allocated_size = initialized_size = None
         flags = struct.unpack_from("<H", raw, pos + 12)[0]
         attribute_id = struct.unpack_from("<H", raw, pos + 14)[0]
         if flags & ~_ATTRIBUTE_KNOWN_FLAGS:
@@ -549,6 +552,8 @@ def parse_ntfs_attribute_stream(
                 raise NtfsMetadataError("invalid NTFS attribute VCN range")
             if run_offset < 64 or run_offset >= length:
                 raise NtfsMetadataError("NTFS runlist offset is outside the attribute")
+            if name_length and name_offset + name_length * 2 > run_offset:
+                raise NtfsMetadataError("NTFS attribute name overlaps its runlist")
             runs = _parse_runlist(
                 raw[pos + run_offset : pos + length],
                 cluster_count,
@@ -556,9 +561,15 @@ def parse_ntfs_attribute_stream(
                 highest_vcn=highest_vcn,
             )
             run_count = len(runs)
-            data_size = struct.unpack_from("<Q", raw, pos + 48)[0]
-            if data_size > (1 << 63):
+            allocated_size, data_size, initialized_size = struct.unpack_from(
+                "<QQQ", raw, pos + 40
+            )
+            if max(allocated_size, data_size, initialized_size) > (1 << 63):
                 raise NtfsMetadataError("NTFS nonresident data size overflows")
+            if data_size > allocated_size or initialized_size > data_size:
+                raise NtfsMetadataError(
+                    "NTFS nonresident allocated, data and initialized sizes are inconsistent"
+                )
         else:
             if length < 24:
                 raise NtfsMetadataError("NTFS resident attribute header is truncated")
@@ -566,9 +577,19 @@ def parse_ntfs_attribute_stream(
             value_offset = struct.unpack_from("<H", raw, pos + 20)[0]
             if value_offset < 24 or value_offset + value_length > length:
                 raise NtfsMetadataError("NTFS resident attribute value exceeds record")
+            if name_length and (
+                name_offset < value_offset + value_length
+                and value_offset < name_offset + name_length * 2
+            ):
+                raise NtfsMetadataError(
+                    "NTFS attribute name overlaps its resident value"
+                )
             resident_value = bytes(
                 raw[pos + value_offset : pos + value_offset + value_length]
             )
+            data_size = len(resident_value)
+            allocated_size = data_size
+            initialized_size = data_size
         if type_code == _ATTRIBUTE_LIST:
             if name:
                 raise NtfsMetadataError("NTFS ATTRIBUTE_LIST must be unnamed")
@@ -591,6 +612,8 @@ def parse_ntfs_attribute_stream(
                 resident_value,
                 data_size,
                 attribute_id,
+                allocated_size,
+                initialized_size,
             )
         )
         pos += length
@@ -914,6 +937,17 @@ def _validate_nonresident_data_stream(
     capacity = clusters * cluster_size
     if attribute.data_size <= 0 or attribute.data_size > capacity:
         raise NtfsMetadataError(f"{name} DATA size exceeds its allocated runlist")
+    if attribute.allocated_size is not None and (
+        attribute.allocated_size < attribute.data_size
+        or attribute.allocated_size > capacity
+        or attribute.allocated_size % cluster_size
+    ):
+        raise NtfsMetadataError(f"{name} allocated size exceeds its runlist")
+    if (
+        attribute.initialized_size is not None
+        and attribute.initialized_size > attribute.data_size
+    ):
+        raise NtfsMetadataError(f"{name} initialized size exceeds its DATA size")
 
 
 def probe_ntfs_metadata(
@@ -1064,12 +1098,15 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             _validate_nonresident_data_stream(
                 logfile_data, self.profile.boot.cluster_size, name="$LogFile"
             )
-            if logfile_data.data_size < 2 * _LOGFILE_PAGE_SIZE:
+            if logfile_data.data_size < 2 * _LOGFILE_PAGE_SIZE or (
+                logfile_data.initialized_size is not None
+                and logfile_data.initialized_size < 2 * _LOGFILE_PAGE_SIZE
+            ):
                 raise NtfsMetadataError(
                     "NTFS $LogFile DATA stream is shorter than two restart pages"
                 )
             self.logfile_restart = validate_ntfs_logfile_restart_pages(
-                self._read_runs(logfile_data.runs, 0, 2 * _LOGFILE_PAGE_SIZE)
+                self._read_nonresident_range(logfile_data, 0, 2 * _LOGFILE_PAGE_SIZE)
             )
             self.profile = replace(self.profile, logfile_restart=self.logfile_restart)
             self._upcase_table = self._load_upcase_table()
@@ -1103,13 +1140,16 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if data.resident_value is not None:
             raw = data.resident_value
         else:
-            if data.data_size != _UPCASE_TABLE_SIZE:
+            if data.data_size != _UPCASE_TABLE_SIZE or (
+                data.initialized_size is not None
+                and data.initialized_size != _UPCASE_TABLE_SIZE
+            ):
                 return None
             try:
                 _validate_nonresident_data_stream(
                     data, self.profile.boot.cluster_size, name="$UpCase"
                 )
-                raw = self._read_runs(data.runs, 0, _UPCASE_TABLE_SIZE)
+                raw = self._read_nonresident_range(data, 0, _UPCASE_TABLE_SIZE)
             except NtfsMetadataError:
                 return None
         try:
@@ -1180,8 +1220,8 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             _validate_nonresident_data_stream(
                 list_attribute, self.profile.boot.cluster_size, name="ATTRIBUTE_LIST"
             )
-            list_value = self._read_runs(
-                list_attribute.runs, 0, list_attribute.data_size
+            list_value = self._read_nonresident_range(
+                list_attribute, 0, list_attribute.data_size
             )
         else:
             list_value = list_attribute.resident_value
@@ -1332,6 +1372,16 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 raise NtfsMetadataError(
                     "NTFS ATTRIBUTE_LIST extents disagree on data size"
                 )
+            declared_allocated_sizes = {
+                extent.allocated_size for extent in extents if extent.allocated_size
+            }
+            declared_initialized_sizes = {
+                extent.initialized_size for extent in extents if extent.initialized_size
+            }
+            if len(declared_allocated_sizes) > 1 or len(declared_initialized_sizes) > 1:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST extents disagree on allocated/initialized sizes"
+                )
             first = extents[0]
             resolved.append(
                 replace(
@@ -1341,6 +1391,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     run_count=sum(extent.run_count for extent in extents),
                     runs=tuple(run for extent in extents for run in extent.runs),
                     data_size=next(iter(declared_sizes), 0),
+                    allocated_size=next(
+                        iter(declared_allocated_sizes), first.allocated_size
+                    ),
+                    initialized_size=next(
+                        iter(declared_initialized_sizes), first.initialized_size
+                    ),
                 )
             )
         return tuple(resolved)
@@ -1403,6 +1459,29 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             else data.data_size
         )
 
+    def _read_nonresident_range(self, attribute, offset: int, length: int) -> bytes:
+        """Read logical stream bytes, zero-filling the uninitialized tail."""
+        data_size = attribute.data_size
+        initialized_size = (
+            data_size
+            if attribute.initialized_size is None
+            else attribute.initialized_size
+        )
+        if not 0 <= initialized_size <= data_size:
+            raise NtfsMetadataError("NTFS initialized size exceeds its DATA size")
+        if offset < 0 or length < 0:
+            raise NtfsMetadataError("negative NTFS read range")
+        if offset >= data_size or not length:
+            return b""
+        length = min(length, data_size - offset)
+        initialized_length = max(0, min(length, initialized_size - offset))
+        data = (
+            self._read_runs(attribute.runs, offset, initialized_length)
+            if initialized_length
+            else b""
+        )
+        return data + bytes(length - initialized_length)
+
     def read_file_range(self, path, offset=0, length=1 << 20):
         if (
             not isinstance(offset, int)
@@ -1417,10 +1496,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             raise NtfsMetadataError("NTFS read range exceeds the 1 MiB limit")
         if path == "/$MFT":
             data = self._mft_data
-            if offset >= data.data_size or not length:
-                return b""
-            length = min(length, data.data_size - offset)
-            return self._read_runs(data.runs, offset, length)
+            return self._read_nonresident_range(data, offset, length)
         number, record = self._resolve(path)
         if record.is_directory:
             raise NtfsMetadataError("cannot read directory content as a file")
@@ -1438,10 +1514,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             if offset >= len(data.resident_value) or not length:
                 return b""
             return data.resident_value[offset : offset + length]
-        if offset >= data.data_size or not length:
-            return b""
-        length = min(length, data.data_size - offset)
-        return self._read_runs(data.runs, offset, length)
+        return self._read_nonresident_range(data, offset, length)
 
     def _read_runs(self, runs, offset, length):
         self.reopen()
@@ -1587,7 +1660,9 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 if vcn < 0 or vcn * block_size >= allocation.data_size:
                     raise NtfsMetadataError("NTFS $I30 child VCN is outside allocation")
                 visited_vcns.add(vcn)
-                block = self._read_runs(allocation.runs, vcn * block_size, block_size)
+                block = self._read_nonresident_range(
+                    allocation, vcn * block_size, block_size
+                )
                 block_entries, block_children = _parse_ntfs_index_block(
                     block,
                     parent_reference=parent_reference,

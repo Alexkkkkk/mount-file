@@ -469,7 +469,11 @@ def print_cheatsheet() -> None:
   CLI (mountfile/cli.py, COMMANDS):
     python main.py volumes <img>         # список разделов
     python main.py info <img>            # сводка по образу
+    python -m mountfile capabilities     # JSON матрица профилей чтения/записи
     python main.py ls <img> /            # листинг каталога
+    python main.py stat <img> /path      # метаданные пути
+    python main.py read-range <img> /file --file-offset 0 --length 4096
+                                          # bounded read; output bytes or -o file
     python main.py get <img> / -o out    # извлечение файла/каталога
     python main.py put <img> f --dest / --yes    # импорт в FAT32
     python main.py mkdir <img> /new

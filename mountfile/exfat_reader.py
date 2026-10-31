@@ -40,6 +40,7 @@ class _Entry:
     first_cluster: int
     size: int
     no_fat_chain: bool
+    valid_data_length: int = 0
 
 
 class NativeExfatImage(ReadOnlyVFSStatMixin):
@@ -369,7 +370,15 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             if attributes & ~0x003F:
                 raise ExfatReadError("exFAT file entry has reserved attributes")
             first_cluster = struct.unpack_from("<I", stream, 20)[0]
+            valid_data_length = struct.unpack_from("<Q", stream, 8)[0]
             size = struct.unpack_from("<Q", stream, 24)[0]
+            is_dir = bool(attributes & 0x10)
+            if valid_data_length > size:
+                raise ExfatReadError("exFAT ValidDataLength exceeds DataLength")
+            if is_dir and valid_data_length != size:
+                raise ExfatReadError(
+                    "exFAT directory ValidDataLength differs from DataLength"
+                )
             no_fat_chain = bool(stream[1] & 0x02)
             name_raw = bytearray()
             for index in range(2, secondary_count + 1):
@@ -388,10 +397,11 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             entries.append(
                 _Entry(
                     name,
-                    bool(attributes & 0x10),
+                    is_dir,
                     first_cluster,
                     size,
                     no_fat_chain,
+                    valid_data_length,
                 )
             )
             pos += total
@@ -521,13 +531,19 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         if offset >= entry.size:
             return b""
         length = min(length, entry.size - offset)
-        return self._read_stream_range(
-            entry.first_cluster,
-            entry.size,
-            offset,
-            length,
-            entry.no_fat_chain,
+        valid_length = max(0, min(offset + length, entry.valid_data_length) - offset)
+        data = (
+            self._read_stream_range(
+                entry.first_cluster,
+                entry.size,
+                offset,
+                valid_length,
+                entry.no_fat_chain,
+            )
+            if valid_length
+            else b""
         )
+        return data + bytes(length - valid_length)
 
     def read_file(self, path):
         return self.read_file_range(path, 0, self.file_size(path))

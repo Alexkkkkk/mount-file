@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TON_ADDRESS = "UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv"
 TON_VIEWER = f"https://tonviewer.com/{TON_ADDRESS}"

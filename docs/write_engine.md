@@ -118,19 +118,27 @@ engine.close()
   `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
   расширении каталога pointer block, bitmap/counters и directory map проходят
   read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
-  Перед изменением image writer сохраняет и fsync-ит проверенный before-image
-  выбранного ext2 extent рядом с образом, затем атомарно публикует
-  `<image>.mountfile-ext2-recovery.json` marker и fsync-ит родительский каталог.
-  После внезапного завершения процесса следующий native writer сверяет identity
-  image и SHA-256 snapshot, восстанавливает только выбранный extent, делает
-  read-back и удаляет marker до snapshot. Process-crash tests покрывают
-  прерывание commit, повторного recovery и завершённый commit до удаления marker.
-  При обычном отказе rollback marker
+  Перед изменением image writer сохраняет и fsync-ит рядом с образом проверенные
+  before- и staged after-image выбранного ext2 extent, затем атомарно публикует
+  `<image>.mountfile-ext2-recovery.json` marker формата 3 и fsync-ит родительский
+  каталог. При восстановлении сверяются identity image и SHA-256 обеих копий;
+  rollback разрешён только когда каждый 512-байтовый сектор совпадает с одним из
+  двух сохранённых состояний. Неизвестные/повреждённые данные, внешнее изменение
+  или legacy commit-marker без after-image оставляют sidecars на месте и блокируют
+  дальнейшую запись вместо безусловной перезаписи. Snapshot открываются с проверкой
+  типа/размера файла и удерживаются через один и тот же file descriptor до окончания
+  проверки и восстановления. Ошибка очистки sidecar после подтверждённого commit не
+  запускает rollback. Подтверждённый rollback охватывает только выбранный extent,
+  проверяется read-back, затем marker удаляется до sidecars. Process-crash tests
+  покрывают прерывание commit, повторного recovery
+  и завершённый commit до удаления marker. При обычном отказе rollback marker
   дополнительно привязывается к точному post-failure extent и mtime; любое
   последующее изменение блокирует автоматическое восстановление. Не редактируйте
   image и не удаляйте sidecar-файлы, пока recovery не завершён. Это не заменяет
   backup и не является универсальной power-loss гарантией для всех файловых
-  систем, устройств и ОС;
+  систем, устройств и ОС. Межпроцессный lock advisory: редактор, который его
+  игнорирует, всё ещё может изменить image одновременно с commit/recovery; проверки
+  read-back обнаруживают многие такие изменения, но не устраняют все race conditions.
   directory fsync применяется там, где ОС его поддерживает.
   Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
   `debugfs -w` доступен только прямому library caller с
@@ -204,6 +212,16 @@ extent/inline inodes и symlink traversal отклоняются. `open_image_pr
 только предварительное соответствие write profile. Writer обязан самостоятельно
 проверять затрагиваемые группы, bitmaps, inode metadata и partition bounds.
 
+Ограниченный `NativeExt3Image` проверяет объявленный в superblock номер internal
+JBD2 journal inode и читает именно этот inode; external journal devices остаются
+запрещены. Активный журнал по умолчанию отклоняется. Только явный
+`replay_journal=True` включает read-only overlay для поддерживаемого классического
+descriptor/data/commit формата; после публикации overlay metadata-кэши очищаются,
+чтобы дальнейшие reads видели согласованное представление. Это ограниченная
+проверка/просмотр, не полноценное JBD2 recovery и не разрешение на запись.
+Descriptor targets, указывающие на data-блоки самого journal inode, отвергаются
+как при clean scan, так и при явном read-only replay.
+
 ## Ограничения и риски
 
 * Native FAT mutations enforce the selected extent and use a same-directory
@@ -247,6 +265,10 @@ and runlists, `$Volume` dirty flags, and clean `$LogFile` restart pages before
 exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
 
+For nonresident attributes the reader retains and checks the on-disk allocated,
+data and initialized sizes. Bounded reads expose zero bytes after `initialized_size`
+up to `data_size`, without returning stale physical bytes from the allocated run.
+
 The reader validates resident and nonresident metadata records, parent/sequence
 references and bounded `$I30` index roots/allocation blocks. It supports valid
 Unicode names for listing. If MFT record 10 exposes the exact-size, bounded
@@ -256,9 +278,10 @@ path lookup; otherwise Unicode lookup is exact-case only. Resident
 `$ATTRIBUTE_LIST` values are now decoded with bounded entry lengths, 8-byte
 alignment, UTF-16 names and MFT references. Type order, ASCII name/VCN order and
 duplicate keys are checked; Unicode collation uses a validated `$UpCase` table
-when available and is not guessed when absent. The reader still refuses extension-
-record resolution and nonresident attribute-list streams, so it cannot mistake a
-partial attribute for a complete stream. The entry layout follows [Microsoft's
+when available and is not guessed when absent. Bounded `ATTRIBUTE_LIST` resolution
+supports validated extension-record references and contiguous nonresident extents;
+nested extension lists, VCN gaps/overlaps and conflicting stream sizes fail closed.
+The entry layout follows [Microsoft's
 ATTRIBUTE_LIST_ENTRY definition](https://learn.microsoft.com/en-us/windows/win32/devnotes/attribute-list-entry)
 and the [Linux NTFS on-disk reference](https://flatcap.github.io/linux-ntfs/ntfs/attributes/attribute_list.html).
 The reader also rejects malformed indexes, cycles, sparse/compressed/encrypted
