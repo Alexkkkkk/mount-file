@@ -208,7 +208,10 @@ def _index_root_value(entries):
     entry_bytes = b"".join(entries)
     total_size = 16 + len(entry_bytes) + len(end_entry)
     value = bytearray(16 + total_size)
+    struct.pack_into("<III", value, 0, 0x30, 1, 512)
+    value[12] = 1
     struct.pack_into("<III", value, 16, 16, total_size, total_size)
+    struct.pack_into("<I", value, 28, 0)
     value[32 : 32 + len(entry_bytes)] = entry_bytes
     value[32 + len(entry_bytes) :] = end_entry
     return bytes(value)
@@ -852,6 +855,19 @@ def test_rejects_ntfs_resident_attribute_name_overlapping_value():
         parse_ntfs_attribute_stream(record)
 
 
+def test_record_with_attributes_updates_bytes_in_use_after_serialization():
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    attribute = _resident_attribute(0x30, 1, b"payload")
+    raw = _record_with_attributes((attribute,))
+    expected_used_size = 0x38 + len(attribute) + 4
+    assert struct.unpack_from("<I", raw, 0x18)[0] == expected_used_size
+
+    record = parse_ntfs_file_record_header(raw)
+    assert record.bytes_in_use == expected_used_size
+    assert [item.type_code for item in parse_ntfs_attribute_stream(record)] == [0x30]
+
+
 def test_rejects_ntfs_nonresident_attribute_name_overlapping_runlist():
     from mountfile.ntfs_mft import parse_ntfs_file_record_header
 
@@ -1071,7 +1087,10 @@ def test_native_ntfs_reopens_stream_before_reading_validated_runs(tmp_path):
 
 def test_parses_bounded_index_root_file_name_entry():
     value = bytearray(144)
+    struct.pack_into("<III", value, 0, 0x30, 1, 512)
+    value[12] = 1
     struct.pack_into("<III", value, 16, 16, 128, 128)
+    struct.pack_into("<I", value, 28, 0)
     entry = 32
     key = bytearray(74)
     struct.pack_into("<Q", key, 0, (3 << 48) | 9)
