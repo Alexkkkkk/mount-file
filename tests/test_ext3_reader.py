@@ -33,6 +33,7 @@ def _make_clean_journal_image(
     declared_journal_inode=None,
     replay_target=21,
     duplicate_target=False,
+    wrap_replay=False,
 ):
     _make_image(path, compat=0x000C)
     image = bytearray(path.read_bytes())
@@ -56,18 +57,24 @@ def _make_clean_journal_image(
     struct.pack_into(">II", journal, 20, 1, 0)
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
-    struct.pack_into(">III", journal, 1024, 0xC03B3998, 1, descriptor_sequence)
+    descriptor_logical, commit_logical = (4, 2) if wrap_replay else (1, 3)
+    descriptor_offset = descriptor_logical * 1024
+    struct.pack_into(
+        ">III", journal, descriptor_offset, 0xC03B3998, 1, descriptor_sequence
+    )
     if duplicate_target:
-        struct.pack_into(">II", journal, 1036, replay_target, 0x00000002)  # SAME_UUID
         struct.pack_into(
-            ">II", journal, 1044, replay_target, 0x0000000A
+            ">II", journal, descriptor_offset + 12, replay_target, 0x00000002
+        )  # SAME_UUID
+        struct.pack_into(
+            ">II", journal, descriptor_offset + 20, replay_target, 0x0000000A
         )  # LAST|SAME_UUID
-        commit_offset = 4096
+        commit_offset = (descriptor_logical + 3) * 1024
     else:
         struct.pack_into(
-            ">II", journal, 1036, replay_target, 0x0000000A
+            ">II", journal, descriptor_offset + 12, replay_target, 0x0000000A
         )  # LAST|SAME_UUID
-        commit_offset = 3072
+        commit_offset = commit_logical * 1024
     struct.pack_into(">III", journal, commit_offset, 0xC03B3998, 2, commit_sequence)
     if truncate_commit:
         struct.pack_into(">I", image, 43 * 1024 + 8, 0)
@@ -262,6 +269,41 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
         assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
     finally:
         provider.close()
+
+
+def test_explicit_journal_replay_supports_ring_wraparound(tmp_path):
+    image_path = tmp_path / "wrapped-replay-journal.img"
+    _make_clean_journal_image(image_path, replay_target=3, wrap_replay=True)
+    image = bytearray(image_path.read_bytes())
+    payload = bytes([0xB8]) * 1024
+    image[40 * 1024 + 1 * 1024 : 40 * 1024 + 2 * 1024] = payload
+    struct.pack_into(">I", image, 40 * 1024 + 24, 4)
+    image_path.write_bytes(image)
+
+    provider = NativeExt3Image(
+        image_path, volume_size=BLOCKS_COUNT * 1024, replay_journal=True
+    )
+    try:
+        assert provider.journal_replayed is True
+        assert provider._read_at(3 * 1024, 1024) == payload
+        assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
+    finally:
+        provider.close()
+
+
+def test_wrapped_replay_partial_record_fails_closed(tmp_path):
+    image_path = tmp_path / "wrapped-replay-partial.img"
+    _make_clean_journal_image(image_path, replay_target=3, wrap_replay=True)
+    image = bytearray(image_path.read_bytes())
+    struct.pack_into(">I", image, 40 * 1024 + 24, 4)
+    struct.pack_into(">III", image, 43 * 1024, 0xC03B3998, 1, 8)
+    struct.pack_into(">II", image, 43 * 1024 + 12, 3, 0x0000000A)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="exceeds journal bounds"):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * 1024, replay_journal=True
+        )
 
 
 def test_active_journal_replay_rejects_empty_first_descriptor(tmp_path):

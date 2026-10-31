@@ -295,6 +295,7 @@ class NativeExt3Image(NativeExt2Image):
                 )
             self._replay_journal(
                 journal,
+                first=first,
                 start=start,
                 max_length=max_length,
                 journal_blocks=journal_blocks,
@@ -332,18 +333,30 @@ class NativeExt3Image(NativeExt2Image):
         journal_blocks,
         expected_sequence,
         journal_data_blocks: set[int] | None = None,
+        first: int | None = None,
     ):
         """Replay classic committed JBD2 records into a read-only overlay.
 
         Only the old descriptor/data/commit layout is accepted. No revoke or
         checksum record is interpreted, and the image is never opened for
-        writing. Unsupported records fail closed instead of being guessed.
+        writing. Records may wrap from ``max_length - 1`` to ``first``; the
+        bounded ring is consumed at most once, and an explicit empty record
+        must terminate it. Unsupported records fail closed instead of being
+        guessed.
         """
+        if first is None:
+            first = 1
+        if not 1 <= first < max_length <= journal_blocks:
+            raise Ext3ReadError("JBD2 replay ring geometry is invalid")
+        if not first <= start < max_length:
+            raise Ext3ReadError("JBD2 replay start is outside journal ring")
         logical = start
+        ring_length = max_length - first
+        consumed = 0
         transactions = 0
         overlay = {}
         terminated = False
-        while logical < max_length:
+        while consumed < ring_length:
             descriptor = self._journal_logical_block(inode, logical, journal_blocks)
             if not descriptor.strip(b"\x00"):
                 if transactions == 0:
@@ -389,14 +402,20 @@ class NativeExt3Image(NativeExt2Image):
                     break
             if not targets or not last:
                 raise Ext3ReadError("unterminated JBD2 replay descriptor")
-            data_start = logical + 1
-            commit_logical = data_start + len(targets)
-            if commit_logical >= max_length:
+            transaction_blocks = 2 + len(targets)
+            if transaction_blocks > ring_length - consumed:
                 raise Ext3ReadError("JBD2 replay transaction exceeds journal bounds")
+
+            def ring_position(relative):
+                return first + ((logical - first + relative) % ring_length)
+
             data_blocks = [
-                self._journal_logical_block(inode, data_start + index, journal_blocks)
+                self._journal_logical_block(
+                    inode, ring_position(1 + index), journal_blocks
+                )
                 for index in range(len(targets))
             ]
+            commit_logical = ring_position(1 + len(targets))
             commit = self._journal_logical_block(inode, commit_logical, journal_blocks)
             commit_magic, commit_type, commit_sequence = self._jbd2_header(commit)
             if (
@@ -411,11 +430,12 @@ class NativeExt3Image(NativeExt2Image):
             if transactions > _MAX_JOURNAL_BLOCKS:
                 raise Ext3ReadError("JBD2 replay transaction count is excessive")
             expected_sequence = (expected_sequence + 1) & 0xFFFFFFFF
-            logical = commit_logical + 1
+            consumed += transaction_blocks
+            logical = ring_position(transaction_blocks)
         # Do not expose a partially replayed view if a later transaction is
         # malformed. Publish only after the complete supported log prefix has
         # been validated successfully, a committed transaction was found, and
-        # an unused-record terminator proves this non-wrapping range is complete.
+        # an unused-record terminator proves this bounded ring is complete.
         if transactions == 0:
             raise Ext3ReadError("JBD2 replay verified no committed transaction")
         if not terminated:
