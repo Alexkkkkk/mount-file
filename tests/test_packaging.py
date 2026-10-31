@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Offline wheel smoke tests for the supported commands and package resources."""
+
 from __future__ import annotations
 
 import os
@@ -55,9 +56,11 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     assert len(wheel_paths) == 1
     wheel_path = wheel_paths[0]
     resource_name = "mountfile/data/install-windows-components.ps1"
+    ollama_resource = "mountfile/data/install-ollama.ps1"
     with zipfile.ZipFile(wheel_path) as wheel:
         names = set(wheel.namelist())
         assert resource_name in names
+        assert ollama_resource in names
         assert "install_mountfile.py" not in names
         entry_points_name = next(
             name for name in names if name.endswith(".dist-info/entry_points.txt")
@@ -70,6 +73,10 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
         assert (
             wheel.read(resource_name)
             == (ROOT / "scripts/install-windows-components.ps1").read_bytes()
+        )
+        assert (
+            wheel.read(ollama_resource)
+            == (ROOT / "mountfile/data/install-ollama.ps1").read_bytes()
         )
 
     target = tmp_path / "installed"
