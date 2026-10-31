@@ -22,13 +22,18 @@ projects is copied by this change.
 - Hypothesis now checks generated valid and arbitrary malformed NTFS
   `$ATTRIBUTE_LIST` values. `tools/fuzz_ntfs_reader.py` adds a coverage-guided
   Atheris target for bounded NTFS metadata parsers and seeds the selected corpus
-  directory without overwriting existing entries. This is NTFS-only coverage,
-  not a claim that every filesystem parser has been fuzzed.
+  directory without overwriting existing entries.
+- Hypothesis now covers generated valid exFAT sector/cluster geometries, stale
+  backup status fields, and boot-checksum corruption. The optional
+  `tools/fuzz_exfat_probe.py` target seeds valid geometry plus checksum, backup
+  geometry and selected-volume boundary failures without overwriting corpus
+  entries. Fuzz coverage now includes NTFS and exFAT, not every filesystem.
 
 Run a bounded local campaign on Linux with the optional fuzz dependency:
 
 ```sh
 uv run --extra fuzz python tools/fuzz_ntfs_reader.py /tmp/mountfile-ntfs-corpus -runs=10000
+uv run --extra fuzz python tools/fuzz_exfat_probe.py /tmp/mountfile-exfat-corpus -runs=10000
 ```
 
 ## Suggested follow-up backlog
@@ -36,9 +41,9 @@ uv run --extra fuzz python tools/fuzz_ntfs_reader.py /tmp/mountfile-ntfs-corpus 
 1. Build self-contained Python filesystem-image fixtures/builders where they
    reduce dependence on optional tools such as `mke2fs`; keep real-image tests
    as additional integration coverage when those tools are available.
-2. Extend property-based and coverage-guided fuzzing from NTFS to the remaining
-   bounded on-disk parsers. Seed cases should include valid structures and
-   malformed boundary cases; fuzzing complements, but does not replace,
+2. Extend property-based and coverage-guided fuzzing from NTFS/exFAT to the
+   remaining bounded on-disk parsers. Seed cases should include valid structures
+   and malformed boundary cases; fuzzing complements, but does not replace,
    deterministic regressions.
 3. Expand ext4 support only as separately gated read-only profiles with explicit
    geometry, checksum, bounds and malformed-image tests. Extents, inline data,
