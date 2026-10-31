@@ -9,16 +9,14 @@ and failed/cancelled writes must not publish a replacement.
 from __future__ import annotations
 
 import pytest
+from test_exfat_probe import VOLUME_SIZE, _tree_image
+from test_ext2_native import MKE2FS, _make_ext2
+from test_fat32 import make_fat32_image
 
 from mountfile.exfat_reader import NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
 from mountfile.ext2_native import NativeExt2ImageWriter
 from mountfile.fat32 import Fat32, Fat32Error
-
-from test_exfat_probe import VOLUME_SIZE, _tree_image
-from test_ext2_native import _make_ext2
-from test_fat32 import make_fat32_image
-
 
 PAYLOADS = (b"", b"native-matrix-" * 3, bytes(range(64)))
 
@@ -51,7 +49,9 @@ def _fat_image_with_sentinels(tmp_path):
     return image, len(prefix), partition.stat().st_size, prefix, suffix
 
 
-def test_fat32_short_write_and_cancellation_restore_selected_extent(tmp_path, monkeypatch):
+def test_fat32_short_write_and_cancellation_restore_selected_extent(
+    tmp_path, monkeypatch
+):
     image, offset, size, prefix, suffix = _fat_image_with_sentinels(tmp_path)
     with image.open("r+b") as stream:
         stream.seek(offset)
@@ -106,6 +106,7 @@ def test_fat32_injected_exception_and_external_suffix_change_are_bounded(
     assert final_suffix[len(changed) :] == suffix[len(changed) :]
 
 
+@pytest.mark.skipif(not MKE2FS, reason="mke2fs is required for ext2 fixtures")
 @pytest.mark.parametrize("payload", PAYLOADS)
 def test_ext2_bounded_success_preserves_partition_sentinels(tmp_path, payload):
     partition = tmp_path / "ext2.partition"
@@ -123,6 +124,7 @@ def test_ext2_bounded_success_preserves_partition_sentinels(tmp_path, payload):
     assert writer.read_file("/matrix.bin") == payload
 
 
+@pytest.mark.skipif(not MKE2FS, reason="mke2fs is required for ext2 fixtures")
 def test_ext2_cancellation_leaves_original_and_repeated_recovery_is_idempotent(
     tmp_path, monkeypatch
 ):
@@ -157,9 +159,7 @@ def test_exfat_short_write_exception_and_cancellation_never_publish(
     bounded = tmp_path / "exfat-bounded.img"
     bounded.write_bytes(prefix + image.read_bytes() + suffix)
     before = bounded.read_bytes()
-    writer = NativeExfatWriter(
-        bounded, offset=len(prefix), volume_size=VOLUME_SIZE
-    )
+    writer = NativeExfatWriter(bounded, offset=len(prefix), volume_size=VOLUME_SIZE)
 
     def fail_write(stream, relative, data):
         if data:
