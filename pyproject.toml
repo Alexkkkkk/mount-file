@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mountfile"
-version = "1.58.4"
+version = "1.60.2"
 description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
 readme = "README.md"
 dependencies = [

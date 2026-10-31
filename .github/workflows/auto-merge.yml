@@ -35,7 +35,7 @@ jobs:
         with:
           github-token: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
-            const required = ['CI-Gate', 'quality-gate', 'dependency-review',
+            const required = ['CI-Gate', 'quality-gate', 'security-gate', 'dependency-review',
               'Verify (status, secrets, versions, tests)'];
             // The complete Windows/macOS matrix can exceed 15 minutes.
             const deadline = Date.now() + 45 * 60 * 1000;

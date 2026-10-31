@@ -33,14 +33,21 @@ from mountfile.vfs_api import ReadOnlyVFSStatMixin
 _ATTRIBUTE_END = 0xFFFFFFFF
 _ATTRIBUTE_LIST = 0x20
 _MAX_ATTRIBUTES = 4096
-_MAX_ATTRIBUTE_LIST_ENTRIES = 4096
+_MAX_ATTRIBUTE_LIST_BYTES = 1 << 20
+_MAX_ATTRIBUTE_LIST_RECORDS = 256
+_MAX_ATTRIBUTE_LIST_RUNS = 1 << 16
 _MAX_RUNLIST_BYTES = 1 << 20
 _ATTRIBUTE_FLAG_COMPRESSED = 0x0001
 _ATTRIBUTE_FLAG_ENCRYPTED = 0x4000
 _ATTRIBUTE_FLAG_SPARSE = 0x8000
+_ATTRIBUTE_KNOWN_FLAGS = (
+    _ATTRIBUTE_FLAG_COMPRESSED | _ATTRIBUTE_FLAG_ENCRYPTED | _ATTRIBUTE_FLAG_SPARSE
+)
 _VOLUME_KNOWN_FLAGS = 0x807F
 _LOGFILE_PAGE_SIZE = 4096
 _MAX_READ_RANGE_BYTES = 1 << 20
+_UPCASE_TABLE_ENTRIES = 1 << 16
+_UPCASE_TABLE_SIZE = _UPCASE_TABLE_ENTRIES * 2
 _LOGFILE_CLEAN_DISMOUNT = 0x0002
 _LOGFILE_KNOWN_FLAGS = _LOGFILE_CLEAN_DISMOUNT | 0x0001
 
@@ -98,7 +105,7 @@ class NtfsAttributeSummary:
 
 @dataclass(frozen=True)
 class NtfsAttributeListEntry:
-    """One bounded reference from a resident NTFS $ATTRIBUTE_LIST."""
+    """One bounded reference to an attribute in an NTFS FILE record."""
 
     type_code: int
     name: str
@@ -132,7 +139,7 @@ class NtfsMetadataProfile:
     mft_record: NtfsFileRecordHeader
     mirror_record: NtfsFileRecordHeader
     attributes: tuple[NtfsAttributeSummary, ...]
-    logfile_restart: NtfsLogFileRestartArea | None = None
+    logfile_restart: "NtfsLogFileRestartArea | None" = None
 
     @property
     def mirror_matches_mft(self) -> bool:
@@ -363,10 +370,133 @@ def _parse_runlist(
             raise NtfsMetadataError("NTFS runlist has too many extents")
 
 
+def parse_ntfs_attribute_list(
+    value: bytes, *, upcase_table: tuple[int, ...] | None = None
+) -> tuple[NtfsAttributeListEntry, ...]:
+    """Validate a bounded ``$ATTRIBUTE_LIST`` value.
+
+    This parser validates serialized entries only. The native reader resolves
+    references against MFT extension records and merges their attribute extents
+    under additional bounds. A validated ``$UpCase`` table enables NTFS ordering
+    checks for Unicode names.
+    """
+    try:
+        view = memoryview(value)
+    except TypeError as exc:
+        raise NtfsMetadataError("NTFS ATTRIBUTE_LIST value must be bytes-like") from exc
+    if not view.nbytes or view.nbytes > _MAX_ATTRIBUTE_LIST_BYTES or view.nbytes & 7:
+        raise NtfsMetadataError("NTFS ATTRIBUTE_LIST has invalid bounded length")
+    if upcase_table is not None:
+        try:
+            if len(upcase_table) != _UPCASE_TABLE_ENTRIES:
+                raise NtfsMetadataError("$UpCase entry count is invalid")
+            table_bytes = struct.pack("<65536H", *upcase_table)
+            upcase_table = _parse_ntfs_upcase_table(table_bytes)
+        except (NtfsMetadataError, struct.error, TypeError, OverflowError) as exc:
+            raise NtfsMetadataError(
+                "NTFS ATTRIBUTE_LIST received an invalid $UpCase table"
+            ) from exc
+    raw = view.tobytes()
+    result: list[NtfsAttributeListEntry] = []
+    seen: set[tuple[int, object, int]] = set()
+    pos = 0
+    previous_type = 0
+    previous_name: str | None = None
+    previous_name_key: tuple[int, ...] | None = None
+    previous_lowest_vcn = 0
+    while pos < len(raw):
+        if len(result) >= _MAX_ATTRIBUTES or pos + 26 > len(raw):
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST entry header is truncated")
+        type_code, entry_length, name_length, name_offset = struct.unpack_from(
+            "<IHBB", raw, pos
+        )
+        if type_code == _ATTRIBUTE_LIST:
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST must not reference itself")
+        if type_code == 0 or type_code == _ATTRIBUTE_END or type_code < previous_type:
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST type order is invalid")
+        if entry_length < 26 or entry_length & 7 or pos + entry_length > len(raw):
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST entry length is invalid")
+        lowest_vcn = struct.unpack_from("<q", raw, pos + 8)[0]
+        if lowest_vcn < 0:
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST lowest VCN is negative")
+        if name_length:
+            if (
+                name_offset < 26
+                or name_offset & 1
+                or name_offset + name_length * 2 > entry_length
+            ):
+                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST name exceeds its entry")
+            name = _decode_name(raw[pos : pos + entry_length], name_length, name_offset)
+            if "\x00" in name:
+                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST name contains NUL")
+        else:
+            if name_offset not in (0, 26):
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST empty-name offset is invalid"
+                )
+            name = ""
+        try:
+            encoded_name = name.encode("utf-16le")
+        except UnicodeEncodeError as exc:
+            raise NtfsMetadataError(
+                "NTFS ATTRIBUTE_LIST name is not valid UTF-16"
+            ) from exc
+        if upcase_table is not None:
+            units = struct.unpack(f"<{len(encoded_name) // 2}H", encoded_name)
+            name_key = tuple(upcase_table[unit] for unit in units)
+        elif name.isascii():
+            name_key = tuple(ord(character.upper()) for character in name)
+        else:
+            name_key = None
+        if type_code == previous_type and result:
+            if previous_name_key is not None and name_key is not None:
+                if name_key < previous_name_key or (
+                    name_key == previous_name_key and lowest_vcn < previous_lowest_vcn
+                ):
+                    raise NtfsMetadataError(
+                        "NTFS ATTRIBUTE_LIST name/VCN order is invalid"
+                    )
+            elif name == previous_name and lowest_vcn < previous_lowest_vcn:
+                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST VCN order is invalid")
+        file_reference = struct.unpack_from("<Q", raw, pos + 16)[0]
+        try:
+            decode_ntfs_file_reference(file_reference)
+        except NtfsRecordError as exc:
+            raise NtfsMetadataError(str(exc)) from exc
+        attribute_id = struct.unpack_from("<H", raw, pos + 24)[0]
+        identity_name: object = name_key if name_key is not None else name
+        identity = (type_code, identity_name, lowest_vcn)
+        if identity in seen:
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST contains a duplicate entry")
+        seen.add(identity)
+        result.append(
+            NtfsAttributeListEntry(
+                type_code, name, lowest_vcn, file_reference, attribute_id
+            )
+        )
+        previous_type = type_code
+        previous_name = name
+        previous_name_key = name_key
+        previous_lowest_vcn = lowest_vcn
+        pos += entry_length
+    return tuple(result)
+
+
 def parse_ntfs_attribute_stream(
-    record: NtfsFileRecordHeader, *, cluster_count: int | None = None
+    record: NtfsFileRecordHeader,
+    *,
+    cluster_count: int | None = None,
+    upcase_table: tuple[int, ...] | None = None,
+    allow_attribute_list: bool = False,
 ) -> tuple[NtfsAttributeSummary, ...]:
-    """Validate all attributes in one USA-restored FILE record."""
+    """Validate all attributes in one USA-restored FILE record.
+
+    ``allow_attribute_list`` exposes a validated list descriptor for the native
+    reader's bounded cross-record resolver. It does not resolve references by
+    itself; ordinary callers remain fail-closed when a list is present.
+    """
+    if not isinstance(allow_attribute_list, bool):
+        raise NtfsMetadataError("allow_attribute_list must be a boolean")
     raw = record.fixed_record
     if cluster_count is None:
         cluster_count = 1 << 62
@@ -375,7 +505,6 @@ def parse_ntfs_attribute_stream(
     pos = record.first_attribute_offset
     limit = record.bytes_in_use
     result: list[NtfsAttributeSummary] = []
-    seen_attribute_ids: set[int] = set()
     while pos + 4 <= limit:
         type_code = struct.unpack_from("<I", raw, pos)[0]
         if type_code == _ATTRIBUTE_END:
@@ -398,18 +527,20 @@ def parse_ntfs_attribute_stream(
         if not name_length and name_offset not in (0, name_minimum):
             raise NtfsMetadataError("NTFS unnamed attribute has an invalid name offset")
         name = _decode_name(raw[pos : pos + length], name_length, name_offset)
-        attribute_id = struct.unpack_from("<H", raw, pos + 14)[0]
-        if attribute_id in seen_attribute_ids:
-            raise NtfsMetadataError("NTFS FILE record has duplicate attribute IDs")
-        seen_attribute_ids.add(attribute_id)
         lowest_vcn = highest_vcn = None
         run_count = 0
         runs: tuple[NtfsRun, ...] = ()
         resident_value = None
         data_size = 0
-        allocated_size = None
-        initialized_size = None
+        allocated_size = initialized_size = None
         flags = struct.unpack_from("<H", raw, pos + 12)[0]
+        attribute_id = struct.unpack_from("<H", raw, pos + 14)[0]
+        if flags & ~_ATTRIBUTE_KNOWN_FLAGS:
+            raise NtfsMetadataError("NTFS attribute contains unknown flag bits")
+        if flags:
+            raise NtfsMetadataError(
+                "compressed, encrypted or sparse NTFS attributes are unsupported"
+            )
         if nonresident:
             if length < 64:
                 raise NtfsMetadataError(
@@ -421,14 +552,8 @@ def parse_ntfs_attribute_stream(
                 raise NtfsMetadataError("invalid NTFS attribute VCN range")
             if run_offset < 64 or run_offset >= length:
                 raise NtfsMetadataError("NTFS runlist offset is outside the attribute")
-            if flags & (
-                _ATTRIBUTE_FLAG_COMPRESSED
-                | _ATTRIBUTE_FLAG_ENCRYPTED
-                | _ATTRIBUTE_FLAG_SPARSE
-            ):
-                raise NtfsMetadataError(
-                    "compressed, encrypted or sparse NTFS attributes are unsupported"
-                )
+            if name_length and name_offset + name_length * 2 > run_offset:
+                raise NtfsMetadataError("NTFS attribute name overlaps its runlist")
             runs = _parse_runlist(
                 raw[pos + run_offset : pos + length],
                 cluster_count,
@@ -436,12 +561,15 @@ def parse_ntfs_attribute_stream(
                 highest_vcn=highest_vcn,
             )
             run_count = len(runs)
-            data_size = struct.unpack_from("<Q", raw, pos + 48)[0]
-            if data_size > (1 << 63):
+            allocated_size, data_size, initialized_size = struct.unpack_from(
+                "<QQQ", raw, pos + 40
+            )
+            if max(allocated_size, data_size, initialized_size) > (1 << 63):
                 raise NtfsMetadataError("NTFS nonresident data size overflows")
-            if lowest_vcn == 0:
-                allocated_size = struct.unpack_from("<Q", raw, pos + 40)[0]
-                initialized_size = struct.unpack_from("<Q", raw, pos + 56)[0]
+            if data_size > allocated_size or initialized_size > data_size:
+                raise NtfsMetadataError(
+                    "NTFS nonresident allocated, data and initialized sizes are inconsistent"
+                )
         else:
             if length < 24:
                 raise NtfsMetadataError("NTFS resident attribute header is truncated")
@@ -449,9 +577,28 @@ def parse_ntfs_attribute_stream(
             value_offset = struct.unpack_from("<H", raw, pos + 20)[0]
             if value_offset < 24 or value_offset + value_length > length:
                 raise NtfsMetadataError("NTFS resident attribute value exceeds record")
+            if name_length and (
+                name_offset < value_offset + value_length
+                and value_offset < name_offset + name_length * 2
+            ):
+                raise NtfsMetadataError(
+                    "NTFS attribute name overlaps its resident value"
+                )
             resident_value = bytes(
                 raw[pos + value_offset : pos + value_offset + value_length]
             )
+            data_size = len(resident_value)
+            allocated_size = data_size
+            initialized_size = data_size
+        if type_code == _ATTRIBUTE_LIST:
+            if name:
+                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST must be unnamed")
+            if resident_value is not None:
+                parse_ntfs_attribute_list(resident_value, upcase_table=upcase_table)
+            if not allow_attribute_list:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST extension-record resolution is unsupported"
+                )
         result.append(
             NtfsAttributeSummary(
                 type_code,
@@ -473,79 +620,6 @@ def parse_ntfs_attribute_stream(
     raise NtfsMetadataError("NTFS FILE record has no attribute end marker")
 
 
-def parse_ntfs_attribute_list(value: bytes) -> tuple[NtfsAttributeListEntry, ...]:
-    """Parse bounded resident ``$ATTRIBUTE_LIST`` entries without resolving them."""
-    if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise NtfsMetadataError("NTFS ATTRIBUTE_LIST value must be bytes-like")
-    raw = bytes(value)
-    if not raw or len(raw) > _MAX_RUNLIST_BYTES:
-        raise NtfsMetadataError("NTFS ATTRIBUTE_LIST size is outside bounds")
-
-    entries: list[NtfsAttributeListEntry] = []
-    seen: set[tuple[int, str, int]] = set()
-    last_type = -1
-    last_vcn_by_stream: dict[tuple[int, str], int] = {}
-    pos = 0
-    while pos < len(raw):
-        if len(entries) >= _MAX_ATTRIBUTE_LIST_ENTRIES or pos + 0x1A > len(raw):
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST entry header is truncated")
-        type_code = struct.unpack_from("<I", raw, pos)[0]
-        length = struct.unpack_from("<H", raw, pos + 4)[0]
-        name_length = raw[pos + 6]
-        name_offset = raw[pos + 7]
-        lowest_vcn = struct.unpack_from("<Q", raw, pos + 8)[0]
-        file_reference = struct.unpack_from("<Q", raw, pos + 0x10)[0]
-        attribute_id = struct.unpack_from("<H", raw, pos + 0x18)[0]
-        if type_code in (0, _ATTRIBUTE_LIST, _ATTRIBUTE_END):
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST contains an invalid type")
-        if length < 0x1A or length & 7 or pos + length > len(raw):
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST entry length is invalid")
-        if lowest_vcn >= (1 << 63):
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST LowestVcn is invalid")
-        if name_length:
-            if name_offset < 0x1A or name_offset + name_length * 2 > length:
-                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST name exceeds its entry")
-            try:
-                name = raw[
-                    pos + name_offset : pos + name_offset + name_length * 2
-                ].decode("utf-16le")
-            except UnicodeDecodeError as exc:
-                raise NtfsMetadataError(
-                    "NTFS ATTRIBUTE_LIST name is not valid UTF-16LE"
-                ) from exc
-        else:
-            if name_offset not in (0, 0x1A):
-                raise NtfsMetadataError(
-                    "NTFS ATTRIBUTE_LIST empty-name offset is invalid"
-                )
-            name = ""
-        try:
-            decode_ntfs_file_reference(file_reference)
-        except NtfsRecordError as exc:
-            raise NtfsMetadataError(
-                "NTFS ATTRIBUTE_LIST has an invalid MFT reference"
-            ) from exc
-        key = (type_code, name, lowest_vcn)
-        if key in seen:
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST has duplicate entries")
-        if type_code < last_type:
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST entries are not type ordered")
-        stream_key = (type_code, name)
-        prior_vcn = last_vcn_by_stream.get(stream_key)
-        if prior_vcn is not None and lowest_vcn <= prior_vcn:
-            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST extents are not VCN ordered")
-        seen.add(key)
-        last_type = type_code
-        last_vcn_by_stream[stream_key] = lowest_vcn
-        entries.append(
-            NtfsAttributeListEntry(
-                type_code, name, lowest_vcn, file_reference, attribute_id
-            )
-        )
-        pos += length
-    return tuple(entries)
-
-
 def _parse_ntfs_index_entries(
     value: bytes,
     *,
@@ -553,16 +627,20 @@ def _parse_ntfs_index_entries(
     end: int,
     parent_reference: int | None = None,
     allow_children: bool = False,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
     """Parse bounded FILE_NAME index entries and return child VCNs."""
     if start < 0 or end < start or end > len(value):
         raise NtfsMetadataError("NTFS index entries exceed the attribute")
     if len(value) < 32:
         raise NtfsMetadataError("NTFS index value is truncated")
+    if upcase_table is not None and len(upcase_table) != _UPCASE_TABLE_ENTRIES:
+        raise NtfsMetadataError("NTFS index received an invalid $UpCase table")
     result: list[NtfsIndexEntry] = []
     children: list[int] = []
     previous_name = ""
-    names: set[str] = set()
+    previous_key: tuple[int, ...] | None = None
+    names: set[object] = set()
     pos = start
     while pos < end:
         if pos + 16 > end:
@@ -614,21 +692,26 @@ def _parse_ntfs_index_entries(
             name = key[0x42:name_end].decode("utf-16le")
         except UnicodeDecodeError as exc:
             raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-        if (
-            not name.isascii()
-            or name in (".", "..")
-            or "/" in name
-            or "\\" in name
-            or "\x00" in name
-        ):
+        if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
             raise NtfsMetadataError(
-                "NTFS index name is outside the native ASCII profile"
+                "NTFS index name contains an invalid path component"
             )
-        folded = name.lower()
-        if folded in names or (previous_name and folded < previous_name):
+        if upcase_table is not None:
+            encoded_name = name.encode("utf-16le")
+            units = struct.unpack(f"<{len(encoded_name) // 2}H", encoded_name)
+            folded: object = tuple(upcase_table[unit] for unit in units)
+            unsorted = previous_key is not None and folded < previous_key
+            previous_key = folded
+        else:
+            folded = name.lower() if name.isascii() else name
+            previous_is_ascii = previous_name is not None and previous_name.isascii()
+            unsorted = (
+                name.isascii() and previous_is_ascii and folded < previous_name.lower()
+            )
+        if folded in names or unsorted:
             raise NtfsMetadataError("NTFS index names are duplicate or unsorted")
         names.add(folded)
-        previous_name = folded
+        previous_name = name
         result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
         if flags & 1:
             if not allow_children or entry_length < 24 + key_length:
@@ -640,13 +723,35 @@ def _parse_ntfs_index_entries(
     raise NtfsMetadataError("NTFS INDEX_ROOT has no end entry")
 
 
+def _validate_index_upcase_table(
+    upcase_table: tuple[int, ...] | None,
+) -> tuple[int, ...] | None:
+    if upcase_table is None:
+        return None
+    try:
+        table = tuple(upcase_table)
+    except TypeError as exc:
+        raise NtfsMetadataError("NTFS index received an invalid $UpCase table") from exc
+    if len(table) != _UPCASE_TABLE_ENTRIES or any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > 0xFFFF
+        for value in table
+    ):
+        raise NtfsMetadataError("NTFS index received an invalid $UpCase table")
+    return table
+
+
 def parse_ntfs_index_root(
     value: bytes,
     *,
     parent_reference: int | None = None,
     allow_index_allocation: bool = False,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Parse a resident INDEX_ROOT value containing bounded FILE_NAME keys."""
+    upcase_table = _validate_index_upcase_table(upcase_table)
     if len(value) < 32:
         raise NtfsMetadataError("NTFS INDEX_ROOT value is truncated")
     entry_offset, total_size, allocated_size = struct.unpack_from("<III", value, 16)
@@ -665,6 +770,7 @@ def parse_ntfs_index_root(
         end=end,
         parent_reference=parent_reference,
         allow_children=allow_index_allocation,
+        upcase_table=upcase_table,
     )
     return entries
 
@@ -675,6 +781,7 @@ def _parse_ntfs_index_block(
     parent_reference: int | None = None,
     expected_vcn: int | None = None,
     allow_children: bool = False,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[tuple[NtfsIndexEntry, ...], tuple[int, ...]]:
     """Validate an INDX block's USA and parse its bounded index entries."""
     if len(raw_block) < 512 or len(raw_block) % 512:
@@ -713,6 +820,7 @@ def _parse_ntfs_index_block(
         end=end,
         parent_reference=parent_reference,
         allow_children=allow_children,
+        upcase_table=upcase_table,
     )
     if children and not allow_children:
         raise NtfsMetadataError("NTFS INDX child pointers are unsupported")
@@ -724,10 +832,15 @@ def parse_ntfs_index_block(
     *,
     parent_reference: int | None = None,
     expected_vcn: int | None = None,
+    upcase_table: tuple[int, ...] | None = None,
 ) -> tuple[NtfsIndexEntry, ...]:
     """Validate an INDX block and parse entries without exposing child pointers."""
+    upcase_table = _validate_index_upcase_table(upcase_table)
     entries, _children = _parse_ntfs_index_block(
-        raw_block, parent_reference=parent_reference, expected_vcn=expected_vcn
+        raw_block,
+        parent_reference=parent_reference,
+        expected_vcn=expected_vcn,
+        upcase_table=upcase_table,
     )
     return entries
 
@@ -773,8 +886,8 @@ def parse_ntfs_file_name(value: bytes) -> NtfsFileName:
         name = value[66:end].decode("utf-16le")
     except UnicodeDecodeError as exc:
         raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-    if not name.isascii() or any(c in name for c in ("/", "\\", "\x00")):
-        raise NtfsMetadataError("NTFS FILE_NAME is outside the native ASCII profile")
+    if name in (".", "..") or any(c in name for c in ("/", "\\", "\x00")):
+        raise NtfsMetadataError("NTFS FILE_NAME contains an invalid path component")
     return NtfsFileName(
         parent_reference,
         name,
@@ -794,6 +907,25 @@ def parse_ntfs_standard_information(value: bytes) -> NtfsStandardInformation:
     )
 
 
+def _parse_ntfs_upcase_table(raw: bytes) -> tuple[int, ...]:
+    """Parse and validate the bounded 64K-entry UTF-16 NTFS upcase table."""
+    if len(raw) != _UPCASE_TABLE_SIZE:
+        raise NtfsMetadataError("NTFS $UpCase DATA stream has an invalid size")
+    table = struct.unpack("<65536H", raw)
+    if any(table[mapped] != mapped for mapped in table):
+        raise NtfsMetadataError("NTFS $UpCase table contains a non-idempotent mapping")
+    if any(
+        table[codepoint] != codepoint for codepoint in range(ord("A"), ord("Z") + 1)
+    ):
+        raise NtfsMetadataError("NTFS $UpCase table changes an uppercase ASCII letter")
+    if any(
+        table[codepoint] != codepoint - 32
+        for codepoint in range(ord("a"), ord("z") + 1)
+    ):
+        raise NtfsMetadataError("NTFS $UpCase table has unsupported ASCII mappings")
+    return table
+
+
 def _validate_nonresident_data_stream(
     attribute: NtfsAttributeSummary, cluster_size: int, *, name: str
 ) -> None:
@@ -806,67 +938,16 @@ def _validate_nonresident_data_stream(
     if attribute.data_size <= 0 or attribute.data_size > capacity:
         raise NtfsMetadataError(f"{name} DATA size exceeds its allocated runlist")
     if attribute.allocated_size is not None and (
-        attribute.allocated_size != capacity
+        attribute.allocated_size < attribute.data_size
+        or attribute.allocated_size > capacity
         or attribute.allocated_size % cluster_size
-        or attribute.allocated_size < attribute.data_size
     ):
-        raise NtfsMetadataError(f"{name} allocated size disagrees with its runlist")
+        raise NtfsMetadataError(f"{name} allocated size exceeds its runlist")
     if (
         attribute.initialized_size is not None
         and attribute.initialized_size > attribute.data_size
     ):
-        raise NtfsMetadataError(f"{name} initialized size exceeds its file size")
-
-
-def _select_attribute_stream(
-    attributes: tuple[NtfsAttributeSummary, ...],
-    type_code: int,
-    name: str,
-    *,
-    cluster_size: int,
-    display_name: str,
-) -> NtfsAttributeSummary | None:
-    """Select one stream and join only contiguous, validated nonresident extents."""
-    matches = [
-        attribute
-        for attribute in attributes
-        if attribute.type_code == type_code and attribute.name == name
-    ]
-    if not matches:
-        return None
-    if any(not attribute.nonresident for attribute in matches):
-        if len(matches) != 1 or matches[0].nonresident:
-            raise NtfsMetadataError(f"{display_name} has ambiguous resident extents")
-        return matches[0]
-
-    extents = sorted(matches, key=lambda item: item.lowest_vcn or 0)
-    if extents[0].lowest_vcn != 0:
-        raise NtfsMetadataError(f"{display_name} stream does not start at VCN 0")
-    expected_vcn = 0
-    combined_runs: list[NtfsRun] = []
-    for extent in extents:
-        if (
-            extent.lowest_vcn is None
-            or extent.highest_vcn is None
-            or extent.lowest_vcn != expected_vcn
-            or not extent.runs
-        ):
-            raise NtfsMetadataError(f"{display_name} extents have a gap or overlap")
-        run_end = extent.runs[-1].vcn + extent.runs[-1].length
-        if run_end != extent.highest_vcn + 1:
-            raise NtfsMetadataError(f"{display_name} extent runlist is inconsistent")
-        expected_vcn = extent.highest_vcn + 1
-        combined_runs.extend(extent.runs)
-
-    first = extents[0]
-    merged = replace(
-        first,
-        highest_vcn=extents[-1].highest_vcn,
-        run_count=len(combined_runs),
-        runs=tuple(combined_runs),
-    )
-    _validate_nonresident_data_stream(merged, cluster_size, name=display_name)
-    return merged
+        raise NtfsMetadataError(f"{name} initialized size exceeds its DATA size")
 
 
 def probe_ntfs_metadata(
@@ -946,8 +1027,8 @@ def probe_ntfs_metadata(
 
 
 __all__ = [
-    "NtfsAttributeSummary",
     "NtfsAttributeListEntry",
+    "NtfsAttributeSummary",
     "NtfsIndexEntry",
     "NtfsMetadataError",
     "NtfsVolumeState",
@@ -956,8 +1037,8 @@ __all__ = [
     "NtfsRun",
     "NtfsFileName",
     "NtfsStandardInformation",
-    "parse_ntfs_attribute_stream",
     "parse_ntfs_attribute_list",
+    "parse_ntfs_attribute_stream",
     "parse_ntfs_index_root",
     "parse_ntfs_index_block",
     "parse_ntfs_volume_state",
@@ -970,10 +1051,11 @@ __all__ = [
 
 
 class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
-    """Read-only access to validated unnamed DATA of MFT record 0 only."""
+    """Read-only access to bounded NTFS metadata, indexes and unnamed DATA."""
 
     backend_name = "native-ntfs-metadata-ro"
-    case_insensitive_paths = True
+    case_insensitive_paths = False
+    case_insensitive_ascii_paths = True
     max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
     def __init__(self, image_path, offset=0, volume_size=None):
@@ -983,155 +1065,55 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         self.offset = int(offset)
         self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
         self._image_size = os.fstat(self._stream.fileno()).st_size
-        try:
-            self.profile = probe_ntfs_metadata(
-                self.image_path, offset=self.offset, volume_size=volume_size
-            )
-        except Exception:
-            self.close()
-            raise
+        self.profile = probe_ntfs_metadata(
+            self.image_path, offset=self.offset, volume_size=volume_size
+        )
         self._end = self.offset + self.profile.boot.filesystem_size
-        try:
-            if any(a.type_code == _ATTRIBUTE_LIST for a in self.profile.attributes):
-                raise NtfsMetadataError(
-                    "NTFS $MFT ATTRIBUTE_LIST bootstrap is unsupported"
-                )
-            self._mft_data = _select_attribute_stream(
-                self.profile.attributes,
-                0x80,
-                "",
-                cluster_size=self.profile.boot.cluster_size,
-                display_name="$MFT",
-            )
-            if self._mft_data is None:
-                raise NtfsMetadataError("NTFS $MFT has no unnamed DATA stream")
-            _validate_nonresident_data_stream(
-                self._mft_data, self.profile.boot.cluster_size, name="$MFT"
-            )
-            volume_record = self.read_mft_record(3)
-            volume_state = parse_ntfs_volume_state(
-                self._attributes_for_record(3, volume_record)
-            )
-        except Exception:
+        self._mft_data = next(
+            (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
+            None,
+        )
+        self._upcase_table: tuple[int, ...] | None = None
+        if self._mft_data is None:
             self.close()
-            raise
+            raise NtfsMetadataError("MFT record 0 has no unnamed DATA stream")
+        _validate_nonresident_data_stream(
+            self._mft_data, self.profile.boot.cluster_size, name="MFT"
+        )
+        volume_record = self.read_mft_record(3)
+        volume_state = parse_ntfs_volume_state(
+            self._attributes_for_record(3, volume_record)
+        )
         if not volume_state.clean:
             self.close()
             raise NtfsMetadataError("NTFS volume is dirty or requires repair")
         try:
             logfile_record = self.read_mft_record(2)
             logfile_attrs = self._attributes_for_record(2, logfile_record)
-            logfile_data = _select_attribute_stream(
-                logfile_attrs,
-                0x80,
-                "",
-                cluster_size=self.profile.boot.cluster_size,
-                display_name="$LogFile",
+            logfile_data = next(
+                (a for a in logfile_attrs if a.type_code == 0x80 and not a.name), None
             )
             if logfile_data is None:
                 raise NtfsMetadataError("NTFS $LogFile has no unnamed DATA stream")
             _validate_nonresident_data_stream(
                 logfile_data, self.profile.boot.cluster_size, name="$LogFile"
             )
-            if logfile_data.data_size < 2 * _LOGFILE_PAGE_SIZE:
+            if logfile_data.data_size < 2 * _LOGFILE_PAGE_SIZE or (
+                logfile_data.initialized_size is not None
+                and logfile_data.initialized_size < 2 * _LOGFILE_PAGE_SIZE
+            ):
                 raise NtfsMetadataError(
                     "NTFS $LogFile DATA stream is shorter than two restart pages"
                 )
             self.logfile_restart = validate_ntfs_logfile_restart_pages(
-                self._read_attribute_range(logfile_data, 0, 2 * _LOGFILE_PAGE_SIZE)
+                self._read_nonresident_range(logfile_data, 0, 2 * _LOGFILE_PAGE_SIZE)
             )
             self.profile = replace(self.profile, logfile_restart=self.logfile_restart)
+            self._upcase_table = self._load_upcase_table()
         except Exception:
             self.close()
             raise
         self.close()
-
-    def _attributes_for_record(self, record_number, record):
-        """Resolve a resident attribute list without trusting unlisted records."""
-        attributes = parse_ntfs_attribute_stream(
-            record, cluster_count=self.profile.boot.cluster_count
-        )
-        list_attributes = [a for a in attributes if a.type_code == _ATTRIBUTE_LIST]
-        if not list_attributes:
-            return attributes
-        if record_number == 0:
-            raise NtfsMetadataError("NTFS $MFT ATTRIBUTE_LIST bootstrap is unsupported")
-        if len(list_attributes) != 1:
-            raise NtfsMetadataError("NTFS FILE record has ambiguous ATTRIBUTE_LIST")
-        attribute_list = list_attributes[0]
-        if attribute_list.nonresident or attribute_list.resident_value is None:
-            raise NtfsMetadataError("nonresident NTFS ATTRIBUTE_LIST is unsupported")
-
-        base_reference = record_number | (record.sequence_number << 48)
-        base_attributes = attributes
-        loaded_records = {base_reference: (record_number, record, base_attributes)}
-        entries = parse_ntfs_attribute_list(attribute_list.resident_value)
-        matched = []
-        matched_keys: set[tuple[int, int]] = set()
-        for entry in entries:
-            if entry.file_reference not in loaded_records:
-                extension_number, _sequence = decode_ntfs_file_reference(
-                    entry.file_reference
-                )
-                extension = self.read_mft_record(
-                    extension_number, reference=entry.file_reference
-                )
-                if extension.base_file_reference != base_reference:
-                    raise NtfsMetadataError(
-                        "NTFS extension FILE record has the wrong base reference"
-                    )
-                extension_attributes = parse_ntfs_attribute_stream(
-                    extension, cluster_count=self.profile.boot.cluster_count
-                )
-                if any(a.type_code == _ATTRIBUTE_LIST for a in extension_attributes):
-                    raise NtfsMetadataError(
-                        "nested NTFS extension ATTRIBUTE_LIST is unsupported"
-                    )
-                loaded_records[entry.file_reference] = (
-                    extension_number,
-                    extension,
-                    extension_attributes,
-                )
-
-            _number, _target_record, target_attributes = loaded_records[
-                entry.file_reference
-            ]
-            candidates = [
-                attribute
-                for attribute in target_attributes
-                if attribute.type_code == entry.type_code
-                and attribute.name == entry.name
-                and (attribute.lowest_vcn if attribute.nonresident else 0)
-                == entry.lowest_vcn
-            ]
-            if len(candidates) != 1:
-                raise NtfsMetadataError(
-                    "NTFS ATTRIBUTE_LIST entry does not identify one exact attribute"
-                )
-            target = candidates[0]
-            if entry.attribute_id not in (0, target.attribute_id):
-                raise NtfsMetadataError(
-                    "NTFS ATTRIBUTE_LIST attribute ID does not match its record"
-                )
-            match_key = (entry.file_reference, target.attribute_id)
-            if match_key in matched_keys:
-                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST repeats an attribute")
-            matched_keys.add(match_key)
-            matched.append(target)
-
-        for reference, (
-            _number,
-            _target_record,
-            target_attributes,
-        ) in loaded_records.items():
-            for attribute in target_attributes:
-                if attribute.type_code == _ATTRIBUTE_LIST:
-                    continue
-                if (reference, attribute.attribute_id) not in matched_keys:
-                    raise NtfsMetadataError(
-                        "NTFS extension record contains an unlisted attribute"
-                    )
-        return tuple(matched)
 
     def close(self):
         self._stream.close()
@@ -1140,24 +1122,300 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if self._stream.closed:
             self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
 
+    def _load_upcase_table(self) -> tuple[int, ...] | None:
+        """Load $UpCase only when its unnamed DATA stream has the exact size."""
+        try:
+            record = self.read_mft_record(10)
+            attributes = self._attributes_for_record(10, record)
+        except NtfsMetadataError:
+            return None
+        data_streams = [
+            attribute
+            for attribute in attributes
+            if attribute.type_code == 0x80 and not attribute.name
+        ]
+        if len(data_streams) != 1:
+            return None
+        data = data_streams[0]
+        if data.resident_value is not None:
+            raw = data.resident_value
+        else:
+            if data.data_size != _UPCASE_TABLE_SIZE or (
+                data.initialized_size is not None
+                and data.initialized_size != _UPCASE_TABLE_SIZE
+            ):
+                return None
+            try:
+                _validate_nonresident_data_stream(
+                    data, self.profile.boot.cluster_size, name="$UpCase"
+                )
+                raw = self._read_nonresident_range(data, 0, _UPCASE_TABLE_SIZE)
+            except NtfsMetadataError:
+                return None
+        try:
+            return _parse_ntfs_upcase_table(raw)
+        except NtfsMetadataError:
+            return None
+
+    def _name_key(self, name: str) -> tuple[int, ...]:
+        """Return a conservative NTFS comparison key for one path component."""
+        try:
+            encoded = name.encode("utf-16le")
+        except UnicodeEncodeError as exc:
+            raise NtfsMetadataError("NTFS path component is not valid UTF-16") from exc
+        if len(encoded) > 255 * 2:
+            raise NtfsMetadataError("NTFS path component exceeds 255 UTF-16 code units")
+        table = getattr(self, "_upcase_table", None)
+        if table is None:
+            if name.isascii():
+                encoded = name.lower().encode("utf-16le")
+            return struct.unpack(f"<{len(encoded) // 2}H", encoded)
+        units = struct.unpack(f"<{len(encoded) // 2}H", encoded)
+        return tuple(table[unit] for unit in units)
+
+    def _path_names_equal(self, requested: str, actual: str) -> bool:
+        if requested == actual:
+            return True
+        return self._name_key(requested) == self._name_key(actual)
+
+    def _attributes_for_record(
+        self, record_number: int, record: NtfsFileRecordHeader
+    ) -> tuple[NtfsAttributeSummary, ...]:
+        """Resolve a bounded base-record ATTRIBUTE_LIST without mutating the image."""
+        if (
+            not isinstance(record_number, int)
+            or isinstance(record_number, bool)
+            or record_number < 0
+            or record_number >= (1 << 48)
+        ):
+            raise NtfsMetadataError("ATTRIBUTE_LIST base record number is invalid")
+        if getattr(record, "base_file_reference", 0):
+            raise NtfsMetadataError(
+                "NTFS extension record cannot be used as a base file"
+            )
+        cluster_count = self.profile.boot.cluster_count
+        upcase_table = getattr(self, "_upcase_table", None)
+        sequence_number = getattr(record, "sequence_number", 0)
+        base_reference = record_number | (sequence_number << 48)
+        base_attributes = parse_ntfs_attribute_stream(
+            record,
+            cluster_count=cluster_count,
+            upcase_table=upcase_table,
+            allow_attribute_list=True,
+        )
+        list_attributes = [
+            attribute
+            for attribute in base_attributes
+            if attribute.type_code == _ATTRIBUTE_LIST
+        ]
+        if not list_attributes:
+            return base_attributes
+        if len(list_attributes) != 1:
+            raise NtfsMetadataError("NTFS file has ambiguous ATTRIBUTE_LIST attributes")
+
+        list_attribute = list_attributes[0]
+        if list_attribute.nonresident:
+            if list_attribute.data_size > _MAX_ATTRIBUTE_LIST_BYTES:
+                raise NtfsMetadataError("NTFS ATTRIBUTE_LIST exceeds its 1 MiB limit")
+            _validate_nonresident_data_stream(
+                list_attribute, self.profile.boot.cluster_size, name="ATTRIBUTE_LIST"
+            )
+            list_value = self._read_nonresident_range(
+                list_attribute, 0, list_attribute.data_size
+            )
+        else:
+            list_value = list_attribute.resident_value
+        if list_value is None:
+            raise NtfsMetadataError("NTFS ATTRIBUTE_LIST has no readable value")
+        entries = parse_ntfs_attribute_list(list_value, upcase_table=upcase_table)
+
+        base_key = (record_number, sequence_number)
+        loaded_records: dict[
+            tuple[int, int],
+            tuple[NtfsFileRecordHeader, tuple[NtfsAttributeSummary, ...]],
+        ] = {base_key: (record, base_attributes)}
+        loaded_attribute_count = len(base_attributes)
+        resolved_entries: list[tuple[NtfsAttributeListEntry, NtfsAttributeSummary]] = []
+        listed_identities: set[tuple[int, int, int, str, int]] = set()
+
+        for entry in entries:
+            try:
+                target_number, target_sequence = decode_ntfs_file_reference(
+                    entry.file_reference
+                )
+            except NtfsRecordError as exc:
+                raise NtfsMetadataError(str(exc)) from exc
+            if target_number == record_number and target_sequence != sequence_number:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST base-record sequence does not match"
+                )
+            target_key = (target_number, target_sequence)
+            if target_key not in loaded_records:
+                if len(loaded_records) >= _MAX_ATTRIBUTE_LIST_RECORDS:
+                    raise NtfsMetadataError(
+                        "NTFS ATTRIBUTE_LIST references too many MFT records"
+                    )
+                extension = self.read_mft_record(
+                    target_number, reference=entry.file_reference
+                )
+                if extension.base_file_reference != base_reference:
+                    raise NtfsMetadataError(
+                        "NTFS extension record points to a different base FILE record"
+                    )
+                extension_attributes = parse_ntfs_attribute_stream(
+                    extension,
+                    cluster_count=cluster_count,
+                    upcase_table=upcase_table,
+                    allow_attribute_list=True,
+                )
+                if any(
+                    attribute.type_code == _ATTRIBUTE_LIST
+                    for attribute in extension_attributes
+                ):
+                    raise NtfsMetadataError(
+                        "nested extension-record ATTRIBUTE_LIST is unsupported"
+                    )
+                loaded_attribute_count += len(extension_attributes)
+                if loaded_attribute_count > _MAX_ATTRIBUTES:
+                    raise NtfsMetadataError(
+                        "NTFS ATTRIBUTE_LIST resolves too many FILE attributes"
+                    )
+                loaded_records[target_key] = (extension, extension_attributes)
+
+            _target_record, target_attributes = loaded_records[target_key]
+            candidates = [
+                attribute
+                for attribute in target_attributes
+                if attribute.type_code == entry.type_code
+                and attribute.name == entry.name
+                and (
+                    attribute.attribute_id == entry.attribute_id
+                    or (entry.lowest_vcn > 0 and entry.attribute_id == 0)
+                )
+                and (attribute.lowest_vcn if attribute.nonresident else 0)
+                == entry.lowest_vcn
+            ]
+            if len(candidates) != 1:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST entry does not identify one FILE attribute"
+                )
+            resolved_entries.append((entry, candidates[0]))
+            listed_identities.add(
+                (
+                    entry.file_reference,
+                    entry.type_code,
+                    candidates[0].attribute_id,
+                    entry.name,
+                    entry.lowest_vcn,
+                )
+            )
+
+        for (target_number, target_sequence), (
+            _target,
+            target_attributes,
+        ) in loaded_records.items():
+            target_reference = target_number | (target_sequence << 48)
+            for attribute in target_attributes:
+                if attribute.type_code == _ATTRIBUTE_LIST:
+                    continue
+                identity = (
+                    target_reference,
+                    attribute.type_code,
+                    attribute.attribute_id,
+                    attribute.name,
+                    attribute.lowest_vcn if attribute.nonresident else 0,
+                )
+                if identity not in listed_identities:
+                    raise NtfsMetadataError(
+                        "NTFS FILE attribute is missing from ATTRIBUTE_LIST"
+                    )
+
+        grouped: dict[tuple[int, str], list[NtfsAttributeSummary]] = {}
+        group_order: list[tuple[int, str]] = []
+        for _entry, attribute in resolved_entries:
+            key = (attribute.type_code, attribute.name)
+            if key not in grouped:
+                grouped[key] = []
+                group_order.append(key)
+            grouped[key].append(attribute)
+
+        resolved: list[NtfsAttributeSummary] = [list_attribute]
+        for key in group_order:
+            extents = grouped[key]
+            if not any(attribute.nonresident for attribute in extents):
+                if len(extents) != 1:
+                    raise NtfsMetadataError(
+                        "NTFS resident FILE attribute has duplicate ATTRIBUTE_LIST entries"
+                    )
+                resolved.append(extents[0])
+                continue
+            if any(not attribute.nonresident for attribute in extents):
+                raise NtfsMetadataError(
+                    "NTFS FILE attribute mixes resident and nonresident extents"
+                )
+            extents.sort(key=lambda attribute: attribute.lowest_vcn or 0)
+            expected_vcn = 0
+            for extent in extents:
+                if extent.lowest_vcn != expected_vcn or extent.highest_vcn is None:
+                    raise NtfsMetadataError(
+                        "NTFS ATTRIBUTE_LIST extents have a VCN gap or overlap"
+                    )
+                expected_vcn = extent.highest_vcn + 1
+            if sum(extent.run_count for extent in extents) > _MAX_ATTRIBUTE_LIST_RUNS:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST resolves too many runlist entries"
+                )
+            declared_sizes = {
+                extent.data_size for extent in extents if extent.data_size
+            }
+            if len(declared_sizes) > 1:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST extents disagree on data size"
+                )
+            declared_allocated_sizes = {
+                extent.allocated_size for extent in extents if extent.allocated_size
+            }
+            declared_initialized_sizes = {
+                extent.initialized_size for extent in extents if extent.initialized_size
+            }
+            if len(declared_allocated_sizes) > 1 or len(declared_initialized_sizes) > 1:
+                raise NtfsMetadataError(
+                    "NTFS ATTRIBUTE_LIST extents disagree on allocated/initialized sizes"
+                )
+            first = extents[0]
+            resolved.append(
+                replace(
+                    first,
+                    length=sum(extent.length for extent in extents),
+                    highest_vcn=extents[-1].highest_vcn,
+                    run_count=sum(extent.run_count for extent in extents),
+                    runs=tuple(run for extent in extents for run in extent.runs),
+                    data_size=next(iter(declared_sizes), 0),
+                    allocated_size=next(
+                        iter(declared_allocated_sizes), first.allocated_size
+                    ),
+                    initialized_size=next(
+                        iter(declared_initialized_sizes), first.initialized_size
+                    ),
+                )
+            )
+        return tuple(resolved)
+
     def list_dir(self, path="/"):
         record_number, record = self._resolve(path)
         if not record.is_directory:
             raise NtfsMetadataError("NTFS path is not a directory")
         entries = self.list_dir_by_record(record_number, record)
+        parent_reference = record_number | (record.sequence_number << 48)
         result = []
         for entry in entries:
             child_number = entry.reference & ((1 << 48) - 1)
             child = self.read_mft_record(child_number, reference=entry.reference)
-            if child.is_directory != entry.is_directory:
-                raise NtfsMetadataError("NTFS index directory flag disagrees with MFT")
-            child_attrs = self._attributes_for_record(child_number, child)
-            data = _select_attribute_stream(
-                child_attrs,
-                0x80,
-                "",
-                cluster_size=self.profile.boot.cluster_size,
-                display_name="NTFS file",
+            child_attrs = self._validate_index_entry_metadata(
+                entry, child, parent_reference
+            )
+            data = next(
+                (a for a in child_attrs if a.type_code == 0x80 and not a.name), None
             )
             result.append(
                 {
@@ -1182,16 +1440,16 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     def file_size(self, path):
         if path == "/$MFT":
             return self._mft_data.data_size
-        _number, record = self._resolve(path)
+        number, record = self._resolve(path)
         if record.is_directory:
             return 0
-        attributes = self._attributes_for_record(_number, record)
-        data = _select_attribute_stream(
-            attributes,
-            0x80,
-            "",
-            cluster_size=self.profile.boot.cluster_size,
-            display_name="NTFS file",
+        data = next(
+            (
+                a
+                for a in self._attributes_for_record(number, record)
+                if a.type_code == 0x80 and not a.name
+            ),
+            None,
         )
         if data is None:
             raise NtfsMetadataError("NTFS file has no unnamed DATA attribute")
@@ -1200,6 +1458,29 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             if data.resident_value is not None
             else data.data_size
         )
+
+    def _read_nonresident_range(self, attribute, offset: int, length: int) -> bytes:
+        """Read logical stream bytes, zero-filling the uninitialized tail."""
+        data_size = attribute.data_size
+        initialized_size = (
+            data_size
+            if attribute.initialized_size is None
+            else attribute.initialized_size
+        )
+        if not 0 <= initialized_size <= data_size:
+            raise NtfsMetadataError("NTFS initialized size exceeds its DATA size")
+        if offset < 0 or length < 0:
+            raise NtfsMetadataError("negative NTFS read range")
+        if offset >= data_size or not length:
+            return b""
+        length = min(length, data_size - offset)
+        initialized_length = max(0, min(length, initialized_size - offset))
+        data = (
+            self._read_runs(attribute.runs, offset, initialized_length)
+            if initialized_length
+            else b""
+        )
+        return data + bytes(length - initialized_length)
 
     def read_file_range(self, path, offset=0, length=1 << 20):
         if (
@@ -1215,20 +1496,17 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             raise NtfsMetadataError("NTFS read range exceeds the 1 MiB limit")
         if path == "/$MFT":
             data = self._mft_data
-            if offset >= data.data_size or not length:
-                return b""
-            length = min(length, data.data_size - offset)
-            return self._read_attribute_range(data, offset, length)
-        _number, record = self._resolve(path)
+            return self._read_nonresident_range(data, offset, length)
+        number, record = self._resolve(path)
         if record.is_directory:
             raise NtfsMetadataError("cannot read directory content as a file")
-        attributes = self._attributes_for_record(_number, record)
-        data = _select_attribute_stream(
-            attributes,
-            0x80,
-            "",
-            cluster_size=self.profile.boot.cluster_size,
-            display_name="NTFS file",
+        data = next(
+            (
+                a
+                for a in self._attributes_for_record(number, record)
+                if a.type_code == 0x80 and not a.name
+            ),
+            None,
         )
         if data is None:
             raise NtfsMetadataError("NTFS file has no unnamed DATA attribute")
@@ -1236,10 +1514,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             if offset >= len(data.resident_value) or not length:
                 return b""
             return data.resident_value[offset : offset + length]
-        if offset >= data.data_size or not length:
-            return b""
-        length = min(length, data.data_size - offset)
-        return self._read_attribute_range(data, offset, length)
+        return self._read_nonresident_range(data, offset, length)
 
     def _read_runs(self, runs, offset, length):
         self.reopen()
@@ -1271,40 +1546,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             raise NtfsMetadataError("NTFS DATA runlist does not cover requested range")
         return bytes(output)
 
-    def _read_attribute_range(self, attribute, offset, length):
-        """Read initialized bytes and return zeros for NTFS uninitialized tails."""
-        if offset < 0 or length < 0:
-            raise NtfsMetadataError("negative NTFS read range")
-        if offset >= attribute.data_size or not length:
-            return b""
-        end = min(offset + length, attribute.data_size)
-        initialized_size = attribute.initialized_size
-        if initialized_size is None:
-            initialized_size = attribute.data_size
-        initialized_size = min(initialized_size, attribute.data_size)
-        initialized_end = min(end, initialized_size)
-        initialized_length = max(0, initialized_end - offset)
-        output = (
-            self._read_runs(attribute.runs, offset, initialized_length)
-            if initialized_length
-            else b""
-        )
-        zero_start = max(offset, initialized_end)
-        if zero_start < end:
-            output += bytes(end - zero_start)
-        if len(output) != end - offset:
-            raise NtfsMetadataError("short NTFS initialized-range read")
-        return output
-
     def _resolve(self, path):
         if not isinstance(path, str) or not path.startswith("/"):
             raise NtfsMetadataError("NTFS path must be absolute")
         parts = [part for part in path.split("/") if part]
-        if any(
-            not part.isascii() or part in (".", "..") or "\\" in part or "\x00" in part
-            for part in parts
-        ):
-            raise NtfsMetadataError("NTFS path is outside the native ASCII profile")
+        if any(part in (".", "..") or "\\" in part or "\x00" in part for part in parts):
+            raise NtfsMetadataError("NTFS path contains an invalid component")
         number = 5
         record = self.read_mft_record(number)
         visited = {number}
@@ -1313,18 +1560,56 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 (
                     item
                     for item in self.list_dir_by_record(number, record)
-                    if item.name.lower() == part.lower()
+                    if self._path_names_equal(item.name, part)
                 ),
                 None,
             )
             if match is None:
                 raise NtfsMetadataError(f"NTFS path component not found: {part}")
-            number = match.reference & ((1 << 48) - 1)
-            if number in visited:
+            child_number = match.reference & ((1 << 48) - 1)
+            if child_number in visited:
                 raise NtfsMetadataError("NTFS directory tree contains a cycle")
-            visited.add(number)
-            record = self.read_mft_record(number, reference=match.reference)
+            visited.add(child_number)
+            parent_reference = number | (record.sequence_number << 48)
+            child_record = self.read_mft_record(child_number, reference=match.reference)
+            self._validate_index_entry_metadata(match, child_record, parent_reference)
+            number, record = child_number, child_record
         return number, record
+
+    def _validate_index_entry_metadata(self, entry, child_record, parent_reference):
+        """Cross-check a directory index key against the child's MFT names."""
+        if child_record.is_directory != entry.is_directory:
+            raise NtfsMetadataError("NTFS index directory flag disagrees with MFT")
+        child_number = entry.reference & ((1 << 48) - 1)
+        attributes = self._attributes_for_record(child_number, child_record)
+        file_name_attributes = [
+            attribute for attribute in attributes if attribute.type_code == 0x30
+        ]
+        if not file_name_attributes:
+            raise NtfsMetadataError("NTFS index child has no FILE_NAME attribute")
+
+        matching_name = False
+        for attribute in file_name_attributes:
+            if (
+                attribute.name
+                or attribute.nonresident
+                or attribute.resident_value is None
+            ):
+                raise NtfsMetadataError(
+                    "NTFS FILE_NAME attribute layout is unsupported"
+                )
+            file_name = parse_ntfs_file_name(attribute.resident_value)
+            if (
+                file_name.parent_reference == parent_reference
+                and self._path_names_equal(file_name.name, entry.name)
+                and bool(file_name.file_attributes & 0x10000000) == entry.is_directory
+            ):
+                matching_name = True
+        if not matching_name:
+            raise NtfsMetadataError(
+                "NTFS directory index entry disagrees with child FILE_NAME metadata"
+            )
+        return attributes
 
     def list_dir_by_record(self, record_number, record):
         attrs = self._attributes_for_record(record_number, record)
@@ -1348,20 +1633,16 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             end=16 + total_size,
             parent_reference=parent_reference,
             allow_children=bool(index_flags & 1),
+            upcase_table=getattr(self, "_upcase_table", None),
         )
         entries = list(root_entries)
         if index_flags & 1:
-            allocation = _select_attribute_stream(
-                attrs,
-                0xA0,
-                "$I30",
-                cluster_size=self.profile.boot.cluster_size,
-                display_name="NTFS $I30 INDEX_ALLOCATION",
-            )
-            if allocation is None:
+            allocations = [a for a in attrs if a.type_code == 0xA0 and a.name == "$I30"]
+            if len(allocations) != 1:
                 raise NtfsMetadataError(
                     "NTFS directory has no unique $I30 INDEX_ALLOCATION"
                 )
+            allocation = allocations[0]
             _validate_nonresident_data_stream(
                 allocation, self.profile.boot.cluster_size, name="$I30"
             )
@@ -1379,7 +1660,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 if vcn < 0 or vcn * block_size >= allocation.data_size:
                     raise NtfsMetadataError("NTFS $I30 child VCN is outside allocation")
                 visited_vcns.add(vcn)
-                block = self._read_attribute_range(
+                block = self._read_nonresident_range(
                     allocation, vcn * block_size, block_size
                 )
                 block_entries, block_children = _parse_ntfs_index_block(
@@ -1387,13 +1668,14 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     parent_reference=parent_reference,
                     expected_vcn=vcn,
                     allow_children=True,
+                    upcase_table=getattr(self, "_upcase_table", None),
                 )
                 entries.extend(block_entries)
                 pending.extend(block_children)
-        unique: dict[tuple[str, int], NtfsIndexEntry] = {}
-        names: set[str] = set()
+        unique: dict[tuple[tuple[int, ...], int], NtfsIndexEntry] = {}
+        names: set[tuple[int, ...]] = set()
         for entry in entries:
-            folded = entry.name.casefold()
+            folded = self._name_key(entry.name)
             if folded in names:
                 raise NtfsMetadataError("NTFS directory index contains duplicate names")
             names.add(folded)

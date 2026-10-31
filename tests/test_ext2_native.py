@@ -4,6 +4,7 @@
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -70,7 +71,20 @@ def test_native_ext2_file_and_directory_crud_is_consistent(tmp_path):
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
 
+    root_links_before = writer._fs._u16(writer._fs._read_inode(2), 26)
     writer.mkdir("/evidence")
+    assert writer._fs._u16(writer._fs._read_inode(2), 26) == root_links_before + 1
+    directory_entry = writer._fs._lookup_child(2, b"evidence")
+    assert directory_entry is not None
+    directory_inode = directory_entry["inode"]
+    assert writer._fs._u16(writer._fs._read_inode(directory_inode), 26) == 2
+    _, _, directory_entries = writer._fs._dir_entries(directory_inode)
+    dot_entries = {
+        item["name_bytes"]: item["inode"]
+        for item in directory_entries
+        if item["name_bytes"] in (b".", b"..")
+    }
+    assert dot_entries == {b".": directory_inode, b"..": 2}
     writer.write_file("/evidence/one.bin", b"first\x00payload")
     assert writer.read_file("/evidence/one.bin") == b"first\x00payload"
     writer.write_file("/evidence/one.bin", b"replacement" * 300)
@@ -183,6 +197,39 @@ def test_native_ext2_writer_range_refusal_preserves_image_bytes(tmp_path):
         writer._fs._write_at(writer._fs.filesystem_size - 1, b"overflow")
 
     assert caught.value.code is ext2_native.RefusalCode.RANGE_OUT_OF_BOUNDS
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_mkdir_preflights_parent_link_overflow_before_allocation(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "link-overflow.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    parent_raw = writer._fs._read_inode(2)
+    struct.pack_into("<H", parent_raw, 26, 0xFFFF)
+    writer._fs._write_inode(2, parent_raw)
+    before = image.read_bytes()
+
+    allocations = []
+    allocate_inode = ext2_native._Ext2FS._allocate_inode
+    allocate_block = ext2_native._Ext2FS._allocate_block
+
+    def record_inode_allocation(fs, *args, **kwargs):
+        allocations.append("inode")
+        return allocate_inode(fs, *args, **kwargs)
+
+    def record_block_allocation(fs, *args, **kwargs):
+        allocations.append("block")
+        return allocate_block(fs, *args, **kwargs)
+
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_inode", record_inode_allocation)
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_block", record_block_allocation)
+
+    with pytest.raises(NativeExt2Error, match="parent link counter overflow"):
+        writer.mkdir("/refused")
+
+    assert allocations == []
     assert image.read_bytes() == before
 
 

@@ -190,6 +190,12 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
 NATIVE_CAPABILITY_PROFILES = MappingProxyType(
     {profile.profile_id: profile for profile in NATIVE_CAPABILITY_MATRIX}
 )
+NATIVE_CAPABILITY_PROFILES_BY_BACKEND_INTERFACE = MappingProxyType(
+    {
+        (profile.backend, profile.interface): profile
+        for profile in NATIVE_CAPABILITY_MATRIX
+    }
+)
 NATIVE_WRITE_CAPABILITIES_BY_STRATEGY = MappingProxyType(
     {profile.write_strategy: profile.write_capabilities for profile in _WRITE_PROFILES}
 )
@@ -204,3 +210,10 @@ def get_native_capability_matrix() -> dict[str, object]:
         "version": CAPABILITY_MATRIX_VERSION,
         "profiles": [profile.to_dict() for profile in NATIVE_CAPABILITY_MATRIX],
     }
+
+
+def get_native_capability_profile(
+    backend: str, interface: str
+) -> CapabilityProfile | None:
+    """Return the canonical profile for one backend/interface pair, if known."""
+    return NATIVE_CAPABILITY_PROFILES_BY_BACKEND_INTERFACE.get((backend, interface))

@@ -55,6 +55,7 @@ nav:
   - Движок записи (MF-WE): write_engine.md
   - API: api.md
   - Demos: demos.md
+  - Поддержка проекта: donations.md
   - Синхронизация кода: sync.md
   - Разработчикам:
       - Структура репозитория: structure.md

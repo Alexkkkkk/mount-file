@@ -17,14 +17,16 @@ Licensed under the MIT License - see the LICENSE file for details.
 # Mount File
 
 **Файловый менеджер для raw-образов дисков и дампов NAND/eMMC.** Просмотр и
-извлечение файлов, чтение таблиц разделов MBR/GPT, а в образах FAT32 — создание,
-перезапись и удаление файлов и папок. Вся работа идёт с файлом образа: проект
-никогда не пишет данные обратно на устройство.
+извлечение файлов, чтение таблиц разделов MBR/GPT, bounded native read для FAT,
+ext, exFAT и NTFS, а также ограниченная native-запись в FAT32, ext2 и exFAT.
+Вся работа идёт с файлом образа: проект никогда не пишет данные обратно на
+устройство.
 
 > **English:** Mount File is a desktop file manager for raw disk images and
 > NAND/eMMC dumps — browse and extract files, read MBR/GPT partition tables,
-> and create/replace/delete files and folders in FAT32 images. Everything
-> happens inside the image file; nothing is flashed back to the device.
+> inspect bounded native FAT, ext, exFAT and NTFS profiles, and perform limited
+> writes in FAT32, ext2 and exFAT images. Everything happens inside the image
+> file; nothing is flashed back to the device.
 
 | | |
 |---|---|
@@ -71,6 +73,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 - [Структура проекта](#структура-проекта)
 - [Ограничения](#ограничения)
 - [Участие в разработке](#участие-в-разработке)
+- [Поддержка проекта](#поддержка-проекта)
 - [Лицензия](#лицензия)
 
 ## Состав проекта
@@ -124,8 +127,9 @@ Licensed under the MIT License - see the LICENSE file for details.
 - Колонки Имя / Тип / Размер / Дата / Атрибуты: «Имя» занимает свободное место,
   у папок тип — «Папка», размер — `<Папка>`, атрибуты — `----c`; длинные имена
   обрезаются по центру и видны целиком в подсказке.
-- Перед записью в FAT32-образ GUI предлагает создать резервную копию
-  `<image>.bak`; при ошибке копирования операция записи отменяется.
+- Перед первой mutation в текущей GUI-сессии native writer автоматически
+  сохраняет полную копию образа в `~/.mountfile/backups`; если копирование не
+  удаётся, запись не начинается. Хранятся последние три копии на имя образа.
 
 ### DFIR, AI и служебное
 
@@ -329,13 +333,14 @@ python main.py --olma <команда># слой самоанализа OLMA (с
 
 В окне выберите образ (**File → Open image…**), затем том в списке **Volume**
 (раздел или **Whole image**). Двойной щелчок открывает папку или файл в
-встроенном HEX-редакторе, кнопка **Extract…** извлекает файл на диск. Для тома FAT32
-доступны **Import file…** и **New folder**.
+встроенном HEX-редакторе, кнопка **Extract…** извлекает файл на диск. **Import**,
+**New folder**, **Rename**, **Delete** и сохранение HEX доступны только если
+выбранный том проходит native writer profile gates для FAT32, ext2 или exFAT.
 
 > ⚠️ **Импорт, создание, переименование и удаление изменяют сам файл образа.**
-> Работайте с копией образа или сделайте резервную копию заранее. `--backup`
-> создаёт соседний файл `<image>.bak`, но не заменяет независимую резервную
-> копию и проверку свободного места.
+> Работайте с копией образа. GUI перед первой записью создаёт снимок в
+> `~/.mountfile/backups`; CLI `--backup` создаёт соседний `<image>.bak`. Ни один
+> из этих механизмов не заменяет проверку свободного места и независимую копию.
 
 ## Командная строка
 
@@ -343,7 +348,7 @@ CLI живёт в `mountfile/cli.py` и доступен и через `python m
 `python -m mountfile`; Qt для него не требуется.
 
 ```text
-python -m mountfile {volumes,info,ls,get,put,mkdir,mv,rm,decode,split,autopick,
+python -m mountfile {volumes,info,ls,stat,read-range,capabilities,get,put,mkdir,mv,rm,decode,split,autopick,
                      grep,hash,timeline,timeline-export,timestomp,yara,
                      unallocated-scan,slack,timeline-build,timeline-query,
                      search,yara-scan,timestomp-scan,slack-extract,live-diff} …
@@ -369,6 +374,9 @@ python -m mountfile {volumes,info,ls,get,put,mkdir,mv,rm,decode,split,autopick,
 | `volumes` | список найденных томов и смещений | нет |
 | `info` | размер, сигнатура и сводка томов | нет |
 | `ls` | содержимое каталога внутри образа | нет |
+| `stat` | JSON-метаданные пути из выбранного native/legacy reader | нет |
+| `read-range` | bounded диапазон байтов regular file (до 16 MiB) | только новый output-файл, если указан |
+| `capabilities` | версия и список ограниченных native read/write профилей | нет |
 | `get` | извлечь файл или каталог во внешний каталог | нет |
 | `autopick` | автоматически подобрать рабочий том | нет |
 | `decode` | расшифровать дамп RT809H (MST/MTK) | создаёт новый файл |
@@ -410,8 +418,8 @@ cluster chain — это должен сделать вызывающий код
 
 ### Общие аргументы целевых команд
 
-Применимы к `volumes`, `info`, `ls`, `get`, `put`, `mkdir`, `mv`, `rm`,
-`autopick`:
+Применимы к `volumes`, `info`, `ls`, `stat`, `read-range`, `get`, `put`, `mkdir`,
+`mv`, `rm`, `autopick`:
 
 | Аргумент | Действие |
 |---|---|
@@ -743,6 +751,12 @@ pytest tests/ -v
 | синтетические образы для прогона | `make sample` |
 | очистка артефактов | `make clean` |
 
+Pytest запускается с `-ra`: итоговый вывод перечисляет skipped/xfail тесты и
+причины. CI также публикует `test-results.xml` отдельным artifact для каждой
+комбинации ОС/Python; в JUnit XML сохранены исходы и сообщения skip/xfail.
+Смотрите артефакт соответствующего job, прежде чем сравнивать проценты coverage
+или трактовать зелёный job как полный прогон всех optional integrations.
+
 `mountfile_all.py` прогоняет доступный функционал за один запуск. Команды над
 образом по умолчанию работают без записи; демонстрационные операции записи
 включаются только с `--allow-write`:
@@ -863,15 +877,41 @@ mount-file/
   образа, в который записываете.
 
 ## Участие в разработке
-
 1. Форк → ветка `feat/my-feature`.
 2. `pip install -e ".[dev]"` + `pre-commit install`.
 3. Тесты в `tests/`, коммиты в формате [Conventional Commits](https://www.conventionalcommits.org/).
 4. PR.
-
 Подробнее — [CONTRIBUTING.md](CONTRIBUTING.md). Вопросы по уязвимостям — по
 правилам [SECURITY.md](SECURITY.md), без публичных issue. Правила общения —
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
+
+## Поддержка проекта
+
+![Реклама поддержки open-source проектов](docs/assets/project-donation-ad.png)
+
+Готовая рекламная кампания и макеты находятся в [документации по донатам](docs/donation-campaign.md).
+Если проект оказался полезен и вы хотите поддержать его развитие, можно отправить
+добровольный донат в сети **TON**:
+
+Подробности и безопасные рекомендации собраны в [руководстве по поддержке](docs/donations.md).
+
+```text
+UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
+```
+
+- [Открыть TON-кошелёк для оплаты](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation)
+- [Открыть адрес в TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
+- Сеть: **TON**
+- Назначение: поддержка разработки, тестирования и автоматизации MountFile
+
+![QR-код для доната в TON](docs/assets/ton-donation-qr.png)
+
+Отсканируйте QR-код приложением TON-кошелька или используйте payment link выше.
+Сумма не задана — выберите её самостоятельно перед подтверждением транзакции.
+
+Проверяйте адрес перед отправкой и не отправляйте на него активы из другой сети.
+Этот адрес предназначен только для добровольной поддержки и не является обещанием
+доходности, возврата средств или финансовой услугой.
 
 ## Лицензия
 
@@ -913,3 +953,16 @@ SOFTWARE.
 ```
 
 [LICENSE](LICENSE) © 2026 Alexkkkkk.
+
+<!-- DONATION-CAMPAIGN -->
+## Support the next release
+
+![Support open-source projects](https://raw.githubusercontent.com/Alexkkkkk/mount-file/main/docs/assets/project-donation-ad.png)
+
+Your support funds the next release: development, testing, documentation, and maintenance.
+
+**Donate in TON:** `UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv`
+
+[Open in a TON wallet](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=Project%20support) · [Verify in TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv) · [Read the campaign](https://github.com/Alexkkkkk/mount-file/blob/main/docs/donation-campaign.md)
+
+Donations are voluntary. Check the address and network before sending. Never share a seed phrase, private key, or confirmation code.

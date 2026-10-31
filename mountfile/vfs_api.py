@@ -7,7 +7,12 @@ routing remain in :mod:`mountfile.vfs`.
 
 from __future__ import annotations
 
-from mountfile.capabilities import VFS_READ_CAPABILITIES, VFS_WRITE_CAPABILITIES
+from mountfile.capabilities import (
+    CAPABILITY_MATRIX_VERSION,
+    VFS_READ_CAPABILITIES,
+    VFS_WRITE_CAPABILITIES,
+    get_native_capability_profile,
+)
 
 
 class ReadOnlyVFSStatMixin:
@@ -20,12 +25,25 @@ class ReadOnlyVFSStatMixin:
     """
 
     case_insensitive_paths = False
+    case_insensitive_ascii_paths = False
 
-    def path_component_matches(self, actual: str, requested: str) -> bool:
-        """Compare one name using the provider's filesystem semantics."""
-        if actual == requested:
+    def _native_capability_profile(self):
+        backend = str(getattr(self, "backend_name", type(self).__name__))
+        return get_native_capability_profile(backend, "vfs")
+
+    def _path_names_equal(self, requested: str, actual: str) -> bool:
+        """Compare one path component under this provider's namespace rules."""
+        if requested == actual:
             return True
-        return self.case_insensitive_paths and actual.casefold() == requested.casefold()
+        if self.case_insensitive_paths:
+            return requested.casefold() == actual.casefold()
+        if (
+            self.case_insensitive_ascii_paths
+            and requested.isascii()
+            and actual.isascii()
+        ):
+            return requested.lower() == actual.lower()
+        return False
 
     def stat(self, path: str) -> dict:
         if not isinstance(path, str) or "\x00" in path or "\\" in path:
@@ -55,7 +73,7 @@ class ReadOnlyVFSStatMixin:
                 (
                     item
                     for item in candidates
-                    if self.path_component_matches(str(item.get("name", "")), name)
+                    if self._path_names_equal(name, str(item.get("name", "")))
                 ),
                 None,
             )
@@ -77,6 +95,9 @@ class ReadOnlyVFSStatMixin:
     @property
     def read_capabilities(self) -> tuple[str, ...]:
         """Operations implemented by every reader using this API contract."""
+        profile = self._native_capability_profile()
+        if profile is not None:
+            return profile.read_capabilities
         return VFS_READ_CAPABILITIES
 
     @property
@@ -87,6 +108,9 @@ class ReadOnlyVFSStatMixin:
         the provider contract prevents callers from inferring write support
         from the fact that a filesystem is browsable.
         """
+        profile = self._native_capability_profile()
+        if profile is not None:
+            return profile.write_capabilities
         return VFS_WRITE_CAPABILITIES
 
     @property
@@ -98,7 +122,7 @@ class ReadOnlyVFSStatMixin:
         override this property and report their own bounded write capabilities.
         """
         backend = str(getattr(self, "backend_name", type(self).__name__))
-        return {
+        status = {
             "backend": backend,
             "mode": "read-only",
             "read_capabilities": list(self.read_capabilities),
@@ -109,3 +133,8 @@ class ReadOnlyVFSStatMixin:
                 "bounded writer profile"
             ),
         }
+        profile = self._native_capability_profile()
+        if profile is not None:
+            status["profile_id"] = profile.profile_id
+            status["matrix_version"] = CAPABILITY_MATRIX_VERSION
+        return status

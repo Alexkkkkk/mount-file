@@ -234,6 +234,7 @@ class NativeExfatWriter:
     def _directory_records(self, reader, cluster):
         raw = reader._read_directory_bytes(cluster)
         records = []
+        seen_names = set()
         pos = 0
         while pos + 32 <= len(raw):
             kind = raw[pos]
@@ -270,6 +271,10 @@ class NativeExfatWriter:
                 raise ExfatWriteError("invalid exFAT filename encoding") from exc
             if struct.unpack_from("<H", stream, 4)[0] != reader._name_hash(name):
                 raise ExfatWriteError("exFAT filename hash mismatch")
+            name_key = reader._upcase_key(name)
+            if name_key in seen_names:
+                raise ExfatWriteError("duplicate exFAT filename under up-case mapping")
+            seen_names.add(name_key)
             records.append((name, pos, total, stream, raw[pos : pos + total]))
             pos += total
         return records

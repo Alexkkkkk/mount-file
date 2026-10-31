@@ -19,7 +19,6 @@ concurrency:
 jobs:
   analyze:
     name: analyze
-    if: ${{ github.event_name != 'workflow_dispatch' }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
@@ -49,7 +48,6 @@ jobs:
   pip-audit:
     timeout-minutes: 30
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
@@ -58,5 +56,26 @@ jobs:
       - name: Audit Python dependencies (CVE)
         run: |
           python -m pip install --upgrade pip pip-audit
-          pip-audit -r requirements.txt --desc on || true
-          pip-audit -r requirements-win7.txt --desc on || true
+          pip-audit -r requirements.txt --desc on
+          pip-audit -r requirements-win7.txt --desc on
+
+  security-gate:
+    name: security-gate
+    needs: [analyze, dependency-review, pip-audit]
+    if: ${{ always() }}
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable security check to pass
+        env:
+          ANALYZE: ${{ needs.analyze.result }}
+          DEPENDENCY_REVIEW: ${{ needs.dependency-review.result }}
+          PIP_AUDIT: ${{ needs.pip-audit.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          test "$ANALYZE" = success
+          test "$PIP_AUDIT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$DEPENDENCY_REVIEW" = success
+          fi
