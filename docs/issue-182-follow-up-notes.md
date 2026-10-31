@@ -19,15 +19,27 @@ projects is copied by this change.
   initialized-size boundary.
 - Regression tests exercise the declared-journal path, cached-bitmap overlay,
   NTFS size invariants, zero-fill behavior and malformed attribute ranges.
+- Hypothesis now checks generated valid and arbitrary malformed NTFS
+  `$ATTRIBUTE_LIST` values. `tools/fuzz_ntfs_reader.py` adds a coverage-guided
+  Atheris target for bounded NTFS metadata parsers and seeds the selected corpus
+  directory without overwriting existing entries. This is NTFS-only coverage,
+  not a claim that every filesystem parser has been fuzzed.
+
+Run a bounded local campaign on Linux with the optional fuzz dependency:
+
+```sh
+uv run --extra fuzz python tools/fuzz_ntfs_reader.py /tmp/mountfile-ntfs-corpus -runs=10000
+```
 
 ## Suggested follow-up backlog
 
 1. Build self-contained Python filesystem-image fixtures/builders where they
    reduce dependence on optional tools such as `mke2fs`; keep real-image tests
    as additional integration coverage when those tools are available.
-2. Add property-based tests and a fuzzing corpus for bounded on-disk parsers.
-   Seed cases should include valid structures and malformed boundary cases;
-   fuzzing complements, but does not replace, deterministic regressions.
+2. Extend property-based and coverage-guided fuzzing from NTFS to the remaining
+   bounded on-disk parsers. Seed cases should include valid structures and
+   malformed boundary cases; fuzzing complements, but does not replace,
+   deterministic regressions.
 3. Expand ext4 support only as separately gated read-only profiles with explicit
    geometry, checksum, bounds and malformed-image tests. Extents, inline data,
    64-bit layouts, `flex_bg`, `meta_bg` and indexed directories are distinct
