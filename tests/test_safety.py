@@ -3,12 +3,7 @@
 
 import pytest
 
-from mountfile.safety import (
-    RefusalCategory,
-    RefusalCode,
-    RefusalError,
-    checked_range,
-)
+from mountfile.safety import RefusalCategory, RefusalCode, RefusalError, checked_range
 
 
 @pytest.mark.parametrize(
@@ -71,11 +66,31 @@ def test_checked_range_matches_exhaustive_small_integer_interval_contract():
 @pytest.mark.parametrize(
     ("message", "code", "category"),
     [
-        ("unsupported ext2 feature", RefusalCode.UNSUPPORTED_PROFILE, RefusalCategory.UNSUPPORTED),
-        ("volume is dirty; recovery required", RefusalCode.DIRTY_OR_RECOVERY_REQUIRED, RefusalCategory.DIRTY_RECOVERY),
-        ("corrupt metadata checksum", RefusalCode.MALFORMED_METADATA, RefusalCategory.CORRUPT),
-        ("selected extent is outside image bounds", RefusalCode.RANGE_OUT_OF_BOUNDS, RefusalCategory.OUT_OF_BOUNDS),
-        ("image changed concurrently", RefusalCode.CONCURRENT_CHANGE, RefusalCategory.CONCURRENT_CHANGE),
+        (
+            "unsupported ext2 feature",
+            RefusalCode.UNSUPPORTED_PROFILE,
+            RefusalCategory.UNSUPPORTED,
+        ),
+        (
+            "volume is dirty; recovery required",
+            RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+            RefusalCategory.DIRTY_RECOVERY,
+        ),
+        (
+            "corrupt metadata checksum",
+            RefusalCode.MALFORMED_METADATA,
+            RefusalCategory.CORRUPT,
+        ),
+        (
+            "selected extent is outside image bounds",
+            RefusalCode.RANGE_OUT_OF_BOUNDS,
+            RefusalCategory.OUT_OF_BOUNDS,
+        ),
+        (
+            "image changed concurrently",
+            RefusalCode.CONCURRENT_CHANGE,
+            RefusalCategory.CONCURRENT_CHANGE,
+        ),
         ("refusing unsafe path", RefusalCode.UNSAFE, RefusalCategory.UNSAFE),
     ],
 )

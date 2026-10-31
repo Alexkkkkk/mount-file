@@ -50,11 +50,18 @@ def code_for_message(message: str) -> RefusalCode:
         return RefusalCode.CONCURRENT_CHANGE
     if "dirty" in text or "journal recovery" in text or "recovery" in text:
         return RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
-    if any(word in text for word in ("outside", "out-of-bounds", "out of bounds", "extent")):
+    if any(
+        word in text for word in ("outside", "out-of-bounds", "out of bounds", "extent")
+    ):
         return RefusalCode.RANGE_OUT_OF_BOUNDS
-    if any(word in text for word in ("corrupt", "checksum", "truncated", "integrity", "malformed")):
+    if any(
+        word in text
+        for word in ("corrupt", "checksum", "truncated", "integrity", "malformed")
+    ):
         return RefusalCode.MALFORMED_METADATA
-    if any(word in text for word in ("unsafe", "refusing", "cannot safely", "marked free")):
+    if any(
+        word in text for word in ("unsafe", "refusing", "cannot safely", "marked free")
+    ):
         return RefusalCode.UNSAFE
     if any(word in text for word in ("unsupported", "requires", "not supported")):
         return RefusalCode.UNSUPPORTED_PROFILE
@@ -64,9 +71,7 @@ def code_for_message(message: str) -> RefusalCode:
 class RefusalError(ValueError):
     """A deliberate, fail-closed refusal with a stable reason code."""
 
-    def __init__(
-        self, message: str, code: RefusalCode | None = None
-    ):
+    def __init__(self, message: str, code: RefusalCode | None = None):
         super().__init__(message)
         self.code = RefusalCode(code) if code is not None else code_for_message(message)
 
