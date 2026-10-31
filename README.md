@@ -967,10 +967,7 @@ Your support funds the next release: development, testing, documentation, and ma
 
 Donations are voluntary. Check the address and network before sending. Never share a seed phrase, private key, or confirmation code.
 
-## Support MountFile
-
-MountFile is open source under the MIT License. If it helps you inspect or extract files from disk images, please consider supporting its continued development.
-
-**[Open MountFile and select Sponsor](https://github.com/Alexkkkkk/mount-file)** to make a voluntary contribution through the project's configured TON support link. Please verify the recipient and network before sending; cryptocurrency transfers cannot be reversed.
-
-Not able to donate? Starring the repository, reporting a reproducible issue, contributing a fix, or sharing MountFile with someone who may need it is also valuable.
+If MountFile helps you inspect or extract files from disk images, please consider
+supporting its continued development. If you cannot donate, starring the
+repository, reporting a reproducible issue, contributing a fix, or sharing
+MountFile with someone who may need it is also valuable.
