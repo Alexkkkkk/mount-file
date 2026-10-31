@@ -1275,6 +1275,13 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     raise NtfsMetadataError(
                         "nested extension-record ATTRIBUTE_LIST is unsupported"
                     )
+                if any(
+                    attribute.type_code not in (0x30, 0x80) or attribute.name
+                    for attribute in extension_attributes
+                ):
+                    raise NtfsMetadataError(
+                        "NTFS extension record contains an unsupported named or non-DATA/FILE_NAME attribute"
+                    )
                 loaded_attribute_count += len(extension_attributes)
                 if loaded_attribute_count > _MAX_ATTRIBUTES:
                     raise NtfsMetadataError(

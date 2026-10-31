@@ -504,6 +504,50 @@ def test_attribute_list_resolves_extension_record_and_validates_attribute_id():
     assert attributes[-1].resident_value == b"child-name"
 
 
+@pytest.mark.parametrize(
+    ("extension_type", "extension_attribute"),
+    [
+        (0x40, _resident_attribute(0x40, 4, b"unsupported")),
+        (0x80, _resident_attribute(0x80, 4, b"named-data", name="stream")),
+    ],
+)
+def test_attribute_list_rejects_unsupported_extension_attributes(
+    extension_type, extension_attribute
+):
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    base_reference = (7 << 48) | 42
+    extension_reference = (8 << 48) | 43
+    attribute_list = b"".join(
+        (
+            _attribute_list_entry(0x10, base_reference, attribute_id=1),
+            _attribute_list_entry(extension_type, extension_reference, attribute_id=4),
+        )
+    )
+    base_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (
+                _resident_attribute(0x10, 1, b""),
+                _resident_attribute(0x20, 2, attribute_list),
+            ),
+            sequence=7,
+        )
+    )
+    extension_record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (extension_attribute,),
+            sequence=8,
+            base_file_reference=base_reference,
+        )
+    )
+    reader, _base_reference = _attribute_list_reader(extension_record)
+
+    with pytest.raises(
+        NtfsMetadataError, match="unsupported named or non-DATA/FILE_NAME"
+    ):
+        reader._attributes_for_record(42, base_record)
+
+
 def test_attribute_list_rejects_extension_with_wrong_base_reference():
     from mountfile.ntfs_mft import parse_ntfs_file_record_header
 
