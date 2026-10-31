@@ -68,17 +68,37 @@ def code_for_message(message: str) -> RefusalCode:
     return RefusalCode.UNSUPPORTED_PROFILE
 
 
-class RefusalError(ValueError):
+class _RefusalMetadata:
+    """Shared machine-readable metadata for public refusal exceptions."""
+
+    code: RefusalCode
+
+    @property
+    def category(self) -> RefusalCategory:
+        return _CODE_CATEGORIES[self.code]
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "code": self.code.value,
+            "category": self.category.value,
+            "message": str(self),
+        }
+
+
+class RefusalError(_RefusalMetadata, ValueError):
     """A deliberate, fail-closed refusal with a stable reason code."""
 
     def __init__(self, message: str, code: RefusalCode | None = None):
         super().__init__(message)
         self.code = RefusalCode(code) if code is not None else code_for_message(message)
 
-    @property
-    def category(self) -> RefusalCategory:
-        """Return the stable coarse category for this refusal."""
-        return _CODE_CATEGORIES[self.code]
+
+class RefusalRuntimeError(_RefusalMetadata, RuntimeError):
+    """A coded refusal that preserves RuntimeError compatibility."""
+
+    def __init__(self, message: str, code: RefusalCode):
+        super().__init__(message)
+        self.code = RefusalCode(code)
 
 
 _E = TypeVar("_E", bound=RefusalError)
