@@ -272,7 +272,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         checksum = 0
         for index, value in enumerate(raw):
             if index in (2, 3):
-                value = 0
+                continue
             checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
             checksum = (checksum + value) & 0xFFFF
         return checksum
@@ -290,6 +290,12 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                     raise ExfatReadError("truncated exFAT up-case table word")
                 value = struct.unpack_from("<H", data, position)[0]
                 position += 2
+                # The final U+FFFF entry is both the identity mapping for the
+                # last code unit and the compressed identity-run marker. The
+                # exFAT format uses the literal value when index == value.
+                if value == len(table) and len(table) < 0x10000:
+                    table.append(value)
+                    continue
                 if value == 0xFFFF:
                     if position + 2 > len(data):
                         raise ExfatReadError("truncated exFAT up-case identity run")

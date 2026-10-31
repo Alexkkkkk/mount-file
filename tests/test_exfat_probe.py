@@ -28,7 +28,7 @@ def _entry_set_checksum(entry_set):
     checksum = 0
     for index, value in enumerate(entry_set):
         if index in (2, 3):
-            value = 0
+            continue
         checksum = ((checksum << 15) | (checksum >> 1)) & 0xFFFF
         checksum = (checksum + value) & 0xFFFF
     return checksum
@@ -310,6 +310,26 @@ def test_exfat_upcase_table_accepts_compressed_and_uncompressed_forms():
     uncompressed[ord("a") : ord("z") + 1] = range(ord("A"), ord("Z") + 1)
     raw = struct.pack("<65536H", *uncompressed)
     assert NativeExfatImage._parse_upcase_table(raw) == tuple(uncompressed)
+
+
+def test_exfat_upcase_table_accepts_literal_final_ffff_identity_mapping():
+    raw = _compressed_upcase_table()
+    units = list(struct.unpack(f"<{len(raw) // 2}H", raw))
+    units[-1] -= 1
+    units.append(0xFFFF)
+    raw = struct.pack(f"<{len(units)}H", *units)
+
+    table = NativeExfatImage._parse_upcase_table(raw)
+
+    assert table[0xE4] == 0x00C4
+    assert table[0xFFFF] == 0xFFFF
+
+
+def test_exfat_entry_set_checksum_matches_specified_field_exclusion():
+    entry_set = bytes(range(96))
+
+    assert NativeExfatImage._entry_set_checksum(entry_set) == 0x8086
+    assert NativeExfatWriter._entry_checksum(entry_set) == 0x8086
 
 
 @pytest.mark.parametrize("raw", [b"\xff\xff", b"\xff\xff\x00\x00", b"\x41\x00"])
