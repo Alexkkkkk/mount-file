@@ -161,6 +161,18 @@ def test_64bit_block_count_is_used_for_extent_bounds():
         probe_ext_superblock(io.BytesIO(image))
 
 
+def test_64bit_profile_requires_exact_64_byte_descriptors():
+    image = bytearray(_image(incompat=0x0002 | 0x0080, blocks_high=0))
+    sb = memoryview(image)[1024:2048]
+    struct.pack_into("<H", sb, 0xFE, 64)
+    profile = probe_ext_superblock(io.BytesIO(image))
+    assert profile.group_descriptor_size == 64
+
+    struct.pack_into("<H", sb, 0xFE, 72)
+    with pytest.raises(ExtProbeError, match="group-descriptor size"):
+        probe_ext_superblock(io.BytesIO(image))
+
+
 def test_partition_offset_is_applied_and_sentinels_are_not_touched():
     payload = _image()
     prefix = b"prefix" * 23

@@ -451,7 +451,6 @@ def test_external_journal_device_is_rejected_explicitly(tmp_path):
 @pytest.mark.parametrize(
     ("field", "bit", "reason"),
     [
-        ("feature_incompat", 0x0080, "64-bit/group-descriptor"),
         ("feature_incompat", 0x0200, "flex_bg"),
         ("feature_ro_compat", 0x0200, "bigalloc"),
         ("feature_ro_compat", 0x0400, "metadata checksums"),
@@ -801,3 +800,64 @@ def test_extent_profile_reads_a_real_clean_ext4_image(tmp_path):
         assert any(entry["name"] == "lost+found" for entry in provider.list_dir("/"))
     finally:
         provider.close()
+
+
+def test_64bit_descriptor_profile_reads_real_clean_ext4_image(tmp_path):
+    mke2fs = shutil.which("mke2fs")
+    if mke2fs is None:
+        pytest.skip("mke2fs is not installed")
+    image_path = tmp_path / "64bit-ext4.img"
+    image_path.write_bytes(bytes(64 * 1024 * 1024))
+    subprocess.run(
+        [
+            mke2fs,
+            "-q",
+            "-F",
+            "-t",
+            "ext4",
+            "-b",
+            "1024",
+            "-O",
+            "extent,64bit,^metadata_csum,^dir_index,^flex_bg,^has_journal,^huge_file",
+            str(image_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    provider = NativeExt4Image(image_path, volume_size=image_path.stat().st_size)
+    try:
+        assert provider.profile.group_descriptor_size == 64
+        assert provider.profile.blocks_count > 0
+        assert any(entry["name"] == "lost+found" for entry in provider.list_dir("/"))
+    finally:
+        provider.close()
+
+
+def test_64bit_descriptor_high_addresses_are_decoded_with_group_bounds():
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.feature_incompat = 0x0080
+    reader.feature_ro_compat = 0
+    reader.group_count = 2
+    reader.first_data_block = 0
+    reader.blocks_per_group = 1 << 32
+    reader.blocks_count = (1 << 32) + 100
+    reader.inodes_per_group = 16
+    reader.inode_size = 128
+    reader.block_size = 4096
+    reader.group_descriptor_size = 64
+    reader._gdt_offset = 4096
+    reader._gdt_blocks = 1
+    reader._primary_metadata_start = 0
+    reader._primary_metadata_end = 2
+    reader._group_cache = {}
+    raw = bytearray(64)
+    struct.pack_into("<III", raw, 0, 11, 12, 13)
+    struct.pack_into("<III", raw, 32, 1, 1, 1)
+    reader._read_at = lambda _offset, _size: bytes(raw)
+
+    descriptor = reader._group_descriptor(1)
+
+    assert descriptor.block_bitmap == (1 << 32) + 11
+    assert descriptor.inode_bitmap == (1 << 32) + 12
+    assert descriptor.inode_table == (1 << 32) + 13

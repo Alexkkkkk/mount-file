@@ -10,6 +10,7 @@ default and can only be enabled as an explicit in-memory read-only overlay.
 
 from __future__ import annotations
 
+import math
 import struct
 
 from mountfile.ext2_reader import (
@@ -500,10 +501,6 @@ class NativeExt4Image(NativeExt3Image):
                 "unknown read-only-compatible ext4 feature flags "
                 f"0x{profile.unknown_ro_compat_features:08x}"
             )
-        if profile.feature_incompat & _INCOMPAT_64BIT:
-            raise Ext3ReadError(
-                "ext4 64-bit/group-descriptor layout is not supported by native reader"
-            )
         if profile.feature_incompat & _INCOMPAT_FLEX_BG:
             raise Ext3ReadError("ext4 flex_bg group layout is not supported")
         if profile.feature_ro_compat & _RO_COMPAT_BIGALLOC:
@@ -594,40 +591,77 @@ class NativeExt4Image(NativeExt3Image):
         return inode
 
     def _group_descriptor(self, group: int) -> _GroupDescriptor:
-        """Defensively decode high descriptor words if a future profile enables them."""
+        """Decode 64-bit descriptors with exact bounded metadata ranges."""
         if not self.feature_incompat & _INCOMPAT_64BIT:
             return super()._group_descriptor(group)
         cached = self._group_cache.get(group)
-        if cached is not None and cached.block_bitmap >= (1 << 32):
+        if cached is not None:
             return cached
-        base = super()._group_descriptor(group)
+        if not 0 <= group < self.group_count:
+            raise Ext3ReadError("inode or block references an invalid group")
         raw = self._read_at(
             self._gdt_offset + group * self.group_descriptor_size,
             self.group_descriptor_size,
         )
-        block_bitmap = base.block_bitmap | (struct.unpack_from("<I", raw, 32)[0] << 32)
-        inode_bitmap = base.inode_bitmap | (struct.unpack_from("<I", raw, 36)[0] << 32)
-        inode_table = base.inode_table | (struct.unpack_from("<I", raw, 40)[0] << 32)
-        if not (
-            base.first_block <= block_bitmap < base.end_block
-            and base.first_block <= inode_bitmap < base.end_block
-            and base.first_block <= inode_table < base.end_block
-            and inode_table + base.inode_table_blocks <= base.end_block
-        ):
+        if len(raw) < 64:
+            raise Ext3ReadError("64-bit group descriptor is truncated")
+        low_bitmap, low_inode_bitmap, low_inode_table = struct.unpack_from(
+            "<III", raw, 0
+        )
+        high_bitmap, high_inode_bitmap, high_inode_table = struct.unpack_from(
+            "<III", raw, 32
+        )
+        block_bitmap = low_bitmap | (high_bitmap << 32)
+        inode_bitmap = low_inode_bitmap | (high_inode_bitmap << 32)
+        inode_table = low_inode_table | (high_inode_table << 32)
+        first_block = self.first_data_block + group * self.blocks_per_group
+        end_block = min(self.blocks_count, first_block + self.blocks_per_group)
+        inode_table_blocks = math.ceil(
+            self.inodes_per_group * self.inode_size / self.block_size
+        )
+        if first_block >= end_block:
+            raise Ext3ReadError("empty ext block group")
+        ranges = (
+            (block_bitmap, block_bitmap + 1),
+            (inode_bitmap, inode_bitmap + 1),
+            (inode_table, inode_table + inode_table_blocks),
+        )
+        if any(start < first_block or stop > end_block for start, stop in ranges):
             raise Ext3ReadError("64-bit group descriptor points outside its group")
-        if (
-            block_bitmap == inode_bitmap
-            or inode_table <= block_bitmap < inode_table + base.inode_table_blocks
-        ):
-            raise Ext3ReadError("64-bit group descriptor metadata ranges overlap")
+        if any(stop <= start for start, stop in ranges):
+            raise Ext3ReadError("64-bit group descriptor metadata range overflows")
+        for index, (left_start, left_stop) in enumerate(ranges):
+            for right_start, right_stop in ranges[index + 1 :]:
+                if left_start < right_stop and right_start < left_stop:
+                    raise Ext3ReadError(
+                        "64-bit group descriptor metadata ranges overlap"
+                    )
+        sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
+        if self._has_super_backup(group, sparse):
+            backup_end = min(end_block, first_block + 1 + self._gdt_blocks)
+            if any(start < backup_end and stop > first_block for start, stop in ranges):
+                raise Ext3ReadError(
+                    "64-bit group descriptor metadata overlaps backup superblock metadata"
+                )
+        if group == 0:
+            primary_end = min(end_block, self._primary_metadata_end)
+            if any(
+                start < primary_end and stop > self._primary_metadata_start
+                for start, stop in ranges
+            ):
+                raise Ext3ReadError(
+                    "64-bit group descriptor metadata overlaps primary superblock metadata"
+                )
         result = _GroupDescriptor(
             block_bitmap,
             inode_bitmap,
             inode_table,
-            base.first_block,
-            base.end_block,
-            base.inode_table_blocks,
+            first_block,
+            end_block,
+            inode_table_blocks,
         )
+        if len(self._group_cache) >= 4096:
+            self._group_cache.clear()
         self._group_cache[group] = result
         return result
 
