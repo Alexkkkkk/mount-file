@@ -829,7 +829,7 @@ class Fat32:
         first = self._alloc_chain(nclusters) if nclusters else 0
         try:
             self._write_chain_data(first, data)
-        except Exception as original_error:
+        except BaseException as original_error:
             try:
                 if first >= 2:
                     self._free_chain(first)
