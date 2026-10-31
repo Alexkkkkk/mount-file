@@ -4,9 +4,13 @@
 import shutil
 import struct
 import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
 
 from mountfile import vfs
 from mountfile.ext2_reader import (
@@ -106,6 +110,22 @@ def test_declared_journal_inode_mismatch_fails_closed(tmp_path):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
+def test_synthetic_clean_ext3_routes_through_vfs_without_e2fsprogs(tmp_path):
+    image_path = tmp_path / "synthetic-clean-ext3.img"
+    _make_clean_journal_image(image_path)
+
+    provider = vfs.open_image_provider(image_path, volume_size=BLOCKS_COUNT * 1024)
+    try:
+        assert provider.backend_name == "native-ext3-ro"
+        entries = {entry["name"]: entry for entry in provider.list_dir("/")}
+        assert entries["hello.txt"]["size"] == 11
+        assert provider.stat("/hello.txt")["size"] == 11
+        assert provider.read_file_range("/hello.txt", 1, 4) == b"ello"
+        assert provider.read_file_range("/hello.txt", 11, 4) == b""
+    finally:
+        provider.close()
+
+
 def test_real_clean_empty_ext3_supports_native_directory_reads(tmp_path):
     if not shutil.which("mke2fs"):
         pytest.skip("e2fsprogs is unavailable")
@@ -152,22 +172,30 @@ def test_jbd2_transaction_cannot_target_one_block_twice(tmp_path, replay_journal
 
 
 @pytest.mark.parametrize("replay_journal", [False, True])
+@example(journal_block=40)
+@example(journal_block=41)
+@example(journal_block=42)
+@example(journal_block=43)
+@example(journal_block=44)
+@given(journal_block=st.integers(min_value=40, max_value=44))
+@settings(max_examples=5, derandomize=True)
 def test_jbd2_transaction_cannot_target_its_own_journal_blocks(
-    tmp_path, replay_journal
+    replay_journal, journal_block
 ):
-    image_path = tmp_path / "journal-self-target.img"
-    _make_clean_journal_image(image_path, replay_target=40)
-    if replay_journal:
-        image = bytearray(image_path.read_bytes())
-        struct.pack_into(">I", image, 40 * 1024 + 24, 1)
-        image_path.write_bytes(image)
+    with TemporaryDirectory() as tempdir:
+        image_path = Path(tempdir) / "journal-self-target.img"
+        _make_clean_journal_image(image_path, replay_target=journal_block)
+        if replay_journal:
+            image = bytearray(image_path.read_bytes())
+            struct.pack_into(">I", image, 40 * 1024 + 24, 1)
+            image_path.write_bytes(image)
 
-    with pytest.raises(Ext3ReadError, match="target overlaps journal inode data"):
-        NativeExt3Image(
-            image_path,
-            volume_size=BLOCKS_COUNT * 1024,
-            replay_journal=replay_journal,
-        )
+        with pytest.raises(Ext3ReadError, match="target overlaps journal inode data"):
+            NativeExt3Image(
+                image_path,
+                volume_size=BLOCKS_COUNT * 1024,
+                replay_journal=replay_journal,
+            )
 
 
 def test_journal_data_block_scan_includes_single_indirect_blocks():
