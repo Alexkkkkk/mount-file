@@ -80,6 +80,17 @@ xattrs, число или семантику hard links и все timestamps. NT
 разрешённый host path. Неподдержанное чтение или изменение такого объекта должно
 завершаться явным отказом.
 
+### Метаданные inode ext2/ext3/ext4
+
+Ext providers дополнительно отдают `accessed`, `ctime`, `modified`, `created`,
+полный `mode`, маску POSIX `permissions` и число ссылок `links`. Время ext2/ext3
+выводится с секундной точностью; ext4 использует epoch и nanoseconds из inode
+extra fields только если они полностью покрыты `extra_isize`. Некорректный
+`extra_isize` или nanoseconds приводят к отказу чтения. Эти timestamp strings
+сериализуются в UTC; `created` пусто, если inode не содержит доступного
+creation-time поля. Поля специфичны для ext providers и не означают, что общий
+VFS contract предоставляет владельца, ACL или разрешение link graph.
+
 Текущий операционный контракт bounded native profiles можно получить как
 detached JSON-compatible snapshot:
 
