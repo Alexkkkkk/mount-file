@@ -542,7 +542,9 @@ def test_attribute_list_rejects_unsupported_extension_attributes(
     )
     reader, _base_reference = _attribute_list_reader(extension_record)
 
-    with pytest.raises(NtfsMetadataError, match="unsupported named or non-DATA/FILE_NAME"):
+    with pytest.raises(
+        NtfsMetadataError, match="unsupported named or non-DATA/FILE_NAME"
+    ):
         reader._attributes_for_record(42, base_record)
 
 
