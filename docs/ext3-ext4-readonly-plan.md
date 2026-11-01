@@ -118,3 +118,5 @@ Read-only phase complete only when every accepted feature maps to a tested capab
 ### Реализованный milestone
 
 Добавлен bounded ext4 extent-tree profile: проверяются magic, entry limits, depth consistency, sorted index keys, cycle avoidance, logical/physical bounds, holes и unwritten extents. `64BIT`, metadata checksums, htree и fast commit остаются fail-closed. Для ext3 добавлен отдельный opt-in memory-only replay узкого classic JBD2 формата; он не поддерживает wraparound/revoke/checksums, не предназначен для dirty/recovery-required volumes и остаётся fail-closed по умолчанию.
+
+Для профилей с `resize_inode` bounded reader также учитывает `s_reserved_gdt_blocks`: primary и backup reserved-GDT интервалы исключаются из ext2/ext3/ext4 data-block references, а выход диапазона за группу и ненулевой reserved-GDT count без `resize_inode` отвергаются. Это только защита read-only parsing; online resize и любые journaled writes не поддерживаются.
