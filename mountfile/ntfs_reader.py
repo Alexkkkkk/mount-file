@@ -513,8 +513,10 @@ def parse_ntfs_attribute_stream(
     while pos + 4 <= limit:
         type_code = struct.unpack_from("<I", raw, pos)[0]
         if type_code == _ATTRIBUTE_END:
-            if pos + 4 > limit:
-                raise NtfsMetadataError("NTFS attribute end marker exceeds record")
+            if pos + 4 != limit:
+                raise NtfsMetadataError(
+                    "NTFS attribute end marker is not terminal within bytes_in_use"
+                )
             return tuple(result)
         if len(result) >= _MAX_ATTRIBUTES or pos + 16 > limit:
             raise NtfsMetadataError("NTFS attribute header exceeds FILE record")

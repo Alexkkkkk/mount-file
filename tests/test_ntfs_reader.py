@@ -868,6 +868,21 @@ def test_record_with_attributes_updates_bytes_in_use_after_serialization():
     assert [item.type_code for item in parse_ntfs_attribute_stream(record)] == [0x30]
 
 
+@pytest.mark.parametrize("trailing", [b"\x00" * 4, b"\x7f\x00\xff\x01"])
+def test_attribute_end_marker_must_be_terminal_within_bytes_in_use(trailing):
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    attribute = _resident_attribute(0x30, 1, b"payload")
+    raw = bytearray(_record_with_attributes((attribute,)))
+    end_offset = 0x38 + len(attribute)
+    raw[end_offset + 4 : end_offset + 8] = trailing
+    struct.pack_into("<I", raw, 0x18, end_offset + 8)
+
+    record = parse_ntfs_file_record_header(bytes(raw))
+    with pytest.raises(NtfsMetadataError, match="not terminal within bytes_in_use"):
+        parse_ntfs_attribute_stream(record)
+
+
 def test_rejects_ntfs_nonresident_attribute_name_overlapping_runlist():
     from mountfile.ntfs_mft import parse_ntfs_file_record_header
 
