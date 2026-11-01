@@ -944,6 +944,16 @@ class Fat32RW(RWBackend):
             # refresh that cache - a stale free-cluster count is exactly what
             # `fsck.fat` reports as "Free cluster summary wrong".
             self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
+            if self.fsinfo_sector not in (0, 0xFFFF) and not (
+                1 <= self.fsinfo_sector < self.reserved_sectors
+            ):
+                raise ValueError("FAT32 FSInfo sector is outside the reserved region")
+            if (
+                self.fsinfo_sector not in (0, 0xFFFF)
+                and backup_sector
+                and self.fsinfo_sector == backup_sector
+            ):
+                raise ValueError("FAT32 FSInfo sector aliases the backup boot sector")
         else:
             raise ValueError(
                 "native FAT12/16 writes are unsupported; use the read-only FAT reader"
