@@ -59,6 +59,15 @@ NTFS reader разрешает resident `$ATTRIBUTE_LIST` и extension FILE reco
 Nonresident `$ATTRIBUTE_LIST` и `$MFT`, которому нужны extension records для
 bootstrap, отвергаются; NTFS остаётся read-only и `$LogFile` не проигрывается.
 
+### Метаданные NTFS
+
+NTFS `list_dir` и `stat` предоставляют `created`, `modified`, `ctime`,
+`accessed` и сырую маску `attributes` из единственного unnamed resident
+`$STANDARD_INFORMATION`. Времена сериализуются в UTC с сохранением 100-ns
+точности FILETIME; legacy поле `date` остаётся пустым. Отсутствующий,
+дублированный, named или nonresident `$STANDARD_INFORMATION` приводит к отказу,
+а не к неподтверждённой metadata-записи.
+
 ### Семантика метаданных bounded providers
 
 Общие поля `stat` — `path`, `name`, `is_dir`, `size` и `date`; отдельные

@@ -1230,14 +1230,127 @@ def test_parses_resident_filename_and_standard_information_bounds():
     assert parsed.file_attributes == 0x20
 
     standard = bytearray(48)
+    unix_filetime = 116_444_736_000_000_000
+    struct.pack_into(
+        "<QQQQ",
+        standard,
+        0,
+        unix_filetime + 1_700_000_000 * 10_000_000 + 1_234_567,
+        unix_filetime + 1_700_000_001 * 10_000_000 + 7,
+        unix_filetime + 1_700_000_002 * 10_000_000 + 8_900_000,
+        unix_filetime + 1_700_000_003 * 10_000_000 + 1,
+    )
     struct.pack_into("<I", standard, 32, 0x20)
     struct.pack_into("<II", standard, 40, 2, 1)
     info = parse_ntfs_standard_information(bytes(standard))
     assert (info.file_attributes, info.version, info.class_id) == (0x20, 2, 1)
+    assert info.creation_time == (
+        unix_filetime + 1_700_000_000 * 10_000_000 + 1_234_567
+    )
+    assert info.modification_time == unix_filetime + 1_700_000_001 * 10_000_000 + 7
+    assert info.mft_change_time == (
+        unix_filetime + 1_700_000_002 * 10_000_000 + 8_900_000
+    )
+    assert info.access_time == unix_filetime + 1_700_000_003 * 10_000_000 + 1
+    fields = NativeNtfsMetadataImage._standard_information_fields(
+        (
+            NtfsAttributeSummary(
+                0x10, 72, False, "", resident_value=bytes(standard)
+            ),
+        )
+    )
+    assert fields == {
+        "created": "2023-11-14T22:13:20.1234567+00:00",
+        "modified": "2023-11-14T22:13:21.0000007+00:00",
+        "ctime": "2023-11-14T22:13:22.8900000+00:00",
+        "accessed": "2023-11-14T22:13:23.0000001+00:00",
+        "attributes": 0x20,
+    }
+    with pytest.raises(NtfsMetadataError, match="one STANDARD_INFORMATION"):
+        NativeNtfsMetadataImage._standard_information_fields(())
+    with pytest.raises(NtfsMetadataError, match="one STANDARD_INFORMATION"):
+        NativeNtfsMetadataImage._standard_information_fields(
+            (
+                NtfsAttributeSummary(
+                    0x10, 72, False, "", resident_value=bytes(standard)
+                ),
+                NtfsAttributeSummary(
+                    0x10, 72, False, "", resident_value=bytes(standard)
+                ),
+            )
+        )
+    with pytest.raises(NtfsMetadataError, match="unnamed resident"):
+        NativeNtfsMetadataImage._standard_information_fields(
+            (
+                NtfsAttributeSummary(
+                    0x10, 72, False, "named", resident_value=bytes(standard)
+                ),
+            )
+        )
+    with pytest.raises(NtfsMetadataError, match="unnamed resident"):
+        NativeNtfsMetadataImage._standard_information_fields(
+            (NtfsAttributeSummary(0x10, 72, True, "", resident_value=None),)
+        )
+
+    invalid_time = bytearray(48)
+    struct.pack_into("<Q", invalid_time, 0, 0xFFFFFFFFFFFFFFFF)
+    with pytest.raises(NtfsMetadataError, match="outside supported range"):
+        NativeNtfsMetadataImage._standard_information_fields(
+            (
+                NtfsAttributeSummary(
+                    0x10, 72, False, "", resident_value=bytes(invalid_time)
+                ),
+            )
+        )
     with pytest.raises(NtfsMetadataError, match="FILE_NAME"):
         parse_ntfs_file_name(bytes(value[:65]))
     with pytest.raises(NtfsMetadataError, match="STANDARD_INFORMATION"):
         parse_ntfs_standard_information(bytes(47))
+
+
+def test_ntfs_list_dir_includes_standard_information_metadata():
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    parent = SimpleNamespace(sequence_number=3, is_directory=True)
+    child = SimpleNamespace(is_directory=False)
+    entry = NtfsIndexEntry((3 << 48) | 42, "report.txt", False)
+    value = bytearray(48)
+    unix_filetime = 116_444_736_000_000_000
+    struct.pack_into(
+        "<QQQQ",
+        value,
+        0,
+        unix_filetime + 1_700_000_000 * 10_000_000,
+        unix_filetime + 1_700_000_001 * 10_000_000,
+        unix_filetime + 1_700_000_002 * 10_000_000,
+        unix_filetime + 1_700_000_003 * 10_000_000,
+    )
+    struct.pack_into("<I", value, 32, 0x20)
+    standard = NtfsAttributeSummary(
+        0x10, 72, False, "", resident_value=bytes(value)
+    )
+    reader._resolve = lambda _path: (5, parent)
+    reader.list_dir_by_record = lambda *_args: [entry]
+    reader.read_mft_record = lambda *_args, **_kwargs: child
+    reader._validate_index_entry_metadata = lambda *_args: (standard,)
+
+    listed = reader.list_dir("/")
+
+    assert listed == [
+        {
+            "name": "report.txt",
+            "is_dir": False,
+            "size": 0,
+            "date": "",
+            "inode": 42,
+            "created": "2023-11-14T22:13:20.0000000+00:00",
+            "modified": "2023-11-14T22:13:21.0000000+00:00",
+            "ctime": "2023-11-14T22:13:22.0000000+00:00",
+            "accessed": "2023-11-14T22:13:23.0000000+00:00",
+            "attributes": 0x20,
+        }
+    ]
 
 
 def test_native_ntfs_index_entry_matches_child_filename_metadata(monkeypatch):
