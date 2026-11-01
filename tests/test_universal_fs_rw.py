@@ -738,9 +738,7 @@ def test_cross_directory_lfn_file_move_preserves_chain_and_payload(tmp_path):
         assert fs.stat(source) is None
         assert fs._cluster_chain(moved.inode) == original_chain
         assert fs.read(destination) == payload
-        assert [entry.name for entry in fs.list("/DESTINATION")] == [
-            "Final report.txt"
-        ]
+        assert [entry.name for entry in fs.list("/DESTINATION")] == ["Final report.txt"]
     finally:
         fs.close()
 
@@ -785,9 +783,7 @@ def test_cross_directory_collision_is_rejected_without_image_change(tmp_path):
         unchanged_image = image.read_bytes()
 
         with pytest.raises(FileExistsError):
-            fs.rename(
-                "/SOURCE/source.txt", "/DESTINATION/EXISTING NAME.TXT"
-            )
+            fs.rename("/SOURCE/source.txt", "/DESTINATION/EXISTING NAME.TXT")
 
         assert image.read_bytes() == unchanged_image
         assert fs.read("/SOURCE/source.txt") == b"source"

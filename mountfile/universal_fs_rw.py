@@ -1629,10 +1629,7 @@ class Fat32RW(RWBackend):
         start = short_entry_index
         while start >= 32:
             previous = start - 32
-            if (
-                raw[previous] in (0x00, 0xE5)
-                or raw[previous + 11] != self.ATTR_LFN
-            ):
+            if raw[previous] in (0x00, 0xE5) or raw[previous + 11] != self.ATTR_LFN:
                 break
             start = previous
         count = (short_entry_index - start) // 32
@@ -1695,9 +1692,7 @@ class Fat32RW(RWBackend):
         dot_cluster = struct.unpack_from("<H", dot, 26)[0] | (dot_high << 16)
         if dot_cluster != directory_cluster:
             raise ValueError("FAT directory '.' entry points to a different cluster")
-        parent_cluster = struct.unpack_from("<H", dotdot, 26)[0] | (
-            dotdot_high << 16
-        )
+        parent_cluster = struct.unpack_from("<H", dotdot, 26)[0] | (dotdot_high << 16)
         if parent_cluster == 0:
             return self.root_cluster
         if not 2 <= parent_cluster < self.cluster_count + 2:
@@ -1712,7 +1707,9 @@ class Fat32RW(RWBackend):
     ) -> bytes:
         actual_parent = self._read_directory_parent_cluster(directory_cluster)
         if actual_parent != expected_old_parent:
-            raise ValueError("FAT directory '..' entry does not match its source parent")
+            raise ValueError(
+                "FAT directory '..' entry does not match its source parent"
+            )
         raw = bytearray(self._read_dir_raw(directory_cluster))
         encoded_parent = 0 if new_parent == self.root_cluster else new_parent
         struct.pack_into("<H", raw, 32 + 20, (encoded_parent >> 16) & 0x0FFF)
@@ -1781,8 +1778,7 @@ class Fat32RW(RWBackend):
         destination_raw = self._read_dir_raw(destination_parent_cluster)
         destination_entries = self._parse_dir_raw(destination_raw, dst_parent)
         if any(
-            item.name.casefold() == dst_name.casefold()
-            for item in destination_entries
+            item.name.casefold() == dst_name.casefold() for item in destination_entries
         ):
             raise FileExistsError(dst)
 
@@ -1803,10 +1799,7 @@ class Fat32RW(RWBackend):
                 if other_idx == source_index:
                     continue
                 first = source_raw[other_idx]
-                if (
-                    first in (0x00, 0xE5)
-                    or source_raw[other_idx + 11] == self.ATTR_LFN
-                ):
+                if first in (0x00, 0xE5) or source_raw[other_idx + 11] == self.ATTR_LFN:
                     continue
                 if source_raw[other_idx : other_idx + 11] == short_raw:
                     raise FileExistsError(dst)
