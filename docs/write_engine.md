@@ -95,10 +95,10 @@ engine.close()
 * FAT12/16/32 — bounded pure-Python readers `native-fat12-ro`,
   `native-fat16-ro` и `native-fat32-ro` выбираются через unified VFS без
   `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
-  кластеров и LFN checksum. Запись FAT32 остаётся отдельным writer-ом
-  `mountfile/fat32.py`; FAT12/16 через этот VFS намеренно read-only. Native
-  reader также отклоняет рассинхронные mirrored FAT copies и повреждённую
-  backup BPB FAT32 до чтения файлов.
+  кластеров и LFN checksum. Запись FAT32 остаётся отдельным bounded writer-ом
+  `Fat32RW` в `mountfile/universal_fs_rw.py`; FAT12/16 через этот VFS намеренно
+  read-only. Native reader также отклоняет рассинхронные mirrored FAT copies и
+  повреждённую backup BPB FAT32 до чтения файлов.
   Статус read parity (issue #182): подтверждена differential тест-матрицей
   в `tests/test_fat_reader.py` — для всех трёх вариантов FAT прогоняются
   valid- и invalid-fixture (синтетические образы со short-name, LFN, пустым,
@@ -113,13 +113,20 @@ engine.close()
   и legacy `pytsk3` fallback не вызывается.
   Статус write parity: native WRITE parity для FAT12/16 НЕ заявляется —
   у этих вариантов нет write path вовсе (read-only); это честное ограничение,
-  а не скрытый fallback. FAT32 writer (`mountfile/fat32.py`) остаётся отдельным
-  bounded-движком и также не претендует на паритет с системными средствами
-  записи.
+  а не скрытый fallback. Native FAT32 writer остаётся bounded-движком и также
+  не претендует на паритет с системными средствами записи.
   Writer принимает только mirrored FAT32 mode с идентичными FAT copies.
   Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
   текущий writer обновляет все FAT copies одновременно и не поддерживает
   active-FAT semantics.
+  В этом профиле rename поддерживает перенос файлов и каталогов между
+  существующими каталогами: LFN-записи строятся заново с checksum нового
+  short-name alias, для перенесённого каталога обновляется `..`, а перенос в
+  себя/потомка, collision, malformed LFN и отсутствие свободных directory
+  slots отклоняются до commit. Same-directory LFN rename и расширение каталога
+  остаются неподдерживаемыми; FAT12/16 write и FAT32 active-FAT semantics не
+  включены. Перенос проходит на staged image с read-back, но это не on-volume
+  recovery protocol и не доказательство power-loss atomicity.
   Если BPB объявляет backup boot sector, он должен быть байт-в-байт идентичен
   primary boot sector; повреждённая резервная BPB отклоняется до записи.
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и

@@ -640,3 +640,109 @@ def test_long_filename_rename_fails_closed_without_mutation(tmp_path):
         assert fs.stat(destination) is None
     finally:
         fs.close()
+
+
+def test_cross_directory_lfn_file_move_preserves_chain_and_payload(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        payload = bytes((index * 29) % 256 for index in range(5000))
+        source = "/SOURCE/Original report.txt"
+        destination = "/DESTINATION/Final report.txt"
+        fs.write_file(source, payload)
+        original = fs.stat(source)
+        original_chain = fs._cluster_chain(original.inode)
+
+        fs.rename(source, destination)
+
+        moved = fs.stat(destination)
+        assert moved is not None
+        assert moved.is_dir is False
+        assert fs.stat(source) is None
+        assert fs._cluster_chain(moved.inode) == original_chain
+        assert fs.read(destination) == payload
+        assert [entry.name for entry in fs.list("/DESTINATION")] == [
+            "Final report.txt"
+        ]
+    finally:
+        fs.close()
+
+
+def test_cross_directory_directory_move_updates_dotdot_and_rejects_descendant(
+    tmp_path,
+):
+    image, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        fs.mkdir("/SOURCE/MOVED")
+        fs.mkdir("/SOURCE/MOVED/CHILD")
+        fs.write_file("/SOURCE/MOVED/CHILD/child.bin", b"still reachable")
+        destination_parent_cluster = fs.stat("/DESTINATION").inode
+
+        fs.rename("/SOURCE/MOVED", "/DESTINATION/MOVED")
+
+        moved = fs.stat("/DESTINATION/MOVED")
+        assert moved is not None and moved.is_dir
+        assert fs._read_directory_parent_cluster(moved.inode) == (
+            destination_parent_cluster
+        )
+        assert fs.stat("/SOURCE/MOVED") is None
+        assert fs.read("/DESTINATION/MOVED/CHILD/child.bin") == b"still reachable"
+
+        unchanged_image = image.read_bytes()
+        with pytest.raises(ValueError, match="itself or a descendant"):
+            fs.rename("/DESTINATION/MOVED", "/DESTINATION/MOVED/CHILD/NESTED")
+        assert image.read_bytes() == unchanged_image
+    finally:
+        fs.close()
+
+
+def test_cross_directory_collision_is_rejected_without_image_change(tmp_path):
+    image, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        fs.write_file("/SOURCE/source.txt", b"source")
+        fs.write_file("/DESTINATION/Existing name.txt", b"destination")
+        unchanged_image = image.read_bytes()
+
+        with pytest.raises(FileExistsError):
+            fs.rename(
+                "/SOURCE/source.txt", "/DESTINATION/EXISTING NAME.TXT"
+            )
+
+        assert image.read_bytes() == unchanged_image
+        assert fs.read("/SOURCE/source.txt") == b"source"
+        assert fs.read("/DESTINATION/Existing name.txt") == b"destination"
+    finally:
+        fs.close()
+
+
+def test_cross_directory_rename_failure_discards_partial_staged_move(
+    tmp_path, monkeypatch
+):
+    image, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        fs.write_file("/SOURCE/source.bin", b"source payload")
+        source_parent_cluster = fs.stat("/SOURCE").inode
+        unchanged_image = image.read_bytes()
+        write_dir_raw = fs._write_dir_raw
+
+        def fail_after_source_tombstone(cluster, data):
+            write_dir_raw(cluster, data)
+            if cluster == source_parent_cluster:
+                raise OSError("injected source tombstone failure")
+
+        monkeypatch.setattr(fs, "_write_dir_raw", fail_after_source_tombstone)
+        with pytest.raises(OSError, match="injected source tombstone failure"):
+            fs.rename("/SOURCE/source.bin", "/DESTINATION/moved.bin")
+
+        assert image.read_bytes() == unchanged_image
+        assert fs.read("/SOURCE/source.bin") == b"source payload"
+        assert fs.stat("/DESTINATION/moved.bin") is None
+    finally:
+        fs.close()
