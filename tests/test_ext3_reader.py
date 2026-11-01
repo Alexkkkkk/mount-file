@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Regression tests for conservative ext3/ext4 read-only routing."""
 
+import hashlib
 import shutil
 import struct
 import subprocess
@@ -696,6 +697,7 @@ def _extent_data_reader(first_physical, *, free_blocks=(), unwritten=False):
     reader.blocks_per_group = 200
     reader.feature_ro_compat = 0
     reader._gdt_blocks = 0
+    reader.reserved_gdt_blocks = 0
     reader._primary_metadata_start = 0
     reader._primary_metadata_end = 0
     descriptor = SimpleNamespace(
@@ -999,6 +1001,140 @@ def test_64bit_descriptor_profile_reads_real_clean_ext4_image(tmp_path):
         assert any(entry["name"] == "lost+found" for entry in provider.list_dir("/"))
     finally:
         provider.close()
+
+
+def test_ext_reader_rejects_reserved_gdt_count_without_resize_inode(tmp_path):
+    image_path = tmp_path / "reserved-gdt-without-resize.img"
+    image = bytearray(_make_image(image_path))
+    struct.pack_into("<H", image, 1024 + 0xCE, 1)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext2ReadError, match="without resize_inode"):
+        NativeExt2Image(image_path, volume_size=len(image))
+
+
+def test_ext_reader_rejects_reserved_gdt_interval_outside_primary_group(tmp_path):
+    image_path = tmp_path / "reserved-gdt-outside-group.img"
+    image = bytearray(_make_image(image_path, compat=0x0018, ro_compat=0x0003))
+    struct.pack_into("<H", image, 1024 + 0xCE, 127)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext2ReadError, match="primary reserved GDT metadata"):
+        NativeExt2Image(image_path, volume_size=len(image))
+
+
+def test_ext4_extent_cannot_reference_primary_or_backup_reserved_gdt(tmp_path):
+    mke2fs = shutil.which("mke2fs")
+    debugfs = shutil.which("debugfs")
+    if mke2fs is None or debugfs is None:
+        pytest.skip("mke2fs and debugfs are required")
+
+    image_path = tmp_path / "resize-inode-ext4.img"
+    with image_path.open("wb") as stream:
+        stream.truncate(32 * 1024 * 1024)
+    subprocess.run(
+        [
+            mke2fs,
+            "-q",
+            "-F",
+            "-t",
+            "ext4",
+            "-b",
+            "1024",
+            "-O",
+            "resize_inode,extent,^has_journal,^64bit,^metadata_csum,^dir_index,^flex_bg,^huge_file",
+            str(image_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload_path = tmp_path / "payload.bin"
+    payload_path.write_bytes(b"valid file data before metadata corruption")
+    subprocess.run(
+        [debugfs, "-w", "-R", f"write {payload_path} /hello", str(image_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    provider = NativeExt4Image(image_path, volume_size=image_path.stat().st_size)
+    try:
+        assert provider.reserved_gdt_blocks > 0
+        assert provider.read_file("/hello") == payload_path.read_bytes()
+        inode = provider._resolve("/hello")
+        inode_group = (inode.number - 1) // provider.inodes_per_group
+        descriptor = provider._group_descriptor(inode_group)
+        inode_index = (inode.number - 1) % provider.inodes_per_group
+        inode_offset = (
+            descriptor.inode_table * provider.block_size
+            + inode_index * provider.inode_size
+        )
+
+        primary_reserved_start = provider.first_data_block + 1 + provider._gdt_blocks
+        assert primary_reserved_start < provider._primary_metadata_end
+        with pytest.raises(Ext2ReadError, match="primary superblock metadata"):
+            provider._validate_data_block(primary_reserved_start)
+
+        backup_descriptor = provider._group_descriptor(1)
+        backup_reserved_start = backup_descriptor.first_block + 1 + provider._gdt_blocks
+        backup_reserved_end = provider._backup_metadata_end(
+            backup_descriptor.first_block, backup_descriptor.end_block
+        )
+        assert backup_reserved_start < backup_reserved_end
+        with pytest.raises(Ext2ReadError, match="backup superblock metadata"):
+            provider._validate_data_block(backup_reserved_start)
+        with pytest.raises(Ext2ReadError, match="backup superblock metadata"):
+            provider._validate_data_block_run(backup_reserved_end - 2, 2)
+
+        provider.close()
+        malformed_extent_path = tmp_path / "malformed-reserved-gdt.img"
+        raw = bytearray(image_path.read_bytes())
+        # Extent ee_start_hi/ee_start_lo in i_block's first extent entry.
+        struct.pack_into("<H", raw, inode_offset + 58, 0)
+        struct.pack_into("<I", raw, inode_offset + 60, primary_reserved_start)
+        malformed_extent_path.write_bytes(raw)
+        before_hash = hashlib.sha256(malformed_extent_path.read_bytes()).digest()
+        malformed = NativeExt4Image(
+            malformed_extent_path, volume_size=malformed_extent_path.stat().st_size
+        )
+        try:
+            with pytest.raises(Ext2ReadError, match="primary superblock metadata"):
+                malformed.read_file("/hello")
+        finally:
+            malformed.close()
+        assert (
+            hashlib.sha256(malformed_extent_path.read_bytes()).digest() == before_hash
+        )
+    finally:
+        provider.close()
+
+
+def test_ext4_data_block_run_crossing_reserved_gdt_boundary_fails_closed():
+    reader = NativeExt4Image.__new__(NativeExt4Image)
+    reader.first_data_block = 0
+    reader.blocks_count = 32
+    reader.blocks_per_group = 32
+    reader.feature_ro_compat = 1
+    reader._gdt_blocks = 1
+    reader.reserved_gdt_blocks = 4
+    reader._primary_metadata_start = 0
+    reader._primary_metadata_end = 2
+    descriptor = SimpleNamespace(
+        block_bitmap=10,
+        inode_bitmap=11,
+        inode_table=12,
+        inode_table_blocks=2,
+        first_block=0,
+        end_block=32,
+    )
+    reader._group_descriptor = lambda _group: descriptor
+    reader._bitmap = lambda _group, inode=False: bytes([0xFF] * 4)
+
+    with pytest.raises(Ext2ReadError, match="backup superblock metadata"):
+        reader._validate_data_block_run(5, 2)
+    with pytest.raises(Ext2ReadError, match="reserved GDT metadata exceeds"):
+        reader._backup_metadata_end(0, 5)
 
 
 def test_64bit_descriptor_high_addresses_are_decoded_with_group_bounds():

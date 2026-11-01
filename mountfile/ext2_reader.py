@@ -164,6 +164,16 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             self.feature_compat = self.profile.feature_compat
             self.feature_incompat = self.profile.feature_incompat
             self.feature_ro_compat = self.profile.feature_ro_compat
+            self.resize_inode = bool(self.feature_compat & _COMPAT_RESIZE_INODE)
+            self.reserved_gdt_blocks = (
+                struct.unpack("<H", self._read_at(1024 + 0xCE, 2))[0]
+                if self.profile.revision == 1
+                else 0
+            )
+            if self.reserved_gdt_blocks and not self.resize_inode:
+                raise Ext2ReadError(
+                    "reserved GDT blocks are declared without resize_inode"
+                )
             self.has_filetype = bool(self.feature_incompat & _INCOMPAT_FILETYPE)
             self.group_count = math.ceil(
                 (self.blocks_count - self.first_data_block) / self.blocks_per_group
@@ -186,6 +196,16 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                 raise Ext2ReadError("group descriptor table exceeds filesystem bounds")
             self._primary_metadata_start = self.first_data_block
             self._primary_metadata_end = self.first_data_block + 1 + self._gdt_blocks
+            if self.reserved_gdt_blocks:
+                self._primary_metadata_end += self.reserved_gdt_blocks
+            primary_group_end = min(
+                self.blocks_count,
+                self.first_data_block + self.blocks_per_group,
+            )
+            if self._primary_metadata_end > primary_group_end:
+                raise Ext2ReadError(
+                    "primary reserved GDT metadata exceeds its block group"
+                )
         except (OSError, ExtProbeError) as exc:
             self.close()
             raise Ext2ReadError(str(exc)) from exc
@@ -291,6 +311,13 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                 return True
         return False
 
+    def _backup_metadata_end(self, first_block: int, end_block: int) -> int:
+        """Exclusive end of a group's backup superblock/GDT reservation."""
+        metadata_end = first_block + 1 + self._gdt_blocks + self.reserved_gdt_blocks
+        if metadata_end > end_block:
+            raise Ext2ReadError("backup reserved GDT metadata exceeds its block group")
+        return metadata_end
+
     def _group_descriptor(self, group: int) -> _GroupDescriptor:
         if not 0 <= group < self.group_count:
             raise Ext2ReadError("inode or block references an invalid group")
@@ -325,7 +352,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             raise Ext2ReadError("inode table overlaps the inode bitmap")
         sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
         if self._has_super_backup(group, sparse):
-            backup_end = min(end_block, first_block + 1 + self._gdt_blocks)
+            backup_end = self._backup_metadata_end(first_block, end_block)
             metadata_ranges = (
                 (block_bitmap, block_bitmap + 1),
                 (inode_bitmap, inode_bitmap + 1),
@@ -394,9 +421,8 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             raise Ext2ReadError("data block pointer references a free block")
         sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
         if self._has_super_backup(group, sparse):
-            backup_end = min(
-                descriptor.end_block,
-                descriptor.first_block + 1 + self._gdt_blocks,
+            backup_end = self._backup_metadata_end(
+                descriptor.first_block, descriptor.end_block
             )
             if descriptor.first_block <= block < backup_end:
                 raise Ext2ReadError(
@@ -439,9 +465,8 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                     "data block pointer references primary superblock metadata"
                 )
             if self._has_super_backup(group, sparse):
-                backup_end = min(
-                    descriptor.end_block,
-                    descriptor.first_block + 1 + self._gdt_blocks,
+                backup_end = self._backup_metadata_end(
+                    descriptor.first_block, descriptor.end_block
                 )
                 if block < backup_end and run_end > descriptor.first_block:
                     raise Ext2ReadError(
