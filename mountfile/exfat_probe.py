@@ -11,6 +11,9 @@ _SIGNATURE = b"EXFAT   "
 _BOOT_REGION_SECTORS = 12
 _BOOT_REGIONS = 2
 _MAX_CLUSTER_SIZE = 32 * 1024 * 1024
+# VolumeFlags bits 0..3 are ActiveFat, VolumeDirty, MediaFailure and
+# ClearToZero; only the upper twelve bits are reserved by exFAT 1.00.
+_KNOWN_VOLUME_FLAGS = 0x000F
 
 
 class ExfatProbeError(ValueError):
@@ -100,7 +103,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     if number_of_fats not in (1, 2):
         raise ExfatProbeError("exFAT number of FATs is invalid")
     volume_flags = struct.unpack_from("<H", boot, 0x6A)[0]
-    if volume_flags & ~0x000F:
+    if volume_flags & ~_KNOWN_VOLUME_FLAGS:
         raise ExfatProbeError("exFAT volume flags contain reserved bits")
     active_fat = volume_flags & 1
     if active_fat >= number_of_fats:

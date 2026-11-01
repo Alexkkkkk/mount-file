@@ -41,6 +41,9 @@ class _NoFreeDirectorySlot(ExfatWriteError):
 
 
 _EOC = 0xFFFFFFFF
+_VOLUME_FLAG_DIRTY = 0x0002
+_VOLUME_FLAG_MEDIA_FAILURE = 0x0004
+_VOLUME_FLAG_CLEAR_TO_ZERO = 0x0008
 
 
 def _timestamp_parts():
@@ -182,8 +185,17 @@ class NativeExfatWriter:
             )
         except (OSError, ExfatProbeError) as exc:
             raise ExfatWriteError(str(exc)) from exc
-        if self.profile.volume_flags & 0x0004:
+        volume_flags = self.profile.volume_flags
+        if volume_flags & ~0x000F:
+            raise ExfatWriteError("exFAT volume flags contain reserved bits")
+        if volume_flags & _VOLUME_FLAG_DIRTY:
+            raise ExfatWriteError("exFAT volume is dirty and requires recovery")
+        if volume_flags & _VOLUME_FLAG_MEDIA_FAILURE:
             raise ExfatWriteError("exFAT volume reports media failure")
+        if volume_flags & _VOLUME_FLAG_CLEAR_TO_ZERO:
+            raise ExfatWriteError(
+                "exFAT ClearToZero flag requires unsupported pre-write handling"
+            )
         self.extent_size = self.profile.volume_length * self.profile.bytes_per_sector
         self._source_image_identity = _image_identity(self.image)
 
@@ -485,10 +497,9 @@ class NativeExfatWriter:
         for cluster in range(2, reader.profile.cluster_count + 2):
             if not (bitmap[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7))):
                 fat_relative = (
-                    (reader.profile.fat_offset + reader.profile.active_fat * reader.profile.fat_length)
-                    * reader.profile.bytes_per_sector
-                    + cluster * 4
-                )
+                    reader.profile.fat_offset
+                    + reader.profile.active_fat * reader.profile.fat_length
+                ) * reader.profile.bytes_per_sector + cluster * 4
                 fat_value = struct.unpack(
                     "<I", self._read_rel(stream, fat_relative, 4)
                 )[0]
