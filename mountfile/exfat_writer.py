@@ -9,6 +9,7 @@ closed.
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import os
 import shutil
@@ -40,6 +41,15 @@ class _NoFreeDirectorySlot(ExfatWriteError):
 
 
 _EOC = 0xFFFFFFFF
+
+
+def _timestamp_parts():
+    now = _dt.datetime.now(_dt.timezone.utc)
+    date = ((now.year - 1980) << 9) | (now.month << 5) | now.day
+    time = (now.hour << 11) | (now.minute << 5) | (now.second // 2)
+    packed = (date << 16) | time
+    increment = (now.second % 2) * 100 + now.microsecond // 10_000
+    return packed, increment
 
 
 @contextmanager
@@ -615,6 +625,11 @@ class NativeExfatWriter:
         result[0] = 0x85
         result[1] = slots + 1
         struct.pack_into("<H", result, 4, 0x10 if is_dir else 0)
+        timestamp, increment = _timestamp_parts()
+        struct.pack_into("<III", result, 8, timestamp, timestamp, timestamp)
+        result[20] = increment
+        result[21] = increment
+        result[22:25] = b"\x80\x80\x80"
         result[32] = 0xC0
         result[33] = 0x02 if no_fat_chain else 0
         result[35] = len(encoded) // 2
@@ -806,9 +821,15 @@ class NativeExfatWriter:
                     self._write_rel(
                         stream, relative + 24, struct.pack("<Q", len(payload))
                     )
+                    timestamp, increment = _timestamp_parts()
+                    self._write_rel(
+                        stream, relative - 32 + 12, struct.pack("<I", timestamp)
+                    )
+                    self._write_rel(stream, relative - 32 + 21, bytes((increment,)))
+                    self._write_rel(stream, relative - 32 + 23, b"\x80")
                     self._rewrite_checksum(
                         stream,
-                        self._entry_offset(reader, directory, record[1]),
+                        relative - 32,
                         record[2],
                     )
                     self._write_bitmap(stream, reader, meta, bitmap)
