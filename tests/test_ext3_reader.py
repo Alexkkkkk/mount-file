@@ -42,7 +42,13 @@ def _extent_root_for_block(block):
 
 def _make_ext4_extent_image(path):
     image = bytearray(
-        _make_image(path, compat=0x0008, incompat=0x0042, ro_compat=0x0003)
+        _make_image(
+            path,
+            compat=0x0008,
+            incompat=0x0042,
+            ro_compat=0x0043,
+            inode_size=256,
+        )
     )
     file_data = b"hello ext4!"
     _put_inode(
@@ -60,10 +66,23 @@ def _make_ext4_extent_image(path):
         size=len(file_data),
         pointers=_extent_root_for_block(21),
         flags=_EXT4_EXTENTS_FL,
-        mtime=1,
+        atime=1_700_000_000,
+        ctime=1_700_000_001,
+        mtime=1_700_000_000,
         uid=0x87654321,
         gid=0xFEDCBA98,
     )
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (11 - 1) * 256
+    struct.pack_into("<H", image, inode_offset + 128, 32)
+    struct.pack_into(
+        "<III",
+        image,
+        inode_offset + 132,
+        123_456_789,
+        (1 << 30) | 987_654_321,
+        1,
+    )
+    struct.pack_into("<II", image, inode_offset + 144, 1_700_000_000, 500_000_000)
 
     root_directory = _dir_block([(".", 2, 2), ("..", 2, 2), ("hello.txt", 11, 1)])
     root_start = ROOT_DIR_BLOCK * BLOCK_SIZE
@@ -532,6 +551,20 @@ def test_ext4_metadata_csum_rejection_names_unvalidated_structures():
         NativeExt4Image._validate_profile(profile)
 
 
+def test_ext4_extra_isize_feature_requires_extended_inode_size():
+    profile = SimpleNamespace(
+        fs_type="ext4",
+        unknown_incompat_features=0,
+        unknown_ro_compat_features=0,
+        feature_incompat=0x0042,
+        feature_ro_compat=0x0043,
+        feature_compat=0,
+        inode_size=128,
+    )
+    with pytest.raises(Ext3ReadError, match="EXTRA_ISIZE requires"):
+        NativeExt4Image._validate_profile(profile)
+
+
 def _ext4_inode_reader(raw, *, block_size=1024):
     reader = NativeExt4Image.__new__(NativeExt4Image)
     reader.inodes_count = 16
@@ -835,7 +868,11 @@ def test_synthetic_ext4_extent_image_reads_through_bounded_vfs(tmp_path):
     )
     try:
         assert provider.backend_name == "native-ext4-ro"
-        assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+        listed = next(
+            entry for entry in provider.list_dir("/") if entry["name"] == "hello.txt"
+        )
+        assert listed["uid"] == 0x87654321
+        assert listed["gid"] == 0xFEDCBA98
         owner = provider.stat("/hello.txt")
         assert owner["uid"] == 0x87654321
         assert owner["gid"] == 0xFEDCBA98
@@ -847,10 +884,47 @@ def test_synthetic_ext4_extent_image_reads_through_bounded_vfs(tmp_path):
     assert image_path.read_bytes() == selected_image
 
 
+def test_ext4_stat_exposes_extended_times_permissions_and_links(tmp_path):
+    image_path = tmp_path / "ext4-stat-metadata.img"
+    image = _make_ext4_extent_image(image_path)
+    provider = NativeExt4Image(image_path, volume_size=len(image))
+    try:
+        entry = provider.stat("/hello.txt")
+        assert entry["accessed"] == "2023-11-14T22:13:20.000000001+00:00"
+        assert entry["ctime"] == "2023-11-14T22:13:21.123456789+00:00"
+        assert entry["modified"] == "2159-12-22T04:41:36.987654321+00:00"
+        assert entry["created"] == "2023-11-14T22:13:20.500000000+00:00"
+        assert entry["permissions"] == 0o644
+        assert entry["mode"] == 0x8000 | 0o644
+        assert entry["links"] == 1
+        assert entry["date"]
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("corruption", ["extra_isize", "nanoseconds"])
+def test_ext4_stat_rejects_malformed_extended_timestamps(tmp_path, corruption):
+    image_path = tmp_path / f"ext4-invalid-stat-{corruption}.img"
+    image = bytearray(_make_ext4_extent_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (11 - 1) * 256
+    if corruption == "extra_isize":
+        struct.pack_into("<H", image, inode_offset + 128, 132)
+    else:
+        struct.pack_into("<I", image, inode_offset + 136, 1_000_000_000)
+    image_path.write_bytes(image)
+
+    provider = NativeExt4Image(image_path, volume_size=len(image))
+    try:
+        with pytest.raises(Ext2ReadError, match="extra_isize|nanoseconds"):
+            provider.stat("/hello.txt")
+    finally:
+        provider.close()
+
+
 def test_synthetic_ext4_extent_corruption_fails_closed_without_writes(tmp_path):
     image_path = tmp_path / "corrupt-synthetic-ext4.img"
     image = bytearray(_make_ext4_extent_image(image_path))
-    file_inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (11 - 1) * 128 + 40
+    file_inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (11 - 1) * 256 + 40
     struct.pack_into("<H", image, file_inode_offset, 0)
     image_path.write_bytes(image)
     original = image_path.read_bytes()

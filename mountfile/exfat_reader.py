@@ -8,6 +8,7 @@ out-of-volume ranges. exFAT writes remain outside this profile.
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import struct
 from dataclasses import dataclass
@@ -33,6 +34,35 @@ _MAX_DIR_BYTES = 64 * 1024 * 1024
 _MAX_READ = 16 * 1024 * 1024
 
 
+def _decode_exfat_timestamp(packed, increment, utc_offset, field_name):
+    if increment is not None and not 0 <= increment <= 199:
+        raise ExfatReadError(f"exFAT {field_name} timestamp increment is invalid")
+
+    offset_value = utc_offset & 0x7F
+    offset_valid = bool(utc_offset & 0x80)
+    if not offset_valid and offset_value:
+        raise ExfatReadError(f"exFAT {field_name} UTC offset is invalid")
+
+    double_seconds = packed & 0x1F
+    minute = (packed >> 5) & 0x3F
+    hour = (packed >> 11) & 0x1F
+    day = (packed >> 16) & 0x1F
+    month = (packed >> 21) & 0x0F
+    year = 1980 + ((packed >> 25) & 0x7F)
+    try:
+        value = _dt.datetime(year, month, day, hour, minute, double_seconds * 2)
+    except ValueError as exc:
+        raise ExfatReadError(f"exFAT {field_name} timestamp is invalid") from exc
+
+    if increment is not None:
+        value += _dt.timedelta(milliseconds=increment * 10)
+    if offset_valid:
+        signed_offset = offset_value if offset_value < 0x40 else offset_value - 0x80
+        timezone = _dt.timezone(_dt.timedelta(minutes=signed_offset * 15))
+        value = value.replace(tzinfo=timezone)
+    return value
+
+
 @dataclass(frozen=True)
 class _Entry:
     name: str
@@ -41,6 +71,10 @@ class _Entry:
     size: int
     no_fat_chain: bool
     valid_data_length: int = 0
+    attributes: int = 0
+    created: _dt.datetime | None = None
+    modified: _dt.datetime | None = None
+    accessed: _dt.datetime | None = None
 
 
 class NativeExfatImage(ReadOnlyVFSStatMixin):
@@ -375,6 +409,24 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             attributes = struct.unpack_from("<H", raw, pos + 4)[0]
             if attributes & ~0x003F:
                 raise ExfatReadError("exFAT file entry has reserved attributes")
+            created = _decode_exfat_timestamp(
+                struct.unpack_from("<I", raw, pos + 8)[0],
+                raw[pos + 20],
+                raw[pos + 22],
+                "create",
+            )
+            modified = _decode_exfat_timestamp(
+                struct.unpack_from("<I", raw, pos + 12)[0],
+                raw[pos + 21],
+                raw[pos + 23],
+                "last-modified",
+            )
+            accessed = _decode_exfat_timestamp(
+                struct.unpack_from("<I", raw, pos + 16)[0],
+                None,
+                raw[pos + 24],
+                "last-accessed",
+            )
             first_cluster = struct.unpack_from("<I", stream, 20)[0]
             valid_data_length = struct.unpack_from("<Q", stream, 8)[0]
             size = struct.unpack_from("<Q", stream, 24)[0]
@@ -408,6 +460,10 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                     size,
                     no_fat_chain,
                     valid_data_length,
+                    attributes,
+                    created,
+                    modified,
+                    accessed,
                 )
             )
             pos += total
@@ -510,7 +566,27 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 "name": item.name,
                 "is_dir": item.is_dir,
                 "size": 0 if item.is_dir else item.size,
-                "date": "",
+                "date": (
+                    item.modified.isoformat(timespec="milliseconds")
+                    if item.modified is not None
+                    else ""
+                ),
+                "created": (
+                    item.created.isoformat(timespec="milliseconds")
+                    if item.created is not None
+                    else ""
+                ),
+                "modified": (
+                    item.modified.isoformat(timespec="milliseconds")
+                    if item.modified is not None
+                    else ""
+                ),
+                "accessed": (
+                    item.accessed.isoformat(timespec="seconds")
+                    if item.accessed is not None
+                    else ""
+                ),
+                "attributes": item.attributes,
             }
             for item in sorted(
                 self._directory(entry.first_cluster),

@@ -349,9 +349,49 @@ def test_native_exfat_traverses_nested_paths_and_case_insensitive_stat(tmp_path)
         assert provider.stat("/nested/report.txt")["size"] == len(b"nested report")
         assert provider.read_file_range("/NESTED/report.txt", 7, 6) == b"report"
         assert provider.read_file("/NESTED/report.txt") == b"nested report"
-        assert provider.list_dir("/nested") == [
-            {"name": "Report.TXT", "is_dir": False, "size": 13, "date": ""}
-        ]
+        entries = provider.list_dir("/nested")
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["name"] == "Report.TXT"
+        assert entry["is_dir"] is False
+        assert entry["size"] == 13
+        assert entry["date"] == entry["modified"]
+        assert entry["created"]
+        assert entry["modified"]
+        assert entry["accessed"]
+        assert entry["attributes"] == 0
+    finally:
+        provider.close()
+
+
+def test_native_exfat_writer_updates_existing_file_modified_timestamp(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "exfat-overwrite-timestamp.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    old_date = ((2024 - 1980) << 9) | (4 << 5) | 5
+    old_time = (12 << 11) | (34 << 5) | 28
+    new_date = ((2025 - 1980) << 9) | (6 << 5) | 7
+    new_time = (8 << 11) | (9 << 5) | (10 // 2)
+    old_timestamp = (old_date << 16) | old_time
+    new_timestamp = (new_date << 16) | new_time
+
+    monkeypatch.setattr(
+        "mountfile.exfat_writer._timestamp_parts", lambda: (old_timestamp, 0)
+    )
+    writer.write_file("/HELLO.TXT", b"first replacement")
+    monkeypatch.setattr(
+        "mountfile.exfat_writer._timestamp_parts", lambda: (new_timestamp, 0)
+    )
+    writer.write_file("/HELLO.TXT", b"second replacement")
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        entry = provider.stat("/HELLO.TXT")
+        assert entry["modified"] == "2025-06-07T08:09:10.000+00:00"
+        assert entry["date"] == entry["modified"]
+        assert provider.read_file("/HELLO.TXT") == b"second replacement"
     finally:
         provider.close()
 
@@ -551,6 +591,14 @@ def _tree_image(path, *, valid_data_length=None):
     struct.pack_into("<Q", root, 56, len(upcase_data))
     root[64] = 0x85
     root[65] = 2
+    struct.pack_into("<H", root, 68, 0x23)
+    packed_date = ((2024 - 1980) << 9) | (4 << 5) | 5
+    packed_time = (12 << 11) | (34 << 5) | 28
+    packed_timestamp = (packed_date << 16) | packed_time
+    struct.pack_into(
+        "<III", root, 72, packed_timestamp, packed_timestamp, packed_timestamp
+    )
+    root[84:89] = bytes((37, 125, 0x84, 0xF8, 0x00))
     payload = b"hello exFAT"
     root[96] = 0xC0
     root[99] = 9
@@ -569,6 +617,55 @@ def _tree_image(path, *, valid_data_length=None):
     region[35 * 512 : 35 * 512 + len(upcase_data)] = upcase_data
     path.write_bytes(region)
     return payload
+
+
+def test_native_exfat_stat_exposes_timestamps_and_dos_attributes(tmp_path):
+    path = tmp_path / "exfat-stat-metadata.img"
+    _tree_image(path)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        entry = provider.stat("/HELLO.TXT")
+        assert entry["attributes"] == 0x23
+        assert entry["created"] == "2024-04-05T12:34:56.370+01:00"
+        assert entry["modified"] == "2024-04-05T12:34:57.250-02:00"
+        assert entry["accessed"] == "2024-04-05T12:34:56"
+        assert entry["date"] == entry["modified"]
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        ("calendar", "timestamp is invalid"),
+        ("increment", "timestamp increment is invalid"),
+        ("timezone", "UTC offset is invalid"),
+    ],
+)
+def test_native_exfat_rejects_malformed_timestamp_metadata(
+    tmp_path, corruption, message
+):
+    path = tmp_path / f"exfat-invalid-{corruption}.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    entry_start = 32 * 512 + 64
+    if corruption == "calendar":
+        struct.pack_into("<I", raw, entry_start + 8, 0)
+    elif corruption == "increment":
+        raw[entry_start + 20] = 200
+    else:
+        raw[entry_start + 22] = 0x01
+    entry_set = bytearray(raw[entry_start : entry_start + 96])
+    struct.pack_into("<H", entry_set, 2, _entry_set_checksum(entry_set))
+    raw[entry_start : entry_start + 96] = entry_set
+    path.write_bytes(raw)
+
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        with pytest.raises(ExfatReadError, match=message):
+            provider.list_dir("/")
+    finally:
+        provider.close()
 
 
 @pytest.mark.parametrize("valid_data_length", [0, 5, 11])
