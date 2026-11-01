@@ -13,6 +13,7 @@
 | Self-heal | failure trusted main + opt-in | анализ логов и предложение patch PR | PR | нет |
 | CI Guardian | workflow completion | deduplicated incident issue, recovery close | issues only | нет |
 | mfsync | daily/manual/PR | secret scan, version parity, sync status, optional explicit sync | только manual write mode | нет |
+| External mirror | weekly/tag/manual on main | SSH push of branch and tag refs to a configured mirror | только внешний Git remote | нет |
 | Release | successful tested main | version PR/tag/build/release assets | PR/tag | только ruleset |
 
 ## Автоисправления
@@ -60,6 +61,14 @@ Optional secret:     AUTOMATION_TOKEN=<fine-grained repo token>
 ```
 
 Включение AI не даёт ему права обходить review, required checks или branch protection.
+
+## Внешнее зеркалирование
+
+`.github/workflows/mirror.yml` зеркалирует Git-ветки и теги по расписанию, при публикации `v*`-тега или вручную с `main`. Workflow отключён, пока repository variable `MIRROR_ENABLED` не установлена в `true`. Перед включением задайте `MIRROR_REPOSITORY` в SSH-формате `git@host:owner/repository.git`, переменную `MIRROR_KNOWN_HOSTS` с заранее проверенным публичным host key и secret `MIRROR_SSH` с deploy key, имеющим запись только в целевой репозиторий.
+
+Workflow проверяет host key через `StrictHostKeyChecking=yes`; он не делает runtime `ssh-keyscan`, не использует force-push и не удаляет refs, существующие только на mirror. Конфликт веток останавливает job и требует ручного разрешения. Для GitHub mirror переносятся только refs, а не Issues, PR, Actions или настройки.
+
+Предложенные CIDRA и RepoHeart интеграции не добавлены: указанные upstream repositories не удалось подтвердить. Предложенный вызов `repo-bug-hunter run --issue ... --autonomous` не соответствует опубликованному CLI проекта. CI self-heal и CI Guardian уже реализуют диагностику trusted CI failures; выдавать неподтверждённому issue-агенту API key и токен записи небезопасно.
 
 ## Операционная проверка
 
