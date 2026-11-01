@@ -149,6 +149,16 @@ class Fat32:
         # condition `fsck.fat` reports as "Free cluster summary wrong".
         self.fsinfo_sector = struct.unpack_from("<H", bpb, 48)[0]
         self.backup_boot_sector = struct.unpack_from("<H", bpb, 50)[0]
+        if self.fsinfo_sector not in (0, 0xFFFF) and not (
+            1 <= self.fsinfo_sector < self.reserved
+        ):
+            raise Fat32Error("FSInfo sector is outside the reserved region")
+        if (
+            self.fsinfo_sector not in (0, 0xFFFF)
+            and self.backup_boot_sector
+            and self.fsinfo_sector == self.backup_boot_sector
+        ):
+            raise Fat32Error("FSInfo sector aliases the backup boot sector")
         self.fat_start = self.offset + self.reserved * self.bps
         self.fat_size = self.spf * self.bps
         self.data_start = (
