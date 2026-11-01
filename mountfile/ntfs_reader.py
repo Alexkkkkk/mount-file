@@ -9,6 +9,7 @@ log replay and every native NTFS write operation remain disabled.
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import struct
 from dataclasses import dataclass, replace
@@ -131,6 +132,10 @@ class NtfsStandardInformation:
     file_attributes: int
     version: int
     class_id: int
+    creation_time: int
+    modification_time: int
+    mft_change_time: int
+    access_time: int
 
 
 @dataclass(frozen=True)
@@ -901,10 +906,33 @@ def parse_ntfs_standard_information(value: bytes) -> NtfsStandardInformation:
     if len(value) < 48:
         raise NtfsMetadataError("NTFS STANDARD_INFORMATION value is truncated")
     return NtfsStandardInformation(
-        struct.unpack_from("<I", value, 32)[0],
-        struct.unpack_from("<I", value, 40)[0],
-        struct.unpack_from("<I", value, 44)[0],
+        file_attributes=struct.unpack_from("<I", value, 32)[0],
+        version=struct.unpack_from("<I", value, 40)[0],
+        class_id=struct.unpack_from("<I", value, 44)[0],
+        creation_time=struct.unpack_from("<Q", value, 0)[0],
+        modification_time=struct.unpack_from("<Q", value, 8)[0],
+        mft_change_time=struct.unpack_from("<Q", value, 16)[0],
+        access_time=struct.unpack_from("<Q", value, 24)[0],
     )
+
+
+def _format_ntfs_filetime(filetime: int) -> str:
+    """Format unsigned 100-ns NTFS ticks as a precise UTC timestamp."""
+    if (
+        not isinstance(filetime, int)
+        or isinstance(filetime, bool)
+        or not 0 <= filetime <= 0xFFFFFFFFFFFFFFFF
+    ):
+        raise NtfsMetadataError("NTFS FILETIME value is invalid")
+    epoch = _dt.datetime(1601, 1, 1, tzinfo=_dt.timezone.utc)
+    microseconds = filetime // 10
+    try:
+        value = epoch + _dt.timedelta(microseconds=microseconds)
+    except (OverflowError, ValueError) as exc:
+        raise NtfsMetadataError("NTFS FILETIME is outside supported range") from exc
+    ticks_within_second = filetime % 10_000_000
+    result = value.strftime("%Y-%m-%dT%H:%M:%S")
+    return f"{result}.{ticks_within_second:07d}+00:00"
 
 
 def _parse_ntfs_upcase_table(raw: bytes) -> tuple[int, ...]:
@@ -1408,6 +1436,35 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             )
         return tuple(resolved)
 
+    @staticmethod
+    def _standard_information_fields(attributes) -> dict:
+        matches = [attribute for attribute in attributes if attribute.type_code == 0x10]
+        if len(matches) != 1:
+            raise NtfsMetadataError(
+                "NTFS file must contain one STANDARD_INFORMATION attribute"
+            )
+        attribute = matches[0]
+        if attribute.name or attribute.nonresident or attribute.resident_value is None:
+            raise NtfsMetadataError(
+                "NTFS STANDARD_INFORMATION must be an unnamed resident attribute"
+            )
+        info = parse_ntfs_standard_information(attribute.resident_value)
+        return {
+            "created": _format_ntfs_filetime(info.creation_time),
+            "modified": _format_ntfs_filetime(info.modification_time),
+            "ctime": _format_ntfs_filetime(info.mft_change_time),
+            "accessed": _format_ntfs_filetime(info.access_time),
+            "attributes": info.file_attributes,
+        }
+
+    def stat(self, path: str) -> dict:
+        result = super().stat(path)
+        if result.get("path") == "/":
+            record_number, record = self._resolve("/")
+            attributes = self._attributes_for_record(record_number, record)
+            result.update(self._standard_information_fields(attributes))
+        return result
+
     def list_dir(self, path="/"):
         record_number, record = self._resolve(path)
         if not record.is_directory:
@@ -1439,6 +1496,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     ),
                     "date": "",
                     "inode": child_number,
+                    **self._standard_information_fields(child_attrs),
                 }
             )
         result.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))
