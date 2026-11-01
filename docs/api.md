@@ -153,3 +153,11 @@ offset.
 ::: mountfile.vfs.open_image_provider
 
 ::: mountfile.vfs.ReadOnlyVFSStatMixin
+
+### Владелец inode в ext providers
+
+ext2/ext3/ext4 listing и `stat` включают raw on-disk `uid` и `gid` для
+superblock `creator_os == Linux`; low и high 16-bit inode words объединяются в
+32-bit значения. Для других `creator_os` поля остаются `null`: OS-dependent
+bytes не интерпретируются как Linux ownership. Значения не преобразуются через
+host UID/GID namespace и не означают поддержку ACL или ownership changes.

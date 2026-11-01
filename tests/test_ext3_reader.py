@@ -69,6 +69,8 @@ def _make_ext4_extent_image(path):
         atime=1_700_000_000,
         ctime=1_700_000_001,
         mtime=1_700_000_000,
+        uid=0x87654321,
+        gid=0xFEDCBA98,
     )
     inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (11 - 1) * 256
     struct.pack_into("<H", image, inode_offset + 128, 32)
@@ -866,7 +868,14 @@ def test_synthetic_ext4_extent_image_reads_through_bounded_vfs(tmp_path):
     )
     try:
         assert provider.backend_name == "native-ext4-ro"
-        assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+        listed = next(
+            entry for entry in provider.list_dir("/") if entry["name"] == "hello.txt"
+        )
+        assert listed["uid"] == 0x87654321
+        assert listed["gid"] == 0xFEDCBA98
+        owner = provider.stat("/hello.txt")
+        assert owner["uid"] == 0x87654321
+        assert owner["gid"] == 0xFEDCBA98
         assert provider.read_file("/hello.txt") == b"hello ext4!"
         assert provider.read_file_range("/hello.txt", 6, 4) == b"ext4"
     finally:

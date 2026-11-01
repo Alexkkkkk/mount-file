@@ -91,6 +91,8 @@ class _Inode:
     mtime_extra: int | None = None
     crtime: int | None = None
     crtime_extra: int | None = None
+    uid: int | None = None
+    gid: int | None = None
 
     @property
     def mode_type(self) -> int:
@@ -513,6 +515,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         addressable_blocks += (self.block_size // 4) ** 2 + (self.block_size // 4) ** 3
         if size > addressable_blocks * self.block_size:
             raise Ext2ReadError("inode size exceeds ext2 block-pointer capacity")
+        uid, gid = self._decode_inode_ownership(raw)
         inode = _Inode(
             number=number,
             mode=mode,
@@ -520,6 +523,8 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=block_pointers,
+            uid=uid,
+            gid=gid,
             atime=struct.unpack_from("<I", raw, 8)[0],
             ctime=struct.unpack_from("<I", raw, 12)[0],
             links_count=struct.unpack_from("<H", raw, 26)[0],
@@ -528,6 +533,20 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             self._inode_cache.clear()
         self._inode_cache[number] = inode
         return inode
+
+    def _decode_inode_ownership(self, raw: bytes) -> tuple[int | None, int | None]:
+        """Decode Linux ext UID/GID words without guessing another OS layout."""
+        if getattr(self.profile, "creator_os", None) != 0:
+            return None, None
+        if len(raw) < 124:
+            raise Ext2ReadError(
+                "Linux ext inode is truncated before UID/GID high words"
+            )
+        uid_low = struct.unpack_from("<H", raw, 2)[0]
+        gid_low = struct.unpack_from("<H", raw, 24)[0]
+        uid_high = struct.unpack_from("<H", raw, 120)[0]
+        gid_high = struct.unpack_from("<H", raw, 122)[0]
+        return uid_low | (uid_high << 16), gid_low | (gid_high << 16)
 
     def _indirect_block(
         self,
@@ -798,6 +817,8 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             "ctime": self._format_ext_timestamp(inode.ctime, inode.ctime_extra),
             "modified": self._format_ext_timestamp(inode.mtime, inode.mtime_extra),
             "created": self._format_ext_timestamp(inode.crtime, inode.crtime_extra),
+            "uid": inode.uid,
+            "gid": inode.gid,
         }
 
     def stat(self, path: str) -> dict:

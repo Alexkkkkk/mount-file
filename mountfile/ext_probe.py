@@ -142,6 +142,7 @@ class ExtSuperblockProfile:
     inode_size: int
     group_descriptor_size: int
     filesystem_uuid: bytes
+    creator_os: int
     revision: int
     state: int
     feature_compat: int
@@ -256,6 +257,7 @@ def _probe_stream(
     feature_compat = _u32(superblock, 0x5C)
     feature_incompat = _u32(superblock, 0x60)
     feature_ro_compat = _u32(superblock, 0x64)
+    creator_os = _u32(superblock, 0x48)
     _validate_superblock_checksum(superblock, feature_incompat, feature_ro_compat)
     if feature_incompat & _INCOMPAT_64BIT:
         blocks_count = blocks_low | (_u32(superblock, 0x150) << 32)
@@ -404,6 +406,7 @@ def _probe_stream(
         inode_size=inode_size,
         group_descriptor_size=group_descriptor_size,
         filesystem_uuid=bytes(superblock[0x68:0x78]),
+        creator_os=creator_os,
         revision=revision,
         state=state,
         feature_compat=feature_compat,
