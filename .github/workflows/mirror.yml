@@ -1,0 +1,81 @@
+name: External repository mirror
+
+on:
+  schedule:
+    - cron: '30 1 * * 0'
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-repository-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: >-
+      vars.MIRROR_ENABLED == 'true' &&
+      (
+        github.event_name == 'schedule' ||
+        (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Push branches and tags to the configured mirror
+        shell: bash
+        env:
+          MIRROR_REPOSITORY: ${{ vars.MIRROR_REPOSITORY }}
+          MIRROR_KNOWN_HOSTS: ${{ vars.MIRROR_KNOWN_HOSTS }}
+          MIRROR_SSH: ${{ secrets.MIRROR_SSH }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MIRROR_REPOSITORY:-}" || -z "${MIRROR_KNOWN_HOSTS:-}" || -z "${MIRROR_SSH:-}" ]]; then
+            echo "::error::Set MIRROR_REPOSITORY, MIRROR_KNOWN_HOSTS, and the MIRROR_SSH secret before enabling the mirror."
+            exit 1
+          fi
+
+          if [[ ! "$MIRROR_REPOSITORY" =~ ^git@([A-Za-z0-9.-]+):[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]; then
+            echo "::error::MIRROR_REPOSITORY must use the SSH form git@host:owner/repository.git."
+            exit 1
+          fi
+          mirror_host="${BASH_REMATCH[1]}"
+
+          key_path="$RUNNER_TEMP/mountfile-mirror-key"
+          known_hosts_path="$RUNNER_TEMP/mountfile-mirror-known-hosts"
+          umask 077
+          printf '%s\n' "$MIRROR_SSH" > "$key_path"
+          printf '%s\n' "$MIRROR_KNOWN_HOSTS" > "$known_hosts_path"
+          trap 'rm -f "$key_path"' EXIT
+
+          if ! ssh-keygen -F "$mirror_host" -f "$known_hosts_path" >/dev/null; then
+            echo "::error::MIRROR_KNOWN_HOSTS does not contain a verified host key for $mirror_host."
+            exit 1
+          fi
+
+          export GIT_SSH_COMMAND="ssh -F /dev/null -i $key_path -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts_path -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes"
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git remote add mirror "$MIRROR_REPOSITORY"
+
+          while IFS= read -r remote_ref; do
+            branch="${remote_ref#refs/remotes/origin/}"
+            [[ "$branch" == 'HEAD' ]] && continue
+            git push mirror "$remote_ref:refs/heads/$branch"
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin)
+
+          git push mirror --tags
+          echo 'Branches and tags were pushed without force or remote deletions.' >> "$GITHUB_STEP_SUMMARY"
