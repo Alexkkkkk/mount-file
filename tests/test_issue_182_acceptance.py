@@ -134,7 +134,7 @@ def test_recovery_required_profile_is_default_deny_and_read_only(tmp_path, monke
     image = tmp_path / "recovery-required.img"
     _make_clean_journal_image(image)
     data = bytearray(image.read_bytes())
-    struct.pack_into(">I", data, 40 * 1024 + 24, 1)
+    struct.pack_into(">I", data, 40 * 1024 + 28, 1)
     image.write_bytes(data)
     before = image.read_bytes()
     monkeypatch.setattr(

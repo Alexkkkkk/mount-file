@@ -44,7 +44,12 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 В capability matrix токен `read-file` означает чтение всего файла методом
 `read_file`, а `read-range` — отдельный bounded вызов `read_file_range`; ни один
 из них не подразумевается наличием другого. Добавление этих операций в
-сериализуемую матрицу повышает её schema version до 3.
+сериализуемую матрицу повышает её schema version до 5. Schema v5 сохраняет
+прежние `read_capabilities` и `write_capabilities`, а также публикует общий
+словарь `operations`: у каждой canonical операции есть `state`, точное
+`api_operation` для данного интерфейса либо structured `refusal` с code и
+category. `constraint_ids` и `gates` описывают подтверждённые image-state и
+feature gates профиля; они не заменяют фактическую validation конкретного образа.
 Каждый native provider также публикует `backend_status`: сериализуемый словарь
 с backend name, read/write capabilities, режимом и явной причиной отказа от
 записи. Пустой `write_capabilities` означает именно read-only native profile,
@@ -53,6 +58,9 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 `write_rejection_code` содержит стабильный refusal code для profile-level отказа
 или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
 `write_rejection_reason` не следует разбирать приложениям.
+В schema v5 status также содержит `write_rejection` и полную карту `operations`;
+клиенты должны использовать их, а не выводить доступность записи из одного
+булевого `writable`.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
 другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
 проверенного classic JBD2 существует только явный `open_native_ext3(...,
@@ -132,6 +140,13 @@ python -m mountfile capabilities
 provider status. Она не классифицирует произвольное состояние image и не
 заменяет profile validators: malformed, dirty или unsupported volume всё равно
 отвергается при open.
+
+Опциональный authenticated HTTP API отдаёт тот же static catalog на
+`GET /capabilities`. Если injected registry реализует `filesystem_status(image,
+offset=0)`, `GET /filesystem/status` и compatibility aliases `/fs/status` и
+`/fs/{image_id}/status` возвращают выбранный runtime status. Это read-only
+reporting endpoint: он не добавляет HTTP routes для mutation. Typed refusal
+ответы передаются в JSON как `code`, `category` и `message`.
 
 `pytsk3` остаётся optional compatibility fallback только для форматов, которые
 native routing не распознал, и теперь отключён по умолчанию. Для его явного

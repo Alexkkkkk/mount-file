@@ -6,6 +6,8 @@ from __future__ import annotations
 import pytest
 
 from mountfile.api import FASTAPI_AVAILABLE, APIConfigurationError, create_app
+from mountfile.capabilities import CAPABILITY_MATRIX_VERSION
+from mountfile.safety import RefusalCode, RefusalError
 
 if FASTAPI_AVAILABLE:
     try:
@@ -39,6 +41,24 @@ class FakeRegistry:
         self.calls.append(("read", image, path, offset, length))
         return b"evidence"
 
+    def filesystem_status(self, image, offset=0):
+        self.calls.append(("status", image, offset))
+        return {
+            "matrix_version": CAPABILITY_MATRIX_VERSION,
+            "profile_id": "ext3-native-ro",
+            "operations": {
+                "write-file": {
+                    "state": "refused",
+                    "api_operation": None,
+                    "refusal": {
+                        "code": "operation_not_supported",
+                        "category": "unsupported",
+                        "message": "selected profile is read-only",
+                    },
+                }
+            },
+        }
+
     def timeline(self, image=None, limit=100, path=None, offset=0):
         self.calls.append(("timeline", image, limit, path, offset))
         return [{"path": "/note.txt", "mtime": 1.0}]
@@ -71,6 +91,9 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     assert client.get("/health").status_code == 200
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/images").json() == [{"name": "disk.img"}]
+    catalog = client.get("/capabilities")
+    assert catalog.status_code == 200
+    assert catalog.json()["version"] == CAPABILITY_MATRIX_VERSION
 
     listed = client.get("/filesystem/ls", params={"image": "disk.img", "path": "/"})
     assert listed.status_code == 200
@@ -83,6 +106,13 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     assert read.content == b"evidence"
     assert read.headers["content-type"].startswith("application/octet-stream")
 
+    filesystem_status = client.get(
+        "/filesystem/status", params={"image": "disk.img", "offset": 7}
+    )
+    assert filesystem_status.status_code == 200
+    assert filesystem_status.json()["profile_id"] == "ext3-native-ro"
+    assert filesystem_status.json()["operations"]["write-file"]["state"] == "refused"
+
     timeline = client.get("/timeline", params={"image": "disk.img", "limit": 10})
     assert timeline.status_code == 200
     assert timeline.json()[0]["path"] == "/note.txt"
@@ -93,10 +123,19 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     path_read = client.get("/fs/disk.img/read", params={"path": "/note.txt"})
     assert path_read.status_code == 200
     assert path_read.content == b"evidence"
+    path_status = client.get("/fs/disk.img/status", params={"offset": 8})
+    assert path_status.status_code == 200
+    assert path_status.json()["matrix_version"] == CAPABILITY_MATRIX_VERSION
     path_timeline = client.get("/fs/disk.img/timeline", params={"limit": 10})
     assert path_timeline.status_code == 200
     assert path_timeline.json()[0]["path"] == "/note.txt"
-    assert {call[0] for call in registry.calls} == {"images", "ls", "read", "timeline"}
+    assert {call[0] for call in registry.calls} == {
+        "images",
+        "ls",
+        "read",
+        "status",
+        "timeline",
+    }
 
 
 @needs_fastapi
@@ -238,3 +277,32 @@ def test_filesystem_read_refuses_unbounded_legacy_registry(tmp_path):
         "/filesystem/read", params={"path": "/note.txt"}
     )
     assert response.status_code == 501
+
+
+@needs_fastapi
+def test_filesystem_status_preserves_typed_refusal_and_requires_registry_method(
+    tmp_path,
+):
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+
+    class RefusingRegistry:
+        def filesystem_status(self, image, offset=0):
+            raise RefusalError(
+                "filesystem requires recovery", RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
+            )
+
+    response = _client_or_skip(create_app(RefusingRegistry(), image_roots=image)).get(
+        "/filesystem/status"
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "dirty_or_recovery_required",
+        "category": "dirty_recovery",
+        "message": "filesystem requires recovery",
+    }
+
+    unavailable = _client_or_skip(create_app(object(), image_roots=image)).get(
+        "/filesystem/status"
+    )
+    assert unavailable.status_code == 501

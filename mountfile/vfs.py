@@ -87,6 +87,10 @@ class TskError(Exception):
     def category(self):
         return RefusalError(str(self), self.code).category
 
+    def to_dict(self):
+        """Return the native refusal payload without losing code/category."""
+        return RefusalError(str(self), self.code).to_dict()
+
 
 class RecognizedFilesystemError(TskError):
     """A recognized filesystem was rejected and must not use another format parser."""

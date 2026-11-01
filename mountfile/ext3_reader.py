@@ -254,13 +254,14 @@ class NativeExt3Image(NativeExt2Image):
         raw = self._journal_block(journal, 0)
         if len(raw) < 0x40:
             raise Ext3ReadError("short JBD2 superblock")
-        magic, block_type, sequence = struct.unpack_from(">III", raw, 0)
+        magic, block_type = struct.unpack_from(">II", raw, 0)
         if magic != _JBD2_MAGIC or block_type not in (3, 4):
             raise Ext3ReadError("invalid JBD2 journal superblock")
         if raw[0x30:0x40] != self.profile.filesystem_uuid:
             raise Ext3ReadError("JBD2 journal UUID does not match filesystem UUID")
         journal_block_size, max_length = struct.unpack_from(">II", raw, 0x0C)
-        first, start = struct.unpack_from(">II", raw, 0x14)
+        first = struct.unpack_from(">I", raw, 0x14)[0]
+        sequence, start = struct.unpack_from(">II", raw, 0x18)
         journal_compat, journal_incompat, journal_ro_compat = struct.unpack_from(
             ">III", raw, 0x24
         )

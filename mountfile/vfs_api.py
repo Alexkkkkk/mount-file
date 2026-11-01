@@ -8,11 +8,12 @@ routing remain in :mod:`mountfile.vfs`.
 from __future__ import annotations
 
 from mountfile.capabilities import (
-    CAPABILITY_MATRIX_VERSION,
     VFS_READ_CAPABILITIES,
     VFS_WRITE_CAPABILITIES,
     get_native_capability_profile,
+    get_native_capability_status,
 )
+from mountfile.safety import RefusalCode, RefusalError
 
 
 class ReadOnlyVFSStatMixin:
@@ -122,19 +123,33 @@ class ReadOnlyVFSStatMixin:
         override this property and report their own bounded write capabilities.
         """
         backend = str(getattr(self, "backend_name", type(self).__name__))
+        profile = self._native_capability_profile()
+        if profile is not None:
+            return get_native_capability_status(
+                profile,
+                backend=backend,
+                write_enabled=False,
+                write_rejection_reason=(
+                    "native provider is read-only; use an explicitly selected "
+                    "bounded writer profile"
+                ),
+                write_rejection_code=RefusalCode.OPERATION_NOT_SUPPORTED,
+            )
+
+        reason = (
+            "native provider is read-only; use an explicitly selected "
+            "bounded writer profile"
+        )
         status = {
             "backend": backend,
             "mode": "read-only",
             "read_capabilities": list(self.read_capabilities),
             "write_capabilities": list(self.write_capabilities),
             "write_enabled": False,
-            "write_rejection_reason": (
-                "native provider is read-only; use an explicitly selected "
-                "bounded writer profile"
-            ),
+            "write_rejection_reason": reason,
+            "write_rejection_code": RefusalCode.OPERATION_NOT_SUPPORTED.value,
+            "write_rejection": RefusalError(
+                reason, RefusalCode.OPERATION_NOT_SUPPORTED
+            ).to_dict(),
         }
-        profile = self._native_capability_profile()
-        if profile is not None:
-            status["profile_id"] = profile.profile_id
-            status["matrix_version"] = CAPABILITY_MATRIX_VERSION
         return status

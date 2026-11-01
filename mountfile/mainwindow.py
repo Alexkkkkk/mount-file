@@ -312,17 +312,24 @@ class MainWindow(QMainWindow):
 
     def _set_write_enabled(self, on):
         capabilities = set()
+        operations = {}
         if on and self.writer is not None:
             try:
-                capabilities = set(
-                    self.writer.capability_status()["write_capabilities"]
-                )
+                status = self.writer.capability_status()
+                capabilities = set(status["write_capabilities"])
+                operations = status.get("operations", {})
             except (AttributeError, RuntimeError, ValueError):
                 capabilities = set()
-        self.btn_import.setEnabled("write_file" in capabilities)
-        self.btn_mkdir.setEnabled("mkdir" in capabilities)
-        self.btn_rename.setEnabled("rename" in capabilities)
-        self.btn_delete.setEnabled("delete" in capabilities)
+                operations = {}
+
+        def enabled(canonical, legacy):
+            state = operations.get(canonical, {}).get("state")
+            return state == "available" if state is not None else legacy in capabilities
+
+        self.btn_import.setEnabled(enabled("write-file", "write_file"))
+        self.btn_mkdir.setEnabled(enabled("mkdir", "mkdir"))
+        self.btn_rename.setEnabled(enabled("rename", "rename"))
+        self.btn_delete.setEnabled(enabled("delete", "delete"))
 
     def _set_loaded(self, loaded):
         for w in (self.cmb_parts, self.btn_extract):
