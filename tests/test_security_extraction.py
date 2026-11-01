@@ -117,7 +117,12 @@ def test_extract_does_not_follow_destination_symlink(tmp_path):
     assert link.is_symlink()
 
 
-def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path):
+@pytest.mark.parametrize(
+    "use_dir_fd", sorted({False, bool(extract_module._HAS_DIR_FD)})
+)
+def test_extract_file_does_not_follow_intermediate_destination_symlink(
+    tmp_path, monkeypatch, use_dir_fd
+):
     outside = tmp_path / "outside"
     outside.mkdir()
     protected = outside / "secret.bin"
@@ -129,6 +134,7 @@ def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path)
     except (NotImplementedError, OSError):
         pytest.skip("symlinks unavailable in test environment")
 
+    monkeypatch.setattr(extract_module, "_HAS_DIR_FD", use_dir_fd)
     with pytest.raises(ExtractError, match="symlink|safely"):
         extract_file(
             TreeProvider(), "/secret.bin", destination_root / "nested/secret.bin"

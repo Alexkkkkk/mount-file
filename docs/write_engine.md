@@ -1,7 +1,7 @@
 # MF-WE — движок записи (ТЗ MF-WE-TZ-001)
 
 `mountfile/write_engine.py` — транзакционный фасад над RW-бэкендами
-`mountfile/universal_fs_rw.py` (native FAT12/16/32 и ограниченный clean ext2
+`mountfile/universal_fs_rw.py` (native FAT32 и ограниченные clean ext2/exFAT
 profile; явный library-level legacy ext2/3/4 compatibility backend через
 `debugfs`; NTFS через системный/mount-helper backend). Native ext2 — первая фаза
 собственной записи; GUI и `WriteEngine` не переключают ext3/ext4 автоматически
@@ -31,9 +31,10 @@ profile; явный library-level legacy ext2/3/4 compatibility backend чере
 VFS can browse a validated exFAT image without `pytsk3` when an explicit
 partition extent is supplied. The bounded provider supports directory listing,
 file sizes, bounded range reads and extraction through the common read API. It
-currently accepts only single-FAT volumes; multi-FAT/active-FAT profiles are
-rejected rather than interpreted using the first FAT. A range read fetches only
-the clusters and byte spans intersecting the requested range. The provider
+accepts validated one- and two-FAT profiles and follows the selected active
+FAT. Dirty or media-failure volumes are rejected; ClearToZero is allowed only
+for reading. A range read fetches only the clusters and byte spans intersecting
+the requested range. The provider
 validates the main and backup boot regions, cluster chains and checksummed file
 entry sets. Opening the provider validates the allocation bitmap and the
 checksum-protected, full-range `$UpCase` table (compressed or uncompressed).
@@ -45,11 +46,45 @@ are ignored as required by exFAT. The reader never writes the image. Mutations
 are provided separately through the explicitly bounded `NativeExfatRW` writer
 described below.
 
+### Bounded extraction
+
+`mountfile.extract.extract_path()` and `extract_file()` apply `ExtractionLimits`
+by default: 1 GiB per file, 4 GiB total for a tree, 100,000 regular files,
+200,000 directory entries, and 64 nested directory levels. Callers may pass a
+stricter policy explicitly:
+
+```python
+from mountfile.extract import ExtractionLimits, extract_path
+
+extract_path(
+    provider,
+    "/evidence",
+    "./out",
+    limits=ExtractionLimits(
+        max_file_size=256 * 1024 * 1024,
+        max_total_size=1024 * 1024 * 1024,
+        max_files=10_000,
+        max_entries=20_000,
+        max_depth=32,
+    ),
+)
+```
+
+Providers with file-size and range-read APIs are rejected before reading an
+oversized file and copied in bounded chunks. Older whole-file providers retain
+compatibility; their returned payload is checked before it is written, but may
+already have been buffered in memory. Limits do not provide tree-wide rollback:
+files completed before a later limit/error remain in the output directory.
+Host-side extraction limits also do not add filesystem-image write capability.
+
 ### Native exFAT phase-one writes
 
 `UniversalFSRW` exposes `native-exfat-phase1` only for an explicitly bounded
-volume. It supports file creation and replacement, directory creation and
-growth, same- and cross-directory rename, and file or recursive directory
+volume. One- and two-FAT profiles use the validated active FAT for reads and
+mirror FAT updates to all declared copies. Dirty, media-failure, ClearToZero
+and reserved VolumeFlags are rejected before mutation. It supports file
+creation and replacement, directory creation and growth, same- and
+cross-directory rename, and file or recursive directory
 deletion. Before freeing clusters it scans allocation ownership and rejects
 cross-linked or inconsistent streams. Each operation copies the complete image
 to a staging file, validates the staged image through the native reader, checks
@@ -172,9 +207,9 @@ engine.close()
   the explicit `allow_legacy_mount=True` option. This compatibility path is not
   the issue #182 native writer and retains its driver/privilege requirements.
 
-* exFAT — через ImDisk и системный Windows filesystem driver на
-  Windows (те же требования установки и прав); на Linux — через `LoopMountRW`,
-  если доступны `mount`/`umount` и соответствующий драйвер. HFS+ и другие
+* exFAT — ограниченный native writer описан выше. ImDisk и системный Windows
+  filesystem driver или Linux `LoopMountRW` с драйвером — отдельные explicit
+  compatibility paths, не расширяющие поддержку native writer. HFS+ и другие
   неподдерживаемые Windows filesystem drivers остаются read-only.
   Имена детектора (`FAT16`, `FAT32`, `HFS+`) нормализуются для mount-helper.
 * ISO9660, SquashFS, JFFS2 и UBIFS объявлены `read-only-format`: чтение и

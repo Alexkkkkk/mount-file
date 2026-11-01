@@ -14,12 +14,53 @@ import os
 import secrets
 import stat
 import tempfile
+import unicodedata
+from dataclasses import dataclass
 
-__all__ = ["ExtractError", "extract_file", "extract_path"]
+__all__ = ["ExtractError", "ExtractionLimits", "extract_file", "extract_path"]
 
 
 class ExtractError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ExtractionLimits:
+    """Resource ceilings for one file or one directory-tree extraction.
+
+    The tree byte limit applies to bytes actually written; directory limits
+    stop pathological depth and entry counts. A later failure can leave earlier
+    files from a tree extraction in place; tree-wide rollback is not promised.
+    """
+
+    max_file_size: int = 1 << 30
+    max_total_size: int = 4 << 30
+    max_files: int = 100_000
+    max_entries: int = 200_000
+    max_depth: int = 64
+
+    def __post_init__(self):
+        for name in (
+            "max_file_size",
+            "max_total_size",
+            "max_files",
+            "max_entries",
+            "max_depth",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("%s must be a non-negative integer" % name)
+
+
+_DEFAULT_EXTRACTION_LIMITS = ExtractionLimits()
+
+
+def _limits_or_default(limits):
+    if limits is None:
+        return _DEFAULT_EXTRACTION_LIMITS
+    if not isinstance(limits, ExtractionLimits):
+        raise TypeError("limits must be an ExtractionLimits instance")
+    return limits
 
 
 _HAS_DIR_FD = (
@@ -43,6 +84,36 @@ def _safe_name(name):
 
 def _join(path, name):
     return (path.rstrip("/") + "/" + name) if path != "/" else "/" + name
+
+
+def _checked_directory_entries(provider, path, max_entries):
+    """Reject sibling names that can map to the same host name.
+
+    Preflight each directory before writing any of its entries. This is
+    deliberately conservative across host filesystems; it does not roll back
+    the complete extraction if a later directory fails.
+    """
+    entries = []
+    seen = {}
+    for entry in provider.list_dir(path):
+        if len(entries) >= max_entries:
+            raise ExtractError(
+                "directory tree exceeds the configured entry-count limit"
+            )
+        name = entry["name"]
+        safe_name = _safe_name(name)
+        # Windows ignores trailing spaces and dots; case and Unicode rules also
+        # differ across filesystems. Reject ambiguous names on every platform.
+        key = unicodedata.normalize("NFKC", safe_name).casefold().rstrip(" .")
+        if not key:
+            raise ExtractError("refusing ambiguous destination name %r" % name)
+        if key in seen:
+            raise ExtractError(
+                "destination name collision in %s: %r and %r" % (path, seen[key], name)
+            )
+        seen[key] = name
+        entries.append(entry)
+    return entries
 
 
 def _normalize_system_path_alias(path):
@@ -86,18 +157,10 @@ def _ensure_directory(path, root=None):
                 ) from exc
             os.close(fd)
             return
-        try:
-            os.makedirs(path, exist_ok=True)
-            mode = os.lstat(path).st_mode
-        except OSError as exc:
-            raise ExtractError(
-                "cannot safely create directory %s: %s" % (path, exc)
-            ) from exc
-        if stat.S_ISLNK(mode):
-            raise ExtractError("refusing to follow destination symlink: %s" % path)
-        if not stat.S_ISDIR(mode):
-            raise ExtractError("destination component is not a directory: %s" % path)
-        return
+        # Avoid following an intermediate link while creating a parent on
+        # platforms without descriptor-relative APIs.
+        drive, _ = os.path.splitdrive(path)
+        root = drive + os.sep
 
     root = os.path.abspath(root)
     path = _ensure_within(path, root)
@@ -116,7 +179,7 @@ def _ensure_directory(path, root=None):
     for component in () if relative == "." else relative.split(os.sep):
         current = os.path.join(current, component)
         try:
-            mode = os.lstat(current).st_mode
+            info = os.lstat(current)
         except FileNotFoundError:
             try:
                 os.mkdir(current)
@@ -124,7 +187,7 @@ def _ensure_directory(path, root=None):
                 # Re-check below: another process may have created a symlink.
                 pass
             try:
-                mode = os.lstat(current).st_mode
+                info = os.lstat(current)
             except OSError as exc:
                 raise ExtractError(
                     "cannot safely create directory %s: %s" % (current, exc)
@@ -133,9 +196,10 @@ def _ensure_directory(path, root=None):
             raise ExtractError(
                 "cannot safely inspect directory %s: %s" % (current, exc)
             ) from exc
-        if stat.S_ISLNK(mode):
+        reparse_point = bool(getattr(info, "st_file_attributes", 0) & 0x400)
+        if stat.S_ISLNK(info.st_mode) or reparse_point:
             raise ExtractError("refusing to follow destination symlink: %s" % current)
-        if not stat.S_ISDIR(mode):
+        if not stat.S_ISDIR(info.st_mode):
             raise ExtractError("destination component is not a directory: %s" % current)
 
 
@@ -181,18 +245,24 @@ _COPY_CHUNK_SIZE = 1 << 20
 _DEFAULT_PROVIDER_READ_LIMIT = 1 << 20
 
 
-def _write_provider_contents(provider, src_path, output):
+def _write_provider_contents(provider, src_path, output, max_bytes):
     """Stream providers with ranged reads; retain compatibility with old providers."""
     read_range = getattr(provider, "read_file_range", None)
     get_size = getattr(provider, "file_size", None)
     if not callable(read_range) or not callable(get_size):
         data = provider.read_file(src_path)
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise ExtractError("provider returned data that is not bytes-like")
+        if len(data) > max_bytes:
+            raise ExtractError("file exceeds the configured extraction size limit")
         output.write(data)
         return len(data)
 
     size = get_size(src_path)
-    if not isinstance(size, int) or size < 0:
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
         raise ExtractError("provider returned an invalid file size")
+    if size > max_bytes:
+        raise ExtractError("file exceeds the configured extraction size limit")
     provider_limit = getattr(
         provider, "max_read_range_bytes", _DEFAULT_PROVIDER_READ_LIMIT
     )
@@ -216,7 +286,11 @@ def _write_provider_contents(provider, src_path, output):
     return written
 
 
-def _write_file(provider, src_path, dst_path, root=None):
+def _write_file(provider, src_path, dst_path, root=None, max_bytes=None):
+    if max_bytes is None:
+        max_bytes = _DEFAULT_EXTRACTION_LIMITS.max_file_size
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes < 0:
+        raise ValueError("max_bytes must be a non-negative integer")
     dst_path = os.path.abspath(dst_path)
     if root is not None:
         dst_path = _ensure_within(dst_path, root)
@@ -262,7 +336,9 @@ def _write_file(provider, src_path, dst_path, root=None):
             try:
                 with os.fdopen(fd, "wb") as output:
                     fd = None
-                    written = _write_provider_contents(provider, src_path, output)
+                    written = _write_provider_contents(
+                        provider, src_path, output, max_bytes
+                    )
                     output.flush()
                     os.fsync(output.fileno())
                 os.replace(
@@ -291,16 +367,18 @@ def _write_file(provider, src_path, dst_path, root=None):
             os.close(parent_fd)
 
     try:
-        mode = os.lstat(dst_path).st_mode
+        info = os.lstat(dst_path)
     except FileNotFoundError:
-        mode = None
+        info = None
     except OSError as exc:
         raise ExtractError(
             "cannot safely inspect destination file %s: %s" % (dst_path, exc)
         ) from exc
-    if mode is not None and stat.S_ISLNK(mode):
+    if info is not None and (
+        stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400
+    ):
         raise ExtractError("refusing to follow destination symlink: %s" % dst_path)
-    if mode is not None and not stat.S_ISREG(mode):
+    if info is not None and not stat.S_ISREG(info.st_mode):
         raise ExtractError("refusing to replace non-regular destination: %s" % dst_path)
 
     fd, temp_path = tempfile.mkstemp(prefix=".mountfile-", suffix=".tmp", dir=parent)
@@ -308,7 +386,7 @@ def _write_file(provider, src_path, dst_path, root=None):
     try:
         with os.fdopen(fd, "wb") as output:
             fd = None
-            written = _write_provider_contents(provider, src_path, output)
+            written = _write_provider_contents(provider, src_path, output, max_bytes)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temp_path, dst_path)
@@ -330,18 +408,25 @@ def _write_file(provider, src_path, dst_path, root=None):
     return written
 
 
-def extract_file(provider, src_path, dst_path):
+def extract_file(provider, src_path, dst_path, *, limits=None):
     """Write one file out of the image; returns the number of bytes written."""
-    return _write_file(provider, src_path, dst_path)
+    limits = _limits_or_default(limits)
+    return _write_file(
+        provider,
+        src_path,
+        dst_path,
+        max_bytes=min(limits.max_file_size, limits.max_total_size),
+    )
 
 
-def extract_path(provider, src_path, dst_dir, progress=None):
+def extract_path(provider, src_path, dst_dir, progress=None, *, limits=None):
     """Extract `src_path` (file or directory) into the host directory `dst_dir`.
 
     A directory is recreated under `dst_dir` with the same name, empty
     subdirectories included; the volume root ("/") is extracted directly into
     `dst_dir`. Returns the number of regular files written.
     """
+    limits = _limits_or_default(limits)
     src = "/" + str(src_path or "/").strip().strip("/")
     if src == "/":
         parent, name, is_root = "/", "", True
@@ -361,8 +446,16 @@ def extract_path(provider, src_path, dst_dir, progress=None):
     root = os.path.realpath(root)
     total = 0
     if not is_dir:
+        if limits.max_files < 1:
+            raise ExtractError("extraction exceeds the configured file-count limit")
         dst_path = _ensure_within(os.path.join(root, _safe_name(name)), root)
-        _write_file(provider, src, dst_path, root=root)
+        _write_file(
+            provider,
+            src,
+            dst_path,
+            root=root,
+            max_bytes=min(limits.max_file_size, limits.max_total_size),
+        )
         if progress:
             progress(src)
         return 1
@@ -371,19 +464,43 @@ def extract_path(provider, src_path, dst_dir, progress=None):
         root if is_root else _ensure_within(os.path.join(root, _safe_name(name)), root)
     )
     _ensure_directory(base, root=root)
-    stack = [(src, base)]
+    total_bytes = 0
+    total_entries = 0
+    stack = [(src, base, 0)]
     while stack:
-        src_dir, dst_dir_now = stack.pop()
-        for item in provider.list_dir(src_dir):
+        src_dir, dst_dir_now, depth = stack.pop()
+        entries = _checked_directory_entries(
+            provider, src_dir, limits.max_entries - total_entries
+        )
+        total_entries += len(entries)
+        for item in entries:
             child_src = _join(src_dir, item["name"])
             child_dst = _ensure_within(
                 os.path.join(dst_dir_now, _safe_name(item["name"])), root
             )
             if item["is_dir"]:
+                child_depth = depth + 1
+                if child_depth > limits.max_depth:
+                    raise ExtractError(
+                        "directory tree exceeds the configured depth limit"
+                    )
                 _ensure_directory(child_dst, root=root)
-                stack.append((child_src, child_dst))
+                stack.append((child_src, child_dst, child_depth))
             else:
-                _write_file(provider, child_src, child_dst, root=root)
+                if total >= limits.max_files:
+                    raise ExtractError(
+                        "directory tree exceeds the configured file-count limit"
+                    )
+                remaining = limits.max_total_size - total_bytes
+                max_bytes = min(limits.max_file_size, remaining)
+                written = _write_file(
+                    provider,
+                    child_src,
+                    child_dst,
+                    root=root,
+                    max_bytes=max_bytes,
+                )
+                total_bytes += written
                 total += 1
                 if progress:
                     progress(child_src)

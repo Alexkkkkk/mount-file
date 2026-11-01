@@ -1,6 +1,8 @@
 """Conformance tests for the canonical native filesystem capability matrix."""
 
 import json
+import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +17,8 @@ from mountfile.capabilities import (
     VFS_WRITE_CAPABILITIES,
     get_native_capability_matrix,
 )
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
+from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
 from mountfile.universal_fs_rw import FSInfo, UniversalFSRW
 
 
@@ -58,7 +62,7 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
 
 
 def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
-    assert CAPABILITY_MATRIX_VERSION == 3
+    assert CAPABILITY_MATRIX_VERSION == 4
     assert VFS_READ_CAPABILITIES == (
         "list",
         "stat",
@@ -70,6 +74,91 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
         if profile.interface == "vfs":
             assert "read-file" in profile.read_capabilities
             assert "read-range" in profile.read_capabilities
+
+
+def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
+    tmp_path, monkeypatch
+):
+    profiles = {
+        profile["profile_id"]: profile
+        for profile in get_native_capability_matrix()["profiles"]
+    }
+    assert profiles["exfat-native-ro"]["constraints"] == [
+        "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
+        "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
+    ]
+    assert profiles["exfat-native-rw"]["constraints"] == [
+        "Bounded one- or two-FAT profile; reads the validated active FAT and "
+        "mirrors FAT writes to all declared copies.",
+        "Allows only a validated ActiveFat selection (VolumeFlags 0x0000, or "
+        "0x0001 with two FATs); refuses dirty, media-failure, ClearToZero, and "
+        "reserved flags.",
+        "Unsupported metadata layouts are refused.",
+    ]
+
+    reader = NativeExfatImage.__new__(NativeExfatImage)
+    reader.profile = SimpleNamespace(
+        cluster_count=100,
+        fat_offset=24,
+        active_fat=1,
+        fat_length=8,
+        bytes_per_sector=512,
+        number_of_fats=2,
+    )
+    fat_reads = []
+    reader._read_rel = lambda offset, size: fat_reads.append(
+        (offset, size)
+    ) or struct.pack("<I", 0x12345678)
+    assert reader._fat_entry(3) == 0x12345678
+    assert fat_reads == [((24 + 8) * 512 + 3 * 4, 4)]
+
+    writer = NativeExfatWriter.__new__(NativeExfatWriter)
+    fat_writes = []
+    writer._write_rel = lambda _stream, offset, data: fat_writes.append((offset, data))
+    writer._fat_write(object(), reader, 3, 0x12345678)
+    assert fat_writes == [
+        (24 * 512 + 3 * 4, struct.pack("<I", 0x12345678)),
+        (32 * 512 + 3 * 4, struct.pack("<I", 0x12345678)),
+    ]
+
+    image = tmp_path / "exfat.img"
+    image.write_bytes(b"\0" * 512)
+    reader_profile = SimpleNamespace(
+        volume_flags=0x0008, volume_length=1, bytes_per_sector=512
+    )
+    monkeypatch.setattr(
+        "mountfile.exfat_reader.probe_exfat_boot_region",
+        lambda *_args, **_kwargs: reader_profile,
+    )
+    monkeypatch.setattr(NativeExfatImage, "system_metadata", lambda _self: {})
+    clear_to_zero_reader = NativeExfatImage(image, volume_size=512)
+    clear_to_zero_reader.close()
+    for flags, message in ((0x0002, "volume is dirty"), (0x0004, "media failure")):
+        reader_profile.volume_flags = flags
+        with pytest.raises(ExfatReadError, match=message):
+            NativeExfatImage(image, volume_size=512)
+
+    writer_profile = SimpleNamespace(
+        volume_flags=0x0001, volume_length=1, bytes_per_sector=512
+    )
+    monkeypatch.setattr(
+        "mountfile.exfat_writer.probe_exfat_boot_region",
+        lambda *_args, **_kwargs: writer_profile,
+    )
+    monkeypatch.setattr(
+        "mountfile.exfat_writer._image_identity",
+        lambda *_args, **_kwargs: (512, b"x" * 32),
+    )
+    NativeExfatWriter(image, volume_size=512)
+    for flags, message in (
+        (0x0002, "volume is dirty"),
+        (0x0004, "media failure"),
+        (0x0008, "ClearToZero"),
+        (0x0010, "reserved bits"),
+    ):
+        writer_profile.volume_flags = flags
+        with pytest.raises(ExfatWriteError, match=message):
+            NativeExfatWriter(image, volume_size=512)
 
 
 def test_matrix_exposes_profile_gates_and_does_not_advertise_unsafe_writers():

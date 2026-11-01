@@ -96,14 +96,19 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             raise ExfatReadError("exFAT provider requires an explicit volume extent")
         self.image_path = str(image_path)
         self.offset = offset
+        self._volume_size = volume_size
         self._stream = None
+        self._open()
+
+    def _open(self):
+        """Open and revalidate all metadata, without retaining old caches."""
         self._allocation_bitmap = None
         self._upcase_table = None
         try:
             self._stream = Path(self.image_path).open("rb")
             self._image_size = os.fstat(self._stream.fileno()).st_size
             self.profile = probe_exfat_boot_region(
-                self.image_path, offset=self.offset, volume_size=volume_size
+                self.image_path, offset=self.offset, volume_size=self._volume_size
             )
             if self.profile.volume_flags & 0x0002:
                 raise ExfatReadError("exFAT volume is dirty and requires recovery")
@@ -113,7 +118,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 self.offset + self.profile.volume_length * self.profile.bytes_per_sector
             )
             if (
-                self.volume_end > self.offset + volume_size
+                self.volume_end > self.offset + self._volume_size
                 or self.volume_end > self._image_size
             ):
                 raise ExfatReadError("exFAT volume exceeds selected bounds")
@@ -133,8 +138,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
 
     def reopen(self):
         if self._stream is None or self._stream.closed:
-            self._stream = Path(self.image_path).open("rb")
-            self._image_size = os.fstat(self._stream.fileno()).st_size
+            self._open()
 
     def _read_rel(self, relative, size):
         if self._stream is None:

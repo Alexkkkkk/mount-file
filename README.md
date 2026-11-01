@@ -847,12 +847,21 @@ mount-file/
   выключены до реализации проверяемого on-volume journal/recovery пути.
   Legacy `debugfs`, `ntfs-3g` и системные mount/drivers доступны только как
   отдельные compatibility пути там, где они явно разрешены.
+- **Извлечение ограничено по ресурсам.** По умолчанию один файл ограничен 1 GiB,
+  дерево — 4 GiB, 100 000 файлов и 200 000 записей, глубина вложенных каталогов — 64 уровня.
+  `mountfile.extract.ExtractionLimits` позволяет снизить или изменить эти
+  пределы. При отказе посреди дерева ранее извлечённые файлы остаются на месте;
+  атомарность всего дерева не обещается. Range-capable провайдеры читаются
+  чанками; совместимый whole-file API проверяется по размеру перед записью,
+  но может сначала буферизовать файл в памяти.
 - **FAT write scope:** native FAT writer — только FAT32; FAT12/16 остаются
   native read-only. Системная запись через ImDisk на Windows — отдельный
   compatibility route и не расширяет native FAT writer profile.
-- **exFAT write scope:** native writer принимает только bounded single-FAT
-  профиль с `VolumeFlags == 0` и валидированной служебной metadata; это не
-  полная совместимость со всеми exFAT томами и не power-loss guarantee.
+- **exFAT write scope:** native writer принимает ограниченные профили с одной
+  или двумя FAT и проверенной служебной metadata. В двух-FAT профиле учитывается
+  выбранная active FAT, а изменения FAT отражаются во всех копиях. Dirty,
+  media-failure, ClearToZero и неизвестные флаги запрещают запись; это не полная
+  совместимость со всеми exFAT томами и не power-loss guarantee.
 - **Без `pytsk3`** работают bounded native readers FAT12/16/32, выбранных clean
   ext2/ext3/ext4 профилей, exFAT и NTFS. Каждый parser требует корректные bounds
   и fail-closed на dirty, неизвестных и повреждённых профилях.
