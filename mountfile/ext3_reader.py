@@ -577,6 +577,7 @@ class NativeExt4Image(NativeExt3Image):
             ) ** 3
             if size > addressable_blocks * self.block_size:
                 raise Ext3ReadError("inode size exceeds classic block-pointer capacity")
+        uid, gid = self._decode_inode_ownership(raw)
         inode = _Inode(
             number=number,
             mode=mode,
@@ -584,6 +585,8 @@ class NativeExt4Image(NativeExt3Image):
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=pointers,
+            uid=uid,
+            gid=gid,
         )
         if len(self._inode_cache) >= 4096:
             self._inode_cache.clear()

@@ -82,6 +82,8 @@ class _Inode:
     flags: int
     mtime: int
     block_pointers: tuple[int, ...]
+    uid: int | None = None
+    gid: int | None = None
 
     @property
     def mode_type(self) -> int:
@@ -504,6 +506,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         addressable_blocks += (self.block_size // 4) ** 2 + (self.block_size // 4) ** 3
         if size > addressable_blocks * self.block_size:
             raise Ext2ReadError("inode size exceeds ext2 block-pointer capacity")
+        uid, gid = self._decode_inode_ownership(raw)
         inode = _Inode(
             number=number,
             mode=mode,
@@ -511,11 +514,27 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=block_pointers,
+            uid=uid,
+            gid=gid,
         )
         if len(self._inode_cache) >= _MAX_CACHE_ITEMS:
             self._inode_cache.clear()
         self._inode_cache[number] = inode
         return inode
+
+    def _decode_inode_ownership(self, raw: bytes) -> tuple[int | None, int | None]:
+        """Decode Linux ext UID/GID words without guessing another OS layout."""
+        if getattr(self.profile, "creator_os", None) != 0:
+            return None, None
+        if len(raw) < 124:
+            raise Ext2ReadError(
+                "Linux ext inode is truncated before UID/GID high words"
+            )
+        uid_low = struct.unpack_from("<H", raw, 2)[0]
+        gid_low = struct.unpack_from("<H", raw, 24)[0]
+        uid_high = struct.unpack_from("<H", raw, 120)[0]
+        gid_high = struct.unpack_from("<H", raw, 122)[0]
+        return uid_low | (uid_high << 16), gid_low | (gid_high << 16)
 
     def _indirect_block(
         self,
@@ -729,6 +748,16 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             _S_IFLNK: "symlink",
         }.get(mode & _S_IFMT, "special")
 
+    @staticmethod
+    def _inode_owner_fields(inode: _Inode) -> dict:
+        return {"uid": inode.uid, "gid": inode.gid}
+
+    def stat(self, path: str) -> dict:
+        result = super().stat(path)
+        if result.get("path") == "/":
+            result.update(self._inode_owner_fields(self._resolve("/")))
+        return result
+
     def list_dir(self, path="/"):
         inode = self._resolve(path)
         entries = self._directory_entries(inode)
@@ -756,6 +785,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                     "date": "" if is_dir else self._format_mtime(child.mtime),
                     "kind": actual_type,
                     "inode": child.number,
+                    **self._inode_owner_fields(child),
                 }
             )
         result.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))

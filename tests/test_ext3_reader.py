@@ -61,6 +61,8 @@ def _make_ext4_extent_image(path):
         pointers=_extent_root_for_block(21),
         flags=_EXT4_EXTENTS_FL,
         mtime=1,
+        uid=0x87654321,
+        gid=0xFEDCBA98,
     )
 
     root_directory = _dir_block([(".", 2, 2), ("..", 2, 2), ("hello.txt", 11, 1)])
@@ -834,6 +836,9 @@ def test_synthetic_ext4_extent_image_reads_through_bounded_vfs(tmp_path):
     try:
         assert provider.backend_name == "native-ext4-ro"
         assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+        owner = provider.stat("/hello.txt")
+        assert owner["uid"] == 0x87654321
+        assert owner["gid"] == 0xFEDCBA98
         assert provider.read_file("/hello.txt") == b"hello ext4!"
         assert provider.read_file_range("/hello.txt", 6, 4) == b"ext4"
     finally:

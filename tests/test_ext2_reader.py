@@ -16,12 +16,16 @@ INODE_TABLE_BLOCK = 5
 ROOT_DIR_BLOCK = 20
 
 
-def _put_inode(image, number, *, mode, size, pointers, flags=0, mtime=0):
+def _put_inode(image, number, *, mode, size, pointers, flags=0, mtime=0, uid=0, gid=0):
     offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (number - 1) * 128
     struct.pack_into("<H", image, offset, mode)
+    struct.pack_into("<H", image, offset + 2, uid & 0xFFFF)
     struct.pack_into("<I", image, offset + 4, size & 0xFFFFFFFF)
     struct.pack_into("<I", image, offset + 16, mtime)
+    struct.pack_into("<H", image, offset + 24, gid & 0xFFFF)
     struct.pack_into("<I", image, offset + 32, flags)
+    struct.pack_into("<H", image, offset + 120, (uid >> 16) & 0xFFFF)
+    struct.pack_into("<H", image, offset + 122, (gid >> 16) & 0xFFFF)
     for slot, block in enumerate(pointers):
         struct.pack_into("<I", image, offset + 40 + slot * 4, block)
 
@@ -41,7 +45,15 @@ def _dir_block(entries):
     return bytes(result)
 
 
-def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x0003):
+def _make_image(
+    path,
+    *,
+    state=1,
+    compat=0x0008,
+    incompat=0x0002,
+    ro_compat=0x0003,
+    creator_os=0,
+):
     image = bytearray(BLOCKS_COUNT * BLOCK_SIZE)
     sb = memoryview(image)[1024:2048]
     struct.pack_into("<I", sb, 0x00, INODES_COUNT)
@@ -54,6 +66,7 @@ def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x00
     struct.pack_into("<H", sb, 0x3A, state)
     struct.pack_into("<I", sb, 0x4C, 1)
     struct.pack_into("<H", sb, 0x58, 128)
+    struct.pack_into("<I", sb, 0x48, creator_os)
     struct.pack_into("<I", sb, 0x5C, compat)
     struct.pack_into("<I", sb, 0x60, incompat)
     struct.pack_into("<I", sb, 0x64, ro_compat)
@@ -74,7 +87,14 @@ def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x00
         pointers=(ROOT_DIR_BLOCK,) + (0,) * 14,
     )
     _put_inode(
-        image, 11, mode=0x8000 | 0o644, size=11, pointers=(21,) + (0,) * 14, mtime=1
+        image,
+        11,
+        mode=0x8000 | 0o644,
+        size=11,
+        pointers=(21,) + (0,) * 14,
+        mtime=1,
+        uid=0x12345678,
+        gid=0x9ABCDEF0,
     )
 
     single_pointers = [0] * 15
@@ -246,6 +266,33 @@ def test_reads_directory_and_direct_file_without_external_tools(tmp_path):
             "single.bin",
             "triple.bin",
         ]
+    finally:
+        provider.close()
+
+
+def test_ext_stat_decodes_linux_uid_gid_and_root_inode(tmp_path):
+    image_path = tmp_path / "ext2-owner.img"
+    original = _make_image(image_path)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        entry = provider.stat("/hello.txt")
+        assert entry["uid"] == 0x12345678
+        assert entry["gid"] == 0x9ABCDEF0
+        root = provider.stat("/")
+        assert root["uid"] == 0
+        assert root["gid"] == 0
+    finally:
+        provider.close()
+
+
+def test_ext_owner_fields_are_unknown_for_non_linux_creator_os(tmp_path):
+    image_path = tmp_path / "ext2-nonlinux-owner.img"
+    original = _make_image(image_path, creator_os=1)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        entry = provider.stat("/hello.txt")
+        assert entry["uid"] is None
+        assert entry["gid"] is None
     finally:
         provider.close()
 

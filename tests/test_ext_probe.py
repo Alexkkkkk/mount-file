@@ -20,6 +20,7 @@ def _image(
     ro_compat=0x0003,
     blocks_high=0,
     journal_inode=8,
+    creator_os=0,
 ):
     image_size = block_size * blocks
     image = bytearray(image_size)
@@ -33,6 +34,7 @@ def _image(
     struct.pack_into("<H", sb, 0x38, 0xEF53)
     struct.pack_into("<H", sb, 0x3A, state)
     struct.pack_into("<I", sb, 0x4C, 1)
+    struct.pack_into("<I", sb, 0x48, creator_os)
     struct.pack_into("<H", sb, 0x58, 128)
     struct.pack_into("<I", sb, 0x5C, compat)
     struct.pack_into("<I", sb, 0x60, incompat)
@@ -51,6 +53,13 @@ def test_clean_allowlisted_ext2_is_only_a_candidate_for_full_writer_validation()
     assert profile.phase1_ext2_profile_candidate
     assert profile.write_gate_reasons == ()
     assert profile.label == "TEST"
+    assert profile.creator_os == 0
+
+
+def test_superblock_probe_preserves_non_linux_creator_os():
+    profile = probe_ext_superblock(io.BytesIO(_image(creator_os=1)))
+
+    assert profile.creator_os == 1
 
 
 def test_journal_and_recovery_flags_keep_profile_read_only():
