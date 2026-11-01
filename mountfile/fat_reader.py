@@ -50,6 +50,8 @@ class FatProfile:
     sectors_per_cluster: int
     reserved_sectors: int
     fat_count: int
+    fat_mirroring_enabled: bool
+    active_fat_index: int
     fat_sectors: int
     root_entries: int
     total_sectors: int
@@ -187,7 +189,19 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             fat_type = 16
         else:
             fat_type = 32
+        fat_mirroring_enabled = True
+        active_fat_index = 0
         if fat_type == 32:
+            ext_flags = struct.unpack_from("<H", raw, 40)[0]
+            if ext_flags & 0xFF70:
+                raise FatReadError("FAT32 extended flags contain reserved bits")
+            if ext_flags & 0x0080:
+                fat_mirroring_enabled = False
+                active_fat_index = ext_flags & 0x000F
+                if active_fat_index >= fat_count:
+                    raise FatReadError(
+                        "FAT32 active FAT index is outside the declared FAT copies"
+                    )
             if root_entries or fat16:
                 raise FatReadError("FAT32 BPB contains FAT12/16 root geometry")
             root_cluster = struct.unpack_from("<I", raw, 44)[0] & 0x0FFFFFFF
@@ -222,6 +236,8 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             sectors_per_cluster=spc,
             reserved_sectors=reserved,
             fat_count=fat_count,
+            fat_mirroring_enabled=fat_mirroring_enabled,
+            active_fat_index=active_fat_index,
             fat_sectors=fat_sectors,
             root_entries=root_entries,
             total_sectors=total_sectors,
@@ -253,7 +269,7 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
 
     def _validate_metadata_copies(self) -> None:
         """Reject inconsistent mirrored FAT metadata before any read access."""
-        if self.profile.fat_count > 1:
+        if self.profile.fat_count > 1 and self.profile.fat_mirroring_enabled:
             primary = self._read_at(
                 self.profile.reserved_sectors * self.block_size, self.fat_size
             )
@@ -313,19 +329,23 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
     def _fat_entry(self, cluster: int) -> int:
         if cluster < 0 or cluster >= self.cluster_count + 2:
             raise FatReadError("FAT entry index is outside the declared table")
+        fat_offset = (
+            self.profile.reserved_sectors * self.block_size
+            + self.profile.active_fat_index * self.fat_size
+        )
         if self.fat_type == 12:
             raw = self._read_at(
-                self.profile.reserved_sectors * self.block_size + (cluster * 3) // 2, 2
+                fat_offset + (cluster * 3) // 2, 2
             )
             value = struct.unpack_from("<H", raw, 0)[0]
             return (value >> 4) if cluster & 1 else (value & 0x0FFF)
         if self.fat_type == 16:
             raw = self._read_at(
-                self.profile.reserved_sectors * self.block_size + cluster * 2, 2
+                fat_offset + cluster * 2, 2
             )
             return struct.unpack_from("<H", raw, 0)[0]
         raw = self._read_at(
-            self.profile.reserved_sectors * self.block_size + cluster * 4, 4
+            fat_offset + cluster * 4, 4
         )
         return struct.unpack_from("<I", raw, 0)[0] & 0x0FFFFFFF
 
