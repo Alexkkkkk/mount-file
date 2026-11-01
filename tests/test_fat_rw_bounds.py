@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 """Exact selected-extent checks for native FAT mutations."""
 
+import hashlib
+import struct
 import sys
 from pathlib import Path
 
@@ -12,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fat32 import make_fat32_image
 from test_fat_reader import _make_fat1216_image
 
+from mountfile.fat32 import Fat32, Fat32Error
 from mountfile.safety import RefusalCode
 from mountfile.universal_fs_rw import Fat32RW
 
@@ -93,6 +96,80 @@ def test_native_fat_rejects_bpb_larger_than_selected_extent(tmp_path):
 
     with pytest.raises(ValueError, match="BPB exceeds the selected volume extent"):
         Fat32RW(image, volume_size=exact_size - 512)
+
+
+@pytest.mark.parametrize("writer", ["legacy", "staged"])
+def test_fat32_writer_rejects_fsinfo_pointer_into_file_data_without_mutation(
+    tmp_path, writer
+):
+    image = tmp_path / f"unsafe-fsinfo-{writer}.img"
+    make_fat32_image(image)
+
+    payload = bytearray(b"V" * 512)
+    struct.pack_into("<I", payload, 0, 0x41615252)
+    struct.pack_into("<I", payload, 484, 0x61417272)
+    struct.pack_into("<I", payload, 508, 0xAA550000)
+    staged_writer = Fat32RW(image, volume_size=image.stat().st_size)
+    try:
+        staged_writer.write_file("/KEEP.BIN", bytes(payload))
+    finally:
+        staged_writer.close()
+
+    raw = bytearray(image.read_bytes())
+    bytes_per_sector = struct.unpack_from("<H", raw, 11)[0]
+    reserved_sectors = struct.unpack_from("<H", raw, 14)[0]
+    fat_count = raw[16]
+    sectors_per_fat = struct.unpack_from("<I", raw, 36)[0]
+    sectors_per_cluster = raw[13]
+    first_data_sector = reserved_sectors + fat_count * sectors_per_fat
+    file_data_sector = first_data_sector + sectors_per_cluster
+    assert raw[
+        file_data_sector * bytes_per_sector : (file_data_sector + 1) * bytes_per_sector
+    ] == bytes(payload)
+    struct.pack_into("<H", raw, 48, file_data_sector)
+    backup_boot_sector = struct.unpack_from("<H", raw, 50)[0]
+    struct.pack_into(
+        "<H", raw, backup_boot_sector * bytes_per_sector + 48, file_data_sector
+    )
+    image.write_bytes(raw)
+    original_hash = hashlib.sha256(image.read_bytes()).digest()
+
+    if writer == "staged":
+        with pytest.raises(ValueError, match="FSInfo sector is outside the reserved"):
+            Fat32RW(image, volume_size=image.stat().st_size)
+    else:
+        with image.open("rb") as handle:
+            with pytest.raises(
+                Fat32Error, match="FSInfo sector is outside the reserved"
+            ):
+                Fat32(handle)
+
+    assert hashlib.sha256(image.read_bytes()).digest() == original_hash
+
+
+@pytest.mark.parametrize("writer", ["legacy", "staged"])
+def test_fat32_writer_rejects_fsinfo_alias_of_backup_boot_sector(tmp_path, writer):
+    image = tmp_path / f"fsinfo-backup-alias-{writer}.img"
+    make_fat32_image(image)
+    raw = bytearray(image.read_bytes())
+    bytes_per_sector = struct.unpack_from("<H", raw, 11)[0]
+    backup_boot_sector = struct.unpack_from("<H", raw, 50)[0]
+    struct.pack_into("<H", raw, 48, backup_boot_sector)
+    struct.pack_into(
+        "<H", raw, backup_boot_sector * bytes_per_sector + 48, backup_boot_sector
+    )
+    image.write_bytes(raw)
+    original_hash = hashlib.sha256(image.read_bytes()).digest()
+
+    if writer == "staged":
+        with pytest.raises(ValueError, match="FSInfo sector aliases the backup"):
+            Fat32RW(image, volume_size=image.stat().st_size)
+    else:
+        with image.open("rb") as handle:
+            with pytest.raises(Fat32Error, match="FSInfo sector aliases the backup"):
+                Fat32(handle)
+
+    assert hashlib.sha256(image.read_bytes()).digest() == original_hash
 
 
 def test_native_fat_inferred_extent_must_match_whole_image(tmp_path):
