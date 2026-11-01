@@ -1336,7 +1336,7 @@ def test_ntfs_list_dir_includes_standard_information_metadata():
             "name": "report.txt",
             "is_dir": False,
             "size": 0,
-            "date": "",
+            "date": "2023-11-14T22:13:21.0000000+00:00",
             "inode": 42,
             "created": "2023-11-14T22:13:20.0000000+00:00",
             "modified": "2023-11-14T22:13:21.0000000+00:00",
@@ -1345,6 +1345,7 @@ def test_ntfs_list_dir_includes_standard_information_metadata():
             "attributes": 0x20,
         }
     ]
+    assert reader.stat("/report.txt")["date"] == "2023-11-14T22:13:21.0000000+00:00"
 
 
 def test_ntfs_root_stat_includes_standard_information_metadata():
@@ -1371,6 +1372,7 @@ def test_ntfs_root_stat_includes_standard_information_metadata():
     result = reader.stat("/")
 
     assert result["path"] == "/"
+    assert result["date"] == "2023-11-14T22:13:21.0000000+00:00"
     assert result["created"] == "2023-11-14T22:13:20.0000000+00:00"
     assert result["modified"] == "2023-11-14T22:13:21.0000000+00:00"
     assert result["ctime"] == "2023-11-14T22:13:22.0000000+00:00"
