@@ -26,6 +26,7 @@ class ExfatBootProfile:
     cluster_size: int
     volume_length: int
     number_of_fats: int
+    active_fat: int
     fat_offset: int
     fat_length: int
     cluster_heap_offset: int
@@ -98,6 +99,12 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     number_of_fats = boot[0x6E]
     if number_of_fats not in (1, 2):
         raise ExfatProbeError("exFAT number of FATs is invalid")
+    volume_flags = struct.unpack_from("<H", boot, 0x6A)[0]
+    if volume_flags & ~0x000F:
+        raise ExfatProbeError("exFAT volume flags contain reserved bits")
+    active_fat = volume_flags & 1
+    if active_fat >= number_of_fats:
+        raise ExfatProbeError("exFAT active FAT is outside NumberOfFats")
     fat_end = fat_offset + fat_length * number_of_fats
     if (
         fat_offset < 24
@@ -153,6 +160,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
         (0x5C, 4),
         (0x60, 4),
         (0x6C, 4),
+        (0x6E, 1),
     )
     if any(
         boot[start : start + size] != backup_boot[start : start + size]
@@ -167,13 +175,14 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
         cluster_size,
         volume_length,
         number_of_fats,
+        active_fat,
         fat_offset,
         fat_length,
         heap_offset,
         cluster_count,
         root_cluster,
         struct.unpack_from("<I", boot, 0x64)[0],
-        struct.unpack_from("<H", boot, 0x6A)[0],
+        volume_flags,
         percent,
         calculated,
     )

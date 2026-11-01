@@ -182,10 +182,8 @@ class NativeExfatWriter:
             )
         except (OSError, ExfatProbeError) as exc:
             raise ExfatWriteError(str(exc)) from exc
-        if self.profile.volume_flags != 0:
-            raise ExfatWriteError("exFAT writer rejects nonzero volume flags")
-        if self.profile.number_of_fats != 1:
-            raise ExfatWriteError("bounded exFAT writer requires exactly one FAT")
+        if self.profile.volume_flags & 0x0004:
+            raise ExfatWriteError("exFAT volume reports media failure")
         self.extent_size = self.profile.volume_length * self.profile.bytes_per_sector
         self._source_image_identity = _image_identity(self.image)
 
@@ -487,7 +485,8 @@ class NativeExfatWriter:
         for cluster in range(2, reader.profile.cluster_count + 2):
             if not (bitmap[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7))):
                 fat_relative = (
-                    reader.profile.fat_offset * reader.profile.bytes_per_sector
+                    (reader.profile.fat_offset + reader.profile.active_fat * reader.profile.fat_length)
+                    * reader.profile.bytes_per_sector
                     + cluster * 4
                 )
                 fat_value = struct.unpack(
@@ -503,11 +502,14 @@ class NativeExfatWriter:
         raise ExfatWriteError("not enough free exFAT clusters")
 
     def _fat_write(self, stream, reader, cluster, value):
-        self._write_rel(
-            stream,
-            reader.profile.fat_offset * reader.profile.bytes_per_sector + cluster * 4,
-            struct.pack("<I", value),
-        )
+        for fat_index in range(reader.profile.number_of_fats):
+            self._write_rel(
+                stream,
+                (reader.profile.fat_offset + fat_index * reader.profile.fat_length)
+                * reader.profile.bytes_per_sector
+                + cluster * 4,
+                struct.pack("<I", value),
+            )
 
     def _write_bitmap(self, stream, reader, meta, bitmap):
         remaining = bytes(bitmap)
@@ -732,12 +734,20 @@ class NativeExfatWriter:
                             reader._cluster_offset(cluster),
                             chunk.ljust(reader.profile.cluster_size, b"\0"),
                         )
+                    no_fat_chain = bool(clusters) and all(
+                        cluster == clusters[0] + index
+                        for index, cluster in enumerate(clusters)
+                    )
+                    if no_fat_chain:
+                        for cluster in clusters:
+                            self._fat_write(stream, reader, cluster, 0)
                     entry_set = self._make_entry_set(
                         reader,
                         name,
                         is_dir=False,
                         first_cluster=clusters[0] if clusters else 0,
                         size=len(payload),
+                        no_fat_chain=no_fat_chain,
                     )
                     slot_cluster, slot_offset = self._directory_slot(
                         reader,
@@ -790,8 +800,9 @@ class NativeExfatWriter:
                         no_fat = entry.no_fat_chain
                         for cluster in old_chain[needed:]:
                             self._set_allocated(bitmap, cluster, False)
-                            self._fat_write(stream, reader, cluster, 0)
-                        if chain:
+                            if not entry.no_fat_chain:
+                                self._fat_write(stream, reader, cluster, 0)
+                        if chain and not entry.no_fat_chain:
                             self._fat_write(stream, reader, chain[-1], _EOC)
                     if needed == 0:
                         chain = []
