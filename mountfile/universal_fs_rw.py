@@ -694,14 +694,31 @@ class Fat32RW(RWBackend):
                     raise OSError("staged FAT read-back found deleted entry")
             elif operation == "rename":
                 source, destination = arguments
+                source_parent_cluster, _ = verifier._walk_to(source)
+                destination_parent_cluster, _ = verifier._walk_to(destination)
                 if source.casefold() == destination.casefold():
-                    if verifier.stat(destination) is None:
+                    if (
+                        verifier.stat(source) is None
+                        and verifier.stat(destination) is None
+                    ):
                         raise OSError("staged FAT read-back lost renamed entry")
-                elif (
-                    verifier.stat(source) is not None
-                    or verifier.stat(destination) is None
-                ):
-                    raise OSError("staged FAT read-back did not confirm rename")
+                else:
+                    if verifier.stat(source) is not None:
+                        raise OSError("staged FAT read-back retained renamed source")
+                    destination_entry = verifier.stat(destination)
+                    if destination_entry is None:
+                        raise OSError("staged FAT read-back lost renamed entry")
+                    if (
+                        destination_entry.is_dir
+                        and source_parent_cluster != destination_parent_cluster
+                        and verifier._read_directory_parent_cluster(
+                            destination_entry.inode
+                        )
+                        != destination_parent_cluster
+                    ):
+                        raise OSError(
+                            "staged FAT read-back found an invalid moved-directory '..' entry"
+                        )
             else:
                 raise RuntimeError(f"unknown staged FAT operation: {operation}")
         finally:
@@ -1591,55 +1608,243 @@ class Fat32RW(RWBackend):
             updated[offset] = 0xE5
         return bytes(updated)
 
+    @staticmethod
+    def _validate_fat_move_name(name: str) -> None:
+        if not name or name in (".", ".."):
+            raise ValueError("invalid FAT destination name")
+        if name[-1] in (" ", "."):
+            raise ValueError("FAT names cannot end in a space or dot")
+        if any(ord(char) < 0x20 or char in '"*/:<>?\\|' for char in name):
+            raise ValueError("destination name contains a FAT-forbidden character")
+        try:
+            code_units = len(name.encode("utf-16le")) // 2
+        except UnicodeEncodeError as exc:
+            raise ValueError("destination name is not valid UTF-16") from exc
+        if code_units > 255:
+            raise ValueError("FAT long names cannot exceed 255 UTF-16 code units")
+
+    def _validate_lfn_group(
+        self, raw: bytes, short_entry_index: int, expected_name: str
+    ) -> None:
+        start = short_entry_index
+        while start >= 32:
+            previous = start - 32
+            if raw[previous] in (0x00, 0xE5) or raw[previous + 11] != self.ATTR_LFN:
+                break
+            start = previous
+        count = (short_entry_index - start) // 32
+        if count == 0:
+            return
+        if count > 20:
+            raise ValueError("source FAT long-name sequence is too large")
+
+        short_entry = raw[short_entry_index : short_entry_index + 32]
+        checksum = self._short_checksum(short_entry[:11])
+        offsets = list(range(start, short_entry_index, 32))
+        chunks: list[list[int]] = []
+        for index, offset in enumerate(offsets):
+            expected_sequence = count - index
+            expected_first = expected_sequence | (0x40 if index == 0 else 0)
+            if (
+                raw[offset] != expected_first
+                or raw[offset + 11] != self.ATTR_LFN
+                or raw[offset + 12] != 0
+                or raw[offset + 13] != checksum
+                or struct.unpack_from("<H", raw, offset + 26)[0] != 0
+            ):
+                raise ValueError("source FAT long-name sequence is malformed")
+            chunk = (
+                raw[offset + 1 : offset + 11]
+                + raw[offset + 14 : offset + 26]
+                + raw[offset + 28 : offset + 32]
+            )
+            chunks.append(
+                [
+                    struct.unpack_from("<H", chunk, cursor)[0]
+                    for cursor in range(0, len(chunk), 2)
+                ]
+            )
+        units = [unit for chunk in reversed(chunks) for unit in chunk]
+        if self._decode_lfn_units(units) != expected_name:
+            raise ValueError("source FAT long-name sequence does not match its entry")
+
+    def _read_directory_parent_cluster(self, directory_cluster: int) -> int:
+        if not 2 <= directory_cluster < self.cluster_count + 2:
+            raise ValueError("invalid moved FAT directory cluster")
+        raw = self._read_dir_raw(directory_cluster)
+        dot_name = b"." + b" " * 10
+        dotdot_name = b".." + b" " * 9
+        if len(raw) < 64:
+            raise ValueError("FAT directory lacks '.' and '..' entries")
+        dot = raw[:32]
+        dotdot = raw[32:64]
+        if (
+            dot[:11] != dot_name
+            or not dot[11] & self.ATTR_DIR
+            or dotdot[:11] != dotdot_name
+            or not dotdot[11] & self.ATTR_DIR
+        ):
+            raise ValueError("FAT directory has malformed '.' or '..' entries")
+        dot_high = struct.unpack_from("<H", dot, 20)[0]
+        dotdot_high = struct.unpack_from("<H", dotdot, 20)[0]
+        if dot_high & 0xF000 or dotdot_high & 0xF000:
+            raise ValueError("FAT directory cluster field has reserved bits set")
+        dot_cluster = struct.unpack_from("<H", dot, 26)[0] | (dot_high << 16)
+        if dot_cluster != directory_cluster:
+            raise ValueError("FAT directory '.' entry points to a different cluster")
+        parent_cluster = struct.unpack_from("<H", dotdot, 26)[0] | (dotdot_high << 16)
+        if parent_cluster == 0:
+            return self.root_cluster
+        if not 2 <= parent_cluster < self.cluster_count + 2:
+            raise ValueError("FAT directory '..' entry has an invalid parent cluster")
+        return parent_cluster
+
+    def _directory_parent_update(
+        self,
+        directory_cluster: int,
+        expected_old_parent: int,
+        new_parent: int,
+    ) -> bytes:
+        actual_parent = self._read_directory_parent_cluster(directory_cluster)
+        if actual_parent != expected_old_parent:
+            raise ValueError(
+                "FAT directory '..' entry does not match its source parent"
+            )
+        raw = bytearray(self._read_dir_raw(directory_cluster))
+        encoded_parent = 0 if new_parent == self.root_cluster else new_parent
+        struct.pack_into("<H", raw, 32 + 20, (encoded_parent >> 16) & 0x0FFF)
+        struct.pack_into("<H", raw, 32 + 26, encoded_parent & 0xFFFF)
+        return bytes(raw)
+
+    def _assert_destination_not_descendant(
+        self,
+        moved_directory_cluster: int,
+        destination_parent: str,
+        expected_parent_cluster: int,
+    ) -> None:
+        current_cluster = self.root_cluster
+        if current_cluster == moved_directory_cluster:
+            raise ValueError("cannot move the FAT root directory")
+        prefix = "/"
+        for component in destination_parent.replace("\\", "/").split("/"):
+            if not component:
+                continue
+            if current_cluster == moved_directory_cluster:
+                raise ValueError("cannot move a directory into itself or a descendant")
+            entries = self._parse_dir_raw(self._read_dir_raw(current_cluster), prefix)
+            matches = [
+                entry
+                for entry in entries
+                if entry.is_dir and entry.name.casefold() == component.casefold()
+            ]
+            if len(matches) != 1:
+                raise ValueError("destination parent path is ambiguous or invalid")
+            current_cluster = matches[0].inode
+            if current_cluster == moved_directory_cluster:
+                raise ValueError("cannot move a directory into itself or a descendant")
+            prefix = prefix.rstrip("/") + "/" + matches[0].name
+        if current_cluster != expected_parent_cluster:
+            raise RuntimeError("destination parent changed during FAT rename")
+
     def rename(self, src: str, dst: str) -> None:
         self._mutate_staged("rename", src, dst)
 
     def _rename_inplace(self, src: str, dst: str) -> None:
-        """Rename a same-directory 8.3 entry without changing its cluster chain.
-
-        Long-filename and cross-directory renames are deliberately rejected
-        until they can be implemented with an atomic directory-entry update.
-        """
+        """Rename within one directory or move an entry between FAT32 dirs."""
         src_parent, src_name = _image_path_parent_name(src)
         dst_parent, dst_name = _image_path_parent_name(dst)
-        if src_parent != dst_parent:
-            raise NotImplementedError("cross-directory rename not supported")
-        parent_cluster, _ = self._walk_to(src)
-        raw = self._read_dir_raw(parent_cluster)
-        parent_path = src_parent
-        entries = self._parse_dir_raw(raw, parent_path)
-        if src_name.casefold() == dst_name.casefold():
-            return
-        entry = next((e for e in entries if e.name == src_name), None)
-        if not entry:
+        if not src_name or not dst_name:
+            raise ValueError("FAT root cannot be renamed")
+        source_parent_cluster, _ = self._walk_to(src)
+        destination_parent_cluster, _ = self._walk_to(dst)
+        source_raw = self._read_dir_raw(source_parent_cluster)
+        source_entries = self._parse_dir_raw(source_raw, src_parent)
+        source_matches = [
+            item
+            for item in source_entries
+            if item.name.casefold() == src_name.casefold()
+        ]
+        if not source_matches:
             raise FileNotFoundError(src)
-        if any(e.name.casefold() == dst_name.casefold() for e in entries):
+        if len(source_matches) != 1:
+            raise ValueError("source FAT entry name is ambiguous")
+        entry = source_matches[0]
+        if (
+            source_parent_cluster == destination_parent_cluster
+            and src_name.casefold() == dst_name.casefold()
+        ):
+            return
+
+        destination_raw = self._read_dir_raw(destination_parent_cluster)
+        destination_entries = self._parse_dir_raw(destination_raw, dst_parent)
+        if any(
+            item.name.casefold() == dst_name.casefold() for item in destination_entries
+        ):
             raise FileExistsError(dst)
-        if not self._is_83_name(src_name) or not self._is_83_name(dst_name):
-            raise NotImplementedError(
-                "FAT rename currently supports only same-directory 8.3 names"
-            )
-        idx = self._find_entry_index(raw, entry, parent_path)
-        if idx is None:
+
+        source_index = self._find_entry_index(source_raw, entry, src_parent)
+        if source_index is None:
             raise RuntimeError(f"directory entry not found while renaming {src}")
 
-        short = self._short_name(dst_name)
-        short_raw = short[0].ljust(8, b" ") + short[1].ljust(3, b" ")
-        for other_idx in range(0, len(raw) - 31, 32):
-            if other_idx == idx:
-                continue
-            first = raw[other_idx]
-            if first in (0x00, 0xE5) or raw[other_idx + 11] == self.ATTR_LFN:
-                continue
-            if raw[other_idx : other_idx + 11] == short_raw:
-                raise FileExistsError(dst)
+        if source_parent_cluster == destination_parent_cluster:
+            if not self._is_83_name(src_name) or not self._is_83_name(dst_name):
+                raise NotImplementedError(
+                    "FAT rename currently supports only same-directory 8.3 names"
+                )
+            self._validate_fat_move_name(dst_name)
+            self._validate_lfn_group(source_raw, source_index, entry.name)
+            short = self._short_name(dst_name)
+            short_raw = short[0].ljust(8, b" ") + short[1].ljust(3, b" ")
+            for other_idx in range(0, len(source_raw) - 31, 32):
+                if other_idx == source_index:
+                    continue
+                first = source_raw[other_idx]
+                if first in (0x00, 0xE5) or source_raw[other_idx + 11] == self.ATTR_LFN:
+                    continue
+                if source_raw[other_idx : other_idx + 11] == short_raw:
+                    raise FileExistsError(dst)
+            updated = bytearray(source_raw)
+            updated[source_index : source_index + 11] = short_raw
+            self._write_dir_raw(source_parent_cluster, bytes(updated))
+            self.sync_fsinfo()
+            return
 
-        # Updating the short-name bytes in place preserves the file's FAT
-        # chain and all other directory metadata; the old implementation
-        # called delete(), which freed the chain before recreating the entry.
-        buf = bytearray(raw)
-        buf[idx : idx + 11] = short_raw
-        self._write_dir_raw(parent_cluster, bytes(buf))
+        self._validate_fat_move_name(dst_name)
+        self._validate_lfn_group(source_raw, source_index, entry.name)
+        if entry.is_dir:
+            self._assert_destination_not_descendant(
+                entry.inode, dst_parent, destination_parent_cluster
+            )
+            updated_directory = self._directory_parent_update(
+                entry.inode, source_parent_cluster, destination_parent_cluster
+            )
+        else:
+            updated_directory = None
+
+        short_name = self._short_name_for_dir(dst_name, destination_raw)
+        lfn = (
+            self._lfn_entries(dst_name, short_name)
+            if not self._is_83_name(dst_name)
+            else b""
+        )
+        new_short_entry = bytearray(source_raw[source_index : source_index + 32])
+        new_short_entry[:11] = short_name
+        new_entry_set = lfn + bytes(new_short_entry)
+        slot = self._find_entry_slot(destination_raw, len(new_entry_set) // 32)
+        if slot is None:
+            raise RuntimeError(f"no free dir slot for {dst_name}")
+        updated_destination = bytearray(destination_raw)
+        updated_destination[slot : slot + len(new_entry_set)] = new_entry_set
+        updated_source = self._tombstone_entry_slots(source_raw, source_index)
+
+        # All edits happen against the private staged image. The public writer
+        # validates the resulting namespace and atomically replaces the source
+        # image only after the full move succeeds.
+        self._write_dir_raw(destination_parent_cluster, bytes(updated_destination))
+        if updated_directory is not None:
+            self._write_dir_raw(entry.inode, updated_directory)
+        self._write_dir_raw(source_parent_cluster, updated_source)
+        self.sync_fsinfo()
 
 
 # =============================================================================
