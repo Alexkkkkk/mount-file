@@ -1253,11 +1253,7 @@ def test_parses_resident_filename_and_standard_information_bounds():
     )
     assert info.access_time == unix_filetime + 1_700_000_003 * 10_000_000 + 1
     fields = NativeNtfsMetadataImage._standard_information_fields(
-        (
-            NtfsAttributeSummary(
-                0x10, 72, False, "", resident_value=bytes(standard)
-            ),
-        )
+        (NtfsAttributeSummary(0x10, 72, False, "", resident_value=bytes(standard)),)
     )
     assert fields == {
         "created": "2023-11-14T22:13:20.1234567+00:00",
@@ -1327,9 +1323,7 @@ def test_ntfs_list_dir_includes_standard_information_metadata():
         unix_filetime + 1_700_000_003 * 10_000_000,
     )
     struct.pack_into("<I", value, 32, 0x20)
-    standard = NtfsAttributeSummary(
-        0x10, 72, False, "", resident_value=bytes(value)
-    )
+    standard = NtfsAttributeSummary(0x10, 72, False, "", resident_value=bytes(value))
     reader._resolve = lambda _path: (5, parent)
     reader.list_dir_by_record = lambda *_args: [entry]
     reader.read_mft_record = lambda *_args, **_kwargs: child
@@ -1351,6 +1345,37 @@ def test_ntfs_list_dir_includes_standard_information_metadata():
             "attributes": 0x20,
         }
     ]
+
+
+def test_ntfs_root_stat_includes_standard_information_metadata():
+    from types import SimpleNamespace
+
+    reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    root_record = SimpleNamespace(sequence_number=5, is_directory=True)
+    unix_filetime = 116_444_736_000_000_000
+    value = bytearray(48)
+    struct.pack_into(
+        "<QQQQ",
+        value,
+        0,
+        unix_filetime + 1_700_000_000 * 10_000_000,
+        unix_filetime + 1_700_000_001 * 10_000_000,
+        unix_filetime + 1_700_000_002 * 10_000_000,
+        unix_filetime + 1_700_000_003 * 10_000_000,
+    )
+    struct.pack_into("<I", value, 32, 0x10)
+    standard = NtfsAttributeSummary(0x10, 72, False, "", resident_value=bytes(value))
+    reader._resolve = lambda _path: (5, root_record)
+    reader._attributes_for_record = lambda _number, _record: (standard,)
+
+    result = reader.stat("/")
+
+    assert result["path"] == "/"
+    assert result["created"] == "2023-11-14T22:13:20.0000000+00:00"
+    assert result["modified"] == "2023-11-14T22:13:21.0000000+00:00"
+    assert result["ctime"] == "2023-11-14T22:13:22.0000000+00:00"
+    assert result["accessed"] == "2023-11-14T22:13:23.0000000+00:00"
+    assert result["attributes"] == 0x10
 
 
 def test_native_ntfs_index_entry_matches_child_filename_metadata(monkeypatch):
