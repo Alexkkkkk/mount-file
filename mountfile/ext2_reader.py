@@ -9,6 +9,7 @@ volumes, journals, malformed metadata, and out-of-extent reads fail closed.
 
 from __future__ import annotations
 
+import datetime as _dt
 import math
 import os
 import struct
@@ -82,6 +83,16 @@ class _Inode:
     flags: int
     mtime: int
     block_pointers: tuple[int, ...]
+    atime: int = 0
+    ctime: int = 0
+    links_count: int = 0
+    atime_extra: int | None = None
+    ctime_extra: int | None = None
+    mtime_extra: int | None = None
+    crtime: int | None = None
+    crtime_extra: int | None = None
+    uid: int | None = None
+    gid: int | None = None
 
     @property
     def mode_type(self) -> int:
@@ -504,6 +515,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         addressable_blocks += (self.block_size // 4) ** 2 + (self.block_size // 4) ** 3
         if size > addressable_blocks * self.block_size:
             raise Ext2ReadError("inode size exceeds ext2 block-pointer capacity")
+        uid, gid = self._decode_inode_ownership(raw)
         inode = _Inode(
             number=number,
             mode=mode,
@@ -511,11 +523,30 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=block_pointers,
+            uid=uid,
+            gid=gid,
+            atime=struct.unpack_from("<I", raw, 8)[0],
+            ctime=struct.unpack_from("<I", raw, 12)[0],
+            links_count=struct.unpack_from("<H", raw, 26)[0],
         )
         if len(self._inode_cache) >= _MAX_CACHE_ITEMS:
             self._inode_cache.clear()
         self._inode_cache[number] = inode
         return inode
+
+    def _decode_inode_ownership(self, raw: bytes) -> tuple[int | None, int | None]:
+        """Decode Linux ext UID/GID words without guessing another OS layout."""
+        if getattr(self.profile, "creator_os", None) != 0:
+            return None, None
+        if len(raw) < 124:
+            raise Ext2ReadError(
+                "Linux ext inode is truncated before UID/GID high words"
+            )
+        uid_low = struct.unpack_from("<H", raw, 2)[0]
+        gid_low = struct.unpack_from("<H", raw, 24)[0]
+        uid_high = struct.unpack_from("<H", raw, 120)[0]
+        gid_high = struct.unpack_from("<H", raw, 122)[0]
+        return uid_low | (uid_high << 16), gid_low | (gid_high << 16)
 
     def _indirect_block(
         self,
@@ -722,12 +753,79 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             return ""
 
     @staticmethod
+    def _format_ext_timestamp(seconds: int | None, extra: int | None = None) -> str:
+        if seconds is None:
+            return ""
+        nanoseconds = 0
+        if extra is not None:
+            epoch = (extra >> 30) & 0x03
+            nanoseconds = extra & 0x3FFFFFFF
+            if nanoseconds >= 1_000_000_000:
+                raise Ext2ReadError("ext4 inode timestamp nanoseconds are invalid")
+            seconds |= epoch << 32
+        try:
+            value = _dt.datetime.fromtimestamp(seconds, _dt.timezone.utc)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise Ext2ReadError(
+                "ext inode timestamp is outside supported range"
+            ) from exc
+        result = value.strftime("%Y-%m-%dT%H:%M:%S")
+        if extra is not None and nanoseconds:
+            result += f".{nanoseconds:09d}"
+        return result + "+00:00"
+
+    def _inode_timestamp_extras(self, raw: bytes):
+        """Decode only timestamp extensions covered by ext4 extra_isize."""
+        if (
+            self.profile.fs_type != "ext4"
+            or not self.feature_ro_compat & 0x0040
+            or len(raw) < 130
+        ):
+            return {}
+        extra_size = struct.unpack_from("<H", raw, 128)[0]
+        if extra_size % 4 or extra_size > len(raw) - 128:
+            raise Ext2ReadError("ext4 inode extra_isize exceeds inode bounds")
+        fields = {}
+        for name, offset, required_size in (
+            ("ctime_extra", 132, 8),
+            ("mtime_extra", 136, 12),
+            ("atime_extra", 140, 16),
+            ("crtime", 144, 20),
+            ("crtime_extra", 148, 24),
+        ):
+            if extra_size >= required_size and offset + 4 <= len(raw):
+                value = struct.unpack_from("<I", raw, offset)[0]
+                if name.endswith("_extra") and (value & 0x3FFFFFFF) >= 1_000_000_000:
+                    raise Ext2ReadError("ext4 inode timestamp nanoseconds are invalid")
+                fields[name] = value
+        return fields
+
+    @staticmethod
     def _mode_type_name(mode: int) -> str:
         return {
             _S_IFREG: "file",
             _S_IFDIR: "dir",
             _S_IFLNK: "symlink",
         }.get(mode & _S_IFMT, "special")
+
+    def _inode_stat_fields(self, inode: _Inode) -> dict:
+        return {
+            "mode": inode.mode,
+            "permissions": inode.mode & 0o7777,
+            "links": inode.links_count,
+            "accessed": self._format_ext_timestamp(inode.atime, inode.atime_extra),
+            "ctime": self._format_ext_timestamp(inode.ctime, inode.ctime_extra),
+            "modified": self._format_ext_timestamp(inode.mtime, inode.mtime_extra),
+            "created": self._format_ext_timestamp(inode.crtime, inode.crtime_extra),
+            "uid": inode.uid,
+            "gid": inode.gid,
+        }
+
+    def stat(self, path: str) -> dict:
+        result = super().stat(path)
+        if result.get("path") == "/":
+            result.update(self._inode_stat_fields(self._resolve("/")))
+        return result
 
     def list_dir(self, path="/"):
         inode = self._resolve(path)
@@ -756,6 +854,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                     "date": "" if is_dir else self._format_mtime(child.mtime),
                     "kind": actual_type,
                     "inode": child.number,
+                    **self._inode_stat_fields(child),
                 }
             )
         result.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))

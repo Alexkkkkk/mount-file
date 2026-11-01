@@ -506,6 +506,11 @@ class NativeExt4Image(NativeExt3Image):
         if profile.feature_ro_compat & _RO_COMPAT_BIGALLOC:
             raise Ext3ReadError("ext4 bigalloc cluster layout is not supported")
         if (
+            profile.feature_ro_compat & _RO_COMPAT_EXTRA_ISIZE
+            and profile.inode_size < 132
+        ):
+            raise Ext3ReadError("ext4 EXTRA_ISIZE requires extended inode records")
+        if (
             profile.feature_ro_compat & _RO_COMPAT_METADATA_CSUM
             and not _EXT4_METADATA_CSUM_SUPPORTED
         ):
@@ -577,6 +582,7 @@ class NativeExt4Image(NativeExt3Image):
             ) ** 3
             if size > addressable_blocks * self.block_size:
                 raise Ext3ReadError("inode size exceeds classic block-pointer capacity")
+        uid, gid = self._decode_inode_ownership(raw)
         inode = _Inode(
             number=number,
             mode=mode,
@@ -584,6 +590,12 @@ class NativeExt4Image(NativeExt3Image):
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=pointers,
+            uid=uid,
+            gid=gid,
+            atime=struct.unpack_from("<I", raw, 8)[0],
+            ctime=struct.unpack_from("<I", raw, 12)[0],
+            links_count=struct.unpack_from("<H", raw, 26)[0],
+            **self._inode_timestamp_extras(raw),
         )
         if len(self._inode_cache) >= 4096:
             self._inode_cache.clear()
