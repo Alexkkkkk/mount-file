@@ -284,6 +284,8 @@ boot sectors, `$MFT`/`$MFTMirr`, FILE-record USA fixups, bounded attribute strea
 and runlists, `$Volume` dirty flags, and clean `$LogFile` restart pages before
 exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
+Within each FILE record, the `0xffffffff` attribute terminator must end exactly
+at `bytes_in_use`; even zero-filled trailing bytes are rejected.
 
 `STANDARD_INFORMATION` supplies `created`, `modified`, `ctime` (MFT metadata
 change), and `accessed` as UTC FILETIME strings in both list and stat results;
