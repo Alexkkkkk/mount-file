@@ -131,6 +131,18 @@ MountFile не требует `pytsk3`; native routing не запускает �
 fallback fail-closed откажет; используйте native provider либо отдельный
 адаптер, который умеет ограничивать каждый read выбранным extent.
 
+### macOS APFS adapter
+
+`APFSFuseAdapter` требует явного `mount(existing_directory)` и не монтирует образ
+в конструкторе. Его `status` — read-only snapshot полей `mounted`, `mountpoint`,
+`process_owned`, `process_running`, `writable` и `write_capabilities`. Значения
+`writable=False` и пустой `write_capabilities` постоянны: наличие FUSE не включает
+запись. `mounted=True` означает только, что adapter владеет foreground-процессом,
+который ещё отвечает как работающий; это не проверка mount table или здоровья
+APFS. `close()` останавливает только запущенный этим adapter процесс. Адаптер
+принимает только whole-image input и явно отказывает для ненулевого partition
+offset.
+
 Отклонение mutation на фасадном capability gate выбрасывает
 `RefusalRuntimeError`, совместимый с прежним `RuntimeError` контрактом. У него
 есть стабильные поля `code` и `category`, а `to_dict()` возвращает JSON-совместимые
