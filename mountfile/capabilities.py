@@ -11,10 +11,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
 
-CAPABILITY_MATRIX_VERSION = 2
+CAPABILITY_MATRIX_VERSION = 3
 
 # Read-only providers surfaced through the public VFS API.
-VFS_READ_CAPABILITIES = ("list", "stat", "read-range", "extract")
+VFS_READ_CAPABILITIES = ("list", "stat", "read-file", "read-range", "extract")
 VFS_WRITE_CAPABILITIES: tuple[str, ...] = ()
 
 # Operations surfaced by UniversalFSRW; this is a distinct API vocabulary.

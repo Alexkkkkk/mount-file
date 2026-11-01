@@ -22,7 +22,7 @@ from tests.test_ext3_reader import _make_clean_journal_image
 def test_bounded_native_provider_contract_without_pytsk3(
     tmp_path, monkeypatch, backend_flag
 ):
-    """list/stat/read-range/extract work through the offline native provider."""
+    """list/stat/read-file/read-range/extract use the offline native provider."""
     image = tmp_path / "contract.ext2"
     _make_image(image)
     monkeypatch.setattr(vfs, "pytsk3", None)
@@ -34,7 +34,13 @@ def test_bounded_native_provider_contract_without_pytsk3(
     )
     try:
         assert provider.backend_name == "native-ext2"
-        assert provider.read_capabilities == ("list", "stat", "read-range", "extract")
+        assert provider.read_capabilities == (
+            "list",
+            "stat",
+            "read-file",
+            "read-range",
+            "extract",
+        )
         assert provider.write_capabilities == ()
         assert {entry["name"] for entry in provider.list_dir("/")} == {
             "hello.txt",
@@ -43,6 +49,7 @@ def test_bounded_native_provider_contract_without_pytsk3(
             "triple.bin",
         }
         assert provider.stat("/hello.txt")["size"] == 11
+        assert provider.read_file("/hello.txt") == b"hello ext2!"
         assert provider.read_file_range("/hello.txt", 6, 5) == b"ext2!"
         destination = tmp_path / "extracted"
         assert extract_path(provider, "/hello.txt", destination) == 1
