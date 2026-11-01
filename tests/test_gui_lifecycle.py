@@ -14,7 +14,7 @@ except ImportError as exc:  # pragma: no cover
     pytest.skip("Qt bindings are not usable: %s" % exc, allow_module_level=True)
 
 from mountfile import tc_style, text_editor
-from mountfile.qt_compat import MB_Yes, QApplication, QMessageBox
+from mountfile.qt_compat import MB_Yes, QApplication, QEvent, QMessageBox
 from mountfile.tc_window import MainWindow
 
 
@@ -56,6 +56,13 @@ def test_panel_list_error_has_visible_retry_button(app, monkeypatch):
         assert panel.empty_retry.isHidden()
     finally:
         win.close()
+        # Closing a QWidget leaves its C++ object alive until DeferredDelete is
+        # delivered. Remove it before the next MainWindow reapplies the global
+        # application stylesheet (which can access-violate on Windows/PyQt).
+        win.deleteLater()
+        deferred_delete = getattr(getattr(QEvent, "Type", QEvent), "DeferredDelete")
+        app.sendPostedEvents(None, deferred_delete)
+        app.processEvents()
 
 
 def test_saved_image_editor_copy_is_removed_when_window_closes(
