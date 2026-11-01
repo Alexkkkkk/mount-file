@@ -598,11 +598,11 @@ class NativeExfatRW(RWBackend):
 class Fat32RW(RWBackend):
     """Bounded native FAT32 read/write without external utilities.
 
-    FAT12/16 are deliberately rejected: their packed FAT12 entries, fixed
-    root directory, and format-specific end-of-chain rules are not covered by
-    this writer's safety proof.  They remain available to the read-only FAT
-    reader, but never reach a native mutation path.
+    The historical class remains FAT32-only. ``Fat1216RW`` below enables the
+    same transactional engine after validating classic fixed-root geometry.
     """
+
+    ALLOW_FAT1216 = False
 
     ATTR_DIR = 0x10
     ATTR_LFN = 0x0F
@@ -672,7 +672,7 @@ class Fat32RW(RWBackend):
     def _verify_staged_mutation(
         self, image: Path, operation: str, arguments: tuple
     ) -> None:
-        verifier = Fat32RW(
+        verifier = type(self)(
             image,
             offset=self.offset,
             volume_size=self._selected_volume_size,
@@ -927,6 +927,13 @@ class Fat32RW(RWBackend):
             # refresh that cache - a stale free-cluster count is exactly what
             # `fsck.fat` reports as "Free cluster summary wrong".
             self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
+        elif self.ALLOW_FAT1216:
+            if not self.root_entries:
+                raise ValueError("FAT12/16 requires a fixed root directory")
+            self.root_cluster = 0
+            capacity = self.fat_size * self.bytes_per_sector * (8 if self.fat_type == 12 else 16) // 8
+            if self.cluster_count + 2 > capacity:
+                raise ValueError("FAT12/16 FAT is too small for the declared volume")
         else:
             raise ValueError(
                 "native FAT12/16 writes are unsupported; use the read-only FAT reader"
@@ -978,6 +985,8 @@ class Fat32RW(RWBackend):
 
     # ---- FAT ---------------------------------------------------------------
     def _fat_get(self, cluster: int) -> int:
+        if not 0 <= cluster < self.cluster_count + 2:
+            raise ValueError("FAT entry is outside the declared data area")
         if self.fat_type == 32:
             return (
                 struct.unpack("<I", self._read_at(self.fat_offset + cluster * 4, 4))[0]
@@ -1012,11 +1021,26 @@ class Fat32RW(RWBackend):
                 self._write_at(off, struct.pack("<H", new))
 
     def _cluster_chain(self, start: int, max_n: int = 100_000) -> list[int]:
+        if start in (0, 1):
+            return []
+        eoc = {12: 0xFF8, 16: 0xFFF8, 32: 0x0FFFFFF8}[self.fat_type]
+        bad = {12: 0xFF7, 16: 0xFFF7, 32: 0x0FFFFFF7}[self.fat_type]
+        if not 2 <= start < self.cluster_count + 2:
+            raise ValueError("FAT chain starts outside the data area")
         chain, seen, cur = [], set(), start
-        while 2 <= cur < 0x0FFFFFF8 and cur not in seen and len(chain) < max_n:
+        while 2 <= cur < self.cluster_count + 2 and cur not in seen and len(chain) < max_n:
             chain.append(cur)
             seen.add(cur)
-            cur = self._fat_get(cur)
+            nxt = self._fat_get(cur)
+            if nxt >= eoc:
+                return chain
+            if nxt in (0, 1, bad) or not 2 <= nxt < self.cluster_count + 2:
+                raise ValueError("FAT chain contains an invalid link")
+            cur = nxt
+        if cur in seen:
+            raise ValueError("FAT cluster chain contains a cycle")
+        if len(chain) >= max_n:
+            raise ValueError("FAT cluster chain exceeds safety limit")
         return chain
 
     def _cluster_offset(self, cluster: int) -> int:
@@ -1030,9 +1054,13 @@ class Fat32RW(RWBackend):
         self._write_at(self._cluster_offset(cluster), data)
 
     def _read_chain(self, start: int, size: int | None = None) -> bytes:
+        if size == 0 and start in (0, 1):
+            return b""
         chain = self._cluster_chain(start)
         if not chain:
-            return self._read_at(self._cluster_offset(start), size or self.cluster_size)
+            if size:
+                raise ValueError("non-empty FAT file has no cluster chain")
+            return b""
         data = b"".join(self._read_cluster(c) for c in chain)
         return data[:size] if size is not None else data
 
@@ -1051,8 +1079,9 @@ class Fat32RW(RWBackend):
         if count == 0:
             return []
         clusters = self._find_free_cluster(count)
+        eoc = {12: 0xFFF, 16: 0xFFFF, 32: 0x0FFFFFFF}[self.fat_type]
         for i, c in enumerate(clusters):
-            self._fat_set(c, 0x0FFFFFFF if i == len(clusters) - 1 else clusters[i + 1])
+            self._fat_set(c, eoc if i == len(clusters) - 1 else clusters[i + 1])
         # zero fill
         zero = b"\x00" * self.cluster_size
         for c in clusters:
@@ -1347,7 +1376,7 @@ class Fat32RW(RWBackend):
         for part in parts[:-1]:
             raw = self._read_dir_raw(cur_cluster)
             entries = self._parse_dir_raw(raw, cur_path)
-            found = next((e for e in entries if e.name == part and e.is_dir), None)
+            found = next((e for e in entries if e.name.casefold() == part.casefold() and e.is_dir), None)
             if not found:
                 raise FileNotFoundError(f"dir not found: {part}")
             cur_cluster = found.inode
@@ -1380,7 +1409,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        found = next((e for e in entries if e.name == name and e.is_dir), None)
+        found = next((e for e in entries if e.name.casefold() == name.casefold() and e.is_dir), None)
         if not found:
             return []
         return self._parse_dir_raw(self._read_dir_raw(found.inode), found.path)
@@ -1390,7 +1419,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        entry = next((e for e in entries if e.name == name), None)
+        entry = next((e for e in entries if e.name.casefold() == name.casefold()), None)
         if not entry:
             raise FileNotFoundError(path)
         if entry.is_dir:
@@ -1405,7 +1434,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        existing = next((e for e in entries if e.name == name), None)
+        existing = next((e for e in entries if e.name.casefold() == name.casefold()), None)
         if existing and existing.is_dir:
             raise IsADirectoryError(path)
         old_chain = (
@@ -1516,7 +1545,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        if any(e.name == name for e in entries):
+        if any(e.name.casefold() == name.casefold() for e in entries):
             raise FileExistsError(path)
         new_cluster = self._allocate_chain(1)[0]
         # init . and ..
@@ -1560,7 +1589,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        entry = next((e for e in entries if e.name == name), None)
+        entry = next((e for e in entries if e.name.casefold() == name.casefold()), None)
         if not entry:
             raise FileNotFoundError(path)
         if entry.is_dir:
@@ -1610,12 +1639,14 @@ class Fat32RW(RWBackend):
         entries = self._parse_dir_raw(raw, parent_path)
         if src_name.casefold() == dst_name.casefold():
             return
-        entry = next((e for e in entries if e.name == src_name), None)
+        entry = next((e for e in entries if e.name.casefold() == src_name.casefold()), None)
         if not entry:
             raise FileNotFoundError(src)
         if any(e.name.casefold() == dst_name.casefold() for e in entries):
             raise FileExistsError(dst)
-        if not self._is_83_name(src_name) or not self._is_83_name(dst_name):
+        if not self.ALLOW_FAT1216 and (
+            not self._is_83_name(src_name) or not self._is_83_name(dst_name)
+        ):
             raise NotImplementedError(
                 "FAT rename currently supports only same-directory 8.3 names"
             )
@@ -1623,8 +1654,7 @@ class Fat32RW(RWBackend):
         if idx is None:
             raise RuntimeError(f"directory entry not found while renaming {src}")
 
-        short = self._short_name(dst_name)
-        short_raw = short[0].ljust(8, b" ") + short[1].ljust(3, b" ")
+        short_raw = self._short_name_for_dir(dst_name, raw)
         for other_idx in range(0, len(raw) - 31, 32):
             if other_idx == idx:
                 continue
@@ -1634,12 +1664,41 @@ class Fat32RW(RWBackend):
             if raw[other_idx : other_idx + 11] == short_raw:
                 raise FileExistsError(dst)
 
-        # Updating the short-name bytes in place preserves the file's FAT
-        # chain and all other directory metadata; the old implementation
-        # called delete(), which freed the chain before recreating the entry.
+        # Rebuild only directory slots.  The data chain is retained, and the
+        # staged mutation wrapper makes the tombstone+insert atomic on error.
+        start = idx
+        while start >= 32 and raw[start - 32] not in (0x00, 0xE5) and raw[start - 32 + 11] == self.ATTR_LFN:
+            start -= 32
         buf = bytearray(raw)
-        buf[idx : idx + 11] = short_raw
+        for pos in range(start, idx + 32, 32):
+            buf[pos] = 0xE5
+        need_lfn = not self._is_83_name(dst_name)
+        lfn = self._lfn_entries(dst_name, short_raw) if need_lfn else b""
+        slot = self._find_entry_slot(bytes(buf), len(lfn) // 32 + 1)
+        if slot is None:
+            raise RuntimeError(f"no free dir slot for {dst_name}")
+        buf[slot : slot + len(lfn)] = lfn
+        replacement = bytearray(self._build_dir_entry(
+            dst_name, entry.inode, entry.size, entry.is_dir,
+            short_name=(short_raw[:8], short_raw[8:11]),
+        ))
+        buf[slot + len(lfn) : slot + len(lfn) + 32] = replacement
         self._write_dir_raw(parent_cluster, bytes(buf))
+
+
+class Fat1216RW(Fat32RW):
+    """Native bounded writer for FAT12 and FAT16 volumes."""
+
+    ALLOW_FAT1216 = True
+
+    def info(self) -> FSInfo:
+        value = super().info()
+        value.backend = "native-fat-rw"
+        value.write_strategy = "native-fat12-16"
+        return value
+
+
+NativeFat1216Writer = Fat1216RW
 
 
 # =============================================================================
@@ -2466,6 +2525,7 @@ class UniversalFSRW:
         fs_type_lower = str(fs_type).lower()
         writer_types = [
             (NativeExfatRW, ("exfat",)),
+            (Fat1216RW, ("fat12", "fat16")),
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
         ]
@@ -2476,7 +2536,7 @@ class UniversalFSRW:
                 try:
                     if cls in (Ext234RW, NativeExfatRW):
                         self.backend = cls(self.image, off, volume_size=volume_size)
-                    elif cls is Fat32RW:
+                    elif cls in (Fat32RW, Fat1216RW):
                         backend = cls(self.image, off, volume_size=volume_size)
                         if (
                             inferred_whole_image_fat
@@ -2565,7 +2625,13 @@ class UniversalFSRW:
         native_profile = NATIVE_WRITE_PROFILES_BY_STRATEGY.get(strategy)
         native_profile_matches = bool(
             native_profile
-            and str(info.fs_type).casefold() == native_profile.filesystem.casefold()
+            and (
+                str(info.fs_type).casefold() == native_profile.filesystem.casefold()
+                or (
+                    strategy == "native-fat12-16"
+                    and str(info.fs_type).casefold() in {"fat12", "fat16"}
+                )
+            )
             and str(info.backend) == native_profile.backend
         )
         rejection_code = None

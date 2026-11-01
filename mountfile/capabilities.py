@@ -113,6 +113,16 @@ _READ_ONLY_PROFILES = (
 
 _WRITE_PROFILES = (
     CapabilityProfile(
+        "fat12-16-native-rw",
+        "FAT12",
+        "native-fat-rw",
+        "universal-fs-rw",
+        "read-write",
+        RW_READ_CAPABILITIES,
+        RW_WRITE_CAPABILITIES,
+        "native-fat12-16",
+    ),
+    CapabilityProfile(
         "fat32-native-rw",
         "FAT32",
         "native-fat-rw",
@@ -174,6 +184,10 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "No $LogFile replay, sparse, compressed, or encrypted stream support.",
         ),
         "exfat-native-ro": ("Bounded single-FAT profile with zero VolumeFlags only.",),
+        "fat12-16-native-rw": (
+            "Native bounded FAT12/FAT16 writer with packed and mirrored FAT updates.",
+            "Fixed root directory; unsupported special or sparse cases are refused.",
+        ),
         "fat32-native-rw": (
             "Native bounded FAT32 writer; put/replace, mkdir, rename, and delete.",
         ),
