@@ -128,6 +128,55 @@ def test_native_fat32_rejects_inconsistent_mirrored_fat(tmp_path):
         NativeFatImage(image, volume_size=image.stat().st_size)
 
 
+def _make_active_fat32_image(image, active_fat: int) -> None:
+    make_fat32_image(image)
+    raw = bytearray(image.read_bytes())
+    bps = 512
+    reserved = struct.unpack_from("<H", raw, 14)[0]
+    fat_size = struct.unpack_from("<I", raw, 36)[0] * bps
+    first_fat = reserved * bps
+    second_fat = first_fat + fat_size
+    root_entry = bytes(raw[second_fat : second_fat + 32])
+    active_table = bytes(raw[first_fat : first_fat + fat_size])
+
+    primary_table = bytearray(active_table)
+    struct.pack_into("<I", primary_table, 8, 0)  # cluster 2 is free in FAT 0
+    raw[first_fat : first_fat + fat_size] = primary_table
+    raw[second_fat : second_fat + fat_size] = active_table
+
+    root_start = second_fat + fat_size
+    raw[root_start : root_start + bps] = bytes(bps)
+    raw[root_start : root_start + 32] = root_entry
+
+    boot = bytearray(raw[:bps])
+    boot[16] = 2
+    struct.pack_into("<H", boot, 40, 0x0080 | active_fat)
+    raw[:bps] = boot
+    backup_sector = struct.unpack_from("<H", boot, 50)[0]
+    raw[backup_sector * bps : (backup_sector + 1) * bps] = boot
+    image.write_bytes(raw)
+
+
+def test_native_fat32_reads_from_selected_active_fat(tmp_path):
+    image = tmp_path / "fat32-active-fat.img"
+    _make_active_fat32_image(image, active_fat=1)
+    provider = NativeFatImage(image, volume_size=image.stat().st_size)
+    try:
+        assert provider.profile.fat_mirroring_enabled is False
+        assert provider.profile.active_fat_index == 1
+        assert provider._fat_entry(2) == 0x0FFFFFFF
+    finally:
+        provider.close()
+
+
+def test_native_fat32_rejects_out_of_range_active_fat_index(tmp_path):
+    image = tmp_path / "fat32-invalid-active-fat.img"
+    _make_active_fat32_image(image, active_fat=2)
+
+    with pytest.raises(FatReadError, match="active FAT index"):
+        NativeFatImage(image, volume_size=image.stat().st_size)
+
+
 def test_native_fat_rejects_short_chain_and_never_falls_back(tmp_path):
     image = tmp_path / "fat12.img"
     _make_small_fat(image, 12)

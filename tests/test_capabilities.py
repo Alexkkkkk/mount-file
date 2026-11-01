@@ -107,6 +107,7 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
     assert status["write_capabilities"] == list(profile.write_capabilities)
     assert status["write_enabled"] is True
     assert status["write_rejection_reason"] == ""
+    assert status["write_rejection_code"] is None
     assert (
         tuple(status["write_capabilities"])
         == NATIVE_WRITE_PROFILES_BY_STRATEGY[strategy].write_capabilities
@@ -115,10 +116,11 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
 
 @pytest.mark.parametrize("strategy", ["native", "native-ext2", "native-exfat-phase1"])
 def test_native_strategy_does_not_enable_writes_without_writable_flag(strategy):
+    profile = NATIVE_WRITE_PROFILES_BY_STRATEGY[strategy]
     info = FSInfo(
-        fs_type="unknown",
+        fs_type=profile.filesystem,
         offset=0,
-        backend="native-candidate",
+        backend=profile.backend,
         writable=False,
         write_strategy=strategy,
     )
@@ -129,6 +131,7 @@ def test_native_strategy_does_not_enable_writes_without_writable_flag(strategy):
     assert status["write_capabilities"] == []
     assert status["write_enabled"] is False
     assert status["write_rejection_reason"]
+    assert status["write_rejection_code"] == "operation_not_supported"
 
 
 @pytest.mark.parametrize(
@@ -157,3 +160,4 @@ def test_native_strategy_rejects_mismatched_filesystem_profile(
     assert status["write_capabilities"] == []
     assert status["write_enabled"] is False
     assert status["write_rejection_reason"]
+    assert status["write_rejection_code"] == "unsupported_profile"
