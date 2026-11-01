@@ -1462,7 +1462,9 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         if result.get("path") == "/":
             record_number, record = self._resolve("/")
             attributes = self._attributes_for_record(record_number, record)
-            result.update(self._standard_information_fields(attributes))
+            standard_info = self._standard_information_fields(attributes)
+            result.update(standard_info)
+            result["date"] = standard_info["modified"]
         return result
 
     def list_dir(self, path="/"):
@@ -1478,6 +1480,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             child_attrs = self._validate_index_entry_metadata(
                 entry, child, parent_reference
             )
+            standard_info = self._standard_information_fields(child_attrs)
             data = next(
                 (a for a in child_attrs if a.type_code == 0x80 and not a.name), None
             )
@@ -1494,9 +1497,9 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                             else data.data_size
                         )
                     ),
-                    "date": "",
+                    "date": standard_info["modified"],
                     "inode": child_number,
-                    **self._standard_information_fields(child_attrs),
+                    **standard_info,
                 }
             )
         result.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))

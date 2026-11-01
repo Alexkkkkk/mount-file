@@ -282,6 +282,11 @@ and runlists, `$Volume` dirty flags, and clean `$LogFile` restart pages before
 exposing a tree. It supports list/stat/read-range/extract through the existing
 VFS; it does not replay the journal or authorize writes.
 
+`STANDARD_INFORMATION` supplies `created`, `modified`, `ctime` (MFT metadata
+change), and `accessed` as UTC FILETIME strings in both list and stat results;
+the compatibility `date` field is the same value as `modified`, including for
+the volume root.
+
 For nonresident attributes the reader retains and checks the on-disk allocated,
 data and initialized sizes. Bounded reads expose zero bytes after `initialized_size`
 up to `data_size`, without returning stale physical bytes from the allocated run.
