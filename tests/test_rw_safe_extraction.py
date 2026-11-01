@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
-from mountfile.extract import ExtractError
+from mountfile.extract import ExtractError, ExtractionLimits
 from mountfile.universal_fs_rw import (
     FSEntry,
     FSInfo,
@@ -86,6 +86,51 @@ def test_universal_fsrw_extract_delegates_to_safe_rwbackend_path(tmp_path):
 
     assert result == destination
     assert destination.read_bytes() == b"facade evidence"
+
+
+def test_rwbackend_extract_uses_bounded_reader_api_and_resource_limit(tmp_path):
+    class RangeReader:
+        max_read_range_bytes = 3
+
+        def __init__(self):
+            self.calls = []
+
+        def file_size(self, path):
+            assert path == "/EVIDENCE.BIN"
+            return 7
+
+        def read_file_range(self, path, offset, length):
+            self.calls.append((path, offset, length))
+            return b"payload"[offset : offset + length]
+
+    backend = _MemoryBackend(b"unused payload")
+    reader = RangeReader()
+    backend._reader = reader
+    destination = tmp_path / "evidence.bin"
+    destination.write_bytes(b"old evidence")
+
+    with pytest.raises(ExtractError, match="size limit"):
+        backend.extract(
+            "/EVIDENCE.BIN",
+            destination,
+            limits=ExtractionLimits(max_file_size=6),
+        )
+
+    assert reader.calls == []
+    assert backend.read_calls == 0
+    assert destination.read_bytes() == b"old evidence"
+
+    backend.extract(
+        "/EVIDENCE.BIN",
+        destination,
+        limits=ExtractionLimits(max_file_size=7, max_total_size=7),
+    )
+    assert destination.read_bytes() == b"payload"
+    assert reader.calls == [
+        ("/EVIDENCE.BIN", 0, 3),
+        ("/EVIDENCE.BIN", 3, 3),
+        ("/EVIDENCE.BIN", 6, 1),
+    ]
 
 
 def test_rwbackend_extract_refuses_destination_symlink_before_reading_source(tmp_path):

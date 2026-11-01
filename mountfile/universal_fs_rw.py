@@ -50,7 +50,7 @@ from mountfile.capabilities import (
     RW_READ_CAPABILITIES,
     RW_WRITE_CAPABILITIES,
 )
-from mountfile.extract import extract_file
+from mountfile.extract import ExtractionLimits, extract_file
 from mountfile.rw.journal import Journal as _VerifiedJournal
 from mountfile.safety import (
     RefusalCode,
@@ -435,16 +435,23 @@ class ImageBackup:
 # 3. БАЗОВЫЙ КЛАСС ЧТЕНИЯ/ЗАПИСИ
 # =============================================================================
 class _RWBackendExtractionProvider:
-    """Adapt the existing whole-file read API to the hardened destination writer.
+    """Adapt RWBackend reads to the hardened destination writer.
 
     Do not require ``stat`` here: some backends resolve names case-insensitively
     while the generic RWBackend.stat performs an exact-case directory lookup.
-    Like the original extract implementation, this adapter buffers the complete
-    file and leaves source validation to the backend's read implementation.
+    Use a backend reader's bounded range API where available, and retain the
+    whole-file compatibility path for backends exposing only ``read``.
     """
 
     def __init__(self, backend: RWBackend):
         self._backend = backend
+        reader = getattr(backend, "_reader", None)
+        file_size = getattr(reader, "file_size", None)
+        read_range = getattr(reader, "read_file_range", None)
+        if callable(file_size) and callable(read_range):
+            self.file_size = file_size
+            self.read_file_range = read_range
+            self.max_read_range_bytes = getattr(reader, "max_read_range_bytes", 1 << 20)
 
     def read_file(self, path: str) -> bytes:
         return self._backend.read(path)
@@ -521,9 +528,15 @@ class RWBackend(ABC):
                 return e
         return None
 
-    def extract(self, path: str, dest: Path) -> Path:
+    def extract(
+        self,
+        path: str,
+        dest: Path,
+        *,
+        limits: ExtractionLimits | None = None,
+    ) -> Path:
         dest = Path(dest)
-        extract_file(_RWBackendExtractionProvider(self), path, dest)
+        extract_file(_RWBackendExtractionProvider(self), path, dest, limits=limits)
         return dest
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
@@ -2859,8 +2872,14 @@ class UniversalFSRW:
     def read(self, path: str) -> bytes:
         return self.backend.read(path)
 
-    def extract(self, path: str, dest: Path) -> Path:
-        return self.backend.extract(path, dest)
+    def extract(
+        self,
+        path: str,
+        dest: Path,
+        *,
+        limits: ExtractionLimits | None = None,
+    ) -> Path:
+        return self.backend.extract(path, dest, limits=limits)
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
         yield from self.backend.walk(path)

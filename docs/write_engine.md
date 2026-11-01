@@ -46,6 +46,37 @@ are ignored as required by exFAT. The reader never writes the image. Mutations
 are provided separately through the explicitly bounded `NativeExfatRW` writer
 described below.
 
+### Bounded extraction
+
+`mountfile.extract.extract_path()` and `extract_file()` apply `ExtractionLimits`
+by default: 1 GiB per file, 4 GiB total for a tree, 100,000 regular files,
+200,000 directory entries, and 64 nested directory levels. Callers may pass a
+stricter policy explicitly:
+
+```python
+from mountfile.extract import ExtractionLimits, extract_path
+
+extract_path(
+    provider,
+    "/evidence",
+    "./out",
+    limits=ExtractionLimits(
+        max_file_size=256 * 1024 * 1024,
+        max_total_size=1024 * 1024 * 1024,
+        max_files=10_000,
+        max_entries=20_000,
+        max_depth=32,
+    ),
+)
+```
+
+Providers with file-size and range-read APIs are rejected before reading an
+oversized file and copied in bounded chunks. Older whole-file providers retain
+compatibility; their returned payload is checked before it is written, but may
+already have been buffered in memory. Limits do not provide tree-wide rollback:
+files completed before a later limit/error remain in the output directory.
+Host-side extraction limits also do not add filesystem-image write capability.
+
 ### Native exFAT phase-one writes
 
 `UniversalFSRW` exposes `native-exfat-phase1` only for an explicitly bounded
