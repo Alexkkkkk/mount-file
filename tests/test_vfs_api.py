@@ -3,6 +3,11 @@
 
 import pytest
 
+from mountfile.exfat_reader import NativeExfatImage
+from mountfile.ext2_reader import NativeExt2Image
+from mountfile.ext3_reader import NativeExt3Image, NativeExt4Image
+from mountfile.fat_reader import NativeFatImage
+from mountfile.ntfs_reader import NativeNtfsMetadataImage
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
@@ -73,7 +78,13 @@ def test_backend_status_is_explicitly_read_only_and_serialisable():
     assert provider.backend_status == {
         "backend": "_Provider",
         "mode": "read-only",
-        "read_capabilities": ["list", "stat", "read-range", "extract"],
+        "read_capabilities": [
+            "list",
+            "stat",
+            "read-file",
+            "read-range",
+            "extract",
+        ],
         "write_capabilities": [],
         "write_enabled": False,
         "write_rejection_reason": (
@@ -81,6 +92,25 @@ def test_backend_status_is_explicitly_read_only_and_serialisable():
             "bounded writer profile"
         ),
     }
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    [
+        NativeFatImage,
+        NativeExfatImage,
+        NativeExt2Image,
+        NativeExt3Image,
+        NativeExt4Image,
+        NativeNtfsMetadataImage,
+    ],
+)
+def test_native_provider_classes_implement_whole_file_and_range_reads(
+    provider_type,
+):
+    assert callable(getattr(provider_type, "file_size", None))
+    assert callable(getattr(provider_type, "read_file", None))
+    assert callable(getattr(provider_type, "read_file_range", None))
 
 
 def test_native_backend_status_identifies_canonical_matrix_profile():
@@ -91,5 +121,11 @@ def test_native_backend_status_identifies_canonical_matrix_profile():
     status = provider.backend_status
     assert status["profile_id"] == "ext3-native-ro"
     assert status["matrix_version"] >= 1
-    assert status["read_capabilities"] == ["list", "stat", "read-range", "extract"]
+    assert status["read_capabilities"] == [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract",
+    ]
     assert status["write_capabilities"] == []
