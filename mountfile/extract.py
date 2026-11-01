@@ -14,6 +14,7 @@ import os
 import secrets
 import stat
 import tempfile
+import unicodedata
 
 __all__ = ["ExtractError", "extract_file", "extract_path"]
 
@@ -43,6 +44,31 @@ def _safe_name(name):
 
 def _join(path, name):
     return (path.rstrip("/") + "/" + name) if path != "/" else "/" + name
+
+
+def _checked_directory_entries(provider, path):
+    """Reject sibling names that can map to the same host name.
+
+    Preflight each directory before writing any of its entries. This is
+    deliberately conservative across host filesystems; it does not roll back
+    the complete extraction if a later directory fails.
+    """
+    entries = list(provider.list_dir(path))
+    seen = {}
+    for entry in entries:
+        name = entry["name"]
+        safe_name = _safe_name(name)
+        # Windows ignores trailing spaces and dots; case and Unicode rules also
+        # differ across filesystems. Reject ambiguous names on every platform.
+        key = unicodedata.normalize("NFKC", safe_name).casefold().rstrip(" .")
+        if not key:
+            raise ExtractError("refusing ambiguous destination name %r" % name)
+        if key in seen:
+            raise ExtractError(
+                "destination name collision in %s: %r and %r" % (path, seen[key], name)
+            )
+        seen[key] = name
+    return entries
 
 
 def _normalize_system_path_alias(path):
@@ -86,18 +112,10 @@ def _ensure_directory(path, root=None):
                 ) from exc
             os.close(fd)
             return
-        try:
-            os.makedirs(path, exist_ok=True)
-            mode = os.lstat(path).st_mode
-        except OSError as exc:
-            raise ExtractError(
-                "cannot safely create directory %s: %s" % (path, exc)
-            ) from exc
-        if stat.S_ISLNK(mode):
-            raise ExtractError("refusing to follow destination symlink: %s" % path)
-        if not stat.S_ISDIR(mode):
-            raise ExtractError("destination component is not a directory: %s" % path)
-        return
+        # Avoid following an intermediate link while creating a parent on
+        # platforms without descriptor-relative APIs.
+        drive, _ = os.path.splitdrive(path)
+        root = drive + os.sep
 
     root = os.path.abspath(root)
     path = _ensure_within(path, root)
@@ -116,7 +134,7 @@ def _ensure_directory(path, root=None):
     for component in () if relative == "." else relative.split(os.sep):
         current = os.path.join(current, component)
         try:
-            mode = os.lstat(current).st_mode
+            info = os.lstat(current)
         except FileNotFoundError:
             try:
                 os.mkdir(current)
@@ -124,7 +142,7 @@ def _ensure_directory(path, root=None):
                 # Re-check below: another process may have created a symlink.
                 pass
             try:
-                mode = os.lstat(current).st_mode
+                info = os.lstat(current)
             except OSError as exc:
                 raise ExtractError(
                     "cannot safely create directory %s: %s" % (current, exc)
@@ -133,9 +151,10 @@ def _ensure_directory(path, root=None):
             raise ExtractError(
                 "cannot safely inspect directory %s: %s" % (current, exc)
             ) from exc
-        if stat.S_ISLNK(mode):
+        reparse_point = bool(getattr(info, "st_file_attributes", 0) & 0x400)
+        if stat.S_ISLNK(info.st_mode) or reparse_point:
             raise ExtractError("refusing to follow destination symlink: %s" % current)
-        if not stat.S_ISDIR(mode):
+        if not stat.S_ISDIR(info.st_mode):
             raise ExtractError("destination component is not a directory: %s" % current)
 
 
@@ -291,16 +310,18 @@ def _write_file(provider, src_path, dst_path, root=None):
             os.close(parent_fd)
 
     try:
-        mode = os.lstat(dst_path).st_mode
+        info = os.lstat(dst_path)
     except FileNotFoundError:
-        mode = None
+        info = None
     except OSError as exc:
         raise ExtractError(
             "cannot safely inspect destination file %s: %s" % (dst_path, exc)
         ) from exc
-    if mode is not None and stat.S_ISLNK(mode):
+    if info is not None and (
+        stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400
+    ):
         raise ExtractError("refusing to follow destination symlink: %s" % dst_path)
-    if mode is not None and not stat.S_ISREG(mode):
+    if info is not None and not stat.S_ISREG(info.st_mode):
         raise ExtractError("refusing to replace non-regular destination: %s" % dst_path)
 
     fd, temp_path = tempfile.mkstemp(prefix=".mountfile-", suffix=".tmp", dir=parent)
@@ -374,7 +395,7 @@ def extract_path(provider, src_path, dst_dir, progress=None):
     stack = [(src, base)]
     while stack:
         src_dir, dst_dir_now = stack.pop()
-        for item in provider.list_dir(src_dir):
+        for item in _checked_directory_entries(provider, src_dir):
             child_src = _join(src_dir, item["name"])
             child_dst = _ensure_within(
                 os.path.join(dst_dir_now, _safe_name(item["name"])), root

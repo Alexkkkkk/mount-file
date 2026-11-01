@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
 
-CAPABILITY_MATRIX_VERSION = 3
+CAPABILITY_MATRIX_VERSION = 4
 
 # Read-only providers surfaced through the public VFS API.
 VFS_READ_CAPABILITIES = ("list", "stat", "read-file", "read-range", "extract")
@@ -173,7 +173,10 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "are refused.",
             "No $LogFile replay, sparse, compressed, or encrypted stream support.",
         ),
-        "exfat-native-ro": ("Bounded single-FAT profile with zero VolumeFlags only.",),
+        "exfat-native-ro": (
+            "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
+            "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
+        ),
         "fat32-native-rw": (
             "Native bounded FAT32 writer; put/replace, mkdir, rename, and delete.",
         ),
@@ -183,7 +186,12 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "Sparse, double/triple-indirect, and indirect directory growth are refused.",
         ),
         "exfat-native-rw": (
-            "Single FAT and zero VolumeFlags only; unsupported metadata layouts are refused.",
+            "Bounded one- or two-FAT profile; reads the validated active FAT and "
+            "mirrors FAT writes to all declared copies.",
+            "Allows only a validated ActiveFat selection (VolumeFlags 0x0000, or "
+            "0x0001 with two FATs); refuses dirty, media-failure, ClearToZero, and "
+            "reserved flags.",
+            "Unsupported metadata layouts are refused.",
         ),
     }
 )

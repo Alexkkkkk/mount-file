@@ -50,6 +50,7 @@ from mountfile.capabilities import (
     RW_READ_CAPABILITIES,
     RW_WRITE_CAPABILITIES,
 )
+from mountfile.extract import extract_file
 from mountfile.rw.journal import Journal as _VerifiedJournal
 from mountfile.safety import (
     RefusalCode,
@@ -433,6 +434,22 @@ class ImageBackup:
 # =============================================================================
 # 3. БАЗОВЫЙ КЛАСС ЧТЕНИЯ/ЗАПИСИ
 # =============================================================================
+class _RWBackendExtractionProvider:
+    """Adapt the existing whole-file read API to the hardened destination writer.
+
+    Do not require ``stat`` here: some backends resolve names case-insensitively
+    while the generic RWBackend.stat performs an exact-case directory lookup.
+    Like the original extract implementation, this adapter buffers the complete
+    file and leaves source validation to the backend's read implementation.
+    """
+
+    def __init__(self, backend: RWBackend):
+        self._backend = backend
+
+    def read_file(self, path: str) -> bytes:
+        return self._backend.read(path)
+
+
 class RWBackend(ABC):
     """Unified read/write interface."""
 
@@ -505,10 +522,8 @@ class RWBackend(ABC):
         return None
 
     def extract(self, path: str, dest: Path) -> Path:
-        data = self.read(path)
         dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        extract_file(_RWBackendExtractionProvider(self), path, dest)
         return dest
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
