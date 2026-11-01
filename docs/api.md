@@ -41,6 +41,10 @@ file carving. SQLite хранит SHA-256, дедуплицированные ch
 case-insensitive lookup. NTFS использует проверенную таблицу `$UpCase` для
 Unicode-сравнения, если её bounded stream доступен; иначе Unicode-имена требуют
 точного регистра. Для ext namespace lookup остаётся case-sensitive.
+В capability matrix токен `read-file` означает чтение всего файла методом
+`read_file`, а `read-range` — отдельный bounded вызов `read_file_range`; ни один
+из них не подразумевается наличием другого. Добавление этих операций в
+сериализуемую матрицу повышает её schema version до 3.
 Каждый native provider также публикует `backend_status`: сериализуемый словарь
 с backend name, read/write capabilities, режимом и явной причиной отказа от
 записи. Пустой `write_capabilities` означает именно read-only native profile,

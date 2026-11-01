@@ -57,6 +57,21 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
             assert profile.write_capabilities == RW_WRITE_CAPABILITIES
 
 
+def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
+    assert CAPABILITY_MATRIX_VERSION == 3
+    assert VFS_READ_CAPABILITIES == (
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract",
+    )
+    for profile in NATIVE_CAPABILITY_MATRIX:
+        if profile.interface == "vfs":
+            assert "read-file" in profile.read_capabilities
+            assert "read-range" in profile.read_capabilities
+
+
 def test_matrix_exposes_profile_gates_and_does_not_advertise_unsafe_writers():
     profiles = {
         profile["profile_id"]: profile

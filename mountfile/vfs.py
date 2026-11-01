@@ -5,7 +5,8 @@
 """Read-only, bounded filesystem providers for raw images.
 
 Native providers cover selected profiles of FAT12/16/32, ext2/3/4, exFAT and
-NTFS. Every provider follows the shared list/stat/read-range/extract contract.
+NTFS. Every provider follows the shared list/stat/read-file/read-range/extract
+contract.
 ``TskImage`` is an explicitly optional compatibility fallback for unrecognized
 formats; a recognized but unsupported or malformed native profile is rejected
 without falling through to a different parser. Native NTFS browsing and all
