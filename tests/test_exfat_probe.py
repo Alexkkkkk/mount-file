@@ -103,12 +103,17 @@ def _refresh_exfat_region_checksums(region, sector_size):
 @st.composite
 def _generated_exfat_geometry_cases(draw):
     cluster_count = draw(st.integers(min_value=1, max_value=128))
+    main_flags = draw(st.integers(min_value=0, max_value=0x0F))
+    number_of_fats = draw(st.integers(min_value=1, max_value=2))
+    if main_flags & 1:
+        number_of_fats = 2
     return {
         "sector_size": draw(st.sampled_from((512, 1024, 2048, 4096))),
         "cluster_shift": draw(st.integers(min_value=0, max_value=13)),
         "cluster_count": cluster_count,
         "root_cluster": draw(st.integers(min_value=2, max_value=cluster_count + 1)),
-        "main_flags": draw(st.integers(min_value=0, max_value=0x0F)),
+        "main_flags": main_flags,
+        "number_of_fats": number_of_fats,
         "main_percent": draw(st.integers(min_value=0, max_value=100)),
         "backup_flags": draw(st.integers(min_value=0, max_value=0x0F)),
         "backup_percent": draw(st.integers(min_value=0, max_value=255)),
@@ -118,17 +123,21 @@ def _generated_exfat_geometry_cases(draw):
 def _generated_valid_exfat_region(case):
     sector_size = case["sector_size"]
     sectors_per_cluster = 1 << case["cluster_shift"]
-    volume_length = 32 + case["cluster_count"] * sectors_per_cluster
+    number_of_fats = case["number_of_fats"]
+    heap_sector = 24 + 8 * number_of_fats
+    volume_length = heap_sector + case["cluster_count"] * sectors_per_cluster
     region = bytearray(_region(sector_size))
     for start, flags, percent in (
         (0, case["main_flags"], case["main_percent"]),
         (12 * sector_size, case["backup_flags"], case["backup_percent"]),
     ):
         struct.pack_into("<Q", region, start + 0x48, volume_length)
+        struct.pack_into("<I", region, start + 0x58, heap_sector)
         struct.pack_into("<I", region, start + 0x5C, case["cluster_count"])
         struct.pack_into("<I", region, start + 0x60, case["root_cluster"])
         struct.pack_into("<H", region, start + 0x6A, flags)
         region[start + 0x6D] = case["cluster_shift"]
+        region[start + 0x6E] = number_of_fats
         region[start + 0x70] = percent
     _refresh_exfat_region_checksums(region, sector_size)
     return bytes(region), volume_length * sector_size
@@ -172,6 +181,7 @@ def test_generated_exfat_geometry_and_backup_status_are_bounded(case):
     assert profile.cluster_size <= 32 * 1024 * 1024
     assert profile.volume_length * profile.bytes_per_sector == volume_size
     assert profile.cluster_count == case["cluster_count"]
+    assert profile.number_of_fats == case["number_of_fats"]
     assert profile.root_cluster == case["root_cluster"]
     assert profile.volume_flags == case["main_flags"]
     assert profile.percent_in_use == case["main_percent"]
@@ -466,41 +476,64 @@ def test_exfat_range_read_rejects_chain_shorter_than_requested_range():
         reader.read_file_range("/FILE", 1024, 512)
 
 
-def test_native_exfat_reader_rejects_unvalidated_multiple_fats(tmp_path):
-    region = bytearray(_region())
-    for start in (0, 12 * 512):
-        region[start + 0x6E] = 2
-        struct.pack_into("<I", region, start + 0x58, 40)
-        checksum = exfat_boot_checksum(
-            bytes(region[start : start + 11 * 512]), sector_size=512
-        )
-        for offset in range(0, 512, 4):
-            struct.pack_into("<I", region, start + 11 * 512 + offset, checksum)
+def test_native_exfat_reader_uses_selected_second_fat(tmp_path):
     path = tmp_path / "exfat-two-fats.img"
-    path.write_bytes(region + bytes(VOLUME_SIZE - len(region)))
+    payload = _tree_image(path, number_of_fats=2, volume_flags=0x0001)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.profile.number_of_fats == 2
+        assert provider.profile.active_fat == 1
+        assert provider.read_file("/HELLO.TXT") == payload
+    finally:
+        provider.close()
 
-    with pytest.raises(ExfatReadError, match="only single-FAT"):
-        NativeExfatImage(path, volume_size=VOLUME_SIZE)
 
-
-@pytest.mark.parametrize("flags", [0x0001, 0x0002, 0x0004, 0x0008, 0x8000])
-def test_native_exfat_reader_rejects_nonzero_volume_flags(tmp_path, flags):
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        (0x0001, "active FAT"),
+        (0x0002, "volume is dirty"),
+        (0x0004, "media failure"),
+        (0x8000, "reserved bits"),
+    ],
+)
+def test_native_exfat_reader_rejects_unsafe_volume_flags(tmp_path, flags, message):
     path = tmp_path / f"exfat-flags-{flags:04x}.img"
     _image_with_volume_flags(path, flags)
 
-    with pytest.raises(ExfatReadError, match="nonzero volume flags"):
+    with pytest.raises(ExfatReadError, match=message):
         NativeExfatImage(path, volume_size=VOLUME_SIZE)
 
 
-@pytest.mark.parametrize("flags", [0x0001, 0x0002, 0x0004, 0x0008, 0x8000])
-def test_native_exfat_writer_rejects_nonzero_volume_flags_without_mutation(
-    tmp_path, flags
+def test_native_exfat_reader_allows_clear_to_zero_flag_read_only(tmp_path):
+    path = tmp_path / "exfat-clear-to-zero.img"
+    payload = _tree_image(path, volume_flags=0x0008)
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.read_file("/HELLO.TXT") == payload
+        assert provider.write_capabilities == ()
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        (0x0001, "active FAT"),
+        (0x0002, "volume is dirty"),
+        (0x0004, "media failure"),
+        (0x0008, "ClearToZero"),
+        (0x8000, "reserved bits"),
+    ],
+)
+def test_native_exfat_writer_rejects_unsafe_volume_flags_without_mutation(
+    tmp_path, flags, message
 ):
     path = tmp_path / f"exfat-writer-flags-{flags:04x}.img"
     _image_with_volume_flags(path, flags)
     before = path.read_bytes()
 
-    with pytest.raises(ExfatWriteError, match="nonzero volume flags"):
+    with pytest.raises(ExfatWriteError, match=message):
         NativeExfatWriter(path, volume_size=VOLUME_SIZE)
 
     assert path.read_bytes() == before
@@ -573,13 +606,27 @@ def test_exfat_writer_directory_records_use_bounded_reader_limit(monkeypatch):
     assert reads == [(1024, 512)]
 
 
-def _tree_image(path, *, valid_data_length=None):
+def _tree_image(path, *, valid_data_length=None, number_of_fats=1, volume_flags=0):
+    active_fat = volume_flags & 1
+    if number_of_fats not in (1, 2) or active_fat >= number_of_fats:
+        raise ValueError("invalid synthetic exFAT FAT selection")
     region = bytearray(VOLUME_SIZE)
-    region[: 24 * 512] = _region()
-    struct.pack_into("<I", region, 24 * 512 + 2 * 4, 0xFFFFFFFF)
-    struct.pack_into("<I", region, 24 * 512 + 3 * 4, 0xFFFFFFFF)
-    struct.pack_into("<I", region, 24 * 512 + 4 * 4, 0xFFFFFFFF)
-    struct.pack_into("<I", region, 24 * 512 + 5 * 4, 0xFFFFFFFF)
+    boot_regions = bytearray(_region())
+    heap_sector = 24 + 8 * number_of_fats
+    for start in (0, 12 * 512):
+        struct.pack_into("<I", boot_regions, start + 0x58, heap_sector)
+        struct.pack_into("<H", boot_regions, start + 0x6A, volume_flags)
+        boot_regions[start + 0x6E] = number_of_fats
+    _refresh_exfat_region_checksums(boot_regions, 512)
+    region[: 24 * 512] = boot_regions
+    for fat_index in range(number_of_fats):
+        fat_start = (24 + fat_index * 8) * 512
+        for cluster in range(2, 6):
+            struct.pack_into("<I", region, fat_start + cluster * 4, 0xFFFFFFFF)
+    if number_of_fats == 2:
+        inactive_fat_start = (24 + (1 - active_fat) * 8) * 512
+        for cluster in range(2, 6):
+            struct.pack_into("<I", region, inactive_fat_start + cluster * 4, 0)
     root = bytearray(512)
     root[0] = 0x81
     struct.pack_into("<I", root, 20, 4)
@@ -611,10 +658,11 @@ def _tree_image(path, *, valid_data_length=None):
     root[128] = 0xC1
     root[130:148] = "HELLO.TXT".encode("utf-16le")
     struct.pack_into("<H", root, 66, _entry_set_checksum(root[64:160]))
-    region[32 * 512 : 33 * 512] = root
-    region[33 * 512 : 33 * 512 + len(payload)] = payload
-    region[34 * 512 : 35 * 512] = b"\x0f" + bytes(511)
-    region[35 * 512 : 35 * 512 + len(upcase_data)] = upcase_data
+    heap_offset = heap_sector * 512
+    region[heap_offset : heap_offset + 512] = root
+    region[heap_offset + 512 : heap_offset + 512 + len(payload)] = payload
+    region[heap_offset + 1024 : heap_offset + 1536] = b"\x0f" + bytes(511)
+    region[heap_offset + 1536 : heap_offset + 1536 + len(upcase_data)] = upcase_data
     path.write_bytes(region)
     return payload
 

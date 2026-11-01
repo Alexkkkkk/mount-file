@@ -105,12 +105,10 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             self.profile = probe_exfat_boot_region(
                 self.image_path, offset=self.offset, volume_size=volume_size
             )
-            if self.profile.volume_flags != 0:
-                raise ExfatReadError("native exFAT reader rejects nonzero volume flags")
-            if self.profile.number_of_fats != 1:
-                raise ExfatReadError(
-                    "native exFAT reader supports only single-FAT volumes"
-                )
+            if self.profile.volume_flags & 0x0002:
+                raise ExfatReadError("exFAT volume is dirty and requires recovery")
+            if self.profile.volume_flags & 0x0004:
+                raise ExfatReadError("exFAT volume reports media failure")
             self.volume_end = (
                 self.offset + self.profile.volume_length * self.profile.bytes_per_sector
             )
@@ -165,7 +163,9 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _fat_entry(self, cluster):
         if not 2 <= cluster <= self.profile.cluster_count + 1:
             raise ExfatReadError("exFAT cluster is outside the data heap")
-        relative = self.profile.fat_offset * self.profile.bytes_per_sector + cluster * 4
+        relative = (
+            self.profile.fat_offset + self.profile.active_fat * self.profile.fat_length
+        ) * self.profile.bytes_per_sector + cluster * 4
         return struct.unpack_from("<I", self._read_rel(relative, 4), 0)[0]
 
     def _cluster_offset(self, cluster):
