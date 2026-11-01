@@ -288,6 +288,26 @@ class APFSFuseAdapter:
     def mountpoint(self) -> Optional[str]:
         return str(self._mountpoint) if self._mountpoint is not None else None
 
+    @property
+    def status(self) -> dict[str, object]:
+        """Return conservative mount and read-only capabilities without mounting."""
+
+        process = self._process
+        process_owned = process is not None
+        process_running = process_owned and process.poll() is None
+        mounted = self._mountpoint is not None and process_running
+        return {
+            "filesystem": self.filesystem,
+            "read_only": True,
+            "writable": False,
+            "write_capabilities": [],
+            "mount_required": True,
+            "mounted": mounted,
+            "mountpoint": self.mountpoint,
+            "process_owned": process_owned,
+            "process_running": process_running,
+        }
+
     def mount(self, mountpoint: PathLike, startup_timeout: float = 5.0) -> str:
         """Explicitly mount into an existing absolute directory and return it.
 

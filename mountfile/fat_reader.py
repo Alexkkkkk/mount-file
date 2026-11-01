@@ -334,19 +334,13 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             + self.profile.active_fat_index * self.fat_size
         )
         if self.fat_type == 12:
-            raw = self._read_at(
-                fat_offset + (cluster * 3) // 2, 2
-            )
+            raw = self._read_at(fat_offset + (cluster * 3) // 2, 2)
             value = struct.unpack_from("<H", raw, 0)[0]
             return (value >> 4) if cluster & 1 else (value & 0x0FFF)
         if self.fat_type == 16:
-            raw = self._read_at(
-                fat_offset + cluster * 2, 2
-            )
+            raw = self._read_at(fat_offset + cluster * 2, 2)
             return struct.unpack_from("<H", raw, 0)[0]
-        raw = self._read_at(
-            fat_offset + cluster * 4, 4
-        )
+        raw = self._read_at(fat_offset + cluster * 4, 4)
         return struct.unpack_from("<I", raw, 0)[0] & 0x0FFFFFFF
 
     def _is_eoc(self, value: int) -> bool:
