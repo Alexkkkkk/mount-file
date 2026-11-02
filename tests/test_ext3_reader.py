@@ -181,9 +181,9 @@ def _make_revoke_journal_image(
         *([0] * (15 - len(physical_blocks))),
     )
 
-    journal = memoryview(
-        image
-    )[40 * BLOCK_SIZE : (40 + journal_block_count) * BLOCK_SIZE]
+    journal = memoryview(image)[
+        40 * BLOCK_SIZE : (40 + journal_block_count) * BLOCK_SIZE
+    ]
     struct.pack_into(">III", journal, 0, 0xC03B3998, 3, 0xA5A5A5A5)
     struct.pack_into(">II", journal, 12, BLOCK_SIZE, journal_block_count)
     struct.pack_into(">I", journal, 20, 1)
@@ -219,19 +219,13 @@ def _make_revoke_journal_image(
         if revokes:
             revoke_logicals.append(logical)
             revoke_offset = logical * BLOCK_SIZE
-            struct.pack_into(
-                ">III", journal, revoke_offset, 0xC03B3998, 5, sequence
-            )
-            struct.pack_into(
-                ">I", journal, revoke_offset + 12, 16 + 4 * len(revokes)
-            )
+            struct.pack_into(">III", journal, revoke_offset, 0xC03B3998, 5, sequence)
+            struct.pack_into(">I", journal, revoke_offset + 12, 16 + 4 * len(revokes))
             for index, target in enumerate(revokes):
                 struct.pack_into(">I", journal, revoke_offset + 16 + index * 4, target)
             logical += 1
         commit_offset = logical * BLOCK_SIZE
-        struct.pack_into(
-            ">III", journal, commit_offset, 0xC03B3998, 2, sequence
-        )
+        struct.pack_into(">III", journal, commit_offset, 0xC03B3998, 2, sequence)
         logical += 1
 
     if logical >= journal_block_count:
@@ -449,9 +443,10 @@ def test_jbd2_revoke_suppresses_earlier_transaction_overlay(tmp_path):
     try:
         assert provider.journal_replayed is True
         assert 3 not in provider._journal_overlay
-        assert provider._read_at(3 * BLOCK_SIZE, BLOCK_SIZE) == original[
-            3 * BLOCK_SIZE : 4 * BLOCK_SIZE
-        ]
+        assert (
+            provider._read_at(3 * BLOCK_SIZE, BLOCK_SIZE)
+            == original[3 * BLOCK_SIZE : 4 * BLOCK_SIZE]
+        )
         assert image_path.read_bytes() == original
     finally:
         provider.close()
@@ -533,9 +528,7 @@ def test_jbd2_revoke_rejects_out_of_range_target(tmp_path, revoke_target):
         [(7, [], [4])],
     ],
 )
-def test_clean_journal_validates_bounded_revoke_transactions(
-    tmp_path, transactions
-):
+def test_clean_journal_validates_bounded_revoke_transactions(tmp_path, transactions):
     image_path = tmp_path / "clean-revoke-journal.img"
     _make_revoke_journal_image(
         image_path,
@@ -544,9 +537,7 @@ def test_clean_journal_validates_bounded_revoke_transactions(
         journal_start=0,
     )
 
-    provider = NativeExt3Image(
-        image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE
-    )
+    provider = NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
     try:
         assert provider.journal_replayed is False
         assert provider._journal_overlay == {}

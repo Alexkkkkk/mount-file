@@ -177,11 +177,7 @@ class NativeExt3Image(NativeExt2Image):
         if len(record) < 16:
             raise Ext3ReadError("short JBD2 revoke record")
         byte_count = struct.unpack_from(">I", record, 12)[0]
-        if (
-            byte_count < 16
-            or byte_count > len(record)
-            or (byte_count - 16) % 4
-        ):
+        if byte_count < 16 or byte_count > len(record) or (byte_count - 16) % 4:
             raise Ext3ReadError("JBD2 revoke record has invalid byte count")
         targets = []
         seen = set()
@@ -236,9 +232,7 @@ class NativeExt3Image(NativeExt2Image):
                 cursor += 8
                 tag_count += 1
                 if block_number == 0 or block_number >= self.blocks_count:
-                    raise Ext3ReadError(
-                        "JBD2 descriptor block is outside filesystem"
-                    )
+                    raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
                 if block_number in target_blocks:
                     raise Ext3ReadError(
                         "JBD2 transaction targets a block more than once"
@@ -289,7 +283,9 @@ class NativeExt3Image(NativeExt2Image):
                 control, sequence, journal_data_blocks
             ):
                 if target in revoked_blocks:
-                    raise Ext3ReadError("JBD2 revoke target is duplicated in transaction")
+                    raise Ext3ReadError(
+                        "JBD2 revoke target is duplicated in transaction"
+                    )
                 if target in target_blocks:
                     raise Ext3ReadError(
                         "JBD2 transaction both writes and revokes the same block"
@@ -445,6 +441,7 @@ class NativeExt3Image(NativeExt2Image):
                 raise Ext3ReadError(
                     "JBD2 replay descriptor sequence disagrees with superblock"
                 )
+
             def ring_position(relative):
                 return first + ((logical - first + relative) % ring_length)
 
@@ -460,9 +457,7 @@ class NativeExt3Image(NativeExt2Image):
                     target, flags = struct.unpack_from(">II", record, cursor)
                     cursor += 8
                     if target == 0 or target >= self.blocks_count:
-                        raise Ext3ReadError(
-                            "JBD2 replay target is outside filesystem"
-                        )
+                        raise Ext3ReadError("JBD2 replay target is outside filesystem")
                     if target in seen_targets:
                         raise Ext3ReadError(
                             "JBD2 replay transaction targets a block more than once"
@@ -479,16 +474,9 @@ class NativeExt3Image(NativeExt2Image):
                         raise Ext3ReadError("unsupported JBD2 replay tag flags")
                     if not flags & _JBD2_TAG_SAME_UUID:
                         if cursor + 16 > self.block_size:
-                            raise Ext3ReadError(
-                                "truncated JBD2 replay descriptor UUID"
-                            )
-                        if (
-                            record[cursor : cursor + 16]
-                            != self.profile.filesystem_uuid
-                        ):
-                            raise Ext3ReadError(
-                                "JBD2 replay descriptor UUID mismatch"
-                            )
+                            raise Ext3ReadError("truncated JBD2 replay descriptor UUID")
+                        if record[cursor : cursor + 16] != self.profile.filesystem_uuid:
+                            raise Ext3ReadError("JBD2 replay descriptor UUID mismatch")
                         cursor += 16
                     targets.append(target)
                     if flags & _JBD2_TAG_LAST:
@@ -510,9 +498,7 @@ class NativeExt3Image(NativeExt2Image):
                 writes = list(zip(targets, data_blocks))
             else:
                 revokes.update(
-                    self._parse_jbd2_revoke(
-                        record, sequence, journal_data_blocks
-                    )
+                    self._parse_jbd2_revoke(record, sequence, journal_data_blocks)
                 )
                 records_before_control = 1
 
