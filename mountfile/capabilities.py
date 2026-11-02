@@ -313,6 +313,8 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         "exfat-native-ro": (
             "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
             "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
+            "A present root volume-label entry is validated; malformed or duplicate "
+            "labels are refused.",
         ),
         "fat12-16-native-rw": (
             "Native bounded FAT12/FAT16 writer with packed and mirrored FAT updates.",
@@ -333,6 +335,7 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "0x0001 with two FATs); refuses dirty, media-failure, ClearToZero, and "
             "reserved flags.",
             "Unsupported metadata layouts are refused.",
+            "A single root volume label is validated and exposed through FSInfo.label.",
         ),
     }
 )

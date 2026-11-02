@@ -124,6 +124,8 @@ def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
     assert profiles["exfat-native-ro"]["constraints"] == [
         "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
         "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
+        "A present root volume-label entry is validated; malformed or duplicate "
+        "labels are refused.",
     ]
     assert profiles["exfat-native-rw"]["constraints"] == [
         "Bounded one- or two-FAT profile; reads the validated active FAT and "
@@ -132,6 +134,7 @@ def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
         "0x0001 with two FATs); refuses dirty, media-failure, ClearToZero, and "
         "reserved flags.",
         "Unsupported metadata layouts are refused.",
+        "A single root volume label is validated and exposed through FSInfo.label.",
     ]
 
     reader = NativeExfatImage.__new__(NativeExfatImage)
