@@ -40,13 +40,13 @@ Inode number проверять в `1..inodes_count`; inode читать цел�
 
 ## 5. JBD2 state и recovery detection
 
-Добавить отдельный bounded JBD2 reader; on-disk JBD2 поля — big-endian. Проверять magic `0xC03B3998`, block type 3/4, journal block size, `s_first`, `s_maxlen`, `s_start`, sequence, ring bounds, UUID и journal feature bits. Revoke, 64-bit, async commit, checksum v2/v3 и fast commit разрешать только после реализации, иначе reject.
+Добавить отдельный bounded JBD2 reader; on-disk JBD2 поля — big-endian. Проверять magic `0xC03B3998`, block type 3/4, journal block size, `s_first`, `s_maxlen`, `s_start`, sequence, ring bounds, UUID и journal feature bits. Classic 32-bit revoke records разрешены только после строгой проверки targets; 64-bit, async commit, checksum v2/v3 и fast commit остаются reject.
 
 В superblock `s_first` находится по offset `0x14`, `s_sequence` — `0x18`, а `s_start` — `0x1c`. Третий word общего header по offset `0x08` не заменяет `s_sequence`; fixtures должны задавать эти поля независимо.
 
 `EXT*_INCOMPAT_RECOVER`, dirty `s_state`, error state и fast commit означают отказ; ограниченный overlay не снимает эти gates и не считается recovery. `jbd2.s_start == 0` сам по себе не доказывает clean journal. Требуется доказать пустой корректный ring по geometry/sequence/head/tail либо полностью просканировать ring и доказать отсутствие валидной незаписанной транзакции. Текущий opt-in replay принимает только ограниченную линейную последовательность classic descriptor/data/commit records и публикует overlay лишь после успешной проверки всей принятой последовательности.
 
-Неполный transaction, повреждённый header, неизвестный block type или непроверяемый checksum означают отказ. Текущий ограниченный replay не поддерживает ring wraparound, revoke records, checksummed/64-bit/fast-commit feature bits или общую проверку head/tail; такие профили должны оставаться неподдержанными и fail-closed. Overlay атомарен только как read-only in-memory view после полной проверки принятого линейного префикса; это не доказывает, что транзакции checkpointed, и не является заменой полноценному JBD2 recovery. Не писать journal и не менять superblock. Native writes запрещены до реализации ordering, checkpointing, revoke handling, checksums и crash-injection tests.
+Неполный transaction, повреждённый header, неизвестный block type или непроверяемый checksum означают отказ. Текущий ограниченный replay не поддерживает ring wraparound, checksummed/64-bit/fast-commit feature bits или общую проверку head/tail; такие профили должны оставаться неподдержанными и fail-closed. Classic 32-bit revoke records проверяются на корректный count, границы образа, дубликаты, journal-data overlap и конфликт с writes той же транзакции. Overlay атомарен только как read-only in-memory view после полной проверки принятого линейного префикса; это не доказывает, что транзакции checkpointed, и не является заменой полноценному JBD2 recovery. Не писать journal и не менять superblock. Native writes запрещены до реализации ordering, checkpointing, checksums и crash-injection tests.
 
 ## 6. Checksum invariants
 
@@ -119,6 +119,6 @@ Read-only phase complete only when every accepted feature maps to a tested capab
 
 ### Реализованный milestone
 
-Добавлен bounded ext4 extent-tree profile: проверяются magic, entry limits, depth consistency, sorted index keys, cycle avoidance, logical/physical bounds, holes и unwritten extents. `64BIT`, metadata checksums, htree и fast commit остаются fail-closed. Для ext3 добавлен отдельный opt-in memory-only replay узкого classic JBD2 формата; он не поддерживает wraparound/revoke/checksums, не предназначен для dirty/recovery-required volumes и остаётся fail-closed по умолчанию.
+Добавлен bounded ext4 extent-tree profile: проверяются magic, entry limits, depth consistency, sorted index keys, cycle avoidance, logical/physical bounds, holes и unwritten extents. `64BIT`, metadata checksums, htree и fast commit остаются fail-closed. Для ext3 добавлен отдельный opt-in memory-only replay узкого classic JBD2 формата с проверенными 32-bit revoke records; он не поддерживает wraparound/checksums, не предназначен для dirty/recovery-required volumes и остаётся fail-closed по умолчанию.
 
 Для профилей с `resize_inode` bounded reader также учитывает `s_reserved_gdt_blocks`: primary и backup reserved-GDT интервалы исключаются из ext2/ext3/ext4 data-block references, а выход диапазона за группу и ненулевой reserved-GDT count без `resize_inode` отвергаются. Это только защита read-only parsing; online resize и любые journaled writes не поддерживаются.

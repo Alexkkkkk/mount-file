@@ -65,8 +65,10 @@ feature gates профиля; они не заменяют фактическу�
 другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
 проверенного classic JBD2 существует только явный `open_native_ext3(...,
 replay_journal=True)`: он строит bounded in-memory overlay из committed
-descriptor/data/commit records, не изменяет исходный образ и отклоняет revoke,
+descriptor/data/revoke/commit records, не изменяет исходный образ и отклоняет
 checksum, неизвестные feature flags, повреждённые или неполные транзакции.
+Revoke targets проверяются на границы образа, дубликаты, пересечение с journal
+data и конфликт с записями той же транзакции.
 
 NTFS reader разрешает resident `$ATTRIBUTE_LIST` и extension FILE records для
 обычных файлов и каталогов только после проверки sequence-bearing MFT reference,
