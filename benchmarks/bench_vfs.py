@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from importlib import metadata
 import json
 import platform
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -71,6 +73,29 @@ def _provider_profile(provider) -> dict:
             result[field] = value
     result["backend"] = getattr(provider, "backend_name", type(provider).__name__)
     return result
+
+
+def _runtime_versions() -> dict:
+    """Capture optional backend version and source revision for provenance."""
+    try:
+        pytsk3_version = metadata.version("pytsk3")
+    except metadata.PackageNotFoundError:
+        pytsk3_version = None
+
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        revision = None
+    else:
+        revision = result.stdout.strip() or None
+    return {"pytsk3": pytsk3_version, "source_revision": revision}
 
 
 def _quantile(values: list[float], percentile: float) -> float | None:
@@ -350,6 +375,7 @@ def build_report(
             "python": sys.version.split()[0],
             "implementation": platform.python_implementation(),
             "platform": platform.platform(),
+            "runtime_versions": _runtime_versions(),
         },
         "image": {
             "path": str(image),
