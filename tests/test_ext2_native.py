@@ -121,6 +121,48 @@ def test_native_ext2_single_indirect_file_roundtrip_and_reclamation(
     _assert_e2fsck_clean(image)
 
 
+@pytest.mark.parametrize("block_size", [1024, 2048, 4096])
+def test_native_ext2_double_indirect_file_roundtrip_replace_and_delete(
+    tmp_path, block_size
+):
+    image = tmp_path / "double-indirect.ext2"
+    _make_ext2(image, size=64 * 1024 * 1024, block_size=block_size)
+    writer = NativeExt2ImageWriter(image)
+    entries_per_block = block_size // 4
+    size = (12 + entries_per_block + 17) * block_size + 37
+    payload = bytes(index % 251 for index in range(size))
+
+    writer.write_file("/double.bin", payload)
+    assert writer.read_file("/double.bin") == payload
+    inode_number = next(
+        entry["inode"]
+        for entry in writer.list_dir("/")
+        if entry["name"] == "double.bin"
+    )
+    raw = writer._fs._read_inode(inode_number)
+    assert writer._fs._u32(raw, 40 + 13 * 4) != 0
+    assert (
+        len(
+            writer._fs._inode_blocks(
+                raw, allow_indirect=True, allow_double_indirect=True
+            )
+        )
+        == (size + block_size - 1) // block_size
+    )
+    assert len(writer._fs._inode_pointer_blocks(raw, allow_double_indirect=True)) >= 3
+    _assert_e2fsck_clean(image)
+
+    writer.write_file("/double.bin", b"small replacement")
+    assert writer.read_file("/double.bin") == b"small replacement"
+    raw = writer._fs._read_inode(inode_number)
+    assert writer._fs._inode_pointer_blocks(raw, allow_double_indirect=True) == []
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/double.bin")
+    assert "double.bin" not in {item["name"] for item in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
 def test_native_ext2_directory_grows_through_single_indirect_block(
     tmp_path, monkeypatch
 ):
@@ -404,9 +446,18 @@ def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
 
     with pytest.raises(NativeExt2Error, match="traversal"):
         writer.write_file("/../escape", b"bad")
-    max_bytes = (12 + writer.block_size // 4) * writer.block_size
-    with pytest.raises(NativeExt2Error, match="single-indirect"):
-        writer.write_file("/too-large.bin", b"x" * (max_bytes + 1))
+
+    max_bytes = 64 * 1024 * 1024
+
+    class OversizedPayload:
+        def __len__(self):
+            return max_bytes + 1
+
+        def __bytes__(self):
+            raise AssertionError("oversized payload must be rejected before copying")
+
+    with pytest.raises(NativeExt2Error, match="double-indirect"):
+        writer.write_file("/too-large.bin", OversizedPayload())
     assert image.read_bytes() == before
 
 
@@ -963,11 +1014,11 @@ def test_large_file_high_size_is_not_misreported_as_empty(tmp_path):
         )
         == (1 << 32) + 1
     )
-    with pytest.raises(NativeExt2Error, match="single-indirect"):
+    with pytest.raises(NativeExt2Error, match="double-indirect"):
         writer.read_file("/large.bin")
 
 
-def test_native_ext2_rejects_double_indirect_file_blocks(tmp_path):
+def test_native_ext2_rejects_corrupt_double_indirect_file_pointer(tmp_path):
     image = tmp_path / "double-indirect.ext2"
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
@@ -992,7 +1043,7 @@ def test_native_ext2_rejects_double_indirect_file_blocks(tmp_path):
         stream.write((1).to_bytes(4, "little"))
 
     reader = NativeExt2ImageWriter(image)
-    with pytest.raises(NativeExt2Error, match="double/triple"):
+    with pytest.raises(NativeExt2Error, match="double-indirect pointer beyond"):
         reader.read_file("/file.bin")
 
 

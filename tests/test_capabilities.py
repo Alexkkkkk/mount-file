@@ -106,6 +106,10 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
     profiles = {item["profile_id"]: item for item in snapshot["profiles"]}
     ext3_gate_ids = {item["id"] for item in profiles["ext3-native-ro"]["gates"]}
     assert {"bounded-extent", "clean-jbd2-state", "validated-jbd2"} <= ext3_gate_ids
+    assert any(
+        "double-indirect blocks, up to 64 MiB" in constraint
+        for constraint in profiles["ext2-native-rw"]["constraints"]
+    )
     assert profiles["ext3-native-ro"]["operations"]["write-file"]["state"] == "refused"
     assert profiles["exfat-native-rw"]["operations"]["write-file"] == {
         "state": "available",

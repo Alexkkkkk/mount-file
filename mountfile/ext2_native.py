@@ -2,11 +2,12 @@
 """Dependency-free writer for a deliberately small, validated ext2 profile.
 
 The bounded profile supports clean, unjournaled ext2 filesystems using block
-bitmaps, 32-byte group descriptors, the FILETYPE directory-entry format, and
-direct plus single-indirect data pointers for regular files and directories.
-Mutations are staged against a copy of the selected filesystem extent and are
-committed only after structural read-back validation. This module does not claim
-ext3/ext4 support.
+bitmaps, 32-byte group descriptors, and the FILETYPE directory-entry format.
+Regular files use direct, single-indirect, and bounded double-indirect pointers;
+directories remain limited to direct and single-indirect pointers. Mutations are
+staged against a copy of the selected filesystem extent and are committed only
+after structural read-back validation. This module does not claim ext3/ext4
+support.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ _INODE_INDEX = 0x00001000
 _INODE_UNSUPPORTED_FLAGS = _INODE_EXTENTS | _INODE_INDEX | 0x00000024 | 0x00000800
 _DIRECT_BLOCKS = 12
 _CHUNK = 1024 * 1024
+_MAX_NATIVE_EXT2_FILE_SIZE = 64 * 1024 * 1024
 
 
 @contextmanager
@@ -597,8 +599,12 @@ class _Ext2FS:
         bitmap = self._read_at(bitmap_off, self.block_size)
         return self._bit_is_set(bitmap, bit)
 
-    def _max_file_blocks(self) -> int:
-        return _DIRECT_BLOCKS + self.block_size // 4
+    def _max_file_blocks(self, *, allow_double_indirect=False) -> int:
+        entries = self.block_size // 4
+        pointer_capacity = _DIRECT_BLOCKS + entries
+        if allow_double_indirect:
+            pointer_capacity += entries * entries
+        return min(pointer_capacity, _MAX_NATIVE_EXT2_FILE_SIZE // self.block_size)
 
     def _validate_allocated_block(self, block: int, bitmap_cache: dict) -> None:
         if block in self._metadata:
@@ -617,58 +623,114 @@ class _Ext2FS:
             )
 
     def _inode_blocks(
-        self, inode_raw: bytes | bytearray, *, allow_indirect=False
+        self,
+        inode_raw: bytes | bytearray,
+        *,
+        allow_indirect=False,
+        allow_double_indirect=False,
     ) -> list[int]:
         values = struct.unpack_from("<15I", inode_raw, 40)
-        if not allow_indirect and any(values[_DIRECT_BLOCKS:]):
+        if allow_double_indirect:
+            allow_indirect = True
+            if values[_DIRECT_BLOCKS + 2]:
+                raise NativeExt2Error("triple-indirect ext2 files are unsupported")
+        elif not allow_indirect and any(values[_DIRECT_BLOCKS:]):
             raise NativeExt2Error(
                 "indirect blocks are unsupported for this ext2 object"
             )
-        if allow_indirect and any(values[_DIRECT_BLOCKS + 1 :]):
+        elif allow_indirect and any(values[_DIRECT_BLOCKS + 1 :]):
             raise NativeExt2Error("double/triple-indirect ext2 blocks are unsupported")
+
         size = self._inode_size(inode_raw)
         count = math.ceil(size / self.block_size) if size else 0
-        if count > (self._max_file_blocks() if allow_indirect else _DIRECT_BLOCKS):
-            raise NativeExt2Error(
-                "native ext2 profile exceeds direct plus single-indirect capacity"
-            )
+        max_blocks = (
+            self._max_file_blocks(allow_double_indirect=allow_double_indirect)
+            if allow_indirect
+            else _DIRECT_BLOCKS
+        )
+        if count > max_blocks:
+            level = "double-indirect" if allow_double_indirect else "single-indirect"
+            raise NativeExt2Error(f"native ext2 profile exceeds {level} capacity")
+
+        entries_per_block = self.block_size // 4
         direct_count = min(count, _DIRECT_BLOCKS)
         blocks = list(values[:direct_count])
         if any(values[direct_count:_DIRECT_BLOCKS]):
             raise NativeExt2UnsafeError(
                 "ext2 inode has allocated direct pointers beyond its file size"
             )
-        indirect_block = values[_DIRECT_BLOCKS] if allow_indirect else 0
-        indirect_count = count - direct_count
+
+        pointer_blocks = []
         bitmap_cache = {}
-        if indirect_count:
-            if not indirect_block:
+
+        def validate_pointer_block(block):
+            if not block:
                 raise NativeExt2Error("ext2 file has a missing indirect block")
-            self._validate_allocated_block(indirect_block, bitmap_cache)
+            if block in pointer_blocks:
+                raise NativeExt2UnsafeError("duplicate ext2 indirect pointer blocks")
+            self._validate_allocated_block(block, bitmap_cache)
+            pointer_blocks.append(block)
+
+        indirect_block = values[_DIRECT_BLOCKS] if allow_indirect else 0
+        remaining = count - direct_count
+        single_count = min(remaining, entries_per_block)
+        if single_count:
+            validate_pointer_block(indirect_block)
             indirect_pointers = struct.unpack(
-                f"<{self.block_size // 4}I", self._read_block(indirect_block)
+                f"<{entries_per_block}I", self._read_block(indirect_block)
             )
-            if any(indirect_pointers[indirect_count:]):
+            if any(indirect_pointers[single_count:]):
                 raise NativeExt2UnsafeError(
                     "ext2 indirect block contains pointers beyond the file size"
                 )
-            blocks.extend(indirect_pointers[:indirect_count])
+            blocks.extend(indirect_pointers[:single_count])
         elif indirect_block:
             raise NativeExt2UnsafeError(
                 "ext2 inode has an indirect pointer beyond its file size"
             )
+
+        double_count = remaining - single_count
+        double_root = values[_DIRECT_BLOCKS + 1] if allow_double_indirect else 0
+        if double_count:
+            validate_pointer_block(double_root)
+            top_level = struct.unpack(
+                f"<{entries_per_block}I", self._read_block(double_root)
+            )
+            child_count = math.ceil(double_count / entries_per_block)
+            if any(top_level[child_count:]):
+                raise NativeExt2UnsafeError(
+                    "ext2 double-indirect table has pointers beyond the file size"
+                )
+            for child_index in range(child_count):
+                child_block = top_level[child_index]
+                validate_pointer_block(child_block)
+                child_pointers = struct.unpack(
+                    f"<{entries_per_block}I", self._read_block(child_block)
+                )
+                data_count = min(
+                    entries_per_block,
+                    double_count - child_index * entries_per_block,
+                )
+                if any(child_pointers[data_count:]):
+                    raise NativeExt2UnsafeError(
+                        "ext2 second-level indirect table has pointers beyond the file size"
+                    )
+                blocks.extend(child_pointers[:data_count])
+        elif double_root:
+            raise NativeExt2UnsafeError(
+                "ext2 inode has a double-indirect pointer beyond its file size"
+            )
+
         if any(block == 0 for block in blocks):
             raise NativeExt2Error("sparse or corrupt ext2 files are not writable")
         if len(set(blocks)) != len(blocks):
             raise NativeExt2Error("duplicate ext2 data block pointers")
         for block in blocks:
             self._validate_allocated_block(block, bitmap_cache)
-        if indirect_block and indirect_block in blocks:
+        if set(pointer_blocks) & set(blocks):
             raise NativeExt2UnsafeError("indirect pointer block aliases file data")
         allocated_blocks = (
-            len(blocks)
-            + int(bool(indirect_block))
-            + int(bool(self._u32(inode_raw, 104)))
+            len(blocks) + len(pointer_blocks) + int(bool(self._u32(inode_raw, 104)))
         )
         expected_sectors = allocated_blocks * (self.block_size // 512)
         if self._u32(inode_raw, 28) != expected_sectors:
@@ -677,13 +739,39 @@ class _Ext2FS:
             )
         return blocks
 
+    def _inode_pointer_blocks(
+        self, inode_raw: bytes | bytearray, *, allow_double_indirect=False
+    ) -> list[int]:
+        """Return indirect metadata blocks after _inode_blocks validated them."""
+        values = struct.unpack_from("<15I", inode_raw, 40)
+        size = self._inode_size(inode_raw)
+        count = math.ceil(size / self.block_size) if size else 0
+        entries_per_block = self.block_size // 4
+        pointer_blocks = []
+        if count > _DIRECT_BLOCKS:
+            pointer_blocks.append(values[_DIRECT_BLOCKS])
+        if count > _DIRECT_BLOCKS + entries_per_block:
+            if not allow_double_indirect:
+                raise NativeExt2Error("double-indirect ext2 object is not enabled")
+            double_root = values[_DIRECT_BLOCKS + 1]
+            pointer_blocks.append(double_root)
+            double_count = count - _DIRECT_BLOCKS - entries_per_block
+            child_count = math.ceil(double_count / entries_per_block)
+            top_level = struct.unpack(
+                f"<{entries_per_block}I", self._read_block(double_root)
+            )
+            pointer_blocks.extend(top_level[:child_count])
+        return pointer_blocks
+
     def _inode_data(self, raw: bytes | bytearray) -> bytes:
         size = self._inode_size(raw)
-        if size > self._max_file_blocks() * self.block_size:
+        if size > self._max_file_blocks(allow_double_indirect=True) * self.block_size:
             raise NativeExt2Error(
-                "native ext2 phase 1 exceeds single-indirect capacity"
+                "native ext2 phase 1 exceeds double-indirect capacity"
             )
-        blocks = self._inode_blocks(raw, allow_indirect=True)
+        blocks = self._inode_blocks(
+            raw, allow_indirect=True, allow_double_indirect=True
+        )
         data = b"".join(self._read_block(block) for block in blocks)
         return data[:size]
 
@@ -1011,11 +1099,23 @@ class _Ext2FS:
         return self._inode_data(inode_raw)
 
     def write_file(self, path: str, data: bytes) -> None:
+        maximum_bytes = (
+            self._max_file_blocks(allow_double_indirect=True) * self.block_size
+        )
+        try:
+            incoming_size = len(data)
+        except TypeError:
+            data = bytes(data)
+            incoming_size = len(data)
+        if incoming_size > maximum_bytes:
+            raise NativeExt2Error(
+                "native ext2 phase 1 exceeds double-indirect capacity"
+            )
         if not isinstance(data, bytes):
             data = bytes(data)
-        if len(data) > self._max_file_blocks() * self.block_size:
+        if len(data) > maximum_bytes:
             raise NativeExt2Error(
-                "native ext2 phase 1 exceeds single-indirect capacity"
+                "native ext2 phase 1 exceeds double-indirect capacity"
             )
         parent, name, _ = self._parent_and_name(path)
         existing = self._lookup_child(parent, name)
@@ -1029,8 +1129,12 @@ class _Ext2FS:
                 raise NativeExt2Error(
                     "hard-linked files are not overwritten in phase 1"
                 )
-            old_blocks = self._inode_blocks(inode_raw, allow_indirect=True)
-            old_indirect = self._u32(inode_raw, 40 + _DIRECT_BLOCKS * 4)
+            old_blocks = self._inode_blocks(
+                inode_raw, allow_indirect=True, allow_double_indirect=True
+            )
+            old_pointer_blocks = self._inode_pointer_blocks(
+                inode_raw, allow_double_indirect=True
+            )
             preferred = (inode_num - 1) // self.inodes_per_group
         else:
             inode_num = self._allocate_inode((parent - 1) // self.inodes_per_group)
@@ -1038,27 +1142,56 @@ class _Ext2FS:
             struct.pack_into("<H", inode_raw, 0, stat.S_IFREG | 0o644)
             struct.pack_into("<H", inode_raw, 26, 1)
             old_blocks = []
-            old_indirect = 0
+            old_pointer_blocks = []
             preferred = (parent - 1) // self.inodes_per_group
         needed = math.ceil(len(data) / self.block_size) if data else 0
         new_blocks = [self._allocate_block(preferred) for _ in range(needed)]
         for index, block in enumerate(new_blocks):
             chunk = data[index * self.block_size : (index + 1) * self.block_size]
             self._write_block(block, chunk.ljust(self.block_size, b"\x00"))
+        new_pointer_blocks = []
         new_indirect = 0
         if needed > _DIRECT_BLOCKS:
             new_indirect = self._allocate_block(preferred)
+            new_pointer_blocks.append(new_indirect)
             pointer_table = bytearray(self.block_size)
-            for index, block in enumerate(new_blocks[_DIRECT_BLOCKS:]):
+            single_count = min(needed - _DIRECT_BLOCKS, self.block_size // 4)
+            for index, block in enumerate(
+                new_blocks[_DIRECT_BLOCKS : _DIRECT_BLOCKS + single_count]
+            ):
                 struct.pack_into("<I", pointer_table, index * 4, block)
             self._write_block(new_indirect, bytes(pointer_table))
+        new_double_indirect = 0
+        entries_per_block = self.block_size // 4
+        double_start = _DIRECT_BLOCKS + entries_per_block
+        if needed > double_start:
+            new_double_indirect = self._allocate_block(preferred)
+            new_pointer_blocks.append(new_double_indirect)
+            double_table = bytearray(self.block_size)
+            double_data = new_blocks[double_start:]
+            for child_index, first in enumerate(
+                range(0, len(double_data), entries_per_block)
+            ):
+                child_block = self._allocate_block(preferred)
+                new_pointer_blocks.append(child_block)
+                child_table = bytearray(self.block_size)
+                chunk = double_data[first : first + entries_per_block]
+                for index, block in enumerate(chunk):
+                    struct.pack_into("<I", child_table, index * 4, block)
+                self._write_block(child_block, bytes(child_table))
+                struct.pack_into("<I", double_table, child_index * 4, child_block)
+            self._write_block(new_double_indirect, bytes(double_table))
         inode_raw[40:100] = b"\x00" * 60
         for index, block in enumerate(new_blocks[:_DIRECT_BLOCKS]):
             struct.pack_into("<I", inode_raw, 40 + index * 4, block)
         if new_indirect:
             struct.pack_into("<I", inode_raw, 40 + _DIRECT_BLOCKS * 4, new_indirect)
+        if new_double_indirect:
+            struct.pack_into(
+                "<I", inode_raw, 40 + (_DIRECT_BLOCKS + 1) * 4, new_double_indirect
+            )
         self._put32(inode_raw, 4, len(data))
-        allocated_blocks = len(new_blocks) + int(bool(new_indirect))
+        allocated_blocks = len(new_blocks) + len(new_pointer_blocks)
         self._put32(inode_raw, 28, allocated_blocks * self.block_size // 512)
         struct.pack_into("<I", inode_raw, 20, 0)  # dtime
         self._touch_inode(inode_raw)
@@ -1069,8 +1202,8 @@ class _Ext2FS:
             self._insert_entry(parent, name, inode_num, 1)
         for block in old_blocks:
             self._free_block(block)
-        if old_indirect:
-            self._free_block(old_indirect)
+        for block in old_pointer_blocks:
+            self._free_block(block)
 
     def mkdir(self, path: str) -> None:
         parent, name, _ = self._parent_and_name(path)
@@ -1132,13 +1265,19 @@ class _Ext2FS:
         else:
             if self._u16(raw, 26) != 1:
                 raise NativeExt2Error("hard-linked files are not deleted in phase 1")
-        blocks = self._inode_blocks(raw, allow_indirect=True)
-        indirect_block = self._u32(raw, 40 + _DIRECT_BLOCKS * 4)
+        blocks = self._inode_blocks(
+            raw,
+            allow_indirect=True,
+            allow_double_indirect=not is_dir,
+        )
+        pointer_blocks = self._inode_pointer_blocks(
+            raw, allow_double_indirect=not is_dir
+        )
         self._remove_entry(parent, entry)
         for block in blocks:
             self._free_block(block)
-        if indirect_block:
-            self._free_block(indirect_block)
+        for block in pointer_blocks:
+            self._free_block(block)
         parent_raw = self._read_inode(parent)
         if is_dir:
             links = self._u16(parent_raw, 26)
