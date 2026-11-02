@@ -543,15 +543,26 @@ class RWBackend(ABC):
         dest = Path(dest)
         provider = _RWBackendExtractionProvider(self)
         normalized = "/" + str(path or "/").strip().strip("/")
+        source_path = normalized
         if normalized == "/":
             is_dir = True
         else:
-            entry = self.stat(normalized)
+            parent, name = _image_path_parent_name(normalized)
+            entry = next(
+                (
+                    candidate
+                    for candidate in self.list(parent)
+                    if candidate.name.casefold() == name.casefold()
+                ),
+                None,
+            )
             is_dir = entry is not None and entry.is_dir
+            if entry is not None:
+                source_path = entry.path
         if is_dir:
-            extract_path(provider, normalized, dest, limits=limits)
+            extract_path(provider, source_path, dest, limits=limits)
         else:
-            extract_file(provider, normalized, dest, limits=limits)
+            extract_file(provider, source_path, dest, limits=limits)
         return dest
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:

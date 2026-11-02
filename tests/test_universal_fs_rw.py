@@ -114,7 +114,7 @@ def test_extract_recreates_directory_tree_with_hardened_writer(tmp_path):
         fs.write_file("/EVIDENCE/report.txt", b"directory payload")
         destination = tmp_path / "extracted"
 
-        assert fs.extract("/EVIDENCE", destination) == destination
+        assert fs.extract("/evidence", destination) == destination
         assert (destination / "EVIDENCE" / "report.txt").read_bytes() == (
             b"directory payload"
         )
