@@ -133,7 +133,9 @@ bounded direct/single/double-indirect addressing до 64 MiB (без sparse/trip
 `allow_legacy_debugfs=True`, не скрытым GUI fallback. Перед записью приложение
 создаёт резервную копию образа рядом с ним; отказ от копии отменяет запись. Native ext2 сначала
 проверяет staged extent, затем применяет изменения; внешние ext writers также
-используют временную копию и read-back. NTFS требует отдельный системный backend.
+используют временную копию и read-back. Native NTFS writer отключён: GUI оставляет
+NTFS read-only. Отдельный системный NTFS backend доступен только как явный
+library-level compatibility opt-in, а не как скрытый GUI fallback.
 
 При открытии текстового файла через `Enter` или `F3` из образа Mount File
 создаёт временную копию и запускает системный редактор (на Windows —
