@@ -80,6 +80,10 @@ def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     )
 
     assert report["schema_version"] == 2
+    assert set(report["environment"]["runtime_versions"]) == {
+        "pytsk3",
+        "source_revision",
+    }
     assert report["image"]["size_bytes"] == len(original)
     assert report["image"]["sha256"] == hashlib.sha256(original).hexdigest()
     assert report["cache_state"]["managed_by_harness"] is False
