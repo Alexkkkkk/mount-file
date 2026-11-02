@@ -51,7 +51,7 @@ from mountfile.capabilities import (
     canonical_operation_for_api_operation,
     get_native_capability_status,
 )
-from mountfile.extract import ExtractionLimits, extract_file
+from mountfile.extract import ExtractionLimits, extract_file, extract_path
 from mountfile.rw.journal import Journal as _VerifiedJournal
 from mountfile.safety import (
     RefusalCode,
@@ -454,6 +454,10 @@ class _RWBackendExtractionProvider:
             self.read_file_range = read_range
             self.max_read_range_bytes = getattr(reader, "max_read_range_bytes", 1 << 20)
 
+    def list_dir(self, path: str = "/") -> list[dict]:
+        """Expose the RW backend tree in the hardened extractor's shape."""
+        return [entry.to_dict() for entry in self._backend.list(path)]
+
     def read_file(self, path: str) -> bytes:
         return self._backend.read(path)
 
@@ -537,7 +541,17 @@ class RWBackend(ABC):
         limits: ExtractionLimits | None = None,
     ) -> Path:
         dest = Path(dest)
-        extract_file(_RWBackendExtractionProvider(self), path, dest, limits=limits)
+        provider = _RWBackendExtractionProvider(self)
+        normalized = "/" + str(path or "/").strip().strip("/")
+        if normalized == "/":
+            is_dir = True
+        else:
+            entry = self.stat(normalized)
+            is_dir = entry is not None and entry.is_dir
+        if is_dir:
+            extract_path(provider, normalized, dest, limits=limits)
+        else:
+            extract_file(provider, normalized, dest, limits=limits)
         return dest
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
