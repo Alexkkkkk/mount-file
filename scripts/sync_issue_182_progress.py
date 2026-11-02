@@ -12,7 +12,6 @@ import os
 import re
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -34,15 +33,28 @@ def is_issue_182_related(ref: str, commits: list[dict[str, Any]]) -> bool:
     )
 
 
-def missing_status_updates(commits: list[dict[str, Any]]) -> list[str]:
+def commit_updates_status_sheet(
+    commit: dict[str, Any], verified_files: list[str] | None = None
+) -> bool:
+    """Check changed paths from the webhook or a commit-API file list."""
+    changed = set(commit.get("added", []))
+    changed.update(commit.get("modified", []))
+    changed.update(commit.get("removed", []))
+    changed.update(verified_files or [])
+    return STATUS_PATH in changed
+
+
+def missing_status_updates(
+    commits: list[dict[str, Any]],
+    verified_files_by_sha: dict[str, list[str]] | None = None,
+) -> list[str]:
     """Return commit SHAs that did not modify the canonical status sheet."""
+    verified_files_by_sha = verified_files_by_sha or {}
     missing: list[str] = []
     for commit in commits:
-        changed = set(commit.get("added", []))
-        changed.update(commit.get("modified", []))
-        changed.update(commit.get("removed", []))
-        if STATUS_PATH not in changed:
-            missing.append(str(commit.get("id", "unknown"))[:12])
+        sha = str(commit.get("id", "unknown"))
+        if not commit_updates_status_sheet(commit, verified_files_by_sha.get(sha, [])):
+            missing.append(sha[:12])
     return missing
 
 
@@ -181,7 +193,20 @@ def main() -> int:
         print("No #182 branch or commit reference; progress sync skipped.")
         return 0
 
-    missing = missing_status_updates(commits)
+    verified_files_by_sha: dict[str, list[str]] = {}
+    for commit in commits:
+        if commit_updates_status_sheet(commit):
+            continue
+        sha = str(commit.get("id", "unknown"))
+        if sha == "unknown":
+            continue
+        # Push-event payloads may omit changed-file arrays. Query only commit
+        # metadata (filenames); never download or inspect source file contents.
+        details = _api_request(token, "GET", f"/repos/{repository}/commits/{sha}")
+        verified_files_by_sha[sha] = [
+            str(item.get("filename", "")) for item in details.get("files", [])
+        ]
+    missing = missing_status_updates(commits, verified_files_by_sha)
     if missing:
         print(
             "Every #182 commit must update docs/issue-182-status.md; "

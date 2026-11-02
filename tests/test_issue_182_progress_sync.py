@@ -38,6 +38,13 @@ def test_every_commit_in_push_must_update_status_sheet():
         "second", message="feat: related task #182", files=["mountfile/vfs.py"]
     )
     assert missing_status_updates([first, second]) == ["second"]
+    no_webhook_file_list = _commit("third", files=[])
+    assert (
+        missing_status_updates(
+            [no_webhook_file_list], {"third": ["docs/issue-182-status.md"]}
+        )
+        == []
+    )
 
 
 def test_status_sync_renders_task_sheet_and_push_commit_without_audit_claim():
