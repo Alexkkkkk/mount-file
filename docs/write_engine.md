@@ -130,10 +130,11 @@ engine.close()
 * FAT12/16/32 — bounded pure-Python readers `native-fat12-ro`,
   `native-fat16-ro` и `native-fat32-ro` выбираются через unified VFS без
   `pytsk3`. Они проверяют BPB-геометрию, FAT12 packed entries, цепочки
-  кластеров и LFN checksum. Запись FAT32 остаётся отдельным bounded writer-ом
-  `Fat32RW` в `mountfile/universal_fs_rw.py`; FAT12/16 через этот VFS намеренно
-  read-only. Native reader также отклоняет рассинхронные mirrored FAT copies и
-  повреждённую backup BPB FAT32 до чтения файлов.
+  кластеров и LFN checksum. Bounded writers доступны для FAT12/16 через
+  `Fat1216RW` и для FAT32 через `Fat32RW` в `mountfile/universal_fs_rw.py`.
+  FAT12/16 writer требует fixed root directory; эта ограниченная запись не
+  означает полного write parity. Native reader отклоняет рассинхронные mirrored
+  FAT copies и повреждённую backup BPB FAT32 до чтения файлов.
   Статус read parity (issue #182): подтверждена differential тест-матрицей
   в `tests/test_fat_reader.py` — для всех трёх вариантов FAT прогоняются
   valid- и invalid-fixture (синтетические образы со short-name, LFN, пустым,
@@ -146,10 +147,9 @@ engine.close()
   в цепочке кластеров) завершаются явным отказом; routing-тесты дополнительно
   фиксируют, что bounded FAT-профили всегда обрабатываются native reader-ом
   и legacy `pytsk3` fallback не вызывается.
-  Статус write parity: native WRITE parity для FAT12/16 НЕ заявляется —
-  у этих вариантов нет write path вовсе (read-only); это честное ограничение,
-  а не скрытый fallback. Native FAT32 writer остаётся bounded-движком и также
-  не претендует на паритет с системными средствами записи.
+  Статус write parity: bounded native write path есть для FAT12/16 и FAT32,
+  но полная WRITE parity не заявляется ни для одного из них. FAT12/16
+  ограничены фиксированным root directory; FAT32 writer остаётся bounded-движком.
   Writer принимает только mirrored FAT32 mode с идентичными FAT copies.
   Non-mirrored mode и рассинхронные копии отклоняются до mutation, потому что
   текущий writer обновляет все FAT copies одновременно и не поддерживает
@@ -159,19 +159,21 @@ engine.close()
   short-name alias, для перенесённого каталога обновляется `..`, а перенос в
   себя/потомка, collision, malformed LFN и отсутствие свободных directory
   slots отклоняются до commit. Same-directory LFN rename и расширение каталога
-  остаются неподдерживаемыми; FAT12/16 write и FAT32 active-FAT semantics не
-  включены. Перенос проходит на staged image с read-back, но это не on-volume
+  остаются неподдерживаемыми; FAT32 active-FAT semantics не включены. Перенос
+  проходит на staged image с read-back, но это не on-volume
   recovery protocol и не доказательство power-loss atomicity.
   Если BPB объявляет backup boot sector, он должен быть байт-в-байт идентичен
   primary boot sector; повреждённая резервная BPB отклоняется до записи.
   BPB_FSInfo принимается только как `0`, `0xffff` или сектор внутри reserved
   region, отличный от backup boot sector; указатель в data area или alias
   резервной загрузочной записи отклоняется при открытии writer-а до mutation.
-* Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала, direct и
-  один single-indirect pointer для данных файла и каталогов) использует
-  собственный Python writer без `debugfs`; предел файла и каталога —
-  `12 + block_size/4` data blocks, без sparse/double/triple indirect. При
-  расширении каталога pointer block, bitmap/counters и directory map проходят
+* Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала) использует
+  собственный Python writer без `debugfs`. Regular files поддерживают bounded
+  direct, single- и double-indirect addressing до 64 MiB; sparse и
+  triple-indirect файлы отвергаются. Каталоги пока ограничены direct и
+  single-indirect addressing; double-indirect directory growth находится в
+  отдельном открытом PR и не входит в текущий `main`. При расширении каталога
+  pointer block, bitmap/counters и directory map проходят
   read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
   Перед изменением image writer сохраняет и fsync-ит рядом с образом проверенные
   before- и staged after-image выбранного ext2 extent, затем атомарно публикует

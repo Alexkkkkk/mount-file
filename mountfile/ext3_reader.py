@@ -2,10 +2,11 @@
 """Conservative read-only ext3/ext4 profiles.
 
 This module intentionally supports only the classic ext block-pointer layout
-plus the bounded ext4 extent profile. 64-bit group descriptors, metadata
-checksums, fast commits and other layouts are rejected until their complete
-validators exist. Journal replay is never written back: it is rejected by
-default and can only be enabled as an explicit in-memory read-only overlay.
+plus bounded ext4 extent profiles. The accepted ext4 profile includes validated
+64-bit group descriptors; metadata checksums, fast commits and other layouts are
+rejected until their complete validators exist. Journal replay is never written
+back: it is rejected by default and can only be enabled as an explicit in-memory
+read-only overlay.
 """
 
 from __future__ import annotations

@@ -335,7 +335,8 @@ python main.py --olma <команда># слой самоанализа OLMA (с
 (раздел или **Whole image**). Двойной щелчок открывает папку или файл в
 встроенном HEX-редакторе, кнопка **Extract…** извлекает файл на диск. **Import**,
 **New folder**, **Rename**, **Delete** и сохранение HEX доступны только если
-выбранный том проходит native writer profile gates для FAT32, ext2 или exFAT.
+выбранный том проходит native writer profile gates для FAT12/16, FAT32, ext2
+или exFAT.
 
 > ⚠️ **Импорт, создание, переименование и удаление изменяют сам файл образа.**
 > Работайте с копией образа. GUI перед первой записью создаёт снимок в
@@ -505,14 +506,14 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 | `Ctrl+I` | AI: добавить файл для анализа |
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
-  FAT32, ограниченный профиль чистого ext2 и ограниченный native exFAT профиль
-  имеют встроенную запись. Native ext2 использует allowlisted features и
-  single-indirect blocks для файлов и каталогов (до `12 + block_size/4` data
-  blocks на объект); sparse и double/triple-indirect не поддерживаются.
-  Native FAT12/16 чтение поддержано, но запись — нет. Native exFAT writer
-  принимает только проверенный bounded профиль с одной FAT и нулевыми
-  `VolumeFlags`; unsupported/dirty metadata отвергается. ext2 вне этого
-  профиля, ext3/4 и NTFS остаются read-only в GUI и
+  bounded native write-профили существуют для FAT12/16, FAT32, чистого ext2 и
+  exFAT. Native ext2 использует allowlisted features: regular files используют
+  direct/single/double-indirect blocks (до 64 MiB в профиле), а каталоги пока
+  ограничены direct/single-indirect; sparse и triple-indirect не поддержаны.
+  FAT12/16 writer ограничен packed FAT и фиксированным root directory и не
+  означает полного write parity. Native exFAT принимает проверенный профиль с
+  одной или двумя FAT и разрешённым ActiveFat/VolumeFlags; unsupported/dirty
+  metadata отвергается. ext2 вне этого профиля, ext3/4 и NTFS остаются read-only в GUI и
 `WriteEngine`: legacy `debugfs` доступен только как явный library-level
 compatibility opt-in (`allow_legacy_debugfs=True`), а не как автоматический
 fallback (`debugfs.exe`/WSL на Windows).
@@ -841,8 +842,8 @@ mount-file/
 
 ## Ограничения
 
-- **Запись зависит от поддерживаемого профиля.** FAT32, allowlisted clean ext2
-  и ограниченный exFAT имеют native writers; у каждого остаются явные
+- **Запись зависит от поддерживаемого профиля.** Ограниченные FAT12/16, FAT32,
+  allowlisted clean ext2 и exFAT имеют native writers; у каждого остаются явные
   ограничения операций и metadata layout. Native NTFS и ext3/ext4 writers
   выключены до реализации проверяемого on-volume journal/recovery пути.
   Legacy `debugfs`, `ntfs-3g` и системные mount/drivers доступны только как
@@ -854,9 +855,11 @@ mount-file/
   атомарность всего дерева не обещается. Range-capable провайдеры читаются
   чанками; совместимый whole-file API проверяется по размеру перед записью,
   но может сначала буферизовать файл в памяти.
-- **FAT write scope:** native FAT writer — только FAT32; FAT12/16 остаются
-  native read-only. Системная запись через ImDisk на Windows — отдельный
-  compatibility route и не расширяет native FAT writer profile.
+- **FAT write scope:** bounded native writers есть для FAT12/16 и FAT32.
+  FAT12/16 требуют фиксированный root directory и поддерживают ограниченный
+  набор мутаций; FAT32 требует согласованные mirrored copies и не поддерживает
+  active-FAT semantics. Это не полная FAT write parity. Системная запись через
+  ImDisk на Windows — отдельный compatibility route.
 - **exFAT write scope:** native writer принимает ограниченные профили с одной
   или двумя FAT и проверенной служебной metadata. В двух-FAT профиле учитывается
   выбранная active FAT, а изменения FAT отражаются во всех копиях. Dirty,
@@ -865,7 +868,7 @@ mount-file/
 - **Без `pytsk3`** работают bounded native readers FAT12/16/32, выбранных clean
   ext2/ext3/ext4 профилей, exFAT и NTFS. Каждый parser требует корректные bounds
   и fail-closed на dirty, неизвестных и повреждённых профилях.
-- Native FAT32, ext2 и exFAT write profiles не запускают внешние filesystem CLI.
+- Native FAT12/16, FAT32, ext2 и exFAT write profiles не запускают внешние filesystem CLI.
   Если операция не входит в активный профиль, приложение явно отказывает в
   записи, а не сообщает об успехе после открытия тома только для чтения.
 - Версионируемый машинно-читаемый контракт операций native-профилей доступен в

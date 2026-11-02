@@ -32,12 +32,12 @@
 
 ### `main`
 
-Текущая базовая ветка репозитория включает уже опубликованные native filesystem изменения и последующие исправления. В частности, в дереве есть ограниченные native readers ext/FAT/NTFS, bounded exFAT компоненты, FAT32 writer и ограниченный native ext2 writer. Последние изменения `main` включают проверку регистра имён exFAT по `$UpCase` и differential test native FAT reader против `pytsk3` на реальном образе.
+Текущая базовая ветка репозитория включает уже опубликованные native filesystem изменения и последующие исправления. В частности, в дереве есть ограниченные native readers ext/FAT/NTFS, bounded exFAT компоненты, FAT12/16 и FAT32 writers и ограниченный native ext2 writer. Последние изменения `main` включают проверку регистра имён exFAT по `$UpCase`, bounded double-indirect addressing для ext2 regular files и differential test native FAT reader против `pytsk3` на реальном образе.
 
 Фактический уровень поддержки остаётся частичным:
 
-- **ext2:** ограниченный clean, non-journaled writer с allowlist features, direct и single-indirect блоками файлов, staging и read-back. Рост каталога через indirect blocks, persistent power-loss recovery и общая crash-recovery acceptance не закрыты.
-- **FAT:** native bounded readers реализованы для FAT12/16/32; отдельные write-возможности существуют для FAT32. Полная differential и write parity матрица для всех FAT вариантов не заявляется.
+- **ext2:** ограниченный clean, non-journaled writer с allowlist features; regular files поддерживают bounded direct/single/double-indirect blocks до 64 MiB, каталоги — direct/single-indirect. Double-indirect growth каталогов в `main` ещё не включён; persistent power-loss и общая crash-recovery acceptance не закрыты.
+- **FAT:** native bounded readers реализованы для FAT12/16/32; bounded write-возможности существуют для FAT12/16 и FAT32. Полная differential и write parity матрица для всех FAT вариантов не заявляется.
 - **exFAT:** native reader/writer возможности ограничены поддержанными профилями и проверяемыми метаданными. Не поддерживаемые layout/операции остаются fail-closed; неизвестные структуры не должны трактоваться как поддержанные.
 - **ext3/JBD2:** доступно ограниченное read-only профилирование/валидация. Журналирование и recovery требуют отдельной проверки; replay не является разрешением на запись.
 - **ext4:** доступно ограниченное чтение конкретных clean профилей. Extents, feature gates и checksum/recovery ограничения применяются консервативно; native ext4 writer не заявляется.
@@ -46,7 +46,7 @@
 
 ### Незлитая follow-up работа
 
-Ветка `work/issue-182-follow-up` содержит дополнительные hardening изменения ext3/NTFS readers и regression tests. Эти коммиты не являются частью `main`, пока не будут отдельно проверены и включены через обычный review/merge процесс. Любые упоминания этой ветки в обновлениях должны сопровождаться её SHA и не смешивать статус ветки со статусом релиза.
+PR #326 добавляет bounded double-indirect directory support для ext2. Пока PR открыт, это не входит в возможности `main`; перед включением в утверждённый статус требуются review и успешные обязательные checks. Любые другие незлитые follow-up commits также не являются частью `main`, пока не пройдут обычный review/merge процесс.
 
 ## План работ и критерии приёмки
 

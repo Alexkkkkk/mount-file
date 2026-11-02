@@ -1,0 +1,24 @@
+name: Issue 182 progress sync
+
+on:
+  push:
+    branches: ["**"]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync-progress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Publish committed issue progress (no code audit)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/sync_issue_182_progress.py
