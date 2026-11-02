@@ -10,9 +10,9 @@ Fixture construction belongs in tests/tools rather than this runtime module.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Mapping
 
 from mountfile import vfs
 from mountfile.extract import extract_file
@@ -97,7 +97,9 @@ def _run_case(case: ParityCase) -> int:
             for index, (file_path, expected) in enumerate(case.expected_files.items()):
                 normalized = _normalized_file_path(file_path)
                 if not isinstance(expected, bytes):
-                    raise TypeError(f"expected contents for {file_path!r} must be bytes")
+                    raise TypeError(
+                        f"expected contents for {file_path!r} must be bytes"
+                    )
                 parent = normalized.parent.as_posix()
                 if parent not in listed_by_parent:
                     entries = provider.list_dir(parent)
@@ -111,7 +113,9 @@ def _run_case(case: ParityCase) -> int:
                 checks += 1
 
                 metadata = provider.stat(file_path)
-                if metadata.get("is_dir") or int(metadata.get("size", -1)) != len(expected):
+                if metadata.get("is_dir") or int(metadata.get("size", -1)) != len(
+                    expected
+                ):
                     raise AssertionError(
                         f"stat({file_path!r}) returned unexpected type/size: {metadata!r}"
                     )
@@ -124,9 +128,7 @@ def _run_case(case: ParityCase) -> int:
 
                 range_offset = min(1, len(expected))
                 range_length = min(17, len(expected) - range_offset)
-                ranged = provider.read_file_range(
-                    file_path, range_offset, range_length
-                )
+                ranged = provider.read_file_range(file_path, range_offset, range_length)
                 if ranged != expected[range_offset : range_offset + range_length]:
                     raise AssertionError(
                         f"read_file_range({file_path!r}) content differs"
@@ -158,9 +160,16 @@ def run_parity_matrix(cases: Iterable[ParityCase]) -> ParityReport:
         raise ValueError("parity matrix must contain at least one case")
 
     for case in materialized:
-        if not case.fs_name or case.fs_name in seen:
+        if (
+            not isinstance(case, ParityCase)
+            or not isinstance(case.fs_name, str)
+            or not case.fs_name.strip()
+            or case.fs_name in seen
+        ):
             raise ValueError("parity case names must be non-empty and unique")
         seen.add(case.fs_name)
+
+    for case in materialized:
         try:
             report.checks += _run_case(case)
         except Exception as exc:

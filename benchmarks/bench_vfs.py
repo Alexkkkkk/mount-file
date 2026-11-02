@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from importlib import metadata
 import json
 import platform
 import statistics
@@ -23,6 +22,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
+from importlib import metadata
 from pathlib import Path, PurePosixPath
 
 from mountfile.extract import extract_file
