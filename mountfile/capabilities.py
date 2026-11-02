@@ -239,6 +239,16 @@ _READ_ONLY_PROFILES = (
 
 _WRITE_PROFILES = (
     CapabilityProfile(
+        "fat12-16-native-rw",
+        "FAT12",
+        "native-fat-rw",
+        "universal-fs-rw",
+        "read-write",
+        RW_READ_CAPABILITIES,
+        RW_WRITE_CAPABILITIES,
+        "native-fat12-16",
+    ),
+    CapabilityProfile(
         "fat32-native-rw",
         "FAT32",
         "native-fat-rw",
@@ -303,6 +313,10 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         "exfat-native-ro": (
             "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
             "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
+        ),
+        "fat12-16-native-rw": (
+            "Native bounded FAT12/FAT16 writer with packed and mirrored FAT updates.",
+            "Fixed root directory; unsupported special or sparse cases are refused.",
         ),
         "fat32-native-rw": (
             "Native bounded FAT32 writer; put/replace, mkdir, rename, and delete.",
@@ -447,6 +461,22 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
                 "required",
                 "The selected active FAT and system metadata must validate.",
                 RefusalCode.MALFORMED_METADATA,
+            ),
+        ),
+        "fat12-16-native-rw": (
+            CapabilityGate(
+                "staged-write-identity",
+                "image-state",
+                "required",
+                "Mutation rechecks source identity and uses staged read-back/rollback.",
+                RefusalCode.CONCURRENT_CHANGE,
+            ),
+            CapabilityGate(
+                "fixed-root-fat-layout",
+                "feature",
+                "required",
+                "FAT12/FAT16 writes require validated packed FAT and fixed-root geometry.",
+                RefusalCode.UNSUPPORTED_PROFILE,
             ),
         ),
         "fat32-native-rw": (
