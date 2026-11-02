@@ -328,8 +328,8 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         "ext2-native-rw": (
             "Clean ext2 allowlist only; regular files use bounded direct, single-, "
             "and double-indirect blocks, up to 64 MiB.",
-            "Sparse and triple-indirect files are refused; directory growth remains "
-            "direct/single-indirect only.",
+            "Sparse and triple-indirect files/directories are refused; directory "
+            "growth supports bounded direct, single-, and double-indirect blocks.",
         ),
         "exfat-native-rw": (
             "Bounded one- or two-FAT profile; reads the validated active FAT and "

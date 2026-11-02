@@ -3,11 +3,10 @@
 
 The bounded profile supports clean, unjournaled ext2 filesystems using block
 bitmaps, 32-byte group descriptors, and the FILETYPE directory-entry format.
-Regular files use direct, single-indirect, and bounded double-indirect pointers;
-directories remain limited to direct and single-indirect pointers. Mutations are
-staged against a copy of the selected filesystem extent and are committed only
-after structural read-back validation. This module does not claim ext3/ext4
-support.
+Regular files and directories use direct, single-indirect, and bounded
+double-indirect pointers. Mutations are staged against a copy of the selected
+filesystem extent and are committed only after structural read-back validation.
+This module does not claim ext3/ext4 support.
 """
 
 from __future__ import annotations
@@ -823,7 +822,9 @@ class _Ext2FS:
         size = self._u32(raw, 4)
         if size % self.block_size:
             raise NativeExt2Error("ext2 directory size is not block-aligned")
-        blocks = self._inode_blocks(raw, allow_indirect=True)
+        blocks = self._inode_blocks(
+            raw, allow_indirect=True, allow_double_indirect=True
+        )
         if len(blocks) * self.block_size != size:
             raise NativeExt2Error("ext2 directory size/pointer count mismatch")
         found = []
@@ -1005,9 +1006,9 @@ class _Ext2FS:
                     return
                 cursor += rec_len
         current_blocks = len(blocks)
-        if current_blocks >= self._max_file_blocks():
+        if current_blocks >= self._max_file_blocks(allow_double_indirect=True):
             raise NativeExt2Error(
-                "native ext2 directory exceeds single-indirect capacity"
+                "native ext2 directory exceeds double-indirect capacity"
             )
         preferred = (parent - 1) // self.inodes_per_group
         new_block = self._allocate_block(preferred)
@@ -1015,9 +1016,11 @@ class _Ext2FS:
         self._write_block(new_block, buf)
 
         allocated_blocks = 1
+        entries_per_block = self.block_size // 4
+        double_start = _DIRECT_BLOCKS + entries_per_block
         if current_blocks < _DIRECT_BLOCKS:
             struct.pack_into("<I", parent_raw, 40 + current_blocks * 4, new_block)
-        else:
+        elif current_blocks < double_start:
             indirect_block = self._u32(parent_raw, 40 + _DIRECT_BLOCKS * 4)
             pointer_index = current_blocks - _DIRECT_BLOCKS
             if indirect_block:
@@ -1039,6 +1042,47 @@ class _Ext2FS:
                 allocated_blocks += 1
             struct.pack_into("<I", pointers, pointer_index * 4, new_block)
             self._write_block(indirect_block, bytes(pointers))
+        else:
+            double_index = current_blocks - double_start
+            child_index, pointer_index = divmod(double_index, entries_per_block)
+            double_root = self._u32(parent_raw, 40 + (_DIRECT_BLOCKS + 1) * 4)
+            if double_root:
+                top_level = bytearray(self._read_block(double_root))
+            else:
+                if child_index != 0 or pointer_index != 0:
+                    raise NativeExt2UnsafeError(
+                        "ext2 directory has no double-indirect pointer block"
+                    )
+                double_root = self._allocate_block(preferred)
+                top_level = bytearray(self.block_size)
+                struct.pack_into(
+                    "<I", parent_raw, 40 + (_DIRECT_BLOCKS + 1) * 4, double_root
+                )
+                allocated_blocks += 1
+
+            child_block = self._u32(top_level, child_index * 4)
+            if child_block:
+                pointers = bytearray(self._read_block(child_block))
+            else:
+                if pointer_index != 0 or any(
+                    self._u32(top_level, index * 4)
+                    for index in range(child_index + 1, entries_per_block)
+                ):
+                    raise NativeExt2UnsafeError(
+                        "ext2 directory double-indirect table has an unexpected gap"
+                    )
+                child_block = self._allocate_block(preferred)
+                pointers = bytearray(self.block_size)
+                struct.pack_into("<I", top_level, child_index * 4, child_block)
+                self._write_block(double_root, bytes(top_level))
+                allocated_blocks += 1
+
+            if self._u32(pointers, pointer_index * 4):
+                raise NativeExt2UnsafeError(
+                    "ext2 directory double-indirect block has an unexpected pointer"
+                )
+            struct.pack_into("<I", pointers, pointer_index * 4, new_block)
+            self._write_block(child_block, bytes(pointers))
         self._put32(parent_raw, 4, self._u32(parent_raw, 4) + self.block_size)
         self._put32(
             parent_raw,
@@ -1268,11 +1312,9 @@ class _Ext2FS:
         blocks = self._inode_blocks(
             raw,
             allow_indirect=True,
-            allow_double_indirect=not is_dir,
+            allow_double_indirect=True,
         )
-        pointer_blocks = self._inode_pointer_blocks(
-            raw, allow_double_indirect=not is_dir
-        )
+        pointer_blocks = self._inode_pointer_blocks(raw, allow_double_indirect=True)
         self._remove_entry(parent, entry)
         for block in blocks:
             self._free_block(block)
