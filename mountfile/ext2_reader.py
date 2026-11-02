@@ -946,4 +946,20 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         return bytes(output)
 
     def read_file(self, path) -> bytes:
-        return self.read_file_range(path, 0, self.file_size(path))
+        """Read a complete regular file using bounded native range requests.
+
+        ``read_file_range`` deliberately caps one request at 16 MiB.  The
+        public whole-file operation must not inherit that transport limit, so
+        large files are assembled from bounded chunks instead of being
+        rejected merely because their logical size exceeds the range ceiling.
+        """
+        size = self.file_size(path)
+        if size == 0:
+            return b""
+        output = bytearray()
+        offset = 0
+        while offset < size:
+            length = min(_MAX_READ_RANGE_BYTES, size - offset)
+            output.extend(self.read_file_range(path, offset, length))
+            offset += length
+        return bytes(output)

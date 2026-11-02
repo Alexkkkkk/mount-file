@@ -292,6 +292,31 @@ def test_reads_directory_and_direct_file_without_external_tools(tmp_path):
         provider.close()
 
 
+def test_read_file_assembles_large_files_from_bounded_ranges(monkeypatch):
+    provider = NativeExt2Image.__new__(NativeExt2Image)
+    size = NativeExt2Image.max_read_range_bytes + 123
+    calls = []
+
+    monkeypatch.setattr(provider, "file_size", lambda _path: size)
+
+    def read_range(_path, offset, length):
+        calls.append((offset, length))
+        return bytes(
+            (offset // NativeExt2Image.max_read_range_bytes) + 1 for _ in range(length)
+        )
+
+    monkeypatch.setattr(provider, "read_file_range", read_range)
+    data = provider.read_file("/large.bin")
+
+    assert calls == [
+        (0, NativeExt2Image.max_read_range_bytes),
+        (NativeExt2Image.max_read_range_bytes, 123),
+    ]
+    assert len(data) == size
+    assert data[:1] == b"\x01"
+    assert data[-1:] == b"\x02"
+
+
 def test_ext2_stat_exposes_inode_metadata_and_linux_ownership(tmp_path):
     image_path = tmp_path / "ext2-stat-metadata.img"
     original = _make_image(image_path)
@@ -515,15 +540,13 @@ def test_range_read_keeps_noncontiguous_blocks_and_sparse_holes_separate(tmp_pat
         provider.close()
 
 
-def test_large_file_reads_are_limited_before_allocating(tmp_path):
+def test_large_file_range_reads_are_limited_before_allocating(tmp_path):
     image_path = tmp_path / "large-file.img"
     _make_image(image_path)
     provider = NativeExt2Image(image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
     try:
         with pytest.raises(Ext2ReadError, match="16 MiB"):
             provider.read_file_range("/triple.bin", 0, 17 * 1024 * 1024)
-        with pytest.raises(Ext2ReadError, match="16 MiB"):
-            provider.read_file("/triple.bin")
         assert (
             provider.read_file_range(
                 "/triple.bin", provider.file_size("/triple.bin") - 4, 1 << 40
