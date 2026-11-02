@@ -61,11 +61,11 @@ class Ext3ReadError(Ext2ReadError):
 
 
 class NativeExt3Image(NativeExt2Image):
-    """Read classic-pointer ext3/ext4 images without journal replay.
+    """Read classic-pointer ext3/ext4 images with conservative journal policy.
 
     The inherited block, inode, directory and bounded file readers are safe for
-    the classic layout. This subclass changes only the profile gate and adds a
-    strict internal-JBD2 empty-journal check.
+    the classic layout. Journal replay is rejected by default; an explicit
+    replay request enables only the bounded in-memory JBD2 overlay.
     """
 
     backend_name = "native-ext3-ro"
@@ -167,6 +167,34 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("short JBD2 record header")
         return struct.unpack_from(">III", raw, 0)
 
+    def _parse_jbd2_revoke(self, record, expected_sequence, journal_data_blocks):
+        """Parse one classic 32-bit revoke block without checksum features."""
+        magic, record_type, sequence = self._jbd2_header(record)
+        if magic != _JBD2_MAGIC or record_type != _JBD2_REVOKE:
+            raise Ext3ReadError("invalid JBD2 revoke record")
+        if sequence != expected_sequence:
+            raise Ext3ReadError("JBD2 revoke sequence disagrees with transaction")
+        if len(record) < 16:
+            raise Ext3ReadError("short JBD2 revoke record")
+        byte_count = struct.unpack_from(">I", record, 12)[0]
+        if byte_count < 16 or byte_count > len(record) or (byte_count - 16) % 4:
+            raise Ext3ReadError("JBD2 revoke record has invalid byte count")
+        targets = []
+        seen = set()
+        for cursor in range(16, byte_count, 4):
+            target = struct.unpack_from(">I", record, cursor)[0]
+            if target == 0 or target >= self.blocks_count:
+                raise Ext3ReadError("JBD2 revoke target is outside filesystem")
+            if target in seen:
+                raise Ext3ReadError("JBD2 revoke target is duplicated")
+            if journal_data_blocks is not None and target in journal_data_blocks:
+                raise Ext3ReadError("JBD2 revoke target overlaps journal inode data")
+            seen.add(target)
+            targets.append(target)
+        if not targets:
+            raise Ext3ReadError("JBD2 revoke record contains no targets")
+        return targets
+
     def _validate_jbd2_transaction(
         self,
         inode,
@@ -175,61 +203,99 @@ class NativeExt3Image(NativeExt2Image):
         expected_sequence,
         journal_data_blocks: set[int] | None = None,
     ) -> int:
-        """Validate one bounded descriptor/data/commit chain.
+        """Validate one bounded no-checksum transaction in a clean ring.
 
-        This deliberately supports only the classic, no-checksum JBD2 tag
-        layout.  It never applies data blocks and rejects revoke, checksum and
-        otherwise unknown records rather than guessing their extent.
+        The scanner accepts one classic descriptor/data group, or a revoke-only
+        transaction, followed by zero or more 32-bit revoke blocks and a commit.
+        It never applies the data blocks or guesses unknown record extents.
         """
-        descriptor = self._journal_logical_block(inode, logical, journal_blocks)
-        magic, record_type, sequence = self._jbd2_header(descriptor)
-        if magic != _JBD2_MAGIC or record_type != _JBD2_DESCRIPTOR:
-            raise Ext3ReadError("invalid JBD2 transaction descriptor")
+        record = self._journal_logical_block(inode, logical, journal_blocks)
+        magic, record_type, sequence = self._jbd2_header(record)
+        if magic != _JBD2_MAGIC or record_type not in (
+            _JBD2_DESCRIPTOR,
+            _JBD2_REVOKE,
+        ):
+            raise Ext3ReadError("invalid JBD2 transaction record")
         if sequence == 0 or (
             expected_sequence is not None and sequence != expected_sequence
         ):
-            raise Ext3ReadError("JBD2 descriptor sequence mismatch")
+            raise Ext3ReadError("JBD2 transaction sequence mismatch")
 
-        cursor = 12
-        tag_count = 0
-        last = False
         target_blocks: set[int] = set()
-        while cursor + 8 <= self.block_size:
-            block_number, flags = struct.unpack_from(">II", descriptor, cursor)
-            cursor += 8
-            tag_count += 1
-            if block_number == 0 or block_number >= self.blocks_count:
-                raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
-            if block_number in target_blocks:
-                raise Ext3ReadError("JBD2 transaction targets a block more than once")
-            target_blocks.add(block_number)
-            if journal_data_blocks is not None and block_number in journal_data_blocks:
-                raise Ext3ReadError(
-                    "JBD2 descriptor target overlaps journal inode data"
-                )
-            if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
-                raise Ext3ReadError("unsupported JBD2 descriptor tag flags")
-            if not flags & _JBD2_TAG_SAME_UUID:
-                if cursor + 16 > self.block_size:
-                    raise Ext3ReadError("truncated JBD2 descriptor UUID")
-                if descriptor[cursor : cursor + 16] != self.profile.filesystem_uuid:
-                    raise Ext3ReadError("JBD2 descriptor UUID mismatch")
-                cursor += 16
-            if flags & _JBD2_TAG_LAST:
-                last = True
-                break
-        if not last or tag_count == 0:
-            raise Ext3ReadError("unterminated or empty JBD2 descriptor")
+        revoked_blocks: set[int] = set()
+        if record_type == _JBD2_DESCRIPTOR:
+            cursor = 12
+            tag_count = 0
+            last = False
+            while cursor + 8 <= self.block_size:
+                block_number, flags = struct.unpack_from(">II", record, cursor)
+                cursor += 8
+                tag_count += 1
+                if block_number == 0 or block_number >= self.blocks_count:
+                    raise Ext3ReadError("JBD2 descriptor block is outside filesystem")
+                if block_number in target_blocks:
+                    raise Ext3ReadError(
+                        "JBD2 transaction targets a block more than once"
+                    )
+                target_blocks.add(block_number)
+                if (
+                    journal_data_blocks is not None
+                    and block_number in journal_data_blocks
+                ):
+                    raise Ext3ReadError(
+                        "JBD2 descriptor target overlaps journal inode data"
+                    )
+                if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+                    raise Ext3ReadError("unsupported JBD2 descriptor tag flags")
+                if not flags & _JBD2_TAG_SAME_UUID:
+                    if cursor + 16 > self.block_size:
+                        raise Ext3ReadError("truncated JBD2 descriptor UUID")
+                    if record[cursor : cursor + 16] != self.profile.filesystem_uuid:
+                        raise Ext3ReadError("JBD2 descriptor UUID mismatch")
+                    cursor += 16
+                if flags & _JBD2_TAG_LAST:
+                    last = True
+                    break
+            if not last or tag_count == 0:
+                raise Ext3ReadError("unterminated or empty JBD2 descriptor")
 
-        # Every tag has one following data block; the next block must be the
-        # matching commit record.  Ring arithmetic is explicit and bounded.
-        data_start = logical + 1
-        commit_logical = data_start + tag_count
-        if commit_logical >= journal_blocks:
+            control_logical = logical + 1 + tag_count
+            if control_logical >= journal_blocks:
+                raise Ext3ReadError("JBD2 transaction exceeds journal bounds")
+            for data_logical in range(logical + 1, control_logical):
+                self._journal_logical_block(inode, data_logical, journal_blocks)
+        else:
+            revoked_blocks.update(
+                self._parse_jbd2_revoke(record, sequence, journal_data_blocks)
+            )
+            control_logical = logical + 1
+
+        while control_logical < journal_blocks:
+            control = self._journal_logical_block(
+                inode, control_logical, journal_blocks
+            )
+            control_magic, control_type, control_sequence = self._jbd2_header(control)
+            if control_magic != _JBD2_MAGIC or control_sequence != sequence:
+                break
+            if control_type != _JBD2_REVOKE:
+                break
+            for target in self._parse_jbd2_revoke(
+                control, sequence, journal_data_blocks
+            ):
+                if target in revoked_blocks:
+                    raise Ext3ReadError(
+                        "JBD2 revoke target is duplicated in transaction"
+                    )
+                if target in target_blocks:
+                    raise Ext3ReadError(
+                        "JBD2 transaction both writes and revokes the same block"
+                    )
+                revoked_blocks.add(target)
+            control_logical += 1
+
+        if control_logical >= journal_blocks:
             raise Ext3ReadError("JBD2 transaction exceeds journal bounds")
-        for data_logical in range(data_start, commit_logical):
-            self._journal_logical_block(inode, data_logical, journal_blocks)
-        commit = self._journal_logical_block(inode, commit_logical, journal_blocks)
+        commit = self._journal_logical_block(inode, control_logical, journal_blocks)
         commit_magic, commit_type, commit_sequence = self._jbd2_header(commit)
         if (
             commit_magic != _JBD2_MAGIC
@@ -237,7 +303,7 @@ class NativeExt3Image(NativeExt2Image):
             or commit_sequence != sequence
         ):
             raise Ext3ReadError("JBD2 commit record sequence/type mismatch")
-        return commit_logical
+        return control_logical
 
     def _validate_empty_journal(self, *, replay_journal=False) -> None:
         journal_inode = self.profile.journal_inode
@@ -313,7 +379,7 @@ class NativeExt3Image(NativeExt2Image):
                 logical += 1
                 continue
             _magic, block_kind, record_sequence = self._jbd2_header(block)
-            if block_kind != _JBD2_DESCRIPTOR:
+            if block_kind not in (_JBD2_DESCRIPTOR, _JBD2_REVOKE):
                 raise Ext3ReadError("unexpected JBD2 journal record")
             logical = (
                 self._validate_jbd2_transaction(
@@ -337,14 +403,14 @@ class NativeExt3Image(NativeExt2Image):
         journal_data_blocks: set[int] | None = None,
         first: int | None = None,
     ):
-        """Replay classic committed JBD2 records into a read-only overlay.
+        """Replay classic descriptor/data/revoke/commit records read-only.
 
-        Only the old descriptor/data/commit layout is accepted. No revoke or
-        checksum record is interpreted, and the image is never opened for
-        writing. Records may wrap from ``max_length - 1`` to ``first``; the
-        bounded ring is consumed at most once, and an explicit empty record
-        must terminate it. Unsupported records fail closed instead of being
-        guessed.
+        One descriptor/data group and zero or more 32-bit revoke blocks are
+        accepted per transaction. Revoke blocks suppress earlier overlay data
+        for their targets; a later transaction can write those blocks again.
+        Checksummed and otherwise unknown JBD2 features remain unsupported.
+        The bounded ring is consumed at most once and must have an empty-record
+        terminator. The source image is never opened for writing.
         """
         if first is None:
             first = 1
@@ -356,78 +422,126 @@ class NativeExt3Image(NativeExt2Image):
         ring_length = max_length - first
         consumed = 0
         transactions = 0
-        overlay = {}
+        replayed_transactions = []
         terminated = False
         while consumed < ring_length:
-            descriptor = self._journal_logical_block(inode, logical, journal_blocks)
-            if not descriptor.strip(b"\x00"):
+            record = self._journal_logical_block(inode, logical, journal_blocks)
+            if not record.strip(b"\x00"):
                 if transactions == 0:
                     raise Ext3ReadError("first JBD2 replay descriptor is empty")
                 terminated = True
                 break
-            magic, record_type, sequence = self._jbd2_header(descriptor)
-            if magic != _JBD2_MAGIC or record_type != _JBD2_DESCRIPTOR:
-                raise Ext3ReadError("invalid JBD2 replay descriptor")
+            magic, record_type, sequence = self._jbd2_header(record)
+            if magic != _JBD2_MAGIC or record_type not in (
+                _JBD2_DESCRIPTOR,
+                _JBD2_REVOKE,
+            ):
+                raise Ext3ReadError("invalid JBD2 replay transaction record")
             if sequence != expected_sequence:
                 raise Ext3ReadError(
                     "JBD2 replay descriptor sequence disagrees with superblock"
                 )
-            cursor = 12
-            targets = []
-            seen_targets: set[int] = set()
-            last = False
-            while cursor + 8 <= self.block_size:
-                target, flags = struct.unpack_from(">II", descriptor, cursor)
-                cursor += 8
-                if target == 0 or target >= self.blocks_count:
-                    raise Ext3ReadError("JBD2 replay target is outside filesystem")
-                if target in seen_targets:
-                    raise Ext3ReadError(
-                        "JBD2 replay transaction targets a block more than once"
-                    )
-                seen_targets.add(target)
-                if journal_data_blocks is not None and target in journal_data_blocks:
-                    raise Ext3ReadError(
-                        "JBD2 replay target overlaps journal inode data"
-                    )
-                if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
-                    raise Ext3ReadError("unsupported JBD2 replay tag flags")
-                if not flags & _JBD2_TAG_SAME_UUID:
-                    if cursor + 16 > self.block_size:
-                        raise Ext3ReadError("truncated JBD2 replay descriptor UUID")
-                    if descriptor[cursor : cursor + 16] != self.profile.filesystem_uuid:
-                        raise Ext3ReadError("JBD2 replay descriptor UUID mismatch")
-                    cursor += 16
-                targets.append(target)
-                if flags & _JBD2_TAG_LAST:
-                    last = True
-                    break
-            if not targets or not last:
-                raise Ext3ReadError("unterminated JBD2 replay descriptor")
-            transaction_blocks = 2 + len(targets)
-            if transaction_blocks > ring_length - consumed:
-                raise Ext3ReadError("JBD2 replay transaction exceeds journal bounds")
 
             def ring_position(relative):
                 return first + ((logical - first + relative) % ring_length)
 
-            data_blocks = [
-                self._journal_logical_block(
-                    inode, ring_position(1 + index), journal_blocks
+            remaining = ring_length - consumed
+            writes = []
+            revokes = set()
+            if record_type == _JBD2_DESCRIPTOR:
+                cursor = 12
+                targets = []
+                seen_targets: set[int] = set()
+                last = False
+                while cursor + 8 <= self.block_size:
+                    target, flags = struct.unpack_from(">II", record, cursor)
+                    cursor += 8
+                    if target == 0 or target >= self.blocks_count:
+                        raise Ext3ReadError("JBD2 replay target is outside filesystem")
+                    if target in seen_targets:
+                        raise Ext3ReadError(
+                            "JBD2 replay transaction targets a block more than once"
+                        )
+                    seen_targets.add(target)
+                    if (
+                        journal_data_blocks is not None
+                        and target in journal_data_blocks
+                    ):
+                        raise Ext3ReadError(
+                            "JBD2 replay target overlaps journal inode data"
+                        )
+                    if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+                        raise Ext3ReadError("unsupported JBD2 replay tag flags")
+                    if not flags & _JBD2_TAG_SAME_UUID:
+                        if cursor + 16 > self.block_size:
+                            raise Ext3ReadError("truncated JBD2 replay descriptor UUID")
+                        if record[cursor : cursor + 16] != self.profile.filesystem_uuid:
+                            raise Ext3ReadError("JBD2 replay descriptor UUID mismatch")
+                        cursor += 16
+                    targets.append(target)
+                    if flags & _JBD2_TAG_LAST:
+                        last = True
+                        break
+                if not targets or not last:
+                    raise Ext3ReadError("unterminated JBD2 replay descriptor")
+                records_before_control = 1 + len(targets)
+                if records_before_control >= remaining:
+                    raise Ext3ReadError(
+                        "JBD2 replay transaction exceeds journal bounds"
+                    )
+                data_blocks = [
+                    self._journal_logical_block(
+                        inode, ring_position(1 + index), journal_blocks
+                    )
+                    for index in range(len(targets))
+                ]
+                writes = list(zip(targets, data_blocks))
+            else:
+                revokes.update(
+                    self._parse_jbd2_revoke(record, sequence, journal_data_blocks)
                 )
-                for index in range(len(targets))
-            ]
-            commit_logical = ring_position(1 + len(targets))
-            commit = self._journal_logical_block(inode, commit_logical, journal_blocks)
-            commit_magic, commit_type, commit_sequence = self._jbd2_header(commit)
-            if (
-                commit_magic != _JBD2_MAGIC
-                or commit_type != _JBD2_COMMIT
-                or commit_sequence != sequence
-            ):
-                raise Ext3ReadError("JBD2 replay commit does not match descriptor")
-            for target, data in zip(targets, data_blocks):
-                overlay[target] = data
+                records_before_control = 1
+
+            while True:
+                if records_before_control >= remaining:
+                    raise Ext3ReadError(
+                        "JBD2 replay transaction exceeds journal bounds"
+                    )
+                control = self._journal_logical_block(
+                    inode, ring_position(records_before_control), journal_blocks
+                )
+                if not control.strip(b"\x00"):
+                    raise Ext3ReadError("JBD2 replay transaction is missing commit")
+                control_magic, control_type, control_sequence = self._jbd2_header(
+                    control
+                )
+                if control_magic != _JBD2_MAGIC or control_sequence != sequence:
+                    raise Ext3ReadError("JBD2 commit does not match descriptor")
+                if control_type == _JBD2_REVOKE:
+                    for target in self._parse_jbd2_revoke(
+                        control, sequence, journal_data_blocks
+                    ):
+                        if target in revokes:
+                            raise Ext3ReadError(
+                                "JBD2 revoke target is duplicated in transaction"
+                            )
+                        revokes.add(target)
+                    records_before_control += 1
+                    continue
+                if control_type != _JBD2_COMMIT:
+                    raise Ext3ReadError("unsupported JBD2 replay control record")
+                if set(target for target, _data in writes) & revokes:
+                    raise Ext3ReadError(
+                        "JBD2 transaction both writes and revokes the same block"
+                    )
+                transaction_blocks = records_before_control + 1
+                if transaction_blocks > remaining:
+                    raise Ext3ReadError(
+                        "JBD2 replay transaction exceeds journal bounds"
+                    )
+                break
+
+            replayed_transactions.append((writes, revokes))
             transactions += 1
             if transactions > _MAX_JOURNAL_BLOCKS:
                 raise Ext3ReadError("JBD2 replay transaction count is excessive")
@@ -444,6 +558,12 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError(
                 "JBD2 replay reaches end of non-wrapping log without terminator"
             )
+        overlay = {}
+        for writes, revokes in replayed_transactions:
+            for target in revokes:
+                overlay.pop(target, None)
+            for target, data in writes:
+                overlay[target] = data
         self._journal_overlay = overlay
         # Metadata loaded while resolving the journal inode predates this
         # overlay. Drop every cache whose values are sourced through _read_at

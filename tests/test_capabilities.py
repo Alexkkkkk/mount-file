@@ -110,6 +110,10 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         "double-indirect blocks, up to 64 MiB" in constraint
         for constraint in profiles["ext2-native-rw"]["constraints"]
     )
+    assert (
+        "Explicit replay accepts classic 32-bit revoke records in a validated "
+        "no-checksum JBD2 overlay." in profiles["ext3-native-ro"]["constraints"]
+    )
     assert profiles["ext3-native-ro"]["operations"]["write-file"]["state"] == "refused"
     assert profiles["exfat-native-rw"]["operations"]["write-file"] == {
         "state": "available",
