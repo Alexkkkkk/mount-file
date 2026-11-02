@@ -62,7 +62,7 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
 
 
 def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
-    assert CAPABILITY_MATRIX_VERSION == 4
+    assert CAPABILITY_MATRIX_VERSION == 5
     assert VFS_READ_CAPABILITIES == (
         "list",
         "stat",
@@ -74,6 +74,44 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
         if profile.interface == "vfs":
             assert "read-file" in profile.read_capabilities
             assert "read-range" in profile.read_capabilities
+
+
+def test_v5_matrix_publishes_complete_operation_and_gate_contract():
+    snapshot = get_native_capability_matrix()
+    assert snapshot["operations"] == [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract",
+        "write-file",
+        "mkdir",
+        "delete",
+        "rename",
+    ]
+    for profile in snapshot["profiles"]:
+        assert profile["constraint_ids"]
+        assert profile["gates"]
+        assert set(profile["operations"]) == set(snapshot["operations"])
+        for operation in profile["operations"].values():
+            assert operation["state"] in {"available", "refused"}
+            if operation["state"] == "available":
+                assert operation["api_operation"]
+                assert operation["refusal"] is None
+            else:
+                assert operation["api_operation"] is None
+                assert operation["refusal"]["code"] == "operation_not_supported"
+                assert operation["refusal"]["category"] == "unsupported"
+
+    profiles = {item["profile_id"]: item for item in snapshot["profiles"]}
+    ext3_gate_ids = {item["id"] for item in profiles["ext3-native-ro"]["gates"]}
+    assert {"bounded-extent", "clean-jbd2-state", "validated-jbd2"} <= ext3_gate_ids
+    assert profiles["ext3-native-ro"]["operations"]["write-file"]["state"] == "refused"
+    assert profiles["exfat-native-rw"]["operations"]["write-file"] == {
+        "state": "available",
+        "api_operation": "write_file",
+        "refusal": None,
+    }
 
 
 def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
@@ -212,6 +250,15 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
     assert status["write_enabled"] is True
     assert status["write_rejection_reason"] == ""
     assert status["write_rejection_code"] is None
+    assert status["write_rejection"] is None
+    assert status["operations"]["write-file"] == {
+        "state": "available",
+        "api_operation": "write_file",
+        "refusal": None,
+    }
+    assert status["operations"]["stat"]["state"] == "refused"
+    assert status["constraint_ids"]
+    assert status["gates"]
     assert (
         tuple(status["write_capabilities"])
         == NATIVE_WRITE_PROFILES_BY_STRATEGY[strategy].write_capabilities
@@ -236,6 +283,10 @@ def test_native_strategy_does_not_enable_writes_without_writable_flag(strategy):
     assert status["write_enabled"] is False
     assert status["write_rejection_reason"]
     assert status["write_rejection_code"] == "operation_not_supported"
+    assert status["operations"]["write-file"]["state"] == "refused"
+    assert status["operations"]["write-file"]["refusal"]["code"] == (
+        "operation_not_supported"
+    )
 
 
 @pytest.mark.parametrize(
@@ -265,3 +316,4 @@ def test_native_strategy_rejects_mismatched_filesystem_profile(
     assert status["write_enabled"] is False
     assert status["write_rejection_reason"]
     assert status["write_rejection_code"] == "unsupported_profile"
+    assert status["write_rejection"]["category"] == "unsupported"

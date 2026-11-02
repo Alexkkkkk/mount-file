@@ -45,10 +45,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
 from mountfile.capabilities import (
-    CAPABILITY_MATRIX_VERSION,
     NATIVE_WRITE_PROFILES_BY_STRATEGY,
     RW_READ_CAPABILITIES,
     RW_WRITE_CAPABILITIES,
+    canonical_operation_for_api_operation,
+    get_native_capability_status,
 )
 from mountfile.extract import ExtractionLimits, extract_file
 from mountfile.rw.journal import Journal as _VerifiedJournal
@@ -2811,22 +2812,31 @@ class UniversalFSRW:
             and str(info.fs_type).casefold() == native_profile.filesystem.casefold()
             and str(info.backend) == native_profile.backend
         )
-        rejection_code = None
-        if strategy in NATIVE_WRITE_PROFILES_BY_STRATEGY:
-            if writable and native_profile_matches:
-                write = list(native_profile.write_capabilities)
-                reason = ""
-            else:
-                write = []
-                reason = (
+        if native_profile_matches:
+            rejection_reason = None
+            rejection_code = None
+            if not writable:
+                rejection_reason = (
                     "native write strategy does not match the selected writable "
                     "filesystem/backend profile"
                 )
-                rejection_code = (
-                    RefusalCode.UNSUPPORTED_PROFILE.value
-                    if not native_profile_matches
-                    else RefusalCode.OPERATION_NOT_SUPPORTED.value
-                )
+                rejection_code = RefusalCode.OPERATION_NOT_SUPPORTED
+            return get_native_capability_status(
+                native_profile,
+                backend=info.backend,
+                write_enabled=writable,
+                write_rejection_reason=rejection_reason,
+                write_rejection_code=rejection_code,
+            )
+
+        rejection_code = None
+        if strategy in NATIVE_WRITE_PROFILES_BY_STRATEGY:
+            write = []
+            reason = (
+                "native write strategy does not match the selected writable "
+                "filesystem/backend profile"
+            )
+            rejection_code = RefusalCode.UNSUPPORTED_PROFILE.value
         elif writable:
             write = list(RW_WRITE_CAPABILITIES)
             reason = ""
@@ -2845,10 +2855,12 @@ class UniversalFSRW:
             "write_enabled": bool(write),
             "write_rejection_reason": reason,
             "write_rejection_code": rejection_code,
+            "write_rejection": (
+                None
+                if rejection_code is None
+                else RefusalRuntimeError(reason, RefusalCode(rejection_code)).to_dict()
+            ),
         }
-        if native_profile_matches:
-            status["profile_id"] = native_profile.profile_id
-            status["matrix_version"] = CAPABILITY_MATRIX_VERSION
         return status
 
     def capability_status(self) -> dict:
@@ -2861,9 +2873,17 @@ class UniversalFSRW:
             reason = status["write_rejection_reason"] or (
                 "operation is not advertised by the selected profile"
             )
+            code = RefusalCode.OPERATION_NOT_SUPPORTED
+            canonical = canonical_operation_for_api_operation(
+                "universal-fs-rw", operation
+            )
+            if canonical is not None:
+                refusal = status.get("operations", {}).get(canonical, {}).get("refusal")
+                if isinstance(refusal, dict) and refusal.get("code"):
+                    code = RefusalCode(refusal["code"])
             raise RefusalRuntimeError(
                 "%s is unsupported for %s: %s" % (operation, status["backend"], reason),
-                RefusalCode.OPERATION_NOT_SUPPORTED,
+                code,
             )
 
     def list(self, path: str = "/") -> list[FSEntry]:

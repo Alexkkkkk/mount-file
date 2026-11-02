@@ -91,6 +91,15 @@ def test_backend_status_is_explicitly_read_only_and_serialisable():
             "native provider is read-only; use an explicitly selected "
             "bounded writer profile"
         ),
+        "write_rejection_code": "operation_not_supported",
+        "write_rejection": {
+            "code": "operation_not_supported",
+            "category": "unsupported",
+            "message": (
+                "native provider is read-only; use an explicitly selected "
+                "bounded writer profile"
+            ),
+        },
     }
 
 
@@ -129,3 +138,13 @@ def test_native_backend_status_identifies_canonical_matrix_profile():
         "extract",
     ]
     assert status["write_capabilities"] == []
+    assert status["write_rejection_code"] == "operation_not_supported"
+    assert status["operations"]["read-file"] == {
+        "state": "available",
+        "api_operation": "read-file",
+        "refusal": None,
+    }
+    assert status["operations"]["write-file"]["refusal"]["code"] == (
+        "operation_not_supported"
+    )
+    assert "clean-jbd2-state" in status["constraint_ids"]

@@ -97,6 +97,9 @@ def _make_ext4_extent_image(path):
 def _make_clean_journal_image(
     path,
     *,
+    journal_header_sequence=0xA5A5A5A5,
+    journal_sequence=7,
+    journal_start=0,
     descriptor_sequence=7,
     commit_sequence=7,
     truncate_commit=False,
@@ -123,9 +126,10 @@ def _make_clean_journal_image(
     struct.pack_into("<5I", image, inode + 40, 40, 41, 42, 43, 44)
 
     journal = memoryview(image)[40 * 1024 : 45 * 1024]
-    struct.pack_into(">III", journal, 0, 0xC03B3998, 3, 7)
+    struct.pack_into(">III", journal, 0, 0xC03B3998, 3, journal_header_sequence)
     struct.pack_into(">II", journal, 12, 1024, 5)
-    struct.pack_into(">II", journal, 20, 1, 0)
+    struct.pack_into(">I", journal, 20, 1)
+    struct.pack_into(">II", journal, 24, journal_sequence, journal_start)
     journal[48:64] = filesystem_uuid
     # One classic descriptor tag, one data block, and its matching commit.
     descriptor_logical, commit_logical = (4, 2) if wrap_replay else (1, 3)
@@ -235,11 +239,11 @@ def test_journal_commit_sequence_mismatch_fails_closed(tmp_path):
 @pytest.mark.parametrize("replay_journal", [False, True])
 def test_jbd2_transaction_cannot_target_one_block_twice(tmp_path, replay_journal):
     image_path = tmp_path / f"duplicate-journal-target-{replay_journal}.img"
-    _make_clean_journal_image(image_path, duplicate_target=True)
-    if replay_journal:
-        image = bytearray(image_path.read_bytes())
-        struct.pack_into(">I", image, 40 * 1024 + 24, 1)
-        image_path.write_bytes(image)
+    _make_clean_journal_image(
+        image_path,
+        duplicate_target=True,
+        journal_start=1 if replay_journal else 0,
+    )
 
     with pytest.raises(Ext3ReadError, match="targets a block more than once"):
         NativeExt3Image(
@@ -262,11 +266,11 @@ def test_jbd2_transaction_cannot_target_its_own_journal_blocks(
 ):
     with TemporaryDirectory() as tempdir:
         image_path = Path(tempdir) / "journal-self-target.img"
-        _make_clean_journal_image(image_path, replay_target=journal_block)
-        if replay_journal:
-            image = bytearray(image_path.read_bytes())
-            struct.pack_into(">I", image, 40 * 1024 + 24, 1)
-            image_path.write_bytes(image)
+        _make_clean_journal_image(
+            image_path,
+            replay_target=journal_block,
+            journal_start=1 if replay_journal else 0,
+        )
 
         with pytest.raises(Ext3ReadError, match="target overlaps journal inode data"):
             NativeExt3Image(
@@ -298,21 +302,22 @@ def test_truncated_journal_record_fails_closed(tmp_path):
 
 def test_journal_with_nonzero_start_is_recovery_required(tmp_path):
     image_path = tmp_path / "active-journal.img"
-    _make_clean_journal_image(image_path)
-    image = bytearray(image_path.read_bytes())
-    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
-    image_path.write_bytes(image)
+    _make_clean_journal_image(image_path, journal_start=1)
     with pytest.raises(Ext3ReadError, match="uncheckpointed transaction"):
         NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * 1024)
 
 
 def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
     image_path = tmp_path / "replay-journal.img"
-    _make_clean_journal_image(image_path, replay_target=3)
+    _make_clean_journal_image(
+        image_path,
+        replay_target=3,
+        journal_start=1,
+        journal_header_sequence=99,
+    )
     image = bytearray(image_path.read_bytes())
     payload = bytes([0xA7]) * 1024
     image[40 * 1024 + 2 * 1024 : 40 * 1024 + 3 * 1024] = payload
-    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
     image_path.write_bytes(image)
 
     original_bitmap = NativeExt2Image._bitmap
@@ -344,11 +349,12 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
 
 def test_explicit_journal_replay_supports_ring_wraparound(tmp_path):
     image_path = tmp_path / "wrapped-replay-journal.img"
-    _make_clean_journal_image(image_path, replay_target=3, wrap_replay=True)
+    _make_clean_journal_image(
+        image_path, replay_target=3, wrap_replay=True, journal_start=4
+    )
     image = bytearray(image_path.read_bytes())
     payload = bytes([0xB8]) * 1024
     image[40 * 1024 + 1 * 1024 : 40 * 1024 + 2 * 1024] = payload
-    struct.pack_into(">I", image, 40 * 1024 + 24, 4)
     image_path.write_bytes(image)
 
     provider = NativeExt3Image(
@@ -364,9 +370,10 @@ def test_explicit_journal_replay_supports_ring_wraparound(tmp_path):
 
 def test_wrapped_replay_partial_record_fails_closed(tmp_path):
     image_path = tmp_path / "wrapped-replay-partial.img"
-    _make_clean_journal_image(image_path, replay_target=3, wrap_replay=True)
+    _make_clean_journal_image(
+        image_path, replay_target=3, wrap_replay=True, journal_start=4
+    )
     image = bytearray(image_path.read_bytes())
-    struct.pack_into(">I", image, 40 * 1024 + 24, 4)
     struct.pack_into(">III", image, 43 * 1024, 0xC03B3998, 1, 8)
     struct.pack_into(">II", image, 43 * 1024 + 12, 3, 0x0000000A)
     image_path.write_bytes(image)
@@ -379,9 +386,8 @@ def test_wrapped_replay_partial_record_fails_closed(tmp_path):
 
 def test_active_journal_replay_rejects_empty_first_descriptor(tmp_path):
     image_path = tmp_path / "empty-replay-descriptor.img"
-    _make_clean_journal_image(image_path)
+    _make_clean_journal_image(image_path, journal_start=1)
     image = bytearray(image_path.read_bytes())
-    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
     image[41 * 1024 : 42 * 1024] = bytes(1024)
     image_path.write_bytes(image)
 
@@ -410,10 +416,9 @@ def test_journal_replay_empty_first_descriptor_preserves_existing_overlay():
 
 def test_journal_replay_requires_terminator_before_nonwrapping_log_end(tmp_path):
     image_path = tmp_path / "unterminated-replay-range.img"
-    _make_clean_journal_image(image_path)
+    _make_clean_journal_image(image_path, journal_start=1)
     image = bytearray(image_path.read_bytes())
     struct.pack_into(">I", image, 40 * 1024 + 16, 4)
-    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
     image_path.write_bytes(image)
 
     with pytest.raises(
@@ -428,10 +433,29 @@ def test_journal_replay_requires_terminator_before_nonwrapping_log_end(tmp_path)
 
 def test_journal_replay_rejects_sequence_not_advertised_by_superblock(tmp_path):
     image_path = tmp_path / "stale-replay-sequence.img"
-    _make_clean_journal_image(image_path, descriptor_sequence=99, commit_sequence=99)
-    image = bytearray(image_path.read_bytes())
-    struct.pack_into(">I", image, 40 * 1024 + 24, 1)
-    image_path.write_bytes(image)
+    _make_clean_journal_image(
+        image_path,
+        descriptor_sequence=99,
+        commit_sequence=99,
+        journal_start=1,
+    )
+
+    with pytest.raises(Ext3ReadError, match="sequence disagrees with superblock"):
+        NativeExt3Image(
+            image_path,
+            volume_size=BLOCKS_COUNT * 1024,
+            replay_journal=True,
+        )
+
+
+def test_journal_replay_uses_s_sequence_not_header_sequence(tmp_path):
+    image_path = tmp_path / "sequence-offsets.img"
+    _make_clean_journal_image(
+        image_path,
+        journal_header_sequence=7,
+        journal_sequence=99,
+        journal_start=1,
+    )
 
     with pytest.raises(Ext3ReadError, match="sequence disagrees with superblock"):
         NativeExt3Image(

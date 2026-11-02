@@ -56,9 +56,13 @@ def _make_rollover_journal_image(path, second_sequence=0):
     ]
     journal[:] = bytes(len(journal))
     filesystem_uuid = bytes(image[1024 + 0x68 : 1024 + 0x78])
-    struct.pack_into(">III", journal, 0, _JBD2_MAGIC, 3, 0xFFFFFFFF)
+    # The third word in the generic JBD2 header is independent from the
+    # journal superblock's s_sequence.  Keep every field explicit so this
+    # fixture exercises a real 0xffffffff -> 0 sequence rollover.
+    struct.pack_into(">III", journal, 0, _JBD2_MAGIC, 3, 0xA5A5A5A5)
     struct.pack_into(">II", journal, 0x0C, BLOCK_SIZE, _JOURNAL_BLOCK_COUNT)
-    struct.pack_into(">II", journal, 0x14, 1, 1)
+    struct.pack_into(">I", journal, 0x14, 1)  # s_first
+    struct.pack_into(">II", journal, 0x18, 0xFFFFFFFF, 1)  # s_sequence, s_start
     journal[0x30:0x40] = filesystem_uuid
 
     _write_transaction(journal, 1, 0xFFFFFFFF, b"before-rollover")

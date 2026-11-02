@@ -56,6 +56,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 |---|---|---:|
 | `volumes` | найденные тома и смещения | нет |
 | `info` | размер, сигнатура и сводка томов | нет |
+| `capabilities` | versioned native profile matrix без открытия образа | нет |
 | `ls` | список каталога | нет |
 | `get` | извлечение файла или каталога | нет |
 | `put` | записать локальные файлы | **да, FAT32** |
@@ -92,6 +93,12 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 Для команд записи обязательны `--yes`. Без него программа ничего не меняет,
 показывает предупреждение и возвращает код **2**. Нормальный результат — **0**,
 ошибка — **1**; `Ctrl+C` возвращает **130**.
+
+`python -m mountfile capabilities` печатает schema v5 JSON. Поля
+`read_capabilities` и `write_capabilities` сохранены для existing clients, а
+`operations` публикует полный canonical набор с `available`/`refused`, точным
+именем API method и structured refusal code. `constraint_ids` и `gates`
+описывают accepted bounded profile; они не обходят validation выбранного image.
 
 ## Примеры чтения
 
