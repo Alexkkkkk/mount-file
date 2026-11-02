@@ -4,7 +4,7 @@
 
 Статус относится к commit/ветке, указанным в автоматически обновляемом комментарии. Пока изменение не влито в `main`, оно не считается готовым в `main`.
 
-**Последняя заметка:** PR #326 слит в `main`; добавлены merge-aware sync и обязательный Linux preflight для NTFS oracle tools. Tracker проверяет только filenames и не запускает полный аудит.
+**Последняя заметка:** добавлен pure classic JBD2 transaction serializer как prerequisite; ext3/ext4 writer API остаётся отключённым до ring/order/checkpoint/recovery gates. Linux CI требует NTFS oracle tools; tracker не сканирует исходники.
 
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
