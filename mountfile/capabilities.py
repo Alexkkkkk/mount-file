@@ -300,6 +300,8 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         "ext3-native-ro": (
             "Read-only ext3; only validated supported JBD2 states are exposed.",
             "No writes or complete crash-recovery guarantee.",
+            "Explicit replay accepts classic 32-bit revoke records in a validated "
+            "no-checksum JBD2 overlay.",
         ),
         "ext4-native-ro": (
             "Bounded classic/accepted extent profile only.",

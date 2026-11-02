@@ -156,6 +156,90 @@ def _make_clean_journal_image(
     path.write_bytes(image)
 
 
+def _make_revoke_journal_image(
+    path, transactions, *, journal_block_count, journal_start=1
+):
+    if not transactions or journal_block_count > 15:
+        raise ValueError("synthetic revoke journal geometry is invalid")
+    _make_image(path, compat=0x000C)
+    image = bytearray(path.read_bytes())
+    filesystem_uuid = b"0123456789abcdef"
+    sb = memoryview(image)[1024:2048]
+    sb[0x68:0x78] = filesystem_uuid
+    struct.pack_into("<I", sb, 0xE0, 8)
+
+    inode = 5 * BLOCK_SIZE + (8 - 1) * 128
+    physical_blocks = tuple(range(40, 40 + journal_block_count))
+    struct.pack_into("<H", image, inode, 0x8000 | 0o600)
+    struct.pack_into("<I", image, inode + 4, journal_block_count * BLOCK_SIZE)
+    struct.pack_into("<I", image, inode + 28, journal_block_count * 2)
+    struct.pack_into(
+        "<15I",
+        image,
+        inode + 40,
+        *physical_blocks,
+        *([0] * (15 - len(physical_blocks))),
+    )
+
+    journal = memoryview(
+        image
+    )[40 * BLOCK_SIZE : (40 + journal_block_count) * BLOCK_SIZE]
+    struct.pack_into(">III", journal, 0, 0xC03B3998, 3, 0xA5A5A5A5)
+    struct.pack_into(">II", journal, 12, BLOCK_SIZE, journal_block_count)
+    struct.pack_into(">I", journal, 20, 1)
+    struct.pack_into(">II", journal, 24, transactions[0][0], journal_start)
+    journal[48:64] = filesystem_uuid
+
+    logical = 1
+    revoke_logicals = []
+    for sequence, writes, revokes in transactions:
+        writes = list(writes)
+        revokes = list(revokes)
+        if writes:
+            descriptor_offset = logical * BLOCK_SIZE
+            struct.pack_into(
+                ">III", journal, descriptor_offset, 0xC03B3998, 1, sequence
+            )
+            for index, (target, data) in enumerate(writes):
+                if len(data) != BLOCK_SIZE:
+                    raise ValueError("synthetic journal data must fill one block")
+                flags = 0x00000002
+                if index == len(writes) - 1:
+                    flags |= 0x00000008
+                struct.pack_into(
+                    ">II",
+                    journal,
+                    descriptor_offset + 12 + index * 8,
+                    target,
+                    flags,
+                )
+                data_offset = (logical + 1 + index) * BLOCK_SIZE
+                journal[data_offset : data_offset + BLOCK_SIZE] = data
+            logical += 1 + len(writes)
+        if revokes:
+            revoke_logicals.append(logical)
+            revoke_offset = logical * BLOCK_SIZE
+            struct.pack_into(
+                ">III", journal, revoke_offset, 0xC03B3998, 5, sequence
+            )
+            struct.pack_into(
+                ">I", journal, revoke_offset + 12, 16 + 4 * len(revokes)
+            )
+            for index, target in enumerate(revokes):
+                struct.pack_into(">I", journal, revoke_offset + 16 + index * 4, target)
+            logical += 1
+        commit_offset = logical * BLOCK_SIZE
+        struct.pack_into(
+            ">III", journal, commit_offset, 0xC03B3998, 2, sequence
+        )
+        logical += 1
+
+    if logical >= journal_block_count:
+        raise ValueError("synthetic revoke journal has no empty terminator")
+    path.write_bytes(image)
+    return tuple(revoke_logicals)
+
+
 def test_journaled_profile_rejects_without_a_valid_jbd2_journal(tmp_path):
     image_path = tmp_path / "journaled.img"
     _make_image(image_path, compat=0x000C)
@@ -345,6 +429,143 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
         assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
     finally:
         provider.close()
+
+
+def test_jbd2_revoke_suppresses_earlier_transaction_overlay(tmp_path):
+    image_path = tmp_path / "revoke-suppresses-old-write.img"
+    _make_revoke_journal_image(
+        image_path,
+        [
+            (7, [(3, bytes([0xA7]) * BLOCK_SIZE)], []),
+            (8, [], [3]),
+        ],
+        journal_block_count=8,
+    )
+    original = image_path.read_bytes()
+
+    provider = NativeExt3Image(
+        image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+    )
+    try:
+        assert provider.journal_replayed is True
+        assert 3 not in provider._journal_overlay
+        assert provider._read_at(3 * BLOCK_SIZE, BLOCK_SIZE) == original[
+            3 * BLOCK_SIZE : 4 * BLOCK_SIZE
+        ]
+        assert image_path.read_bytes() == original
+    finally:
+        provider.close()
+
+
+def test_jbd2_write_after_revoke_is_present_in_overlay(tmp_path):
+    image_path = tmp_path / "write-after-revoke.img"
+    later_payload = bytes([0xB8]) * BLOCK_SIZE
+    _make_revoke_journal_image(
+        image_path,
+        [
+            (7, [(3, bytes([0xA7]) * BLOCK_SIZE)], []),
+            (8, [], [3]),
+            (9, [(3, later_payload)], []),
+        ],
+        journal_block_count=11,
+    )
+
+    provider = NativeExt3Image(
+        image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+    )
+    try:
+        assert provider._journal_overlay[3] == later_payload
+    finally:
+        provider.close()
+
+
+def test_jbd2_revoke_rejects_invalid_count(tmp_path):
+    image_path = tmp_path / "invalid-revoke-count.img"
+    revoke_logicals = _make_revoke_journal_image(
+        image_path,
+        [(7, [], [3])],
+        journal_block_count=5,
+    )
+    image = bytearray(image_path.read_bytes())
+    revoke_offset = (40 + revoke_logicals[0]) * BLOCK_SIZE
+    struct.pack_into(">I", image, revoke_offset + 12, 15)
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match="invalid byte count"):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+        )
+
+
+def test_jbd2_revoke_rejects_duplicate_targets(tmp_path):
+    image_path = tmp_path / "duplicate-revoke-targets.img"
+    _make_revoke_journal_image(
+        image_path,
+        [(7, [], [3, 3])],
+        journal_block_count=5,
+    )
+
+    with pytest.raises(Ext3ReadError, match="revoke target is duplicated"):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+        )
+
+
+@pytest.mark.parametrize("revoke_target", [0, BLOCKS_COUNT])
+def test_jbd2_revoke_rejects_out_of_range_target(tmp_path, revoke_target):
+    image_path = tmp_path / "invalid-revoke-target.img"
+    _make_revoke_journal_image(
+        image_path,
+        [(7, [], [revoke_target])],
+        journal_block_count=5,
+    )
+
+    with pytest.raises(Ext3ReadError, match="outside filesystem"):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+        )
+
+
+@pytest.mark.parametrize(
+    "transactions",
+    [
+        [(7, [(3, bytes([0xC1]) * BLOCK_SIZE)], [4])],
+        [(7, [], [4])],
+    ],
+)
+def test_clean_journal_validates_bounded_revoke_transactions(
+    tmp_path, transactions
+):
+    image_path = tmp_path / "clean-revoke-journal.img"
+    _make_revoke_journal_image(
+        image_path,
+        transactions,
+        journal_block_count=6,
+        journal_start=0,
+    )
+
+    provider = NativeExt3Image(
+        image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE
+    )
+    try:
+        assert provider.journal_replayed is False
+        assert provider._journal_overlay == {}
+    finally:
+        provider.close()
+
+
+def test_jbd2_transaction_rejects_target_written_and_revoked_together(tmp_path):
+    image_path = tmp_path / "write-and-revoke-same-transaction.img"
+    _make_revoke_journal_image(
+        image_path,
+        [(7, [(3, bytes([0xA7]) * BLOCK_SIZE)], [3])],
+        journal_block_count=6,
+    )
+
+    with pytest.raises(Ext3ReadError, match="both writes and revokes"):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+        )
 
 
 def test_explicit_journal_replay_supports_ring_wraparound(tmp_path):
