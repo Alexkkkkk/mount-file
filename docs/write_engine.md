@@ -139,10 +139,12 @@ engine.close()
   в `tests/test_fat_reader.py` — для всех трёх вариантов FAT прогоняются
   valid- и invalid-fixture (синтетические образы со short-name, LFN, пустым,
   многокластерным файлом и вложенным каталогом), а результаты
-  list/stat/read-range/extract native reader сравниваются с независимой
-  референс-реализацией FAT внутри тестов (`pytsk3` и `mkfs.vfat` в тестовом
-  окружении недоступны, поэтому oracle — собственная минимальная
-  reference-читалка, не разделяющая код с `mountfile.fat_reader`). Повреждённые
+  list/stat/read-range/extract native reader сравниваются с отдельной минимальной
+  reference-читалкой, не разделяющей код с `mountfile.fat_reader`.
+  Дополнительно есть real-image differential test против `pytsk3`, использующий
+  `mkfs.vfat` и mtools; integration CI устанавливает эти инструменты.
+  Synthetic reference и real-image oracle не доказывают полную format parity.
+  Повреждённые
   профили (битая boot signature, усечённый образ, цикл или свободная ссылка
   в цепочке кластеров) завершаются явным отказом; routing-тесты дополнительно
   фиксируют, что bounded FAT-профили всегда обрабатываются native reader-ом

@@ -4,7 +4,7 @@
 
 Статус относится к commit/ветке, указанным в автоматически обновляемом комментарии. Пока изменение не влито в `main`, оно не считается готовым в `main`.
 
-**Последняя заметка:** добавлены classic JBD2 serializer и wrap-safe placement planner; они не обновляют journal superblock и не меняют образ. ext3/ext4 writer API остаётся отключённым до ordering/checkpoint/recovery gates. Linux CI требует NTFS oracle tools; tracker не сканирует исходники.
+**Последняя заметка:** bounded classic JBD2 serializer и wrap-safe planner остаются отдельным экспериментом: escaping не поддерживается, serializer отказывает на требующем escape payload, а кодировщик и planner не записывают образ или journal superblock. ext3/ext4 writer API остаётся отключённым до ordering/checkpoint/recovery gates. Progress publisher валидирует issue-ветки read-only и публикует один комментарий только с актуального `main`; tracker не сканирует исходники.
 
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
@@ -16,7 +16,7 @@
 | C1 | Crash recovery/quarantine и проверка process-kill/power-loss | Частично | ext2 имеет sidecar recovery и process-crash tests; нет общей полной crash/power-loss гарантии для всех writers. |
 | CI1 | Обязательная Linux/Windows/macOS матрица с реальными fixtures | Частично | CI workflow и локальные тесты существуют; полный набор внешних checker/integration tests на всех ОС не подтверждён. |
 | B1 | Воспроизводимые benchmark на Linux, Windows и macOS | Не готово | Опубликован ограниченный ext2/Linux ARM64 результат; cross-platform benchmark matrix отсутствует. |
-| D1 | Единый актуальный статус в docs, GUI, CLI, VFS и release | Частично | FAT12/16, ext2 files/directories и ext4 64BIT claims синхронизированы в этой ветке; полное согласование интерфейсов и release status ещё впереди. |
+| D1 | Единый актуальный статус в docs, GUI, CLI, VFS и release | Частично | FAT12/16, ext2 files/directories и ext4 64BIT claims синхронизированы; верхний README, NTFS GUI fallback description и oracle wording в write-engine docs уточнены; полное согласование интерфейсов и release status ещё впереди. |
 | P1 | Пройти все acceptance gates и объявить поддержанные профили production-ready | Не готово | Все обязательные gates должны выполняться одновременно; текущие ограничения выше не позволяют считать issue завершённой. |
 
 ## Решение для обновления статуса

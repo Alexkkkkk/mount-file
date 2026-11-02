@@ -25,7 +25,7 @@ ext, exFAT и NTFS, а также ограниченная native-запись �
 > **English:** Mount File is a desktop file manager for raw disk images and
 > NAND/eMMC dumps — browse and extract files, read MBR/GPT partition tables,
 > inspect bounded native FAT, ext, exFAT and NTFS profiles, and perform limited
-> writes in FAT32, ext2 and exFAT images. Everything happens inside the image
+> writes in FAT12/16/32, ext2 and exFAT images. Everything happens inside the image
 > file; nothing is flashed back to the device.
 
 | | |
@@ -44,7 +44,7 @@ ext, exFAT и NTFS, а также ограниченная native-запись �
 
 > **Статус проекта.** Issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
 > это roadmap, а не заявление о готовой forensic-платформе. Native-запись
-> поддерживается в ограниченных профилях FAT32, ext2 и exFAT; это не означает
+> поддерживается в ограниченных профилях FAT12/16/32, ext2 и exFAT; это не означает
 > полную поддержку этих форматов или crash-safe транзакции при отключении
 > питания. ext3/ext4 и NTFS остаются read-only в native-пути. DFIR-команды,
 > AI-слой, YARA, carving и универсальный RW-слой имеют экспериментальные или
