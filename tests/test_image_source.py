@@ -5,11 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from mountfile.image_source import (
-    BoundedImageSource,
-    FileImageSource,
-    ImageSourceError,
-)
+from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
 from mountfile.safety import RefusalCode
 
 
