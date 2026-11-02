@@ -322,9 +322,10 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "Native bounded FAT32 writer; put/replace, mkdir, rename, and delete.",
         ),
         "ext2-native-rw": (
-            "Clean ext2 allowlist only; regular files use 12 direct plus one "
-            "single-indirect block.",
-            "Sparse, double/triple-indirect, and indirect directory growth are refused.",
+            "Clean ext2 allowlist only; regular files use bounded direct, single-, "
+            "and double-indirect blocks, up to 64 MiB.",
+            "Sparse and triple-indirect files are refused; directory growth remains "
+            "direct/single-indirect only.",
         ),
         "exfat-native-rw": (
             "Bounded one- or two-FAT profile; reads the validated active FAT and "
@@ -500,7 +501,8 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
                 "bounded-ext2-write-layout",
                 "feature",
                 "required",
-                "Sparse and double/triple-indirect writes are refused.",
+                "Sparse and triple-indirect files are refused; double-indirect "
+                "regular files are bounded to 64 MiB.",
                 RefusalCode.UNSUPPORTED_PROFILE,
             ),
         ),
