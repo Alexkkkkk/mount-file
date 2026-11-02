@@ -76,7 +76,7 @@ def _provider_profile(provider) -> dict:
 
 
 def _runtime_versions() -> dict:
-    """Capture optional backend version and source revision for provenance."""
+    """Capture optional backend version and source worktree provenance."""
     try:
         pytsk3_version = metadata.version("pytsk3")
     except metadata.PackageNotFoundError:
@@ -95,7 +95,23 @@ def _runtime_versions() -> dict:
         revision = None
     else:
         revision = result.stdout.strip() or None
-    return {"pytsk3": pytsk3_version, "source_revision": revision}
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        worktree_dirty = None
+    else:
+        worktree_dirty = bool(result.stdout.strip())
+    return {
+        "pytsk3": pytsk3_version,
+        "source_revision": revision,
+        "source_worktree_dirty": worktree_dirty,
+    }
 
 
 def _quantile(values: list[float], percentile: float) -> float | None:
@@ -407,7 +423,9 @@ def build_report(
         reports, errors, execution_order = _run_backends_interleaved(
             {
                 "native": _open_native_provider,
-                "pytsk3": lambda path, start, _size: TskImage(path, offset=start),
+                "pytsk3": lambda path, start, size: TskImage(
+                    path, offset=start, volume_size=size
+                ),
             },
             image,
             offset,
@@ -436,7 +454,9 @@ def build_report(
     elif baseline == "pytsk3":
         try:
             report["backends"]["pytsk3"] = _run_backend(
-                lambda path, start, _size: TskImage(path, offset=start),
+                lambda path, start, size: TskImage(
+                    path, offset=start, volume_size=size
+                ),
                 image,
                 offset,
                 volume_size,

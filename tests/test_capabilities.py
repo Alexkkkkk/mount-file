@@ -130,44 +130,48 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
     }
 
 
-def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
-    tmp_path, monkeypatch
-):
+def test_exfat_matrix_matches_single_fat_and_volume_flag_gates(tmp_path, monkeypatch):
     profiles = {
         profile["profile_id"]: profile
         for profile in get_native_capability_matrix()["profiles"]
     }
     assert profiles["exfat-native-ro"]["constraints"] == [
-        "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
+        "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
         "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
         "A present root volume-label entry is validated; malformed or duplicate "
         "labels are refused.",
     ]
     assert profiles["exfat-native-rw"]["constraints"] == [
-        "Bounded one- or two-FAT profile; reads the validated active FAT and "
-        "mirrors FAT writes to all declared copies.",
-        "Allows only a validated ActiveFat selection (VolumeFlags 0x0000, or "
-        "0x0001 with two FATs); refuses dirty, media-failure, ClearToZero, and "
-        "reserved flags.",
+        "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
+        "Requires ActiveFat=0; refuses dirty, media-failure, ClearToZero, and reserved flags.",
         "Unsupported metadata layouts are refused.",
         "A single root volume label is validated and exposed through FSInfo.label.",
     ]
+    for profile_id in ("exfat-native-ro", "exfat-native-rw"):
+        gate = next(
+            gate
+            for gate in profiles[profile_id]["gates"]
+            if gate["id"] == "single-exfat-fat"
+        )
+        assert gate["state"] == "required"
+        assert gate["refusal"]["code"] == "unsupported_profile"
+        assert gate["refusal"]["category"] == "unsupported"
 
     reader = NativeExfatImage.__new__(NativeExfatImage)
     reader.profile = SimpleNamespace(
         cluster_count=100,
         fat_offset=24,
-        active_fat=1,
+        active_fat=0,
         fat_length=8,
         bytes_per_sector=512,
-        number_of_fats=2,
+        number_of_fats=1,
     )
     fat_reads = []
     reader._read_rel = lambda offset, size: fat_reads.append(
         (offset, size)
     ) or struct.pack("<I", 0x12345678)
     assert reader._fat_entry(3) == 0x12345678
-    assert fat_reads == [((24 + 8) * 512 + 3 * 4, 4)]
+    assert fat_reads == [(24 * 512 + 3 * 4, 4)]
 
     writer = NativeExfatWriter.__new__(NativeExfatWriter)
     fat_writes = []
@@ -175,13 +179,12 @@ def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
     writer._fat_write(object(), reader, 3, 0x12345678)
     assert fat_writes == [
         (24 * 512 + 3 * 4, struct.pack("<I", 0x12345678)),
-        (32 * 512 + 3 * 4, struct.pack("<I", 0x12345678)),
     ]
 
     image = tmp_path / "exfat.img"
     image.write_bytes(b"\0" * 512)
     reader_profile = SimpleNamespace(
-        volume_flags=0x0008, volume_length=1, bytes_per_sector=512
+        number_of_fats=1, volume_flags=0x0008, volume_length=1, bytes_per_sector=512
     )
     monkeypatch.setattr(
         "mountfile.exfat_reader.probe_exfat_boot_region",
@@ -196,7 +199,7 @@ def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
             NativeExfatImage(image, volume_size=512)
 
     writer_profile = SimpleNamespace(
-        volume_flags=0x0001, volume_length=1, bytes_per_sector=512
+        number_of_fats=1, volume_flags=0, volume_length=1, bytes_per_sector=512
     )
     monkeypatch.setattr(
         "mountfile.exfat_writer.probe_exfat_boot_region",

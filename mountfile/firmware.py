@@ -87,16 +87,21 @@ def _classify(buf):
     """
     n = len(buf)
 
-    # --- boot-sector based filesystems (FAT / NTFS / exFAT / HFS+) --------
-    # A boot sector always starts with a jump instruction and ends with the
-    # 0x55AA signature; both are required, otherwise random file content that
-    # happens to contain a plausible BPB would be reported as a volume.
+    # An exFAT OEM marker identifies a candidate, not a validated volume.
+    # Route it to the native profile validator even if its jump/signature is
+    # damaged: treating it as unknown could enable a legacy RW mount fallback.
+    # This matches the VFS recognition boundary; the exFAT probe remains the
+    # authority on boot-region geometry and integrity.
+    if n >= 11 and buf[3:11] == b"EXFAT   ":
+        return "exFAT"
+
+    # --- other boot-sector based filesystems (FAT / NTFS / HFS+) --------
+    # Require a jump instruction and 0x55AA signature to avoid treating random
+    # content with a plausible BPB as a confirmed filesystem.
     if n >= 512 and buf[0] in (0xE9, 0xEB) and buf[510:512] == b"\x55\xaa":
         oem = buf[3:11]
         if oem == b"NTFS    ":
             return "NTFS"
-        if oem == b"EXFAT   ":
-            return "exFAT"
         bps = struct.unpack_from("<H", buf, 11)[0]
         spc = buf[13]
         reserved = struct.unpack_from("<H", buf, 14)[0]

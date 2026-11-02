@@ -860,11 +860,13 @@ mount-file/
   набор мутаций; FAT32 требует согласованные mirrored copies и не поддерживает
   active-FAT semantics. Это не полная FAT write parity. Системная запись через
   ImDisk на Windows — отдельный compatibility route.
-- **exFAT write scope:** native writer принимает ограниченные профили с одной
-  или двумя FAT и проверенной служебной metadata. В двух-FAT профиле учитывается
-  выбранная active FAT, а изменения FAT отражаются во всех копиях. Dirty,
+- **exFAT read/write scope:** native reader и writer принимают только ограниченный
+  профиль с одной FAT и проверенной служебной metadata. Двух-FAT TexFAT
+  отвергается независимо от active FAT и bitmap до native чтения или записи;
+  boot probe проверяет геометрию и сам по себе не разрешает доступ. Dirty,
   media-failure, ClearToZero и неизвестные флаги запрещают запись; это не полная
-  совместимость со всеми exFAT томами и не power-loss guarantee.
+  совместимость со всеми exFAT томами и не power-loss guarantee; ClearToZero
+  допускается только при чтении.
 - **Без `pytsk3`** работают bounded native readers FAT12/16/32, выбранных clean
   ext2/ext3/ext4 профилей, exFAT и NTFS. Каждый parser требует корректные bounds
   и fail-closed на dirty, неизвестных и повреждённых профилях.

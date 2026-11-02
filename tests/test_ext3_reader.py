@@ -23,7 +23,9 @@ from mountfile.ext2_reader import (
     _Inode,
 )
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
+from mountfile.safety import RefusalCategory, RefusalCode
 from tests.test_ext2_reader import (
+    _CLASSIC_READABLE_INODE_BITS,
     BLOCK_SIZE,
     BLOCKS_COUNT,
     INODE_TABLE_BLOCK,
@@ -31,6 +33,7 @@ from tests.test_ext2_reader import (
     _dir_block,
     _make_image,
     _put_inode,
+    _set_inode_flags,
 )
 
 
@@ -232,6 +235,153 @@ def _make_revoke_journal_image(
         raise ValueError("synthetic revoke journal has no empty terminator")
     path.write_bytes(image)
     return tuple(revoke_logicals)
+
+
+def _make_flag_test_image(path, layout):
+    if layout == "ext3":
+        _make_clean_journal_image(path)
+        return NativeExt3Image, 0, b"hello ext2!"
+    if layout == "ext4-classic":
+        # DIR_NLINK marks this as ext4 without enabling extent layout.
+        _make_image(path, ro_compat=0x0023)
+        return NativeExt4Image, 0, b"hello ext2!"
+    if layout == "ext4-extent":
+        _make_ext4_extent_image(path)
+        return NativeExt4Image, _EXT4_EXTENTS_FL, b"hello ext4!"
+    raise AssertionError(layout)
+
+
+_EXT4_ADDITIONAL_READABLE_INODE_BITS = {
+    0x00080000,  # EXTENTS, subject to the existing profile/layout checks
+    0x00400000,  # EOFBLOCKS
+    0x02000000,  # DAX
+    0x20000000,  # PROJINHERIT
+}
+
+
+@pytest.mark.parametrize("layout", ["ext3", "ext4-classic", "ext4-extent"])
+@pytest.mark.parametrize("bit", [1 << shift for shift in range(32)])
+def test_ext3_ext4_inode_flags_are_fail_closed_for_every_bit(tmp_path, layout, bit):
+    image_path = tmp_path / "inode-flags.img"
+    reader_type, base_flags, payload = _make_flag_test_image(image_path, layout)
+    original = _set_inode_flags(image_path, 11, base_flags | bit | 0x40)
+    provider = reader_type(image_path, volume_size=len(original))
+    try:
+        allowed_bits = _CLASSIC_READABLE_INODE_BITS
+        if layout.startswith("ext4"):
+            allowed_bits = allowed_bits | _EXT4_ADDITIONAL_READABLE_INODE_BITS
+        if layout == "ext4-classic" and bit == _EXT4_EXTENTS_FL:
+            with pytest.raises(Ext3ReadError, match="lacks EXTENTS feature") as exc:
+                provider.read_file("/hello.txt")
+            assert exc.value.code is RefusalCode.MALFORMED_METADATA
+        elif bit in allowed_bits:
+            assert provider.read_file("/hello.txt") == payload
+            assert provider.stat("/hello.txt")["size"] == len(payload)
+            assert provider._read_inode(11).flags == base_flags | bit | 0x40
+        else:
+            for operation in (
+                lambda: provider.read_file("/hello.txt"),
+                lambda: provider.stat("/hello.txt"),
+                lambda: provider.list_dir("/"),
+            ):
+                with pytest.raises(Ext2ReadError, match=f"0x{bit:08x}") as exc:
+                    operation()
+                assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+                assert exc.value.category is RefusalCategory.UNSUPPORTED
+                assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("layout", ["ext3", "ext4-classic", "ext4-extent"])
+def test_ext3_ext4_report_all_unsupported_bits_in_mixed_flag_word(tmp_path, layout):
+    image_path = tmp_path / "mixed-flags.img"
+    reader_type, base_flags, _ = _make_flag_test_image(image_path, layout)
+    original = _set_inode_flags(image_path, 11, base_flags | 0x80000240)
+    provider = reader_type(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext2ReadError, match="0x80000200") as exc:
+            provider.read_file("/hello.txt")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("layout", ["ext3", "ext4-classic", "ext4-extent"])
+def test_ext3_ext4_all_compatible_flags_can_be_combined(tmp_path, layout):
+    image_path = tmp_path / "compatible-flags.img"
+    reader_type, base_flags, payload = _make_flag_test_image(image_path, layout)
+    allowed_bits = _CLASSIC_READABLE_INODE_BITS
+    if layout.startswith("ext4"):
+        allowed_bits = allowed_bits | (_EXT4_ADDITIONAL_READABLE_INODE_BITS - {0x80000})
+    file_flags = sum(allowed_bits) | base_flags
+    _set_inode_flags(image_path, 11, file_flags)
+    original = _set_inode_flags(image_path, 2, file_flags & ~0x1000)
+    provider = reader_type(image_path, volume_size=len(original))
+    try:
+        assert provider.read_file("/hello.txt") == payload
+        assert provider._read_inode(11).flags == file_flags
+        assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("layout", ["ext3", "ext4-classic", "ext4-extent"])
+@pytest.mark.parametrize("flags", [0x00001000, 0x00000200, 0x80000000])
+def test_ext3_ext4_reject_unsupported_directory_inode_before_listing(
+    tmp_path, layout, flags
+):
+    image_path = tmp_path / "directory-flags.img"
+    reader_type, base_flags, _ = _make_flag_test_image(image_path, layout)
+    original = _set_inode_flags(image_path, 2, base_flags | flags | 0x10)
+    provider = reader_type(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext2ReadError) as exc:
+            provider.list_dir("/")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 2 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("layout", ["ext3", "ext4-classic"])
+@pytest.mark.parametrize("flags", [0x00000200, 0x80000000])
+def test_journal_inode_refusal_preserves_unsupported_code(tmp_path, layout, flags):
+    image_path = tmp_path / "journal-inode-flags.img"
+    _make_clean_journal_image(image_path)
+    if layout == "ext4-classic":
+        image = bytearray(image_path.read_bytes())
+        struct.pack_into("<I", image, 1024 + 0x64, 0x0023)
+        image_path.write_bytes(image)
+    original = _set_inode_flags(image_path, 8, flags | 0x40)
+    reader_type = NativeExt3Image if layout == "ext3" else NativeExt4Image
+    with pytest.raises(
+        Ext3ReadError, match="journal inode/JBD2 validation failed"
+    ) as exc:
+        reader_type(image_path, volume_size=len(original))
+    assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+    assert exc.value.category is RefusalCategory.UNSUPPORTED
+    assert image_path.read_bytes() == original
+
+
+def test_ext4_extent_profile_still_rejects_pointer_layout_inode(tmp_path):
+    image_path = tmp_path / "extent-feature-pointer-inode.img"
+    _make_ext4_extent_image(image_path)
+    original = _set_inode_flags(image_path, 11, 0x40)
+    provider = NativeExt4Image(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext3ReadError, match="pointer-layout inode") as exc:
+            provider.read_file("/hello.txt")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
 
 
 def test_journaled_profile_rejects_without_a_valid_jbd2_journal(tmp_path):
@@ -820,7 +970,7 @@ def _ext4_inode_reader(raw, *, block_size=1024):
 @pytest.mark.parametrize(
     ("mode", "flags", "reason"),
     [
-        (0x8000, _EXT2_COMPR_FL, "unsupported ext4 data layout"),
+        (0x8000, _EXT2_COMPR_FL, "unsupported or unknown inode flags"),
         (0x4000, _EXT2_INDEX_FL, "indexed directories"),
     ],
 )

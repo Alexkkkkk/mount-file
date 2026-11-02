@@ -31,9 +31,11 @@ profile; явный library-level legacy ext2/3/4 compatibility backend чере
 VFS can browse a validated exFAT image without `pytsk3` when an explicit
 partition extent is supplied. The bounded provider supports directory listing,
 file sizes, bounded range reads and extraction through the common read API. It
-accepts validated one- and two-FAT profiles and follows the selected active
-FAT. Dirty or media-failure volumes are rejected; ClearToZero is allowed only
-for reading. A range read fetches only the clusters and byte spans intersecting
+accepts validated one-FAT profiles only. Two-FAT TexFAT volumes are refused for
+native browsing and writes regardless of the selected active FAT or bitmap
+contents. The boot-region probe is geometric, not an access authorization.
+Dirty or media-failure volumes are rejected; ClearToZero is allowed only for
+reading. A range read fetches only the clusters and byte spans intersecting
 the requested range. The provider
 validates the main and backup boot regions, cluster chains and checksummed file
 entry sets. Opening the provider validates the allocation bitmap and the
@@ -80,8 +82,9 @@ Host-side extraction limits also do not add filesystem-image write capability.
 ### Native exFAT phase-one writes
 
 `UniversalFSRW` exposes `native-exfat-phase1` only for an explicitly bounded
-volume. One- and two-FAT profiles use the validated active FAT for reads and
-mirror FAT updates to all declared copies. Dirty, media-failure, ClearToZero
+volume with exactly one FAT. Two-FAT TexFAT is rejected before mutation, with
+no legacy fallback after a native profile refusal; mirrored FAT writes are not
+a TexFAT transaction or recovery protocol. Dirty, media-failure, ClearToZero
 and reserved VolumeFlags are rejected before mutation. It supports file
 creation and replacement, directory creation and growth, same- and
 cross-directory rename, and file or recursive directory

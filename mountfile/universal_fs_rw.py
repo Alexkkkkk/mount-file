@@ -2906,13 +2906,18 @@ class UniversalFSRW:
                     "filesystem/backend profile"
                 )
                 rejection_code = RefusalCode.OPERATION_NOT_SUPPORTED
-            return get_native_capability_status(
+            status = get_native_capability_status(
                 native_profile,
                 backend=info.backend,
                 write_enabled=writable,
                 write_rejection_reason=rejection_reason,
                 write_rejection_code=rejection_code,
             )
+            if strategy == "native-fat12-16":
+                # The matrix has one shared profile for both variants. Publish
+                # the validated selection, not the profile's representative FAT12.
+                status["filesystem"] = str(info.fs_type).casefold().upper()
+            return status
 
         rejection_code = None
         if strategy in NATIVE_WRITE_PROFILES_BY_STRATEGY:

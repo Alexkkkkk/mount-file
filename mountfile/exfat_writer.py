@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Transactional, bounded staged exFAT writer.
 
-The writer intentionally supports only operations with fully known allocation
-metadata. Every mutation is made on a complete image copy, read-back validated,
-and committed only after a source extent hash check. Unsupported profiles fail
-closed.
+The writer intentionally supports only one-FAT operations with fully known
+allocation metadata. Two-FAT TexFAT volumes are refused. Every mutation is made
+on a complete image copy, read-back validated, and committed only after a full
+source-image identity check. Unsupported profiles fail closed.
 """
 
 from __future__ import annotations
@@ -19,7 +19,11 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
+from mountfile.exfat_probe import (
+    NATIVE_EXFAT_TWO_FAT_REFUSAL,
+    ExfatProbeError,
+    probe_exfat_boot_region,
+)
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.safety import RefusalCode, RefusalError, checked_range, code_for_message
 
@@ -185,6 +189,10 @@ class NativeExfatWriter:
             )
         except (OSError, ExfatProbeError) as exc:
             raise ExfatWriteError(str(exc)) from exc
+        if self.profile.number_of_fats != 1:
+            raise ExfatWriteError(
+                NATIVE_EXFAT_TWO_FAT_REFUSAL, RefusalCode.UNSUPPORTED_PROFILE
+            )
         volume_flags = self.profile.volume_flags
         if volume_flags & ~0x000F:
             raise ExfatWriteError("exFAT volume flags contain reserved bits")
@@ -230,7 +238,7 @@ class NativeExfatWriter:
                 stage, offset=self.offset, volume_size=self.volume_size
             )
         except ExfatReadError as exc:
-            raise ExfatWriteError(str(exc)) from exc
+            raise ExfatWriteError(str(exc), exc.code) from exc
 
     def _read_rel(self, stream, relative, size):
         try:
@@ -497,9 +505,9 @@ class NativeExfatWriter:
         for cluster in range(2, reader.profile.cluster_count + 2):
             if not (bitmap[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7))):
                 fat_relative = (
-                    reader.profile.fat_offset
-                    + reader.profile.active_fat * reader.profile.fat_length
-                ) * reader.profile.bytes_per_sector + cluster * 4
+                    reader.profile.fat_offset * reader.profile.bytes_per_sector
+                    + cluster * 4
+                )
                 fat_value = struct.unpack(
                     "<I", self._read_rel(stream, fat_relative, 4)
                 )[0]
@@ -513,14 +521,15 @@ class NativeExfatWriter:
         raise ExfatWriteError("not enough free exFAT clusters")
 
     def _fat_write(self, stream, reader, cluster, value):
-        for fat_index in range(reader.profile.number_of_fats):
-            self._write_rel(
-                stream,
-                (reader.profile.fat_offset + fat_index * reader.profile.fat_length)
-                * reader.profile.bytes_per_sector
-                + cluster * 4,
-                struct.pack("<I", value),
+        if reader.profile.number_of_fats != 1:
+            raise ExfatWriteError(
+                NATIVE_EXFAT_TWO_FAT_REFUSAL, RefusalCode.UNSUPPORTED_PROFILE
             )
+        self._write_rel(
+            stream,
+            reader.profile.fat_offset * reader.profile.bytes_per_sector + cluster * 4,
+            struct.pack("<I", value),
+        )
 
     def _write_bitmap(self, stream, reader, meta, bitmap):
         remaining = bytes(bitmap)
