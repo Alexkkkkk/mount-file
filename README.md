@@ -507,9 +507,9 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
   bounded native write-профили существуют для FAT12/16, FAT32, чистого ext2 и
-  exFAT. Native ext2 использует allowlisted features: regular files используют
-  direct/single/double-indirect blocks (до 64 MiB в профиле), а каталоги пока
-  ограничены direct/single-indirect; sparse и triple-indirect не поддержаны.
+  exFAT. Native ext2 использует allowlisted features: regular files и каталоги
+  поддерживают bounded direct/single/double-indirect blocks до 64 MiB; sparse и
+  triple-indirect не поддержаны.
   FAT12/16 writer ограничен packed FAT и фиксированным root directory и не
   означает полного write parity. Native exFAT принимает проверенный профиль с
   одной или двумя FAT и разрешённым ActiveFat/VolumeFlags; unsupported/dirty

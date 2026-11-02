@@ -373,6 +373,50 @@ def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
     _assert_e2fsck_clean(check_image)
 
 
+def test_native_ext2_grows_directory_through_double_indirect_blocks(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "double-indirect-directory.ext2"
+    _make_ext2(image, size=32 * 1024 * 1024, block_size=1024)
+    writer = NativeExt2ImageWriter(image)
+    names = [f"{index:04d}-" + "x" * 245 for index in range(810)]
+
+    def populate_many(fs, file_names):
+        fs.mkdir("/crowded")
+        for name in file_names:
+            fs.write_file("/crowded/" + name, b"")
+
+    from mountfile.ext2_native import _Ext2FS
+
+    monkeypatch.setattr(_Ext2FS, "populate_many_for_test", populate_many, raising=False)
+    writer._mutate("populate_many_for_test", names)
+
+    listed = writer.list_dir("/crowded")
+    assert {entry["name"] for entry in listed} == set(names)
+    directory_inode = next(
+        entry["inode"] for entry in writer.list_dir("/") if entry["name"] == "crowded"
+    )
+    raw = writer._fs._read_inode(directory_inode)
+    assert writer._fs._u32(raw, 40 + 13 * 4) != 0
+    directory_blocks = writer._fs._inode_blocks(
+        raw, allow_indirect=True, allow_double_indirect=True
+    )
+    assert len(directory_blocks) > 12 + writer.block_size // 4
+    pointer_blocks = writer._fs._inode_pointer_blocks(raw, allow_double_indirect=True)
+    assert len(pointer_blocks) >= 3
+    _assert_e2fsck_clean(image)
+
+    def remove_many(fs, file_names):
+        for name in file_names:
+            fs.delete("/crowded/" + name)
+        fs.delete("/crowded")
+
+    monkeypatch.setattr(_Ext2FS, "remove_many_for_test", remove_many, raising=False)
+    writer._mutate("remove_many_for_test", names)
+    assert "crowded" not in {entry["name"] for entry in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
 @pytest.mark.parametrize("corruption", ["double", "unused-slot"])
 def test_native_ext2_rejects_corrupt_single_indirect_directory_map(
     tmp_path, corruption

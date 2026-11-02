@@ -170,10 +170,8 @@ engine.close()
 * Чистый ext2 с allowlisted features (1/2/4 KiB blocks, без журнала) использует
   собственный Python writer без `debugfs`. Regular files поддерживают bounded
   direct, single- и double-indirect addressing до 64 MiB; sparse и
-  triple-indirect файлы отвергаются. Каталоги пока ограничены direct и
-  single-indirect addressing; double-indirect directory growth находится в
-  отдельном открытом PR и не входит в текущий `main`. При расширении каталога
-  pointer block, bitmap/counters и directory map проходят
+  triple-indirect файлы отвергаются. Каталоги поддерживают bounded direct,
+  single- и double-indirect growth до 64 MiB; pointer blocks, bitmap/counters и directory map проходят
   read-back до commit. Unsupported/dirty/out-of-bounds volumes не получают native RW.
   Перед изменением image writer сохраняет и fsync-ит рядом с образом проверенные
   before- и staged after-image выбранного ext2 extent, затем атомарно публикует

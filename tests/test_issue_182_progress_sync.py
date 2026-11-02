@@ -1,5 +1,7 @@
+import scripts.sync_issue_182_progress as progress_sync
 from scripts.sync_issue_182_progress import (
     STATUS_PATH,
+    collect_first_parent_commits,
     is_issue_182_related,
     missing_status_updates,
     render_comment,
@@ -45,6 +47,41 @@ def test_every_commit_in_push_must_update_status_sheet():
         )
         == []
     )
+
+
+def test_merge_push_checks_first_parent_commits_not_imported_second_parent(
+    monkeypatch,
+):
+    details = {
+        "merge": {
+            "commit": {"message": "merge issue update"},
+            "html_url": "https://github.com/example/repo/commit/merge",
+            "parents": [{"sha": "branch-commit"}, {"sha": "imported-main"}],
+            "files": [{"filename": STATUS_PATH}],
+        },
+        "branch-commit": {
+            "commit": {"message": "feat: #182 update status"},
+            "html_url": "https://github.com/example/repo/commit/branch-commit",
+            "parents": [{"sha": "before"}],
+            "files": [{"filename": STATUS_PATH}],
+        },
+    }
+    requested = []
+
+    def fake_api_request(_token, method, path):
+        assert method == "GET"
+        sha = path.rsplit("/", 1)[-1]
+        requested.append(sha)
+        return details[sha]
+
+    monkeypatch.setattr(progress_sync, "_api_request", fake_api_request)
+    commits, files_by_sha = collect_first_parent_commits(
+        "token", "owner/repo", "before", "merge"
+    )
+
+    assert [commit["id"] for commit in commits] == ["branch-commit", "merge"]
+    assert "imported-main" not in requested
+    assert progress_sync.missing_status_updates(commits, files_by_sha) == []
 
 
 def test_status_sync_renders_task_sheet_and_push_commit_without_audit_claim():

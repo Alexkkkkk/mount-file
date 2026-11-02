@@ -21,6 +21,8 @@ STATUS_PATH = "docs/issue-182-status.md"
 COMMENT_MARKER = "<!-- issue-182-progress-sync -->"
 API_ROOT = "https://api.github.com"
 MAX_DISPLAYED_COMMITS = 15
+ZERO_SHA = "0" * 40
+MAX_PUSH_COMMITS = 100
 
 
 def is_issue_182_related(ref: str, commits: list[dict[str, Any]]) -> bool:
@@ -130,6 +132,47 @@ def _api_request(token: str, method: str, path: str, payload: dict | None = None
         ) from exc
 
 
+def collect_first_parent_commits(
+    token: str, repository: str, before: str, after: str
+) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+    """Collect only commits introduced on the pushed branch's first-parent line."""
+    if not before or not after or before == ZERO_SHA or before == after:
+        return [], {}
+
+    reverse_commits: list[dict[str, Any]] = []
+    files_by_sha: dict[str, list[str]] = {}
+    cursor = after
+    while cursor != before and len(reverse_commits) < MAX_PUSH_COMMITS:
+        details = _api_request(token, "GET", f"/repos/{repository}/commits/{cursor}")
+        commit_data = details.get("commit") or {}
+        reverse_commits.append(
+            {
+                "id": cursor,
+                "message": str(commit_data.get("message", "")),
+                "url": str(details.get("html_url", "")),
+                "added": [],
+                "modified": [],
+                "removed": [],
+            }
+        )
+        files_by_sha[cursor] = [
+            str(item.get("filename", "")) for item in details.get("files", [])
+        ]
+        parents = details.get("parents") or []
+        if not parents:
+            break
+        # A merge commit's second-parent history was already authored on the
+        # other branch; only the first-parent line belongs to this pushed branch.
+        cursor = str(parents[0].get("sha", ""))
+
+    if cursor != before:
+        raise RuntimeError(
+            "Could not safely identify the first-parent commits for this push "
+            "(push is too large or history was rewritten)."
+        )
+    return list(reversed(reverse_commits)), files_by_sha
+
+
 def _find_progress_comment(token: str, repository: str) -> dict | None:
     page = 1
     while page <= 10:
@@ -186,26 +229,36 @@ def main() -> int:
 
     event = json.loads(Path(event_path).read_text(encoding="utf-8"))
     ref = str(event.get("ref", ""))
-    commits = event.get("commits") or []
-    if not commits and event.get("head_commit"):
-        commits = [event["head_commit"]]
-    if not is_issue_182_related(ref, commits):
+    payload_commits = event.get("commits") or []
+    if not payload_commits and event.get("head_commit"):
+        payload_commits = [event["head_commit"]]
+    if not is_issue_182_related(ref, payload_commits):
         print("No #182 branch or commit reference; progress sync skipped.")
         return 0
 
-    verified_files_by_sha: dict[str, list[str]] = {}
-    for commit in commits:
-        if commit_updates_status_sheet(commit):
-            continue
-        sha = str(commit.get("id", "unknown"))
-        if sha == "unknown":
-            continue
-        # Push-event payloads may omit changed-file arrays. Query only commit
-        # metadata (filenames); never download or inspect source file contents.
-        details = _api_request(token, "GET", f"/repos/{repository}/commits/{sha}")
-        verified_files_by_sha[sha] = [
-            str(item.get("filename", "")) for item in details.get("files", [])
-        ]
+    before = str(event.get("before", ""))
+    after = str(event.get("after", ""))
+    if before and after and before != ZERO_SHA and before != after:
+        commits, verified_files_by_sha = collect_first_parent_commits(
+            token, repository, before, after
+        )
+    else:
+        # First push to a new branch has no previous SHA. The event's commits
+        # array is the bounded list of commits introduced with that branch.
+        commits = payload_commits
+        verified_files_by_sha = {}
+        for commit in commits:
+            if commit_updates_status_sheet(commit):
+                continue
+            sha = str(commit.get("id", "unknown"))
+            if sha == "unknown":
+                continue
+            # Some push payloads omit changed-file arrays. Query only commit
+            # metadata (filenames); never download source file contents.
+            details = _api_request(token, "GET", f"/repos/{repository}/commits/{sha}")
+            verified_files_by_sha[sha] = [
+                str(item.get("filename", "")) for item in details.get("files", [])
+            ]
     missing = missing_status_updates(commits, verified_files_by_sha)
     if missing:
         print(

@@ -36,7 +36,7 @@
 
 Фактический уровень поддержки остаётся частичным:
 
-- **ext2:** ограниченный clean, non-journaled writer с allowlist features; regular files поддерживают bounded direct/single/double-indirect blocks до 64 MiB, каталоги — direct/single-indirect. Double-indirect growth каталогов в `main` ещё не включён; persistent power-loss и общая crash-recovery acceptance не закрыты.
+- **ext2:** ограниченный clean, non-journaled writer с allowlist features; regular files и каталоги поддерживают bounded direct/single/double-indirect blocks до 64 MiB. Sparse/triple-indirect профили не поддержаны; persistent power-loss и общая crash-recovery acceptance не закрыты. Double-indirect directory support включён в `main` через PR #326.
 - **FAT:** native bounded readers реализованы для FAT12/16/32; bounded write-возможности существуют для FAT12/16 и FAT32. Полная differential и write parity матрица для всех FAT вариантов не заявляется.
 - **exFAT:** native reader/writer возможности ограничены поддержанными профилями и проверяемыми метаданными. Не поддерживаемые layout/операции остаются fail-closed; неизвестные структуры не должны трактоваться как поддержанные.
 - **ext3/JBD2:** доступно ограниченное read-only профилирование/валидация. Журналирование и recovery требуют отдельной проверки; replay не является разрешением на запись.
@@ -44,9 +44,9 @@
 - **NTFS:** имеются bounded metadata/read-only компоненты, но принятие профиля зависит от полной проверки затрагиваемых структур и состояния тома. Native NTFS writer и log replay не заявляются.
 - **Benchmarking:** наличие тестов производительности или differential tests не заменяет опубликованный воспроизводимый benchmark report по методике ниже.
 
-### Незлитая follow-up работа
+### Follow-up работа и статус merge
 
-PR #326 добавляет bounded double-indirect directory support для ext2. Пока PR открыт, это не входит в возможности `main`; перед включением в утверждённый статус требуются review и успешные обязательные checks. Любые другие незлитые follow-up commits также не являются частью `main`, пока не пройдут обычный review/merge процесс.
+PR #326 с bounded double-indirect directory support для ext2 слит в `main` после review и успешных обязательных checks. Другие незлитые follow-up commits не являются частью `main`, пока не пройдут обычный review/merge процесс.
 
 ## План работ и критерии приёмки
 
@@ -54,7 +54,7 @@ PR #326 добавляет bounded double-indirect directory support для ext2
 
 - Сохранить явный allowlist чистого ext2 профиля и отказывать для ext3/ext4 профилей, если соответствующая логика журналирования/структур не реализована.
 - Проверять inode flags и тип/состояние изменяемых каталогов и файлов до мутации; неподдержанные flags не должны обходиться через parent path.
-- Добавить рост каталогов через indirect blocks только отдельным профилем с allocation/counter/read-back тестами.
+- Поддерживать bounded double-indirect рост каталогов ext2 с pointer validation, allocation/counter/read-back и `e2fsck` lifecycle tests; triple-indirect остаётся явно неподдержанным.
 - Спроектировать durable transaction/recovery протокол для падения процесса и питания. Advisory locks не считаются crash recovery и не защищают от неучаствующих процессов.
 - Проверить fsync/rename порядок, идентичность и права sidecar backup, очистку временных файлов, отсутствующий или повреждённый backup.
 - Выполнить failure-injection для short write, исключения, отмены, concurrent modification, завершения процесса и каждого commit/rollback boundary.
