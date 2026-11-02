@@ -4,7 +4,11 @@ from types import SimpleNamespace
 import pytest
 
 from mountfile.ext3_reader import NativeExt3Image
-from mountfile.jbd2_writer import JBD2WriteProfileError, encode_classic_jbd2_transaction
+from mountfile.jbd2_writer import (
+    JBD2WriteProfileError,
+    encode_classic_jbd2_transaction,
+    plan_classic_jbd2_ring_transaction,
+)
 
 _MAGIC = 0xC03B3998
 
@@ -69,6 +73,80 @@ def test_serialized_transaction_passes_existing_classic_jbd2_validator():
     )
 
     assert terminal == 4
+
+
+def test_ring_planner_places_transaction_across_wrap_boundary():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=4,
+        filesystem_blocks=64,
+        writes={8: b"A" * 1024},
+        revokes=[9],
+    )
+
+    plan = plan_classic_jbd2_ring_transaction(
+        first=1,
+        max_length=6,
+        head=4,
+        tail=4,
+        records=records,
+        block_size=1024,
+        empty=True,
+    )
+
+    assert [position for position, _block in plan.writes] == [4, 5, 1, 2]
+    assert [block for _position, block in plan.writes] == list(records)
+    assert plan.next_head == 3
+    assert plan.used_blocks == 4
+    assert plan.free_blocks == 0
+
+
+def test_ring_planner_accounts_for_live_records_before_placement():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=5,
+        filesystem_blocks=64,
+        writes={},
+        revokes=[9],
+    )
+
+    plan = plan_classic_jbd2_ring_transaction(
+        first=1,
+        max_length=6,
+        head=5,
+        tail=3,
+        records=records,
+        block_size=1024,
+    )
+
+    assert [position for position, _block in plan.writes] == [5, 1]
+    assert plan.next_head == 2
+    assert plan.used_blocks == 4
+    assert plan.free_blocks == 0
+
+
+@pytest.mark.parametrize(
+    ("head", "tail", "empty", "records"),
+    [
+        (4, 4, False, (b"A" * 1024, b"B" * 1024)),
+        (5, 3, False, (b"A" * 1024, b"B" * 1024, b"C" * 1024)),
+        (1, 1, True, (b"A" * 1024,)),
+        (4, 4, True, (b"bad",)),
+    ],
+)
+def test_ring_planner_rejects_ambiguous_overfull_or_malformed_state(
+    head, tail, empty, records
+):
+    with pytest.raises(JBD2WriteProfileError):
+        plan_classic_jbd2_ring_transaction(
+            first=1,
+            max_length=6,
+            head=head,
+            tail=tail,
+            records=records,
+            block_size=1024,
+            empty=empty,
+        )
 
 
 @pytest.mark.parametrize(

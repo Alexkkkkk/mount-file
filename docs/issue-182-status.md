@@ -4,7 +4,7 @@
 
 Статус относится к commit/ветке, указанным в автоматически обновляемом комментарии. Пока изменение не влито в `main`, оно не считается готовым в `main`.
 
-**Последняя заметка:** добавлен pure classic JBD2 transaction serializer как prerequisite; ext3/ext4 writer API остаётся отключённым до ring/order/checkpoint/recovery gates. Linux CI требует NTFS oracle tools; tracker не сканирует исходники.
+**Последняя заметка:** добавлены classic JBD2 serializer и wrap-safe placement planner; они не обновляют journal superblock и не меняют образ. ext3/ext4 writer API остаётся отключённым до ordering/checkpoint/recovery gates. Linux CI требует NTFS oracle tools; tracker не сканирует исходники.
 
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|

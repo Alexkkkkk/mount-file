@@ -1,14 +1,16 @@
 """Bounded serializer for classic 32-bit, no-checksum JBD2 transactions.
 
-This module only encodes transaction records. It does not write a filesystem
-image, manage the journal ring, checkpoint metadata, or claim ext3/ext4 write
-support. Checksum, 64-bit-tag, and unknown journal profiles must stay disabled.
+This module only encodes transaction records and computes bounded ring
+placements. It does not write a filesystem image, update durable journal state,
+checkpoint metadata, or claim ext3/ext4 write support. Checksum, 64-bit-tag,
+and unknown journal profiles must stay disabled.
 """
 
 from __future__ import annotations
 
 import struct
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 _JBD2_MAGIC = 0xC03B3998
 _JBD2_DESCRIPTOR = 1
@@ -22,6 +24,16 @@ _SUPPORTED_BLOCK_SIZES = {1024, 2048, 4096}
 
 class JBD2WriteProfileError(ValueError):
     """The bounded classic JBD2 transaction profile was rejected."""
+
+
+@dataclass(frozen=True)
+class JBD2RingPlan:
+    """Immutable placement plan; callers must still enforce durable ordering."""
+
+    writes: tuple[tuple[int, bytes], ...]
+    next_head: int
+    used_blocks: int
+    free_blocks: int
 
 
 def _validate_target(target: int, filesystem_blocks: int, forbidden: set[int]) -> None:
@@ -139,3 +151,79 @@ def encode_classic_jbd2_transaction(
     struct.pack_into(">III", commit, 0, _JBD2_MAGIC, _JBD2_COMMIT, sequence)
     records.append(bytes(commit))
     return tuple(records)
+
+
+def plan_classic_jbd2_ring_transaction(
+    *,
+    first: int,
+    max_length: int,
+    head: int,
+    tail: int,
+    records: Sequence[bytes],
+    block_size: int,
+    empty: bool = False,
+) -> JBD2RingPlan:
+    """Plan record placement in a bounded circular ring without writing it.
+
+    One ring block remains unused to distinguish full from empty. The caller
+    must supply an explicit empty-state bit because ``head == tail`` alone cannot
+    distinguish an empty journal from an invalid/full one. Superblock updates,
+    locking, write ordering, flushes, and recovery remain separate obligations.
+    """
+    if block_size not in _SUPPORTED_BLOCK_SIZES:
+        raise JBD2WriteProfileError("unsupported JBD2 block size")
+    for name, value in (
+        ("first", first),
+        ("max_length", max_length),
+        ("head", head),
+        ("tail", tail),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise JBD2WriteProfileError(f"JBD2 {name} must be an integer")
+    if first < 1 or max_length <= first:
+        raise JBD2WriteProfileError("invalid JBD2 ring geometry")
+    if not first <= head < max_length or not first <= tail < max_length:
+        raise JBD2WriteProfileError("JBD2 head or tail is outside ring bounds")
+    if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
+        raise JBD2WriteProfileError("JBD2 records must be a sequence of blocks")
+    if len(records) < 2:
+        raise JBD2WriteProfileError("JBD2 transaction lacks records or commit")
+    if any(
+        not isinstance(record, bytes) or len(record) != block_size for record in records
+    ):
+        raise JBD2WriteProfileError("JBD2 ring records must be full-size byte blocks")
+    commit_magic, commit_type, commit_sequence = struct.unpack_from(">III", records[-1])
+    if (
+        commit_magic != _JBD2_MAGIC
+        or commit_type != _JBD2_COMMIT
+        or commit_sequence == 0
+    ):
+        raise JBD2WriteProfileError("JBD2 transaction has no valid final commit record")
+
+    ring_length = max_length - first
+    if empty:
+        if head != tail:
+            raise JBD2WriteProfileError("empty JBD2 ring must have matching head/tail")
+        used = 0
+    else:
+        if head == tail:
+            raise JBD2WriteProfileError("JBD2 head/tail state is ambiguous or full")
+        used = (head - tail) % ring_length
+    free = ring_length - used - 1
+    if len(records) > free:
+        raise JBD2WriteProfileError("JBD2 transaction would overrun live ring records")
+
+    writes = tuple(
+        (
+            first + ((head - first + index) % ring_length),
+            record,
+        )
+        for index, record in enumerate(records)
+    )
+    next_head = first + ((head - first + len(records)) % ring_length)
+    return JBD2RingPlan(
+        writes=writes,
+        next_head=next_head,
+        used_blocks=used + len(records),
+        free_blocks=free - len(records),
+    )
