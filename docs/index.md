@@ -62,9 +62,11 @@ python main.py path\to\image.img
 
 ## Ограничения
 
-- Native-запись ограничена профилями FAT32, clean allowlisted ext2 и exFAT;
-  FAT12/16, ext3/ext4 и NTFS остаются read-only в native-пути. Legacy/system
-  writers — отдельные compatibility routes, а не native capability.
+- Native-запись ограничена профилями FAT12/16, FAT32, clean allowlisted ext2 и
+  exFAT; ext3/ext4 и NTFS остаются read-only в native-пути. FAT12/16 writer
+  требует fixed root directory, а каждый native профиль ограничен собственными
+  operation/metadata gates. Legacy/system writers — отдельные compatibility
+  routes, а не native capability.
 - Native readers не требуют `pytsk3` для bounded accepted-профилей FAT12/16/32,
   ext2/3/4, exFAT и NTFS. Это не полное покрытие каждого варианта формата:
   неизвестные, dirty, повреждённые или неподдержанные профили отклоняются.

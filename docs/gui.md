@@ -123,10 +123,10 @@ carver или chain-of-custody система.
 
 `F4` редактирует текстовые файлы до 2 MiB (`ini`, `cfg`, `txt`, `log`, `json`,
 `xml`, `csv`, `yaml`, `md`) и сохраняет исходную UTF-8 или CP1251 кодировку и
-переводы строк. FAT32 и ограниченный профиль чистого ext2 поддерживаются
-встроенно. Native ext2 не требует `debugfs`, но в фазе 1 ограничен allowlisted
-features, 1/2/4 KiB blocks и одним single-indirect pointer для данных файла
-(`12 + block_size/4` blocks; без sparse/double/triple indirect и роста каталогов);
+переводы строк. FAT12/16, FAT32, ограниченный профиль чистого ext2 и exFAT
+поддерживаются встроенно. Native ext2 не требует `debugfs`, использует
+allowlisted features и 1/2/4 KiB blocks; regular files и каталоги поддерживают
+bounded direct/single/double-indirect addressing до 64 MiB (без sparse/triple-indirect);
 неподдерживаемый или нечистый том не получает native RW. Для иных ext2 features
 и ext3/ext4 GUI оставляет том read-only: legacy `debugfs` (`PATH`, `debugfs.exe`
 или WSL/e2fsprogs) является только явным library-level compatibility opt-in

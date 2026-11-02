@@ -305,7 +305,8 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         ),
         "ext4-native-ro": (
             "Bounded classic/accepted extent profile only.",
-            "Unsupported 64BIT, flex_bg, bigalloc, and metadata_csum profiles fail closed.",
+            "Bounded 64BIT group-descriptor ext4 profiles are supported.",
+            "flex_bg, bigalloc, and metadata_csum profiles fail closed.",
         ),
         "ntfs-native-ro": (
             "Bounded metadata/tree profile only; ATTRIBUTE_LIST and unsupported streams "

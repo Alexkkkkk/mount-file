@@ -47,10 +47,11 @@ gates, что и продукт. Содержимое файлов детерм�
 `seed:counter`, псевдослучайные, плохо сжимаемые данные).
 
 Опциональный `--include-10m` добавляет `/bench/large_10m.dat` в готовый образ
-через `debugfs`. Это исключительно test/benchmark fixture setup: внешний tool
-обходит текущий 4 МиБ лимит production writer'а, чтобы проверить double-indirect
-read-only путь; ни production writer, ни benchmark reader этим инструментом
-не вызываются для записи. Нужны `mke2fs` и `debugfs` из e2fsprogs.
+через `debugfs` исключительно как test/benchmark fixture setup для reader-а.
+Текущий bounded ext2 writer поддерживает double-indirect regular files до
+64 MiB; использование `debugfs` здесь не является обходом production writer
+limit и само по себе не проверяет writer parity на 10 MiB. Нужны `mke2fs` и
+`debugfs` из e2fsprogs.
 
 После staged-записей генератор нормализует только metadata самой fixture:
 UUID, directory-hash seed и поля времени superblock/inode. Поэтому два запуска
@@ -60,9 +61,9 @@ UUID, directory-hash seed и поля времени superblock/inode. Поэт�
 writer не меняется: нормализация и debugfs fixture setup находятся только в
 benchmark generator.
 
-В стандартной фикстуре самый большой файл — 4 МиБ, поскольку native writer
-ограничен direct + single-indirect addressing (~4 МиБ при блоке 4 КиБ). Для
-критерия `extract_10m` запустите расширенный режим benchmark runner:
+В стандартной фикстуре самый большой файл — 4 МиБ по выбору benchmark workload;
+writer profile допускает большие regular files через bounded double-indirect
+addressing. Для критерия `extract_10m` запустите расширенный режим runner:
 
 ```bash
 INCLUDE_10M=1 scripts/run_vfs_benchmarks.sh /tmp/vfs-bench-10m

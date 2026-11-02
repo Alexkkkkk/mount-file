@@ -114,6 +114,14 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         "Explicit replay accepts classic 32-bit revoke records in a validated "
         "no-checksum JBD2 overlay." in profiles["ext3-native-ro"]["constraints"]
     )
+    assert (
+        "Bounded 64BIT group-descriptor ext4 profiles are supported."
+        in profiles["ext4-native-ro"]["constraints"]
+    )
+    assert not any(
+        "Unsupported 64BIT" in constraint
+        for constraint in profiles["ext4-native-ro"]["constraints"]
+    )
     assert profiles["ext3-native-ro"]["operations"]["write-file"]["state"] == "refused"
     assert profiles["exfat-native-rw"]["operations"]["write-file"] == {
         "state": "available",
