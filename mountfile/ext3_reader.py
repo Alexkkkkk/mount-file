@@ -530,9 +530,7 @@ class NativeExt3Image(NativeExt2Image):
                     control
                 )
                 if control_magic != _JBD2_MAGIC or control_sequence != sequence:
-                    raise Ext3ReadError(
-                        "JBD2 replay control record disagrees with transaction"
-                    )
+                    raise Ext3ReadError("JBD2 commit does not match descriptor")
                 if control_type == _JBD2_REVOKE:
                     for target in self._parse_jbd2_revoke(
                         control, sequence, journal_data_blocks
