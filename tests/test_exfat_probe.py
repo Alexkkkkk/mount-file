@@ -606,7 +606,14 @@ def test_exfat_writer_directory_records_use_bounded_reader_limit(monkeypatch):
     assert reads == [(1024, 512)]
 
 
-def _tree_image(path, *, valid_data_length=None, number_of_fats=1, volume_flags=0):
+def _tree_image(
+    path,
+    *,
+    valid_data_length=None,
+    number_of_fats=1,
+    volume_flags=0,
+    volume_label=None,
+):
     active_fat = volume_flags & 1
     if number_of_fats not in (1, 2) or active_fat >= number_of_fats:
         raise ValueError("invalid synthetic exFAT FAT selection")
@@ -658,6 +665,13 @@ def _tree_image(path, *, valid_data_length=None, number_of_fats=1, volume_flags=
     root[128] = 0xC1
     root[130:148] = "HELLO.TXT".encode("utf-16le")
     struct.pack_into("<H", root, 66, _entry_set_checksum(root[64:160]))
+    if volume_label is not None:
+        encoded_label = volume_label.encode("utf-16le")
+        if len(encoded_label) > 22:
+            raise ValueError("synthetic volume label is too long")
+        root[160] = 0x83
+        root[161] = len(encoded_label) // 2
+        root[162 : 162 + len(encoded_label)] = encoded_label
     heap_offset = heap_sector * 512
     region[heap_offset : heap_offset + 512] = root
     region[heap_offset + 512 : heap_offset + 512 + len(payload)] = payload
@@ -665,6 +679,66 @@ def _tree_image(path, *, valid_data_length=None, number_of_fats=1, volume_flags=
     region[heap_offset + 1536 : heap_offset + 1536 + len(upcase_data)] = upcase_data
     path.write_bytes(region)
     return payload
+
+
+def test_native_exfat_reads_validated_volume_label_and_rw_info(tmp_path):
+    path = tmp_path / "exfat-volume-label.img"
+    _tree_image(path, volume_label="DATA é")
+    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    try:
+        assert provider.volume_label == "DATA é"
+    finally:
+        provider.close()
+    writer = NativeExfatRW(path, volume_size=VOLUME_SIZE)
+    try:
+        assert writer.info().label == "DATA é"
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (lambda root: root.__setitem__(161, 12), "exceeds 11"),
+        (lambda root: root.__setitem__(190, 1), "reserved bytes"),
+    ],
+)
+def test_native_exfat_rejects_malformed_volume_label(tmp_path, mutator, message):
+    path = tmp_path / "bad-volume-label.img"
+    _tree_image(path, volume_label="LABEL")
+    raw = bytearray(path.read_bytes())
+    root = bytearray(raw[32 * 512 : 33 * 512])
+    mutator(root)
+    raw[32 * 512 : 33 * 512] = root
+    path.write_bytes(raw)
+    with pytest.raises(ExfatReadError, match=message):
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
+
+
+def test_native_exfat_rejects_invalid_volume_label_utf16(tmp_path):
+    path = tmp_path / "invalid-volume-label-utf16.img"
+    _tree_image(path, volume_label="LABEL")
+    raw = bytearray(path.read_bytes())
+    root = bytearray(raw[32 * 512 : 33 * 512])
+    root[162:164] = b"\x00\xd8"
+    raw[32 * 512 : 33 * 512] = root
+    path.write_bytes(raw)
+    with pytest.raises(ExfatReadError, match="valid UTF-16"):
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
+
+
+def test_native_exfat_rejects_duplicate_volume_labels(tmp_path):
+    path = tmp_path / "duplicate-volume-label.img"
+    _tree_image(path, volume_label="ONE")
+    raw = bytearray(path.read_bytes())
+    root = bytearray(raw[32 * 512 : 33 * 512])
+    root[192] = 0x83
+    root[193] = 3
+    root[194:200] = "TWO".encode("utf-16le")
+    raw[32 * 512 : 33 * 512] = root
+    path.write_bytes(raw)
+    with pytest.raises(ExfatReadError, match="duplicate exFAT volume label"):
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
 
 
 def test_native_exfat_stat_exposes_timestamps_and_dos_attributes(tmp_path):
