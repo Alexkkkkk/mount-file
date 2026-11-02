@@ -11,10 +11,7 @@ from mountfile.native_parity import ParityCase, run_parity_matrix
 from tests.test_exfat_probe import VOLUME_SIZE as EXFAT_VOLUME_SIZE
 from tests.test_exfat_probe import _tree_image
 from tests.test_ext2_reader import _make_image as make_ext2_image
-from tests.test_ext3_reader import (
-    _make_clean_journal_image,
-    _make_ext4_extent_image,
-)
+from tests.test_ext3_reader import _make_clean_journal_image, _make_ext4_extent_image
 from tests.test_fat32 import make_fat32_image
 from tests.test_fat_reader import _make_small_fat
 
