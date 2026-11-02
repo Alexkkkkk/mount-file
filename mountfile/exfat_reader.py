@@ -98,6 +98,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         self.offset = offset
         self._volume_size = volume_size
         self._stream = None
+        self.volume_label = ""
         self._open()
 
     def _open(self):
@@ -123,6 +124,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             ):
                 raise ExfatReadError("exFAT volume exceeds selected bounds")
             self._system_metadata = self.system_metadata()
+            self.volume_label = self._volume_label()
             self.root_name = self.image_path
         except (OSError, ExfatProbeError, struct.error) as exc:
             self.close()
@@ -533,6 +535,33 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             "upcase_cluster": upcase_cluster,
             "upcase_size": upcase_size,
         }
+
+    def _volume_label(self) -> str:
+        """Read the single validated exFAT Volume Label directory entry."""
+        if not hasattr(self.profile, "root_cluster"):
+            return ""
+        raw = self._read_directory_bytes(self.profile.root_cluster)
+        label = None
+        for pos in range(0, len(raw) - 31, 32):
+            kind = raw[pos]
+            if kind == 0:
+                break
+            if kind != 0x83:
+                continue
+            if label is not None:
+                raise ExfatReadError("duplicate exFAT volume label entry")
+            length = raw[pos + 1]
+            if length > 11:
+                raise ExfatReadError("exFAT volume label exceeds 11 UTF-16 units")
+            label_bytes = raw[pos + 2 : pos + 2 + length * 2]
+            try:
+                label = label_bytes.decode("utf-16le", "strict")
+            except UnicodeDecodeError as exc:
+                raise ExfatReadError("exFAT volume label is not valid UTF-16") from exc
+            reserved = raw[pos + 2 + length * 2 : pos + 32]
+            if any(reserved):
+                raise ExfatReadError("exFAT volume label has non-zero reserved bytes")
+        return "" if label is None else label
 
     @staticmethod
     def _parts(path):

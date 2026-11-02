@@ -574,6 +574,7 @@ class NativeExfatRW(RWBackend):
             fs_type="exfat",
             offset=self.offset,
             backend="native-exfat-rw",
+            label=self._reader.volume_label,
             total_size=self._reader.profile.volume_length
             * self._reader.profile.bytes_per_sector,
             writable=True,
