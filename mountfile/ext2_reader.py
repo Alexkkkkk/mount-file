@@ -57,6 +57,26 @@ _EXT4_VERITY_FL = 0x00100000
 _EXT4_EA_INODE_FL = 0x00200000
 _EXT4_INLINE_DATA_FL = 0x10000000
 
+# These flags do not alter the on-disk file contents or block mapping.  The
+# INDEX bit is retained for non-directories as before; directories carrying it
+# are rejected separately.  Do not add compression state bits (including
+# NOCOMPR: historically it could request raw access to compressed ext2 data).
+# https://docs.kernel.org/filesystems/ext4/inodes.html
+_EXT_INODE_READ_FLAGS = (
+    0x00000001  # SECRM
+    | 0x00000002  # UNRM
+    | 0x00000008  # SYNC
+    | 0x00000010  # IMMUTABLE
+    | 0x00000020  # APPEND
+    | 0x00000040  # NODUMP
+    | 0x00000080  # NOATIME
+    | _EXT2_INDEX_FL  # checked by inode type below
+    | 0x00004000  # JOURNAL_DATA (write policy)
+    | 0x00008000  # NOTAIL
+    | 0x00010000  # DIRSYNC
+    | 0x00020000  # TOPDIR
+)
+
 _MAX_GROUPS = 1_000_000
 _MAX_DIRECTORY_BYTES = 64 * 1024 * 1024
 _MAX_DIRECTORY_ENTRIES = 1_000_000
@@ -521,20 +541,17 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             )
         else:
             size = size_low
-        unsupported_flags = (
-            _EXT2_COMPR_FL
-            | _EXT4_ENCRYPT_FL
-            | _EXT4_EXTENTS_FL
-            | _EXT4_VERITY_FL
-            | _EXT4_EA_INODE_FL
-            | _EXT4_INLINE_DATA_FL
-        )
-        if flags & unsupported_flags:
+        unsupported_flags = flags & ~_EXT_INODE_READ_FLAGS
+        if unsupported_flags:
             raise Ext2ReadError(
-                "inode uses unsupported compression, encryption or ext4 layout"
+                f"inode uses unsupported or unknown inode flags: 0x{unsupported_flags:08x}",
+                RefusalCode.UNSUPPORTED_PROFILE,
             )
         if mode & _S_IFMT == _S_IFDIR and flags & _EXT2_INDEX_FL:
-            raise Ext2ReadError("indexed directories are not supported by this profile")
+            raise Ext2ReadError(
+                "indexed directories are not supported by this profile",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         block_pointers = struct.unpack_from("<15I", raw, 40)
         addressable_blocks = 12 + self.block_size // 4
         addressable_blocks += (self.block_size // 4) ** 2 + (self.block_size // 4) ** 3

@@ -50,6 +50,31 @@ def test_validate_paths_rejects_relative_and_traversal_paths():
         bench_vfs._validate_paths(["/docs/readme.txt", "/docs/readme.txt"])
 
 
+@pytest.mark.parametrize(
+    "status_output,expected", [("", False), (" M mountfile/vfs.py\n", True)]
+)
+def test_runtime_versions_reports_worktree_status(monkeypatch, status_output, expected):
+    def fake_run(args, **_kwargs):
+        if args[1] == "rev-parse":
+            return subprocess.CompletedProcess(args, 0, stdout="abc123\n")
+        return subprocess.CompletedProcess(args, 0, stdout=status_output)
+
+    monkeypatch.setattr(bench_vfs.subprocess, "run", fake_run)
+    result = bench_vfs._runtime_versions()
+    assert result["source_revision"] == "abc123"
+    assert result["source_worktree_dirty"] is expected
+
+
+def test_runtime_versions_handles_unavailable_git(monkeypatch):
+    def fail_run(*_args, **_kwargs):
+        raise OSError("git not available")
+
+    monkeypatch.setattr(bench_vfs.subprocess, "run", fail_run)
+    result = bench_vfs._runtime_versions()
+    assert result["source_revision"] is None
+    assert result["source_worktree_dirty"] is None
+
+
 def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     tmp_path, monkeypatch
 ):
@@ -83,6 +108,7 @@ def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     assert set(report["environment"]["runtime_versions"]) == {
         "pytsk3",
         "source_revision",
+        "source_worktree_dirty",
     }
     assert report["image"]["size_bytes"] == len(original)
     assert report["image"]["sha256"] == hashlib.sha256(original).hexdigest()
@@ -108,6 +134,34 @@ def test_build_report_rejects_extent_outside_image(tmp_path):
         bench_vfs.build_report(image, 1, 4, ["/file"], baseline="native")
 
 
+@pytest.mark.parametrize("baseline", ["both", "pytsk3"])
+def test_pytsk_benchmark_rejects_partial_extent_without_opening_image(
+    tmp_path, monkeypatch, baseline
+):
+    from types import SimpleNamespace
+
+    import mountfile.vfs as vfs
+
+    image = tmp_path / "sample.img"
+    original = b"1234" + b"adjacent partition"
+    image.write_bytes(original)
+    monkeypatch.setattr(
+        vfs,
+        "pytsk3",
+        SimpleNamespace(Img_Info=lambda *_args: pytest.fail("pytsk opened the image")),
+    )
+    monkeypatch.setattr(
+        bench_vfs, "open_image_provider", lambda *_args, **_kwargs: _FakeProvider()
+    )
+    report = bench_vfs.build_report(
+        image, 0, 4, ["/docs/readme.txt"], baseline=baseline, repeats=1, warmups=0
+    )
+    assert "cannot safely constrain" in report["backends"]["pytsk3_error"]
+    assert "pytsk3" not in report["backends"]
+    assert "comparison" not in report
+    assert image.read_bytes() == original
+
+
 def test_build_report_compares_backends_only_when_both_succeed(tmp_path, monkeypatch):
     image = tmp_path / "sample.img"
     image.write_bytes(b"1234")
@@ -115,7 +169,8 @@ def test_build_report_compares_backends_only_when_both_succeed(tmp_path, monkeyp
     def open_native(path, offset=0, volume_size=None):
         return _FakeProvider()
 
-    def open_pytsk(path, offset=0):
+    def open_pytsk(path, offset=0, volume_size=None):
+        assert (offset, volume_size) == (0, 4)
         provider = _FakeProvider()
         provider.backend_name = "pytsk3-test"
         return provider
@@ -145,7 +200,8 @@ def test_both_backends_are_interleaved_and_execution_order_is_recorded(
         provider.backend_name = "native-test"
         return provider
 
-    def open_pytsk(path, offset=0):
+    def open_pytsk(path, offset=0, volume_size=None):
+        assert (offset, volume_size) == (0, 4)
         provider = _FakeProvider()
         provider.backend_name = "pytsk3-test"
         return provider
@@ -202,7 +258,8 @@ def test_interleaved_benchmark_keeps_working_backend_when_other_fails(
     def fail_native(*_args, **_kwargs):
         raise bench_vfs.TskError("native fixture unavailable")
 
-    def open_pytsk(path, offset=0):
+    def open_pytsk(path, offset=0, volume_size=None):
+        assert (offset, volume_size) == (0, 4)
         provider = _FakeProvider()
         provider.backend_name = "pytsk3-test"
         return provider

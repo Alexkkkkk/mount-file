@@ -282,7 +282,16 @@ class TskImage(ReadOnlyVFSStatMixin):
     def reopen(self):
         """Reopen the image after a writer has detached its temporary mount."""
         if getattr(self, "fs", None) is None:
-            self._open_image()
+            # The image may have been resized while its handle was closed.
+            # Revalidate the original whole-image extent before opening it again.
+            _legacy_tsk_extent(self.image_path, self.offset, self.volume_size)
+            try:
+                self._open_image()
+            except Exception as exc:
+                # FS_Info can fail after Img_Info opened a file. Do not retain
+                # that handle or leave a half-open provider on retry.
+                self.close()
+                raise TskError(str(exc)) from exc
 
     def list_dir(self, path="/"):
         out = []
@@ -491,6 +500,12 @@ def _detect_macos_filesystem(image_path, offset, volume_size):
     return None
 
 
+def _refusal_code(exc):
+    """Preserve a typed native refusal; leave legacy exceptions classified by text."""
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, RefusalCode) else None
+
+
 def open_image_provider(
     image_path, offset=0, volume_size=None, *, allow_legacy_fallback=None
 ):
@@ -526,7 +541,8 @@ def open_image_provider(
                 return open_native_ext2(image_path, offset, volume_size)
             except Ext2ReadError as exc:
                 raise RecognizedFilesystemError(
-                    f"native ext2 reader declined the ext profile: {exc}"
+                    f"native ext2 reader declined the ext profile: {exc}",
+                    code=_refusal_code(exc),
                 ) from exc
         if profile.fs_type in ("ext3", "ext4"):
             if not profile.clean_unmounted or profile.journal_recovery_needed:
@@ -537,7 +553,8 @@ def open_image_provider(
                 return open_native_ext3(image_path, offset, volume_size)
             except Ext3ReadError as exc:
                 raise RecognizedFilesystemError(
-                    f"native ext3/ext4 reader declined the ext profile: {exc}"
+                    f"native ext3/ext4 reader declined the ext profile: {exc}",
+                    code=_refusal_code(exc),
                 ) from exc
 
     if _has_exfat_boot_magic(image_path, offset, volume_size):
@@ -549,13 +566,14 @@ def open_image_provider(
             probe_exfat_profile(image_path, offset=offset, volume_size=volume_size)
         except Exception as exc:
             raise RecognizedFilesystemError(
-                f"invalid exFAT boot profile: {exc}"
+                f"invalid exFAT boot profile: {exc}", code=_refusal_code(exc)
             ) from exc
         try:
             return NativeExfatImage(image_path, offset=offset, volume_size=volume_size)
         except ExfatReadError as exc:
             raise RecognizedFilesystemError(
-                f"native exFAT reader declined the exFAT profile: {exc}"
+                f"native exFAT reader declined the exFAT profile: {exc}",
+                code=_refusal_code(exc),
             ) from exc
 
     if _has_ntfs_boot_magic(image_path, offset, volume_size):
@@ -567,7 +585,8 @@ def open_image_provider(
             return open_native_ntfs_metadata(image_path, offset, volume_size)
         except Exception as exc:
             raise RecognizedFilesystemError(
-                f"native NTFS reader declined the NTFS profile: {exc}"
+                f"native NTFS reader declined the NTFS profile: {exc}",
+                code=_refusal_code(exc),
             ) from exc
 
     if _has_fat_boot_magic(image_path, offset, volume_size):
@@ -575,7 +594,8 @@ def open_image_provider(
             return NativeFatImage(image_path, offset=offset, volume_size=volume_size)
         except FatReadError as exc:
             raise RecognizedFilesystemError(
-                f"native FAT reader declined the FAT profile: {exc}"
+                f"native FAT reader declined the FAT profile: {exc}",
+                code=_refusal_code(exc),
             ) from exc
 
     macos_filesystem = _detect_macos_filesystem(image_path, offset, volume_size)
@@ -595,5 +615,5 @@ def open_image_provider(
     try:
         _legacy_tsk_extent(image_path, offset, volume_size)
     except TskError as exc:
-        raise RecognizedFilesystemError(str(exc)) from exc
+        raise RecognizedFilesystemError(str(exc), code=_refusal_code(exc)) from exc
     return TskImage(image_path, offset=offset, volume_size=volume_size)

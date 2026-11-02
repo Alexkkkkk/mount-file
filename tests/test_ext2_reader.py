@@ -8,6 +8,7 @@ import pytest
 
 from mountfile import cli, vfs
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
+from mountfile.safety import RefusalCategory, RefusalCode
 
 BLOCK_SIZE = 1024
 BLOCKS_COUNT = 64
@@ -179,6 +180,107 @@ def _make_image(
 
     path.write_bytes(image)
     return bytes(image)
+
+
+def _set_inode_flags(path, number, flags):
+    image = bytearray(path.read_bytes())
+    inode_size = struct.unpack_from("<H", image, 1024 + 0x58)[0]
+    offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (number - 1) * inode_size
+    struct.pack_into("<I", image, offset + 32, flags)
+    path.write_bytes(image)
+    return bytes(image)
+
+
+# Independent on-disk expectations, not a copy of the reader's mask. INDEX
+# remains accepted for non-directories, but never for a directory.
+_CLASSIC_READABLE_INODE_BITS = {
+    0x00000001,  # SECRM
+    0x00000002,  # UNRM
+    0x00000008,  # SYNC
+    0x00000010,  # IMMUTABLE
+    0x00000020,  # APPEND
+    0x00000040,  # NODUMP
+    0x00000080,  # NOATIME
+    0x00001000,  # INDEX on a non-directory (historic behavior)
+    0x00004000,  # JOURNAL_DATA
+    0x00008000,  # NOTAIL
+    0x00010000,  # DIRSYNC
+    0x00020000,  # TOPDIR
+}
+
+
+@pytest.mark.parametrize("bit", [1 << shift for shift in range(32)])
+def test_ext2_inode_flags_are_fail_closed_for_every_bit(tmp_path, bit):
+    image_path = tmp_path / "ext2-inode-flags.img"
+    _make_image(image_path)
+    original = _set_inode_flags(image_path, 11, bit | 0x40)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        if bit in _CLASSIC_READABLE_INODE_BITS:
+            assert provider.read_file("/hello.txt") == b"hello ext2!"
+            assert provider.stat("/hello.txt")["size"] == 11
+            assert provider._read_inode(11).flags == bit | 0x40
+        else:
+            for operation in (
+                lambda: provider.read_file("/hello.txt"),
+                lambda: provider.stat("/hello.txt"),
+                lambda: provider.list_dir("/"),
+            ):
+                with pytest.raises(Ext2ReadError, match=f"0x{bit:08x}") as exc:
+                    operation()
+                assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+                assert exc.value.category is RefusalCategory.UNSUPPORTED
+                assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+def test_ext2_reports_all_unsupported_bits_in_mixed_flag_word(tmp_path):
+    image_path = tmp_path / "ext2-mixed-flags.img"
+    _make_image(image_path)
+    original = _set_inode_flags(image_path, 11, 0x80000240)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext2ReadError, match="0x80000200") as exc:
+            provider.read_file("/hello.txt")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+def test_ext2_all_compatible_flags_can_be_combined(tmp_path):
+    image_path = tmp_path / "ext2-compatible-flags.img"
+    _make_image(image_path)
+    file_flags = sum(_CLASSIC_READABLE_INODE_BITS)
+    _set_inode_flags(image_path, 11, file_flags)
+    original = _set_inode_flags(image_path, 2, file_flags & ~0x1000)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        assert provider.read_file("/hello.txt") == b"hello ext2!"
+        assert provider._read_inode(11).flags == file_flags
+        assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("flags", [0x00001000, 0x00000200, 0x80000000])
+def test_ext2_rejects_unsupported_directory_inode_before_listing(tmp_path, flags):
+    image_path = tmp_path / "ext2-directory-flags.img"
+    _make_image(image_path)
+    original = _set_inode_flags(image_path, 2, flags | 0x10)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext2ReadError) as exc:
+            provider.list_dir("/")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 2 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
 
 
 def _dir_block_for(entries, block_size, filetype):

@@ -18,13 +18,16 @@ from mountfile.ext2_reader import (
     _COMPAT_EXT_ATTR,
     _COMPAT_HAS_JOURNAL,
     _COMPAT_RESIZE_INODE,
-    _EXT2_COMPR_FL,
-    _EXT2_INDEX_FL,
-    _EXT4_EA_INODE_FL,
-    _EXT4_ENCRYPT_FL,
-    _EXT4_EXTENTS_FL,
-    _EXT4_INLINE_DATA_FL,
-    _EXT4_VERITY_FL,
+)
+from mountfile.ext2_reader import _EXT2_COMPR_FL as _EXT2_COMPR_FL
+from mountfile.ext2_reader import _EXT2_INDEX_FL
+from mountfile.ext2_reader import _EXT4_EA_INODE_FL as _EXT4_EA_INODE_FL
+from mountfile.ext2_reader import _EXT4_ENCRYPT_FL as _EXT4_ENCRYPT_FL
+from mountfile.ext2_reader import _EXT4_EXTENTS_FL
+from mountfile.ext2_reader import _EXT4_INLINE_DATA_FL as _EXT4_INLINE_DATA_FL
+from mountfile.ext2_reader import _EXT4_VERITY_FL as _EXT4_VERITY_FL
+from mountfile.ext2_reader import (
+    _EXT_INODE_READ_FLAGS,
     _INCOMPAT_FILETYPE,
     _RO_COMPAT_LARGE_FILE,
     _RO_COMPAT_SPARSE_SUPER,
@@ -43,6 +46,7 @@ from mountfile.ext_probe import (
     _RO_COMPAT_BIGALLOC,
     _RO_COMPAT_METADATA_CSUM,
 )
+from mountfile.safety import RefusalCode
 
 _JBD2_MAGIC = 0xC03B3998
 _JBD2_DESCRIPTOR = 1
@@ -55,6 +59,17 @@ _RO_COMPAT_EXTRA_ISIZE = 0x0040
 _EXT4_EXTENTS_MAGIC = 0xF30A
 _MAX_EXTENT_TREE_DEPTH = 5
 _EXT4_METADATA_CSUM_SUPPORTED = False
+
+# In addition to the common behavior flags, ext4's extent layout is parsed
+# below. EOFBLOCKS only reports preallocation beyond i_size; DAX and
+# PROJINHERIT affect access/creation policy, not the stored file bytes.
+_EXT4_INODE_READ_FLAGS = (
+    _EXT_INODE_READ_FLAGS
+    | _EXT4_EXTENTS_FL
+    | 0x00400000  # deprecated EOFBLOCKS
+    | 0x02000000  # DAX
+    | 0x20000000  # PROJINHERIT
+)
 
 
 class Ext3ReadError(Ext2ReadError):
@@ -129,7 +144,9 @@ class NativeExt3Image(NativeExt2Image):
                 self._validate_empty_journal(replay_journal=replay_journal)
         except Ext2ReadError as exc:
             self.close()
-            raise Ext3ReadError(f"journal inode/JBD2 validation failed: {exc}") from exc
+            raise Ext3ReadError(
+                f"journal inode/JBD2 validation failed: {exc}", exc.code
+            ) from exc
         except Exception:
             self.close()
             raise
@@ -651,7 +668,7 @@ class NativeExt4Image(NativeExt3Image):
         NativeExt3Image._validate_profile(profile)
 
     def _read_inode(self, number: int) -> _Inode:
-        """Read an inode while permitting only the explicitly parsed extents flag."""
+        """Read an inode with an explicit allowlist and checked extent layout."""
         if not 1 <= number <= self.inodes_count:
             raise Ext3ReadError("inode number is outside filesystem bounds")
         cached = self._inode_cache.get(number)
@@ -670,22 +687,25 @@ class NativeExt4Image(NativeExt3Image):
         if mode == 0:
             raise Ext3ReadError("allocated inode has no valid file mode")
         flags = struct.unpack_from("<I", raw, 32)[0]
-        unsupported_flags = (
-            _EXT2_COMPR_FL
-            | _EXT4_EA_INODE_FL
-            | _EXT4_ENCRYPT_FL
-            | _EXT4_VERITY_FL
-            | _EXT4_INLINE_DATA_FL
-        )
-        if flags & unsupported_flags:
-            raise Ext3ReadError("inode uses an unsupported ext4 data layout")
+        unsupported_flags = flags & ~_EXT4_INODE_READ_FLAGS
+        if unsupported_flags:
+            raise Ext3ReadError(
+                f"inode uses unsupported or unknown inode flags: 0x{unsupported_flags:08x}",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if mode & 0xF000 == 0x4000 and flags & _EXT2_INDEX_FL:
-            raise Ext3ReadError("indexed directories are not supported by this profile")
+            raise Ext3ReadError(
+                "indexed directories are not supported by this profile",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if flags & _EXT4_EXTENTS_FL:
             if self.profile.feature_incompat & 0x0040 == 0:
                 raise Ext3ReadError("inode extent flag lacks EXTENTS feature")
         elif self.profile.feature_incompat & 0x0040:
-            raise Ext3ReadError("ext4 EXTENTS profile contains a pointer-layout inode")
+            raise Ext3ReadError(
+                "ext4 EXTENTS profile contains a pointer-layout inode",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         size_low = struct.unpack_from("<I", raw, 4)[0]
         size_high = struct.unpack_from("<I", raw, 108)[0]
         if mode & 0xF000 == _S_IFREG:

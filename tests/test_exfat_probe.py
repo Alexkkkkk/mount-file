@@ -476,16 +476,14 @@ def test_exfat_range_read_rejects_chain_shorter_than_requested_range():
         reader.read_file_range("/FILE", 1024, 512)
 
 
-def test_native_exfat_reader_uses_selected_second_fat(tmp_path):
+def test_native_exfat_reader_refuses_selected_second_fat(tmp_path):
     path = tmp_path / "exfat-two-fats.img"
-    payload = _tree_image(path, number_of_fats=2, volume_flags=0x0001)
-    provider = NativeExfatImage(path, volume_size=VOLUME_SIZE)
-    try:
-        assert provider.profile.number_of_fats == 2
-        assert provider.profile.active_fat == 1
-        assert provider.read_file("/HELLO.TXT") == payload
-    finally:
-        provider.close()
+    _tree_image(path, number_of_fats=2, volume_flags=0x0001)
+    before = path.read_bytes()
+    with pytest.raises(ExfatReadError, match="NumberOfFats=2") as refusal:
+        NativeExfatImage(path, volume_size=VOLUME_SIZE)
+    assert refusal.value.code is RefusalCode.UNSUPPORTED_PROFILE
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

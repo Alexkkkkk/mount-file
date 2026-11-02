@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Conservative, bounded read-only exFAT tree provider.
 
-The provider intentionally supports only directory entries and regular-file
-reads. It never mutates the image and rejects malformed chains, name sets and
-out-of-volume ranges. exFAT writes remain outside this profile.
+The provider intentionally supports only bounded one-FAT directory entries and
+regular-file reads. Two-FAT TexFAT volumes are refused. It never mutates the
+image and rejects malformed chains, name sets and out-of-volume ranges.
 """
 
 from __future__ import annotations
@@ -14,7 +14,11 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
+from mountfile.exfat_probe import (
+    NATIVE_EXFAT_TWO_FAT_REFUSAL,
+    ExfatProbeError,
+    probe_exfat_boot_region,
+)
 from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
@@ -111,6 +115,10 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             self.profile = probe_exfat_boot_region(
                 self.image_path, offset=self.offset, volume_size=self._volume_size
             )
+            if self.profile.number_of_fats != 1:
+                raise ExfatReadError(
+                    NATIVE_EXFAT_TWO_FAT_REFUSAL, RefusalCode.UNSUPPORTED_PROFILE
+                )
             if self.profile.volume_flags & 0x0002:
                 raise ExfatReadError("exFAT volume is dirty and requires recovery")
             if self.profile.volume_flags & 0x0004:
@@ -169,9 +177,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _fat_entry(self, cluster):
         if not 2 <= cluster <= self.profile.cluster_count + 1:
             raise ExfatReadError("exFAT cluster is outside the data heap")
-        relative = (
-            self.profile.fat_offset + self.profile.active_fat * self.profile.fat_length
-        ) * self.profile.bytes_per_sector + cluster * 4
+        relative = self.profile.fat_offset * self.profile.bytes_per_sector + cluster * 4
         return struct.unpack_from("<I", self._read_rel(relative, 4), 0)[0]
 
     def _cluster_offset(self, cluster):

@@ -314,7 +314,7 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "No $LogFile replay, sparse, compressed, or encrypted stream support.",
         ),
         "exfat-native-ro": (
-            "Bounded one- or two-FAT profile; reads the validated selected active FAT.",
+            "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
             "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
             "A present root volume-label entry is validated; malformed or duplicate "
             "labels are refused.",
@@ -333,11 +333,8 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "growth supports bounded direct, single-, and double-indirect blocks.",
         ),
         "exfat-native-rw": (
-            "Bounded one- or two-FAT profile; reads the validated active FAT and "
-            "mirrors FAT writes to all declared copies.",
-            "Allows only a validated ActiveFat selection (VolumeFlags 0x0000, or "
-            "0x0001 with two FATs); refuses dirty, media-failure, ClearToZero, and "
-            "reserved flags.",
+            "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
+            "Requires ActiveFat=0; refuses dirty, media-failure, ClearToZero, and reserved flags.",
             "Unsupported metadata layouts are refused.",
             "A single root volume label is validated and exposed through FSInfo.label.",
         ),
@@ -456,6 +453,13 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
         ),
         "exfat-native-ro": (
             CapabilityGate(
+                "single-exfat-fat",
+                "feature",
+                "required",
+                "NumberOfFats must be 1; two-FAT TexFAT is unsupported.",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            ),
+            CapabilityGate(
                 "clean-exfat-state",
                 "image-state",
                 "required",
@@ -463,10 +467,10 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
                 RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
             ),
             CapabilityGate(
-                "validated-active-fat",
+                "validated-exfat-metadata",
                 "feature",
                 "required",
-                "The selected active FAT and system metadata must validate.",
+                "The single FAT and mandatory system metadata must validate.",
                 RefusalCode.MALFORMED_METADATA,
             ),
         ),
@@ -514,6 +518,13 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
         ),
         "exfat-native-rw": (
             CapabilityGate(
+                "single-exfat-fat",
+                "feature",
+                "required",
+                "NumberOfFats must be 1; two-FAT TexFAT is unsupported.",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            ),
+            CapabilityGate(
                 "clean-exfat-write-state",
                 "image-state",
                 "required",
@@ -521,10 +532,10 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
                 RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
             ),
             CapabilityGate(
-                "validated-mirrored-fat-write",
+                "validated-exfat-fat-write",
                 "feature",
                 "required",
-                "Active FAT selection and every declared FAT copy must validate.",
+                "The single FAT and mandatory system metadata must validate before mutation.",
                 RefusalCode.MALFORMED_METADATA,
             ),
         ),

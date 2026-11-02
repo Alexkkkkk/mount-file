@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: MIT
-"""Bounded, read-only exFAT boot-region and geometry validation."""
+"""Bounded, read-only exFAT boot-region and geometry validation.
+
+A successful probe is not a native access decision: in particular it can
+describe a two-FAT TexFAT volume whose transaction semantics are unsupported.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,10 @@ _MAX_CLUSTER_SIZE = 32 * 1024 * 1024
 # VolumeFlags bits 0..3 are ActiveFat, VolumeDirty, MediaFailure and
 # ClearToZero; only the upper twelve bits are reserved by exFAT 1.00.
 _KNOWN_VOLUME_FLAGS = 0x000F
+
+NATIVE_EXFAT_TWO_FAT_REFUSAL = (
+    "exFAT NumberOfFats=2 (TexFAT) is unsupported for native browsing and writes"
+)
 
 
 class ExfatProbeError(ValueError):
@@ -194,6 +202,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
 def probe_exfat_boot_region(
     image_path, *, offset: int = 0, volume_size: int | None = None
 ) -> ExfatBootProfile:
+    """Inspect boot geometry only; a result does not grant read/write access."""
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ExfatProbeError("offset must be a non-negative integer")
     if (
@@ -228,6 +237,7 @@ def probe_exfat_boot_region(
 __all__ = [
     "ExfatBootProfile",
     "ExfatProbeError",
+    "NATIVE_EXFAT_TWO_FAT_REFUSAL",
     "exfat_boot_checksum",
     "parse_exfat_boot_region",
     "probe_exfat_boot_region",
