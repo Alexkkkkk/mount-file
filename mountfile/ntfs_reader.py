@@ -21,11 +21,7 @@ from mountfile.ntfs_mft import (
     parse_ntfs_file_record_header,
     validate_ntfs_file_reference,
 )
-from mountfile.ntfs_probe import (
-    NtfsBootProfile,
-    NtfsProbeError,
-    parse_ntfs_boot_sector,
-)
+from mountfile.ntfs_probe import NtfsBootProfile, NtfsProbeError, parse_ntfs_boot_sector
 from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
