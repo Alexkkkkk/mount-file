@@ -19,6 +19,10 @@
 | D1 | Единый актуальный статус в docs, GUI, CLI, VFS и release | Частично | FAT12/16, ext2 files/directories, ext4 inode flag policy, one-FAT exFAT policy и benchmark provenance синхронизированы; полное согласование интерфейсов и release status ещё впереди. |
 | P1 | Пройти все acceptance gates и объявить поддержанные профили production-ready | Не готово | Все обязательные gates должны выполняться одновременно; текущие ограничения выше не позволяют считать issue завершённой. |
 
+### Обновление bounded ImageSource / NTFS
+
+Добавлен общий read-only `ImageSource` с positioned reads, проверкой границ выбранного extent, защитой от concurrent truncation и bounded `NTFS` integration. Это закрывает общий источник чтения и lifecycle safety, но не объявляет NTFS writer или полную NTFS feature parity production-ready.
+
 ## Решение для обновления статуса
 
 Не помечать семейство «готово» только из-за наличия reader/writer класса. Для завершения профиля нужны точные поддерживаемые операции и features, положительные и отрицательные fixtures, независимая проверка, failure/crash tests, согласованная документация и CI на заявленных платформах.
