@@ -689,23 +689,28 @@ class NativeExfatWriter:
                 stage.unlink(missing_ok=True)
 
     def _mutate(self, operation, validate):
-        with _image_lock(self.image):
-            stage = self._copy_stage()
+        # Windows denies a second reader while msvcrt.locking holds the
+        # source open. Copy the source before taking the lock, then re-check
+        # its identity inside the lock immediately before os.replace().
+        stage = self._copy_stage()
+        try:
+            reader = self._reader(stage)
             try:
-                reader = self._reader(stage)
-                try:
-                    validate(reader, stage)
-                finally:
-                    reader.close()
-                verified = self._reader(stage)
-                try:
-                    self._metadata(verified)
-                finally:
-                    verified.close()
+                validate(reader, stage)
+            finally:
+                reader.close()
+            verified = self._reader(stage)
+            try:
+                self._metadata(verified)
+            finally:
+                verified.close()
+            with _image_lock(self.image):
                 self._commit_stage(stage)
-            except Exception:
+                stage = None
+        except Exception:
+            if stage is not None:
                 stage.unlink(missing_ok=True)
-                raise
+            raise
 
     def write_file(self, path, data):
         payload = bytes(data)
