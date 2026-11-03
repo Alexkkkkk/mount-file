@@ -82,7 +82,7 @@ def test_consensus_identical_and_opposite_answers():
 
 
 def test_dialog_backend_runs_asynchronously_and_updates_on_gui_thread():
-    app = QApplication.instance() or QApplication([])
+    _app = QApplication.instance() or QApplication([])
     entered, release = threading.Event(), threading.Event()
     gui_thread = threading.get_ident()
 
@@ -121,7 +121,7 @@ def test_dialog_backend_runs_asynchronously_and_updates_on_gui_thread():
 
 
 def test_dialog_displays_consensus_and_backend_errors():
-    app = QApplication.instance() or QApplication([])
+    _app = QApplication.instance() or QApplication([])
 
     class Result:
         def __init__(self, text):

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import atexit
 import fnmatch
+import logging
 import os
 import shutil
 import stat
@@ -1446,8 +1447,10 @@ class TcPanel(QWidget):
                 found = attrs.get(e["name"].upper())
                 if found is not None:
                     e["fat_attr"] = found
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort FAT attribute refresh failed", exc_info=exc
+            )
 
     def _sort_entries(self):
         key = {
@@ -2213,8 +2216,10 @@ class MainWindow(QMainWindow):
             icon = appicon.app_icon()
             if icon is not None and not icon.isNull():
                 self.setWindowIcon(icon)
-        except Exception:  # pragma: no cover - icons are cosmetic
-            pass
+        except Exception as exc:  # pragma: no cover - icons are cosmetic
+            logging.getLogger(__name__).debug(
+                "optional application icon unavailable", exc_info=exc
+            )
 
     # -------------------------------------------------------- screen fit
     def screen_geometry(self):
@@ -4811,8 +4816,10 @@ class MainWindow(QMainWindow):
         try:
             if updater.isRunning():
                 updater.requestInterruption()
-        except Exception:  # pragma: no cover - заглушка без Qt
-            pass
+        except Exception as exc:  # pragma: no cover - заглушка без Qt
+            logging.getLogger(__name__).debug(
+                "optional updater interruption unavailable", exc_info=exc
+            )
         _ORPHAN_THREADS.append(updater)
 
     def closeEvent(self, e):

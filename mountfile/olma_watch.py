@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -189,8 +190,8 @@ def _ollama_settings():
             return None
         base = settings.get("ai_base_url") or base
         model = settings.get("ai_model") or ""
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     return {
         "ai_backend": "ollama",
         "ai_base_url": base,
@@ -307,8 +308,10 @@ def _ollama_analyze_with_timeout(tb_text, timeout=None):
             value = _ollama_analyze(tb_text)
             if not abandoned.is_set():
                 result.append(value)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
         finally:
             finished.set()
 
@@ -499,8 +502,10 @@ def flush_pending(log=None):
     if sent and log is not None:
         try:
             log("OLMA Watch: отправлено отложенных отчётов: %d" % sent)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
     return sent
 
 
@@ -514,15 +519,19 @@ def _handle_text(tb_text, context="", wait=True):
     if wait:
         try:
             report_text(tb_text, context, wait=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
         return
 
     def _worker():
         try:
             report_text(tb_text, context, wait=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
 
     threading.Thread(target=_worker, daemon=True, name="olma-watch").start()
 
@@ -540,8 +549,10 @@ def install(qt_app=None, log=None):
             if exc_type not in (KeyboardInterrupt, SystemExit):
                 text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
                 _handle_text(text, context="основной поток", wait=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
         previous(exc_type, exc_value, exc_tb)
 
     sys.excepthook = sys_hook
@@ -558,8 +569,10 @@ def install(qt_app=None, log=None):
                 )
                 name = getattr(args.thread, "name", "") or "поток"
                 _handle_text(text, context="фоновый поток (%s)" % name)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
         if previous_thread is not None:
             previous_thread(args)
 
@@ -580,16 +593,19 @@ def install(qt_app=None, log=None):
                         _handle_text("QtFatal: %s" % message, context="Qt")
                     elif log is not None and mode in (warning, critical):
                         log("Qt: %s" % message)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "best-effort operation failed", exc_info=exc
+                    )
 
             QtCore.qInstallMessageHandler(qt_handler)
-        except Exception:
-            pass
-
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
     try:
         if enabled():
             flush_pending(log=log)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     return True

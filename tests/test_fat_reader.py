@@ -33,7 +33,6 @@ def _make_small_fat(path, fat_type: int) -> bytes:
     else:  # pragma: no cover - callers use the existing complete FAT32 fixture
         raise AssertionError(fat_type)
     root_sectors = (root_entries * 32 + bps - 1) // bps
-    data_sectors = total_sectors - reserved - fat_sectors - root_sectors
     with path.open("wb") as stream:
         stream.truncate(total_sectors * bps)
         boot = bytearray(bps)

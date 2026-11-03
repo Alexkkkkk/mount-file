@@ -361,7 +361,7 @@ class TestFat32Provider:
         with Fat32Provider(self.path) as p:
             try:
                 p.fs.write_file("/", "nope.bin", b"x")
-            except Exception:
+            except Exception:  # noqa: S110 - expected rejection path
                 pass
         with open(self.path, "rb") as f:  # still intact
             assert f.read(3) == b"\xeb\x58\x90"

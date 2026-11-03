@@ -310,7 +310,7 @@ def test_crash_recovery_restores_snapshot_byte_range_and_verifies_afterward(tmp_
     journal = Journal(image)
     verifier = _RecoveryVerifier(expected_image=original)
     try:
-        tx_id = journal.begin("write_file", "/evidence.bin")
+        journal.begin("write_file", "/evidence.bin")
         journal.backup_region(4, 6)
         with image.open("r+b") as stream:
             stream.seek(4)

@@ -19,6 +19,7 @@ mountfile_universal_rw.py — Universal RW-слой для Mount File (Task 2.1,
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import time
@@ -158,8 +159,10 @@ class UniversalRW(ABC):
             # Preserve the snapshot error even if journal cleanup itself fails.
             try:
                 self.journal.cancel(tx_id, snapshot_failed=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
             raise
         return tx_id
 

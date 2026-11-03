@@ -179,7 +179,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     ):
         raise ExfatProbeError("exFAT backup boot-sector geometry mismatch")
     return ExfatBootProfile(
-        0,
+        partition_offset,
         volume_size,
         bytes_per_sector,
         sectors_per_cluster,

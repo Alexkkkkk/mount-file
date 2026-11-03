@@ -32,6 +32,8 @@ jobs:
           python -m pip install ruff==0.4.10 black==24.4.2 isort==5.13.2
       - name: Static check (syntax + undefined names)
         run: ruff check . --select E9,F63,F7,F82 --output-format=github
+      - name: Correctness lint (issue #182 safety rules)
+        run: ruff check mountfile tests --select B006,E722,S110,S112,F841 --output-format=github
       - name: Format check (black)
         run: black --check --diff .
       - name: Import order check (isort)
