@@ -557,7 +557,7 @@ class RWBackend(ABC):
                 None,
             )
             is_dir = entry is not None and entry.is_dir
-            if entry is not None:
+            if entry is not None and entry.is_dir:
                 source_path = entry.path
         if is_dir:
             extract_path(provider, source_path, dest, limits=limits)
