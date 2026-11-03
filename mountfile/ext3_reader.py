@@ -35,6 +35,7 @@ _JBD2_COMMIT = 2
 _JBD2_REVOKE = 5
 _MAX_JOURNAL_BLOCKS = 1 << 20
 _RO_COMPAT_EXTRA_ISIZE = 0x0040
+_RO_COMPAT_METADATA_CSUM = 0x0400
 
 
 class Ext3ReadError(Ext2ReadError):
@@ -79,7 +80,7 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("unsupported incompatible ext feature")
         ro_allowed = _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE
         if profile.fs_type == "ext4":
-            ro_allowed |= _RO_COMPAT_EXTRA_ISIZE | 0x0020  # DIR_NLINK
+            ro_allowed |= _RO_COMPAT_EXTRA_ISIZE | _RO_COMPAT_METADATA_CSUM | 0x0020
         if profile.feature_ro_compat & ~ro_allowed:
             raise Ext3ReadError("unsupported read-only-compatible ext feature")
         if profile.fs_type == "ext3" and not profile.has_journal:
@@ -90,10 +91,6 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("extent layout is not enabled in classic profile")
         if profile.feature_incompat & 0x0080 and profile.fs_type != "ext4":  # 64BIT
             raise Ext3ReadError("64-bit group layout is not enabled in classic profile")
-        if profile.feature_ro_compat & 0x0400:  # METADATA_CSUM
-            raise Ext3ReadError(
-                "metadata checksums are not implemented in this profile"
-            )
 
     def __init__(self, image_path, offset=0, volume_size=None):
         super().__init__(image_path, offset=offset, volume_size=volume_size)
@@ -189,6 +186,8 @@ class NativeExt4Image(NativeExt3Image):
             descriptor.inode_table * self.block_size + index * self.inode_size,
             self.inode_size,
         )
+        if self.feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
+            self._validate_inode_checksum(number, raw)
         mode = struct.unpack_from("<H", raw, 0)[0]
         if mode == 0:
             raise Ext3ReadError("allocated inode has no valid file mode")
@@ -224,24 +223,78 @@ class NativeExt4Image(NativeExt3Image):
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=pointers,
+            generation=struct.unpack_from("<I", raw, 100)[0],
         )
         if len(self._inode_cache) >= 4096:
             self._inode_cache.clear()
         self._inode_cache[number] = inode
         return inode
 
+    def _checksum_seed(self) -> int:
+        from mountfile.ext_checksum import crc32c_raw
+
+        return crc32c_raw(self.profile.filesystem_uuid)
+
+    def _validate_inode_checksum(self, number: int, raw: bytes) -> None:
+        from mountfile.ext_checksum import crc32c_raw
+
+        if len(raw) < 128:
+            raise Ext3ReadError("inode is too short for metadata checksum")
+        candidate = bytearray(raw)
+        expected = struct.unpack_from("<H", raw, 0x7C)[0]
+        struct.pack_into("<H", candidate, 0x7C, 0)
+        expected_high = None
+        if len(raw) >= 0x84:
+            expected_high = struct.unpack_from("<H", raw, 0x82)[0]
+            struct.pack_into("<H", candidate, 0x82, 0)
+        generation = struct.unpack_from("<I", raw, 100)[0]
+        actual = crc32c_raw(
+            struct.pack("<II", number, generation) + bytes(candidate),
+            self._checksum_seed(),
+        )
+        if (actual & 0xFFFF) != expected or (
+            expected_high is not None and actual >> 16 != expected_high
+        ):
+            raise Ext3ReadError(f"inode {number} checksum mismatch")
+
+    def _directory_block_data_end(
+        self, inode: _Inode, logical: int, block: bytes
+    ) -> int:
+        from mountfile.ext_checksum import crc32c_raw
+
+        if not self.feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
+            return super()._directory_block_data_end(inode, logical, block)
+        tail = self.block_size - 12
+        if tail < 0:
+            raise Ext3ReadError("directory block is too small for checksum tail")
+        reserved, record_length, name_length, file_type = struct.unpack_from(
+            "<I H B B", block, tail
+        )
+        if reserved or record_length != 12 or name_length or file_type != 0xDE:
+            raise Ext3ReadError("directory checksum tail is missing or malformed")
+        expected = struct.unpack_from("<I", block, self.block_size - 4)[0]
+        seed = crc32c_raw(
+            struct.pack("<II", inode.number, inode.generation),
+            self._checksum_seed(),
+        )
+        if crc32c_raw(block[:tail], seed) != expected:
+            raise Ext3ReadError(f"directory block {logical} checksum mismatch")
+        return tail
+
     def _group_descriptor(self, group: int) -> _GroupDescriptor:
         """Read high descriptor words for the explicitly gated 64-bit profile."""
-        if not self.feature_incompat & 0x0080:
-            return super()._group_descriptor(group)
-        cached = self._group_cache.get(group)
-        if cached is not None and cached.block_bitmap >= (1 << 32):
-            return cached
         base = super()._group_descriptor(group)
         raw = self._read_at(
             self._gdt_offset + group * self.group_descriptor_size,
             self.group_descriptor_size,
         )
+        if self.feature_ro_compat & _RO_COMPAT_METADATA_CSUM:
+            self._validate_group_checksum(group, raw)
+        if not self.feature_incompat & 0x0080:
+            return base
+        cached = self._group_cache.get(group)
+        if cached is not None and cached.block_bitmap >= (1 << 32):
+            return cached
         block_bitmap = base.block_bitmap | (struct.unpack_from("<I", raw, 32)[0] << 32)
         inode_bitmap = base.inode_bitmap | (struct.unpack_from("<I", raw, 36)[0] << 32)
         inode_table = base.inode_table | (struct.unpack_from("<I", raw, 40)[0] << 32)
@@ -267,6 +320,17 @@ class NativeExt4Image(NativeExt3Image):
         )
         self._group_cache[group] = result
         return result
+
+    def _validate_group_checksum(self, group: int, raw: bytes) -> None:
+        from mountfile.ext_checksum import crc32c_raw
+
+        candidate = bytearray(raw)
+        struct.pack_into("<H", candidate, 30, 0)
+        actual = crc32c_raw(
+            struct.pack("<I", group) + bytes(candidate), self._checksum_seed()
+        )
+        if (actual & 0xFFFF) != struct.unpack_from("<H", raw, 30)[0]:
+            raise Ext3ReadError(f"group descriptor {group} checksum mismatch")
 
     def _extent_block(self, block: int) -> bytes:
         if not 0 < block < self.blocks_count:
