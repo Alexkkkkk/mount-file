@@ -107,6 +107,21 @@ def _open_fat_rw(tmp_path):
     return image, Fat32RW(image, volume_size=image.stat().st_size)
 
 
+def test_extract_recreates_directory_tree_with_hardened_writer(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/EVIDENCE")
+        fs.write_file("/EVIDENCE/report.txt", b"directory payload")
+        destination = tmp_path / "extracted"
+
+        assert fs.extract("/evidence", destination) == destination
+        assert (destination / "EVIDENCE" / "report.txt").read_bytes() == (
+            b"directory payload"
+        )
+    finally:
+        fs.close()
+
+
 def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):
     image = tmp_path / "not-an-image.bin"
     image.write_bytes(b"not a filesystem")
