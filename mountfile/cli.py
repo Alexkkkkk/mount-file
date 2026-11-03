@@ -103,12 +103,8 @@ def cmd_status(args):
             status = {
                 "backend": backend,
                 "mode": "read-only",
-                "read_capabilities": list(
-                    getattr(provider, "read_capabilities", ())
-                ),
-                "write_capabilities": list(
-                    getattr(provider, "write_capabilities", ())
-                ),
+                "read_capabilities": list(getattr(provider, "read_capabilities", ())),
+                "write_capabilities": list(getattr(provider, "write_capabilities", ())),
                 "write_enabled": False,
             }
         payload = dict(status)
@@ -131,9 +127,7 @@ def cmd_status(args):
                 "write_enabled": False,
                 "write_rejection_reason": str(exc),
                 "write_rejection_code": refusal_code.value,
-                "write_rejection": RefusalError(
-                    str(exc), refusal_code
-                ).to_dict(),
+                "write_rejection": RefusalError(str(exc), refusal_code).to_dict(),
             }
         finally:
             if writer is not None:

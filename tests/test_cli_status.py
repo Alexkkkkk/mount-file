@@ -169,6 +169,4 @@ def test_status_classifies_writer_dirty_refusal(monkeypatch, tmp_path, capsys):
     assert payload["write_status"]["write_rejection_code"] == (
         "dirty_or_recovery_required"
     )
-    assert payload["write_status"]["write_rejection"]["category"] == (
-        "dirty_recovery"
-    )
+    assert payload["write_status"]["write_rejection"]["category"] == ("dirty_recovery")

@@ -42,3 +42,5 @@ bounded read-provider status и отдельный `write_status`, получе�
 Добавлен end-to-end regression test на реальном allowlisted ext2 fixture:
 `status` подтверждает native writer profile и оставляет SHA-256 образа
 неизменным.
+CLI и regression tests приведены к формату Black, используемому Quality
+workflow; локальный `black --check` проходит.
