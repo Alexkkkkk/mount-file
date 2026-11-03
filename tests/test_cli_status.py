@@ -1,11 +1,16 @@
 """Tests for the issue-182 CLI capability/refusal status projection."""
 
+import hashlib
 import json
+import shutil
 from types import SimpleNamespace
+
+import pytest
 
 import mountfile.cli as cli
 from mountfile.safety import RefusalCode, RefusalError
 from mountfile.vfs import TskError
+from tests.test_ext2_native import _make_ext2
 
 
 def _args(tmp_path):
@@ -97,6 +102,22 @@ def test_status_reports_native_writer_profile_without_mutating_image(
         "rename",
     ]
     assert payload["write_status"]["mode"] == "read-write"
+
+
+@pytest.mark.skipif(not shutil.which("mke2fs"), reason="mke2fs is required")
+def test_status_real_ext2_does_not_modify_image(tmp_path, capsys):
+    image = tmp_path / "status.ext2"
+    _make_ext2(image)
+    before = hashlib.sha256(image.read_bytes()).digest()
+    args = _args(tmp_path)
+    args.image = image
+
+    assert cli.cmd_status(args) == cli.OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["backend"] == "native-ext2"
+    assert payload["write_status"]["profile_id"] == "ext2-native-rw"
+    assert payload["write_status"]["write_enabled"] is True
+    assert hashlib.sha256(image.read_bytes()).digest() == before
 
 
 def test_status_preserves_typed_native_refusal_without_fallback(

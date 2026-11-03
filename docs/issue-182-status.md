@@ -39,3 +39,6 @@ bounded read-provider status и отдельный `write_status`, получе�
 сохраняет typed refusal category, включая `dirty_or_recovery_required`, вместо
 универсального `unsupported_profile`. Это улучшает reporting contract для
 профильных состояний, но не расширяет заявленный набор filesystem writers.
+Добавлен end-to-end regression test на реальном allowlisted ext2 fixture:
+`status` подтверждает native writer profile и оставляет SHA-256 образа
+неизменным.
