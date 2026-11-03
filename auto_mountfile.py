@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import struct
@@ -280,8 +281,13 @@ def scan_signatures(
             try:
                 if check(buf):
                     out.append(Volume(offset=pos, fs=name, source="scan"))
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "filesystem signature probe failed at offset %d (%s)",
+                    pos,
+                    name,
+                    exc_info=exc,
+                )
         pos += step
     # dedup
     seen = set()

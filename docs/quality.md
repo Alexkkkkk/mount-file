@@ -14,19 +14,22 @@ code:
 - `S112` — exception swallowed before `continue`;
 - `F841` — assigned value never used.
 
-Run the gate locally with:
+The gate covers the entire repository, including the application entry points,
+filesystem utilities, maintenance scripts, and tests. Run it locally with:
 
 ```bash
 make lint-correctness
 # or
-python -m ruff check mountfile tests --select B006,E722,S110,S112,F841
+python -m ruff check . --select B006,E722,S110,S112,F841
 ```
 
-The current `main` baseline contained **42 findings** in these rules: 31
-`S110`, 4 `S112`, and 7 `F841`. They were triaged in the issue #182 follow-up:
-optional cleanup and parser-rejection paths now emit debug diagnostics, real
-unused assignments were removed or corrected, and intentional test rejection
-paths are explicitly marked. The gate now reports **0 findings**.
+The `main` baseline contained **51 findings** in these rules: 37 `S110`, 7
+`S112`, and 7 `F841`. Of these, 42 were in `mountfile/` and `tests/`; the
+remaining 9 were in root-level application modules and repository maintenance
+tools. The issue #182 follow-up brings all of them under the required gate:
+optional cleanup and parser-rejection paths emit debug diagnostics, unused
+assignments were removed or corrected, and intentional test rejection paths
+are explicitly marked. The repository-wide gate now reports **0 findings**.
 
 `S110`/`S112` are also enabled in `pyproject.toml` and run as a required step in
 the `Quality` GitHub Actions workflow. Debug-level logging is deliberate: normal
@@ -45,8 +48,8 @@ separate bounded PRs rather than hidden by a broad ignore or unsafe autofix.
 Useful commands:
 
 ```bash
-ruff check mountfile tests --statistics
-ruff check mountfile tests --select B006,E722,S110,S112,F841
+ruff check . --statistics
+ruff check . --select B006,E722,S110,S112,F841
 ```
 
 ## Test and coverage reporting

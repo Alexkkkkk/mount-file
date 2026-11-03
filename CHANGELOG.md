@@ -6,11 +6,11 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
-- **Issue #182 quality gate**: устранены 42 correctness-lint нарушения в
-  filesystem/DFIR paths (`S110`, `S112`, `F841`), добавлены диагностические
-  debug-логи для best-effort отказов, а targeted Ruff-проверка включена в CI и
-  доступна через `make lint-correctness`. Полный modernization backlog Ruff
-  оставлен отдельным, измеряемым follow-up.
+- **Issue #182 quality gate**: устранено 51 correctness-lint нарушение по всему
+  репозиторию (`S110`, `S112`, `F841`), включая 42 в filesystem/DFIR package/tests;
+  best-effort failures теперь диагностируются через debug-логи. Полный Ruff gate
+  включён в CI и доступен через `make lint-correctness`; modernization backlog
+  остаётся отдельным, измеряемым follow-up.
 
 - **Автообновление**: исправлен выбор Win7-сборки, когда generic `.exe` шёл
   первым в GitHub Release; добавлена поддержка GitHub asset `digest`, лимит

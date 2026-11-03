@@ -285,8 +285,8 @@ def list_partitions(image: Path) -> list[PartitionInfo]:
         fs_type = None
         try:
             fs_type = str(pytsk3.FS_Info(img, offset=off).info.ftype)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("filesystem type probe failed at offset %d", off, exc_info=exc)
         parts.append(
             PartitionInfo(
                 addr=p.addr,
@@ -473,7 +473,8 @@ def auto_decrypt(image: Path) -> dict | None:
         out = CONFIG.workspace / f"{image.stem}.{name}.bin"
         try:
             res = try_xor_decrypt(image, name, out)
-        except Exception:
+        except Exception as exc:
+            log.debug("XOR key %s failed for %s", name, image, exc_info=exc)
             continue
         if any(h["kind"] != "mbr" for h in res["signatures"]):
             return res

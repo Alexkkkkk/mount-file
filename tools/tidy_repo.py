@@ -18,6 +18,7 @@ import concurrent.futures as cf
 import html
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -240,8 +241,10 @@ def d_python(ctx: Ctx) -> None:
             )
             if m:
                 versions.append(m.group(1))
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "unable to inspect Python file %s", p, exc_info=exc
+            )
     ctx.facts["python"] = max(versions) if versions else "3.9"
 
 
@@ -551,7 +554,10 @@ def a_imports(ctx: Ctx) -> None:
             continue
         try:
             text = py.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "unable to read Python file %s", py, exc_info=exc
+            )
             continue
 
         def repl(m):
@@ -974,8 +980,10 @@ def make_backup(ctx: Ctx) -> None:
         for f in files:
             try:
                 t.add(f, arcname=f.relative_to(ctx.root))
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "unable to add %s to repository snapshot", f, exc_info=exc
+                )
     log(f"снапшот → {ctx.backup.name}/snapshot.tar.gz", "ok")
 
 
