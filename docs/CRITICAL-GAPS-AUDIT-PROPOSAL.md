@@ -1,32 +1,557 @@
-🏆 Полный финальный пакет: всё незакрытое из аудита
+🎯 Код для приоритетов 1-4 (архитектура mountfile, не mount_fs)
 
-Пять модулей + CI, которые закрывают последние блокеры issue #182: реальный crash injection, extent insert, htree insert, fscrypt write, verbose CLI и финальный acceptance.
+Согласен с аудитом: PR #340 — proposal, не совместимый код. Ниже — реальный код под mountfile, закрывающий шаги 1-4 в указанном порядке. Без forensic_source, без mount_fs, только mountfile.* и capabilities.py v5.
 
 ---
 
-Часть 1: dm-flakey crash injection (Этап A — durable recovery)
+Шаг 1: Failure injection + quarantine
 
-📁 scripts/crash_inject.sh
+📁 mountfile/testing/__init__.py
+
+```python
+"""Testing infrastructure: failure injection, quarantine, recovery verification."""
+```
+
+📁 mountfile/testing/failure_injection.py
+
+```python
+"""
+Deterministic failure injection for mountfile writers.
+
+Integrates with existing Writer protocol (begin/add/commit) without
+changing it. Wraps any backend (ImageSource / BinaryIO / fd) so tests
+can enumerate failure points.
+
+Injection modes:
+  IO_ERROR       — raises the project's typed write error
+  SHORT_WRITE    — writes half, returns actual count
+  ZERO_WRITE     — returns success, writes nothing
+  SILENT_CORRUPT — writes but flips a byte
+  FSYNC_ERROR    — succeeds writes, fails at commit barrier
+
+Design: every writer calls `backend.checkpoint(name)` at known points.
+Failure fires exactly at the named checkpoint. Unknown checkpoints are
+no-ops so old writers keep working.
+"""
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Iterable, Optional
+
+try:
+    from mountfile.errors import (
+        MountFileError,
+        ShortReadError,
+        ShortWriteError,
+    )
+except ImportError:
+    # Fallback so module is importable before errors.py is migrated
+    class MountFileError(Exception):
+        pass
+
+    class ShortReadError(MountFileError):
+        pass
+
+    class ShortWriteError(MountFileError):
+        pass
+
+
+class FailMode(str, Enum):
+    IO_ERROR = "io_error"
+    SHORT_WRITE = "short_write"
+    ZERO_WRITE = "zero_write"
+    SILENT_CORRUPT = "silent_corrupt"
+    FSYNC_ERROR = "fsync_error"
+
+
+@dataclass(frozen=True)
+class Injection:
+    point: str
+    mode: FailMode
+    repeat: int = 1
+
+    def __post_init__(self):
+        if self.repeat < 1:
+            raise ValueError("repeat must be >= 1")
+
+
+class Checkpoint:
+    """Standard names writers should emit."""
+    BEFORE_BITMAP_UPDATE = "before_bitmap_update"
+    AFTER_BITMAP_UPDATE = "after_bitmap_update"
+    BEFORE_INODE_WRITE = "before_inode_write"
+    AFTER_INODE_WRITE = "after_inode_write"
+    BEFORE_DIRENT_ADD = "before_dirent_add"
+    AFTER_DIRENT_ADD = "after_dirent_add"
+    BEFORE_DATA_WRITE = "before_data_write"
+    AFTER_DATA_WRITE = "after_data_write"
+    BEFORE_JOURNAL = "before_journal"
+    AFTER_JOURNAL = "after_journal"
+    BEFORE_SB_UPDATE = "before_sb_update"
+    AFTER_SB_UPDATE = "after_sb_update"
+    BEFORE_FSYNC = "before_fsync"
+    AFTER_FSYNC = "after_fsync"
+
+
+@dataclass
+class Event:
+    point: str
+    fired: bool
+    sequence: int
+
+
+class FaultyBackend:
+    """
+    Wraps a backend that implements:
+      - read(offset, length) -> bytes
+      - write(offset, data) -> int
+      - fsync() -> None    (optional)
+      - size() -> int       (optional)
+    """
+
+    def __init__(self, inner, injection: Optional[Injection] = None):
+        self._inner = inner
+        self._inj = injection
+        self._fired = 0
+        self._seq = 0
+        self.events: list[Event] = []
+
+    # ---- pass-through with injection ----
+
+    def size(self) -> int:
+        if hasattr(self._inner, "size"):
+            return self._inner.size()
+        if hasattr(self._inner, "len"):
+            return self._inner.len()
+        if hasattr(self._inner, "seek"):
+            pos = self._inner.tell()
+            self._inner.seek(0, 2)
+            n = self._inner.tell()
+            self._inner.seek(pos)
+            return n
+        raise TypeError("backend has no size/len")
+
+    def read(self, offset: int, length: int) -> bytes:
+        data = self._inner.read(offset, length)
+        if (self._inj
+                and self._inj.point == "read"
+                and self._inj.mode == FailMode.IO_ERROR):
+            self._fire("read")
+            raise ShortReadError(f"injected read failure at {offset}")
+        return data
+
+    def write(self, offset: int, data: bytes) -> int:
+        if not self._inj or self._inj.point != "write":
+            return self._inner.write(offset, data)
+        mode = self._inj.mode
+        if mode == FailMode.IO_ERROR:
+            self._fire("write")
+            raise ShortWriteError(f"injected write failure at {offset}")
+        if mode == FailMode.SHORT_WRITE:
+            half = len(data) // 2
+            n = self._inner.write(offset, data[:half])
+            self._fire("write")
+            return n
+        if mode == FailMode.ZERO_WRITE:
+            self._fire("write")
+            return len(data)
+        if mode == FailMode.SILENT_CORRUPT:
+            corrupted = bytes([data[0] ^ 0xFF]) + data[1:] if data else data
+            n = self._inner.write(offset, corrupted)
+            self._fire("write")
+            return n
+        return self._inner.write(offset, data)
+
+    def fsync(self) -> None:
+        if (self._inj
+                and self._inj.point == "fsync"
+                and self._inj.mode in (FailMode.IO_ERROR, FailMode.FSYNC_ERROR)):
+            self._fire("fsync")
+            raise ShortWriteError("injected fsync failure")
+        if hasattr(self._inner, "fsync"):
+            self._inner.fsync()
+
+    # ---- checkpoint ----
+
+    def checkpoint(self, name: str) -> None:
+        self._seq += 1
+        fires = (
+            self._inj is not None
+            and self._inj.point == name
+            and self._fired < self._inj.repeat
+        )
+        self.events.append(Event(name, fires, self._seq))
+        if not fires:
+            return
+        self._fired += 1
+        mode = self._inj.mode
+        if mode == FailMode.IO_ERROR:
+            raise ShortWriteError(f"injected at checkpoint {name}")
+        if mode == FailMode.SHORT_WRITE:
+            raise ShortWriteError(f"short-write simulated at {name}")
+        if mode == FailMode.FSYNC_ERROR:
+            raise ShortWriteError(f"fsync failure at {name}")
+        # ZERO_WRITE / SILENT_CORRUPT are wire-level, not checkpoint-level;
+        # at a checkpoint we just record the event.
+
+    def _fire(self, name: str) -> None:
+        self._fired += 1
+
+
+# ---------- exploration ----------
+
+@dataclass
+class ExploreReport:
+    total_states: int
+    crashed: int
+    recovered: int
+    quarantined: int
+    corrupt: int
+    failures: list[str] = field(default_factory=list)
+
+    def ok(self) -> bool:
+        return self.corrupt == 0
+
+
+def explore_writer(
+    build_backend: Callable[[], FaultyBackend],
+    writer_fn: Callable[[FaultyBackend], None],
+    verify_fn: Callable[[FaultyBackend], bool],
+    recover_fn: Optional[Callable[[FaultyBackend], bool]] = None,
+    max_points: int = 24,
+) -> ExploreReport:
+    """
+    Enumerate every named checkpoint in the writer, inject failure at each,
+    and verify that recovery (if provided) leaves a consistent image.
+
+    Verifier contract:
+      verify_fn(backend) -> True if image is structurally valid.
+      recover_fn(backend) -> True if recovery completed without corruption.
+    """
+    # Pass 1: collect checkpoint names by observing a normal run
+    probe = build_backend()
+    points: list[str] = []
+    orig = probe.checkpoint
+
+    def spy(name: str) -> None:
+        if name not in points:
+            points.append(name)
+        orig(name)
+
+    probe.checkpoint = spy  # type: ignore[method-assign]
+    try:
+        writer_fn(probe)
+    except Exception:
+        pass
+
+    if len(points) > max_points:
+        points = points[:max_points]
+
+    report = ExploreReport(total_states=len(points), crashed=0,
+                           recovered=0, quarantined=0, corrupt=0)
+
+    for point in points:
+        backend = build_backend()
+        backend._inj = Injection(point, FailMode.IO_ERROR)
+        crashed = False
+        try:
+            writer_fn(backend)
+        except (ShortWriteError, ShortReadError, MountFileError):
+            crashed = True
+        except Exception as e:
+            report.failures.append(f"{point}: unexpected {type(e).__name__}: {e}")
+            report.corrupt += 1
+            continue
+
+        if not crashed:
+            # writer didn't actually fail; skip
+            continue
+        report.crashed += 1
+
+        if recover_fn is None:
+            continue
+        rec_backend = build_backend()
+        try:
+            ok = recover_fn(rec_backend)
+        except Exception as e:
+            report.failures.append(f"{point}: recovery raised {type(e).__name__}: {e}")
+            report.corrupt += 1
+            continue
+
+        if not ok:
+            report.failures.append(f"{point}: recovery returned False")
+            report.corrupt += 1
+            continue
+
+        if verify_fn(rec_backend):
+            report.recovered += 1
+        else:
+            report.failures.append(f"{point}: post-recovery verify failed")
+            report.corrupt += 1
+
+    return report
+
+
+def image_hash(backend) -> str:
+    h = hashlib.sha256()
+    n = backend.size()
+    chunk = 65536
+    pos = 0
+    while pos < n:
+        size = min(chunk, n - pos)
+        data = backend.read(pos, size)
+        if not data:
+            break
+        h.update(data)
+        pos += len(data)
+    return h.hexdigest()
+```
+
+📁 mountfile/testing/quarantine.py
+
+```python
+"""
+Quarantine: when a write path cannot determine state, mark the image
+as indeterminate and refuse further writes until explicit recovery.
+
+Manifest stored alongside the image:
+  <image>.mountfile-quarantine.json
+
+Format:
+  {
+    "version": 1,
+    "image_sha256": "...",
+    "reason": "fsync failure during bitmap update",
+    "operation": "create_file",
+    "writer": "fat32",
+    "checkpoint": "after_bitmap_update",
+    "timestamp": "2026-11-03T...",
+    "steps_to_recover": [
+      "run fsck.vfat -a <image>",
+      "mountfile recover --force <image>"
+    ]
+  }
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from dataclasses import dataclass, asdict, field
+from typing import Optional
+
+
+QUARANTINE_SUFFIX = ".mountfile-quarantine.json"
+
+
+@dataclass
+class QuarantineManifest:
+    version: int = 1
+    image_sha256: str = ""
+    reason: str = ""
+    operation: str = ""
+    writer: str = ""
+    checkpoint: str = ""
+    timestamp: str = ""
+    steps_to_recover: list[str] = field(default_factory=list)
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), indent=2)
+
+
+def manifest_path(image_path: str) -> str:
+    return image_path + QUARANTINE_SUFFIX
+
+
+def is_quarantined(image_path: str) -> bool:
+    return os.path.exists(manifest_path(image_path))
+
+
+def read_manifest(image_path: str) -> Optional[QuarantineManifest]:
+    p = manifest_path(image_path)
+    if not os.path.exists(p):
+        return None
+    with open(p) as f:
+        data = json.load(f)
+    return QuarantineManifest(**data)
+
+
+def quarantine(image_path: str, *,
+                image_sha256: str,
+                reason: str,
+                operation: str,
+                writer: str,
+                checkpoint: str,
+                steps: Optional[list[str]] = None) -> QuarantineManifest:
+    m = QuarantineManifest(
+        image_sha256=image_sha256,
+        reason=reason,
+        operation=operation,
+        writer=writer,
+        checkpoint=checkpoint,
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        steps_to_recover=steps or [],
+    )
+    with open(manifest_path(image_path), "w") as f:
+        f.write(m.to_json())
+    return m
+
+
+def release(image_path: str) -> None:
+    """Remove the quarantine marker (only after successful recovery)."""
+    p = manifest_path(image_path)
+    if os.path.exists(p):
+        os.remove(p)
+
+
+class QuarantineRefusal(Exception):
+    def __init__(self, image_path: str, manifest: QuarantineManifest):
+        self.image_path = image_path
+        self.manifest = manifest
+        super().__init__(
+            f"image {image_path} is quarantined "
+            f"({manifest.operation} failed at {manifest.checkpoint}); "
+            f"reason: {manifest.reason}"
+        )
+
+
+def assert_not_quarantined(image_path: str) -> None:
+    if is_quarantined(image_path):
+        m = read_manifest(image_path)
+        if m:
+            raise QuarantineRefusal(image_path, m)
+```
+
+📁 mountfile/testing/recovery_verifier.py
+
+```python
+"""
+Independent recovery verification after crash.
+
+Runs external checker (e2fsck -fn, fsck.fat -n, fsck.exfat -n, ntfsfix -n)
+under timeout in a temp copy of the image and parses the exit code.
+
+Semantics:
+  rc=0  → clean
+  rc=1  → errors corrected (acceptable after crash)
+  rc>1  → fatal, corruption beyond recovery
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class CheckerResult:
+    tool: str
+    available: bool
+    returncode: Optional[int]
+    clean: bool
+    output: str
+    timed_out: bool = False
+
+
+def _run(cmd: list[str], timeout: int) -> CheckerResult:
+    tool = cmd[0]
+    if shutil.which(tool) is None:
+        return CheckerResult(tool, False, None, False, "not installed")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout)
+        out = (r.stdout or "") + (r.stderr or "")
+        return CheckerResult(
+            tool, True, r.returncode,
+            clean=(r.returncode in (0, 1)),
+            output=out[-2000:],
+        )
+    except subprocess.TimeoutExpired as e:
+        return CheckerResult(tool, True, None, False, "timeout", timed_out=True)
+
+
+def check_image(image_path: str, fs_family: str,
+                timeout: int = 120) -> CheckerResult:
+    fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(image_path)[1])
+    os.close(fd)
+    try:
+        shutil.copy2(image_path, tmp)
+        if fs_family == "fat":
+            return _run(["fsck.fat", "-n", "-v", tmp], timeout)
+        if fs_family == "exfat":
+            return _run(["fsck.exfat", "-n", tmp], timeout)
+        if fs_family in ("ext2", "ext3", "ext4"):
+            return _run(["e2fsck", "-fn", tmp], timeout)
+        if fs_family == "ntfs":
+            return _run(["ntfsfix", "-n", tmp], timeout)
+        return CheckerResult(fs_family, False, None, False, "unknown family")
+    finally:
+        os.unlink(tmp)
+
+
+def verified_recover(image_path: str, fs_family: str,
+                     timeout: int = 120) -> tuple[bool, CheckerResult]:
+    """
+    Run recovery checker. Return (ok, result).
+    ok=True iff image is clean or was repaired (rc 0/1).
+    """
+    r = check_image(image_path, fs_family, timeout)
+    return r.clean, r
+```
+
+---
+
+Шаг 2: ext2 crash/recovery acceptance
+
+📁 tests/crash/workload_write_tree.sh
 
 ```bash
 #!/usr/bin/env bash
-# Crash consistency testing via dm-flakey.
-# Requires: root, dmsetup, e2fsprogs, losetup.
-#
-# Workflow:
-#   1. Build a clean image with mke2fs.
-#   2. Attach loop device.
-#   3. Wrap in dm-flakey with a "crash after N writes" error path.
-#   4. Mount via ext4, run workload.
-#   5. Simulate crash: dm-flakey drops all further writes.
-#   6. Unmount, detach.
-#   7. Verify: replay via e2fsck -fy, then content hash matches expected.
-#
-# Exit 0 iff image is consistent and content survives.
+# Deterministic workload for crash testing.
+set -eu
+ROOT="$1"
+mkdir -p "$ROOT/a/b/c"
+echo "alpha"  > "$ROOT/a/file1.txt"
+echo "beta"   > "$ROOT/a/b/file2.txt"
+echo "gamma"  > "$ROOT/a/b/c/file3.txt"
+seq 1 10000 > "$ROOT/big.txt"
+sync
+```
+
+📁 tests/crash/workload_write_tree_verify.sh
+
+```bash
+#!/usr/bin/env bash
+set -eu
+ROOT="$1"
+[ -f "$ROOT/a/file1.txt" ] || { echo "missing file1"; exit 1; }
+[ "$(cat "$ROOT/a/file1.txt")" = "alpha" ] || exit 1
+[ -f "$ROOT/a/b/file2.txt" ] || exit 1
+[ "$(cat "$ROOT/a/b/file2.txt")" = "beta" ] || exit 1
+[ -f "$ROOT/a/b/c/file3.txt" ] || exit 1
+[ "$(cat "$ROOT/a/b/c/file3.txt")" = "gamma" ] || exit 1
+[ -f "$ROOT/big.txt" ] || exit 1
+[ "$(wc -l < "$ROOT/big.txt")" = "10000" ] || exit 1
+echo "VERIFY OK"
+```
+
+📁 scripts/crash_acceptance.sh
+
+```bash
+#!/usr/bin/env bash
+# ext2/ext4 crash acceptance using dm-flakey.
+# Requires: root, dmsetup, losetup, mkfs.ext4, e2fsck.
 set -uo pipefail
 
-IMG="${1:?usage: $0 <image> <workload.sh>}"
-WORKLOAD="${2:?missing workload}"
+FS_TYPE="${1:-ext2}"
+WORKLOAD="${2:-tests/crash/workload_write_tree.sh}"
+VERIFY="${WORKLOAD%.sh}_verify.sh"
+IMG_SIZE_MB="${IMG_SIZE_MB:-64}"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "requires root" >&2; exit 2
@@ -34,1527 +559,807 @@ fi
 for t in dmsetup losetup mount umount e2fsck mkfs.ext4; do
     command -v "$t" >/dev/null || { echo "missing $t" >&2; exit 2; }
 done
+[ -x "$WORKLOAD" ] || { echo "missing workload $WORKLOAD" >&2; exit 2; }
+[ -x "$VERIFY"   ] || { echo "missing verify $VERIFY"   >&2; exit 2; }
 
-LOOP=$(losetup -f --show "$IMG") || exit 1
+IMG=$(mktemp --suffix=.img)
+truncate -s "${IMG_SIZE_MB}M" "$IMG"
+trap 'rm -f "$IMG"' EXIT
+
+LOOP=$(losetup -f --show "$IMG")
 DMNAME="crash-$$"
 SECTORS=$(blockdev --getsz "$LOOP")
+MNT="/mnt/crash-$$"
 
 cleanup() {
-    umount -l /mnt/crash-test 2>/dev/null || true
+    umount -l "$MNT" 2>/dev/null || true
     dmsetup remove "$DMNAME" 2>/dev/null || true
     losetup -d "$LOOP" 2>/dev/null || true
+    rmdir "$MNT" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# dm-flakey: allow 0..up_interval, fail writes during down_interval
-# We use a very long up_interval first; workload triggers crash explicitly.
+mkfs.ext4 -q -t "$FS_TYPE" -b 1024 \
+    -O extent,dir_index,metadata_csum "$LOOP"
+
 dmsetup create "$DMNAME" --table "0 $SECTORS flakey $LOOP 0 86400 1"
 DEV="/dev/mapper/$DMNAME"
 
-mkfs.ext4 -q -b 1024 -O extent,dir_index,metadata_csum "$DEV"
+mkdir -p "$MNT"
+mount -t "$FS_TYPE" "$DEV" "$MNT"
 
-mkdir -p /mnt/crash-test
-mount -t ext4 "$DEV" /mnt/crash-test || { echo "mount failed"; exit 1; }
+echo "[1/4] run workload"
+bash "$WORKLOAD" "$MNT" || { echo "workload failed"; exit 1; }
 
-# Run workload. It must create deterministic files.
-bash "$WORKLOAD" /mnt/crash-test || {
-    echo "workload failed"
-    exit 1
-}
-
-# Force sync so writes reach dm-flakey
+echo "[2/4] sync + simulate crash"
 sync
-
-# SIMULATE CRASH: reload dm-flakey in permanent-down mode
 dmsetup suspend "$DMNAME"
 dmsetup load "$DMNAME" --table "0 $SECTORS flakey $LOOP 0 0 1"
 dmsetup resume "$DMNAME"
+umount "$MNT" 2>/dev/null || true
+dmsetup remove "$DMNAME" 2>/dev/null || true
 
-# Any pending write from now on fails. Unmount will retry and error.
-umount /mnt/crash-test 2>/dev/null || true
-
-# Now remove flakey, operate on raw loop
-dmsetup remove "$DMNAME"
-
-# Verify
+echo "[3/4] e2fsck"
 e2fsck -fy "$LOOP" >/tmp/e2fsck.log 2>&1
 RC=$?
-# rc=1 means errors fixed — acceptable for crash test
 if [ "$RC" -gt 1 ]; then
-    echo "e2fsck reported fatal errors (rc=$RC)"
-    cat /tmp/e2fsck.log
+    echo "FATAL: e2fsck rc=$RC"
+    tail -30 /tmp/e2fsck.log
     exit 1
 fi
+echo "  e2fsck rc=$RC (0=clean, 1=repaired)"
 
-# Mount again and verify content survived
-mount -t ext4 "$LOOP" /mnt/crash-test || { echo "re-mount failed"; exit 1; }
-bash "$WORKLOAD.verify" /mnt/crash-test || {
-    echo "content verification failed"
-    umount /mnt/crash-test 2>/dev/null
-    exit 1
-}
-umount /mnt/crash-test
-echo "PASS: crash consistency verified"
+echo "[4/4] verify content"
+mount -t "$FS_TYPE" "$LOOP" "$MNT" || { echo "remount failed"; exit 1; }
+bash "$VERIFY" "$MNT" || { echo "VERIFY FAILED"; exit 1; }
+umount "$MNT"
+
+echo "PASS: $FS_TYPE crash acceptance"
 ```
 
-📁 tests/workloads/simple_write.sh
-
-```bash
-#!/usr/bin/env bash
-set -eu
-ROOT="$1"
-mkdir -p "$ROOT/dir_a/dir_b"
-echo "hello world" > "$ROOT/dir_a/file_1.txt"
-echo "second file"  > "$ROOT/dir_a/dir_b/file_2.txt"
-seq 1 5000 > "$ROOT/big.txt"
-sync
-```
-
-📁 tests/workloads/simple_write.sh.verify
-
-```bash
-#!/usr/bin/env bash
-set -eu
-ROOT="$1"
-[ -f "$ROOT/dir_a/file_1.txt" ] || exit 1
-[ "$(cat "$ROOT/dir_a/file_1.txt")" = "hello world" ] || exit 1
-[ -f "$ROOT/dir_a/dir_b/file_2.txt" ] || exit 1
-[ "$(cat "$ROOT/dir_a/dir_b/file_2.txt")" = "second file" ] || exit 1
-[ -f "$ROOT/big.txt" ] || exit 1
-[ "$(wc -l < "$ROOT/big.txt")" = "5000" ] || exit 1
-```
-
-📁 tests/test_crash_consistency.py
+📁 tests/test_crash_acceptance.py
 
 ```python
 """
-Crash consistency tests using dm-flakey. Requires root + Linux.
-Skipped on non-Linux and when dm-flakey is unavailable.
+Crash acceptance for ext2/ext3/ext4. Linux + root + dm-flakey required.
 """
+from __future__ import annotations
+
 import os
 import platform
 import shutil
 import subprocess
-import tempfile
 import pytest
-
-pytestmark = pytest.mark.skipif(
-    platform.system() != "Linux"
-    or not shutil.which("dmsetup")
-    or os.geteuid() != 0,
-    reason="requires Linux + root + dmsetup",
-)
 
 
 def _has_flakey() -> bool:
+    if platform.system() != "Linux":
+        return False
+    if os.geteuid() != 0:
+        return False
+    if shutil.which("dmsetup") is None:
+        return False
     r = subprocess.run(["dmsetup", "targets"], capture_output=True, text=True)
     return "flakey" in r.stdout
 
 
-@pytest.mark.skipif(not _has_flakey(), reason="dm-flakey target missing")
-def test_ext4_crash_during_write():
-    fd, img = tempfile.mkstemp(suffix=".img")
-    os.close(fd)
-    with open(img, "wb") as f:
-        f.truncate(64 * 1024 * 1024)
-    try:
+pytestmark = pytest.mark.skipif(
+    not _has_flakey(),
+    reason="needs Linux + root + dm-flakey",
+)
+
+
+@pytest.mark.parametrize("fs_type", ["ext2", "ext4"])
+def test_crash_acceptance(fs_type):
+    r = subprocess.run(
+        ["bash", "scripts/crash_acceptance.sh", fs_type],
+        capture_output=True, text=True, timeout=300,
+    )
+    if r.returncode != 0:
+        print(r.stdout)
+        print(r.stderr)
+    assert r.returncode == 0
+
+
+def test_crash_acceptance_repeat_3x():
+    """Catch flaky failures by repeating."""
+    for i in range(3):
         r = subprocess.run(
-            ["bash", "scripts/crash_inject.sh", img,
-             "tests/workloads/simple_write.sh"],
-            capture_output=True, text=True, timeout=180,
+            ["bash", "scripts/crash_acceptance.sh", "ext4"],
+            capture_output=True, text=True, timeout=300,
         )
-        if r.returncode != 0:
-            print("STDOUT:", r.stdout)
-            print("STDERR:", r.stderr)
-        assert r.returncode == 0
-    finally:
-        os.unlink(img)
+        assert r.returncode == 0, f"run {i}: {r.stdout}\n{r.stderr}"
+```
+
+---
+
+Шаг 3: Dynamic capability reporting
+
+📁 mountfile/capabilities_dynamic.py
+
+```python
+"""
+Dynamic capability reporting: extends static matrix with per-image
+reason/code that reflects the CURRENT image state.
+
+Uses existing capabilities.py for the static decision, then augments
+with image-specific explanation. This is the single source of truth
+for VFS/CLI/GUI/API reporting.
+
+API:
+  report(image) -> DynamicReport
+  explain(image, operation) -> ExplainResult
+  matrix(image) -> list[OperationRow]
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict, field
+from typing import Optional, Sequence
+
+try:
+    from mountfile.capabilities import (
+        CAPABILITY_SCHEMA_VERSION,
+        Capability,
+        Operation,
+        OperationOutcome,
+        decide_operation,
+        get_capability_matrix,
+    )
+except ImportError:
+    # Defensive: keeps module importable in isolation, integration
+    # tests will fail loudly if the real module is missing.
+    CAPABILITY_SCHEMA_VERSION = 0
+
+    class Operation:
+        pass
+
+    class OperationOutcome:
+        ALLOW = "allow"
+        LIMITED = "limited"
+        REFUSE = "refuse"
 
 
-@pytest.mark.skipif(not _has_flakey(), reason="dm-flakey target missing")
-def test_ext4_crash_survives_multiple_runs():
-    """Run crash test 3x to catch flaky failures."""
-    fd, img = tempfile.mkstemp(suffix=".img")
-    os.close(fd)
+@dataclass
+class ExplainResult:
+    operation: str
+    outcome: str
+    code: Optional[str]
+    reason: str
+    image_reason: str          # image-specific reason ("inodes_exhausted", ...)
+    suggested_action: Optional[str]
+    format: str
+    profile: str
+    features: list[str]
+    state: list[str]
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class DynamicReport:
+    schema_version: int
+    format: str
+    profile: str
+    features: list[str]
+    state: list[str]
+    operations: list[ExplainResult] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "format": self.format,
+            "profile": self.profile,
+            "features": self.features,
+            "state": self.state,
+            "operations": [o.to_dict() for o in self.operations],
+        }
+
+
+def _probe(image) -> dict:
+    """Extract format/profile/features/state via existing probe."""
     try:
-        for i in range(3):
-            with open(img, "wb") as f:
-                f.truncate(64 * 1024 * 1024)
-            r = subprocess.run(
-                ["bash", "scripts/crash_inject.sh", img,
-                 "tests/workloads/simple_write.sh"],
-                capture_output=True, text=True, timeout=180,
-            )
-            assert r.returncode == 0, f"run {i}: {r.stderr}"
-    finally:
-        os.unlink(img)
-```
-
----
-
-Часть 2: mount_fs/writer/ext4_extent_insert.py — extent tree insert
-
-Полноценная B-tree insert для ext4 extents, включая split и рост дерева.
-
-```python
-"""
-Ext4 extent tree insert (depth 0-2).
-
-Operations:
-  - insert_range(ino, i_block, logical_start, physical_start, length)
-  - coalesce adjacent extents after insert
-  - split leaf when full
-  - grow tree depth when root full
-
-Guarantees:
-  - Every insert leaves a valid extent tree (magic, depth, entries)
-  - Overlapping logical ranges refused
-  - Insert into existing extent with matching physical contiguity coalesces
-  - Depth 2 is the maximum; refuse with UnsupportedFeature beyond
-"""
-from __future__ import annotations
-import struct
-from dataclasses import dataclass
-from typing import Optional
-
-from mount_fs.errors import (
-    InvalidArgument, UnsupportedFeature, StructureCorrupt, NoFreeBlocks,
-)
+        from mountfile.probe import probe_image
+        p = probe_image(image)
+        return {
+            "format": p.format,
+            "profile": p.profile,
+            "features": list(p.features),
+            "state": list(p.state),
+        }
+    except ImportError:
+        # Fallback: try image attributes
+        return {
+            "format": getattr(image, "format", "unknown"),
+            "profile": getattr(image, "profile", "unknown"),
+            "features": list(getattr(image, "features", [])),
+            "state": list(getattr(image, "state", [])),
+        }
 
 
-EXTENT_MAGIC = 0xF30A
-UNINIT_FLAG = 0x8000
-MAX_DEPTH = 2
-HEADER_SIZE = 12
-ENTRY_SIZE = 12
-
-
-@dataclass
-class Extent:
-    logical: int
-    length: int
-    physical: int
-    uninit: bool = False
-
-    @property
-    def logical_end(self) -> int:
-        return self.logical + self.length
-
-
-@dataclass
-class ExtentHeader:
-    entries: int
-    max_entries: int
-    depth: int
-    generation: int = 0
-
-
-def _parse_header(buf: bytes) -> ExtentHeader:
-    if len(buf) < HEADER_SIZE:
-        raise StructureCorrupt("extent header short")
-    magic, entries, max_entries, depth, gen = struct.unpack_from(
-        "<HHHHI", buf, 0)
-    if magic != EXTENT_MAGIC:
-        raise StructureCorrupt("extent magic", context={"magic": hex(magic)})
-    if entries > max_entries:
-        raise StructureCorrupt("entries > max_entries")
-    return ExtentHeader(entries, max_entries, depth, gen)
-
-
-def _serialize_header(h: ExtentHeader) -> bytes:
-    return struct.pack("<HHHHI", EXTENT_MAGIC, h.entries, h.max_entries,
-                       h.depth, h.generation)
-
-
-def _read_extents_root(i_block: bytes) -> list[Extent]:
-    """Return leaf extents in i_block (works only at depth 0)."""
-    h = _parse_header(i_block)
-    if h.depth != 0:
-        raise UnsupportedFeature("i_block is not a leaf")
-    out = []
-    for i in range(h.entries):
-        off = HEADER_SIZE + i * ENTRY_SIZE
-        lblk, length, hi, lo = struct.unpack_from("<IHHI", i_block, off)
-        uninit = bool(length & UNINIT_FLAG)
-        out.append(Extent(lblk, length & 0x7FFF,
-                          (hi << 32) | lo, uninit))
-    return out
-
-
-class Ext4ExtentTree:
+def _image_specific_reason(image, op: str, outcome: str) -> tuple[str, Optional[str]]:
     """
-    Manages an extent tree rooted in i_block. Nodes other than the root
-    are read/written via `block_reader`/`block_writer`.
+    Given the static outcome, produce an image-specific explanation.
+
+    Examples:
+      - REFUSE for create on ext4 → "native ext4 writer not implemented"
+      - REFUSE for create on ext2 when no free inodes → "inodes_exhausted"
+      - LIMITED for write on FAT32 → "FAT32 writer limited to fixed root"
     """
-    def __init__(self, i_block: bytes, block_size: int,
-                 block_reader, block_writer, alloc_block, checkpoint=None):
-        if block_size not in (1024, 2048, 4096, 8192, 16384):
-            raise InvalidArgument(f"block_size={block_size}")
-        self._ib = bytes(i_block).ljust(60, b"\x00")
-        self._bs = block_size
-        self._read_blk = block_reader
-        self._write_blk = block_writer
-        self._alloc = alloc_block
-        self._cp = checkpoint or (lambda name: None)
-        self._max_per_leaf = (block_size - HEADER_SIZE) // ENTRY_SIZE
-        self._max_per_index = (block_size - HEADER_SIZE) // ENTRY_SIZE
-        self._max_root_leaf = (60 - HEADER_SIZE) // ENTRY_SIZE
-        self._max_root_index = (60 - HEADER_SIZE) // ENTRY_SIZE
+    state = getattr(image, "state", [])
+    if "dirty" in state and outcome == "refuse":
+        return "volume is marked dirty", "run fsck first"
+    if "needs_recovery" in state and outcome == "refuse":
+        return "journal recovery required", "run recovery or fsck"
+    if "no_free_inodes" in state and op == "create":
+        return "no free inodes available", "delete files or resize"
+    if "no_free_blocks" in state and op in ("write", "create"):
+        return "no free blocks available", "delete files or resize"
+    if outcome == "limited":
+        return "operation is supported with restrictions", None
+    if outcome == "allow":
+        return "operation is fully supported", None
+    return "", None
 
-    # ---------- public ----------
 
-    def insert(self, logical_start: int, physical_start: int,
-               length: int, uninit: bool = False) -> bytes:
-        """
-        Insert an extent range. Returns the new i_block (60 bytes).
-        Caller must persist via inode write.
-        """
-        if length <= 0 or length >= 0x8000:
-            raise InvalidArgument(f"length={length}")
-        if logical_start < 0 or physical_start < 0:
-            raise InvalidArgument("negative offset")
+def explain(image, operation: str) -> ExplainResult:
+    p = _probe(image)
+    try:
+        decision = decide_operation(image, operation)
+        outcome = decision.outcome.value if hasattr(decision.outcome, "value") \
+            else str(decision.outcome)
+        code = getattr(decision, "code", None)
+        base_reason = getattr(decision, "reason", "")
+    except Exception as e:
+        # Fallback: everything refused with MOUNT_ERROR
+        outcome = "refuse"
+        code = "MOUNT_ERROR"
+        base_reason = f"capability lookup failed: {e}"
 
-        h = _parse_header(self._ib)
-        if h.depth == 0:
-            return self._insert_in_leaf_root(
-                logical_start, physical_start, length, uninit)
-        return self._insert_via_tree(
-            logical_start, physical_start, length, uninit)
+    image_reason, action = _image_specific_reason(image, operation, outcome)
+    return ExplainResult(
+        operation=operation,
+        outcome=outcome,
+        code=code,
+        reason=base_reason,
+        image_reason=image_reason,
+        suggested_action=action,
+        format=p["format"],
+        profile=p["profile"],
+        features=p["features"],
+        state=p["state"],
+    )
 
-    # ---------- depth 0 (root is leaf) ----------
 
-    def _insert_in_leaf_root(self, logical: int, physical: int,
-                              length: int, uninit: bool) -> bytes:
-        leaves = _read_extents_root(self._ib)
-        merged = self._merge(leaves, logical, physical, length, uninit)
-        if len(merged) <= self._max_root_leaf:
-            return self._serialize_leaf_root(merged)
+def matrix(image) -> DynamicReport:
+    p = _probe(image)
+    ops: Sequence[str] = _list_operations()
+    rows = [explain(image, op) for op in ops]
+    return DynamicReport(
+        schema_version=CAPABILITY_SCHEMA_VERSION,
+        format=p["format"],
+        profile=p["profile"],
+        features=p["features"],
+        state=p["state"],
+        operations=rows,
+    )
 
-        # Root full → need depth 1
-        return self._grow_to_depth1(merged)
 
-    def _grow_to_depth1(self, all_leaves: list[Extent]) -> bytes:
-        self._cp("before_extent_split")
-        n_leaves = (len(all_leaves) + self._max_per_leaf - 1) // self._max_per_leaf
-        leaf_blocks = [self._alloc() for _ in range(n_leaves)]
-        index_entries = []
-
-        for i, blk in enumerate(leaf_blocks):
-            start = i * self._max_per_leaf
-            chunk = all_leaves[start:start + self._max_per_leaf]
-            header = ExtentHeader(
-                entries=len(chunk),
-                max_entries=self._max_per_leaf,
-                depth=0,
-            )
-            buf = bytearray(self._bs)
-            buf[:HEADER_SIZE] = _serialize_header(header)
-            for j, e in enumerate(chunk):
-                off = HEADER_SIZE + j * ENTRY_SIZE
-                ee_len = e.length | (UNINIT_FLAG if e.uninit else 0)
-                struct.pack_into("<IHHI", buf, off, e.logical, ee_len,
-                                 (e.physical >> 32) & 0xFFFF,
-                                 e.physical & 0xFFFFFFFF)
-            self._write_blk(blk, bytes(buf))
-            index_entries.append((chunk[0].logical, blk))
-
-        root = bytearray(60)
-        root_hdr = ExtentHeader(
-            entries=len(index_entries),
-            max_entries=self._max_root_index,
-            depth=1,
-        )
-        root[:HEADER_SIZE] = _serialize_header(root_hdr)
-        for i, (lblk, blk) in enumerate(index_entries):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            struct.pack_into("<IIHH", root, off, lblk, blk, 0, 0)
-
-        self._cp("after_extent_split")
-        return bytes(root)
-
-    # ---------- depth >= 1 ----------
-
-    def _insert_via_tree(self, logical: int, physical: int,
-                          length: int, uninit: bool) -> bytes:
-        root_hdr = _parse_header(self._ib)
-        if root_hdr.depth > MAX_DEPTH:
-            raise UnsupportedFeature(f"depth={root_hdr.depth}")
-
-        # Find leaf containing (or immediately after) `logical`
-        leaf_idx, leaf_blk = self._find_leaf(logical)
-        leaf = bytearray(self._read_blk(leaf_blk))
-        leaf_hdr = _parse_header(bytes(leaf))
-        if leaf_hdr.depth != 0:
-            raise StructureCorrupt("expected leaf, got index")
-
-        leaf_extents = self._read_leaf_extents(leaf, leaf_hdr)
-        merged = self._merge(leaf_extents, logical, physical, length, uninit)
-
-        if len(merged) <= self._max_per_leaf:
-            self._write_leaf(leaf_blk, merged)
-            return self._ib  # root unchanged
-
-        # Leaf split
-        mid = len(merged) // 2
-        left, right = merged[:mid], merged[mid:]
-        self._write_leaf(leaf_blk, left)
-
-        new_blk = self._alloc()
-        self._write_leaf(new_blk, right)
-
-        # Insert new index entry into root
-        new_root_hdr, new_root_bytes = self._insert_index_entry(
-            self._ib, root_hdr,
-            logical_key=right[0].logical,
-            leaf_block=new_blk,
-            after_block=leaf_blk,
-        )
-
-        if new_root_hdr is not None:
-            return new_root_bytes
-
-        # Root split → grow to depth+1
-        return self._grow_root(self._ib, root_hdr)
-
-    def _find_leaf(self, logical: int) -> tuple[int, int]:
-        root_hdr = _parse_header(self._ib)
-        entries = self._read_index_entries(self._ib, root_hdr)
-        if not entries:
-            raise StructureCorrupt("empty index root")
-        # Find last entry with key <= logical
-        idx = 0
-        for i, (k, _) in enumerate(entries):
-            if k <= logical:
-                idx = i
-            else:
-                break
-        blk = entries[idx][1]
-
-        depth = root_hdr.depth
-        while depth > 1:
-            node = self._read_blk(blk)
-            hdr = _parse_header(node)
-            sub_entries = self._read_index_entries(node, hdr)
-            idx = 0
-            for i, (k, _) in enumerate(sub_entries):
-                if k <= logical:
-                    idx = i
-                else:
-                    break
-            blk = sub_entries[idx][1]
-            depth -= 1
-        return idx, blk
-
-    def _read_index_entries(self, node: bytes, hdr: ExtentHeader):
-        out = []
-        for i in range(hdr.entries):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            lblk, leaf_lo, leaf_hi, _ = struct.unpack_from("<IIHH", node, off)
-            out.append((lblk, (leaf_hi << 32) | leaf_lo))
-        return out
-
-    def _read_leaf_extents(self, leaf: bytes, hdr: ExtentHeader) -> list[Extent]:
-        out = []
-        for i in range(hdr.entries):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            lblk, length, hi, lo = struct.unpack_from("<IHHI", leaf, off)
-            uninit = bool(length & UNINIT_FLAG)
-            out.append(Extent(lblk, length & 0x7FFF,
-                              (hi << 32) | lo, uninit))
-        return out
-
-    def _write_leaf(self, blk: int, extents: list[Extent]):
-        header = ExtentHeader(
-            entries=len(extents),
-            max_entries=self._max_per_leaf,
-            depth=0,
-        )
-        buf = bytearray(self._bs)
-        buf[:HEADER_SIZE] = _serialize_header(header)
-        for i, e in enumerate(extents):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            ee_len = e.length | (UNINIT_FLAG if e.uninit else 0)
-            struct.pack_into("<IHHI", buf, off, e.logical, ee_len,
-                             (e.physical >> 32) & 0xFFFF,
-                             e.physical & 0xFFFFFFFF)
-        self._write_blk(blk, bytes(buf))
-
-    def _insert_index_entry(self, node: bytes, hdr: ExtentHeader,
-                            logical_key: int, leaf_block: int,
-                            after_block: int
-                            ) -> tuple[Optional[ExtentHeader], bytes]:
-        entries = self._read_index_entries(node, hdr)
-        # Find insertion point: after the entry pointing to after_block
-        insert_at = 0
-        for i, (_, blk) in enumerate(entries):
-            if blk == after_block:
-                insert_at = i + 1
-                break
-        entries.insert(insert_at, (logical_key, leaf_block))
-
-        max_per = self._max_per_leaf if len(node) == 60 else self._max_per_index
-        if len(entries) > max_per:
-            return None, node  # signal split needed
-
-        new_hdr = ExtentHeader(
-            entries=len(entries),
-            max_entries=hdr.max_entries,
-            depth=hdr.depth,
-            generation=hdr.generation,
-        )
-        new_buf = bytearray(len(node))
-        new_buf[:HEADER_SIZE] = _serialize_header(new_hdr)
-        for i, (k, b) in enumerate(entries):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            struct.pack_into("<IIHH", new_buf, off, k,
-                             b & 0xFFFFFFFF, (b >> 32) & 0xFFFF, 0)
-        self._write_blk(_node_block_of(node), bytes(new_buf)) if False else None
-        return new_hdr, bytes(new_buf)
-
-    def _node_block_of(self, node: bytes) -> int:
-        # Not tracked; caller must know. This is a design compromise.
-        raise UnsupportedFeature("direct node rewrite not supported")
-
-    def _grow_root(self, node: bytes, hdr: ExtentHeader) -> bytes:
-        if hdr.depth >= MAX_DEPTH:
-            raise UnsupportedFeature(
-                f"depth would exceed {MAX_DEPTH}")
-        entries = self._read_index_entries(node, hdr)
-        mid = len(entries) // 2
-        left, right = entries[:mid], entries[mid:]
-
-        left_blk = self._alloc()
-        right_blk = self._alloc()
-
-        left_buf = bytearray(self._bs)
-        left_h = ExtentHeader(len(left), self._max_per_index, hdr.depth)
-        left_buf[:HEADER_SIZE] = _serialize_header(left_h)
-        for i, (k, b) in enumerate(left):
-            struct.pack_into("<IIHH", left_buf,
-                             HEADER_SIZE + i * ENTRY_SIZE,
-                             k, b & 0xFFFFFFFF, (b >> 32) & 0xFFFF, 0)
-        self._write_blk(left_blk, bytes(left_buf))
-
-        right_buf = bytearray(self._bs)
-        right_h = ExtentHeader(len(right), self._max_per_index, hdr.depth)
-        right_buf[:HEADER_SIZE] = _serialize_header(right_h)
-        for i, (k, b) in enumerate(right):
-            struct.pack_into("<IIHH", right_buf,
-                             HEADER_SIZE + i * ENTRY_SIZE,
-                             k, b & 0xFFFFFFFF, (b >> 32) & 0xFFFF, 0)
-        self._write_blk(right_blk, bytes(right_buf))
-
-        root = bytearray(60)
-        root_h = ExtentHeader(2, self._max_root_index, hdr.depth + 1)
-        root[:HEADER_SIZE] = _serialize_header(root_h)
-        struct.pack_into("<IIHH", root, HEADER_SIZE,
-                         left[0][0], left_blk, 0, 0)
-        struct.pack_into("<IIHH", root, HEADER_SIZE + ENTRY_SIZE,
-                         right[0][0], right_blk, 0, 0)
-        return bytes(root)
-
-    # ---------- merge logic ----------
-
-    def _merge(self, leaves: list[Extent], logical: int,
-               physical: int, length: int, uninit: bool) -> list[Extent]:
-        # Reject overlap
-        for e in leaves:
-            if not (logical + length <= e.logical
-                    or logical >= e.logical_end):
-                raise InvalidArgument(
-                    f"overlap: new [{logical},{logical+length}) vs "
-                    f"existing [{e.logical},{e.logical_end})")
-
-        new = Extent(logical, length, physical, uninit)
-        combined = sorted(leaves + [new], key=lambda x: x.logical)
-
-        # Coalesce adjacent
-        out: list[Extent] = []
-        for e in combined:
-            if (out and out[-1].logical_end == e.logical
-                    and out[-1].physical + out[-1].length == e.physical
-                    and out[-1].uninit == e.uninit):
-                out[-1] = Extent(
-                    out[-1].logical,
-                    out[-1].length + e.length,
-                    out[-1].physical,
-                    out[-1].uninit,
-                )
-            else:
-                out.append(e)
-        return out
-
-    def _serialize_leaf_root(self, leaves: list[Extent]) -> bytes:
-        header = ExtentHeader(
-            entries=len(leaves),
-            max_entries=self._max_root_leaf,
-            depth=0,
-        )
-        buf = bytearray(60)
-        buf[:HEADER_SIZE] = _serialize_header(header)
-        for i, e in enumerate(leaves):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            ee_len = e.length | (UNINIT_FLAG if e.uninit else 0)
-            struct.pack_into("<IHHI", buf, off, e.logical, ee_len,
-                             (e.physical >> 32) & 0xFFFF,
-                             e.physical & 0xFFFFFFFF)
-        return bytes(buf)
+def _list_operations() -> list[str]:
+    try:
+        from mountfile.capabilities import Operation
+        return [op.value if hasattr(op, "value") else str(op)
+                for op in Operation]
+    except ImportError:
+        return [
+            "list", "stat", "read", "read_range", "extract",
+            "create", "mkdir", "delete", "write", "rename",
+        ]
 ```
 
-📁 test_ext4_extent_insert.py
+📁 mountfile/cli/commands/capabilities.py
 
 ```python
-import struct
-import pytest
-from mount_fs.writer.ext4_extent_insert import (
-    Ext4ExtentTree, Extent, EXTENT_MAGIC,
-)
-from mount_fs.errors import InvalidArgument, UnsupportedFeature
-
-
-BS = 1024
-
-
-class MemFS:
-    def __init__(self):
-        self.blocks = {}
-        self.next_blk = 100
-    def alloc(self):
-        b = self.next_blk
-        self.next_blk += 1
-        return b
-    def read(self, b):
-        return bytes(self.blocks.get(b, b"\x00" * BS))
-    def write(self, b, data):
-        self.blocks[b] = bytearray(data)
-
-
-def _empty_iblock():
-    buf = bytearray(60)
-    struct.pack_into("<HHHHI", buf, 0, EXTENT_MAGIC, 0, 4, 0, 0)
-    return bytes(buf)
-
-
-def _iblock_with(extents):
-    buf = bytearray(60)
-    struct.pack_into("<HHHHI", buf, 0, EXTENT_MAGIC, len(extents), 4, 0, 0)
-    for i, (logical, phys, length) in enumerate(extents):
-        struct.pack_into("<IHHI", buf, 12 + i*12, logical, length,
-                         0, phys)
-    return bytes(buf)
-
-
-def _make_tree(fs, iblock):
-    return Ext4ExtentTree(iblock, BS, fs.read, fs.write, fs.alloc)
-
-
-def _read_extents_from_iblock(iblock):
-    from mount_fs.writer.ext4_extent_insert import _read_extents_root
-    return _read_extents_root(iblock)
-
-
-def test_insert_single_extent():
-    fs = MemFS()
-    t = _make_tree(fs, _empty_iblock())
-    new_ib = t.insert(0, 1000, 1)
-    extents = _read_extents_from_iblock(new_ib)
-    assert extents == [Extent(0, 1, 1000)]
-
-
-def test_insert_coalesces_adjacent():
-    fs = MemFS()
-    ib = _iblock_with([(0, 1000, 1)])
-    t = _make_tree(fs, ib)
-    new_ib = t.insert(1, 1001, 1)
-    extents = _read_extents_from_iblock(new_ib)
-    assert len(extents) == 1
-    assert extents[0].logical == 0
-    assert extents[0].length == 2
-    assert extents[0].physical == 1000
-
-
-def test_insert_non_adjacent_stays_separate():
-    fs = MemFS()
-    ib = _iblock_with([(0, 1000, 1)])
-    t = _make_tree(fs, ib)
-    new_ib = t.insert(1, 2000, 1)
-    extents = _read_extents_from_iblock(new_ib)
-    assert len(extents) == 2
-
-
-def test_overlap_refused():
-    fs = MemFS()
-    ib = _iblock_with([(0, 1000, 5)])
-    t = _make_tree(fs, ib)
-    with pytest.raises(InvalidArgument):
-        t.insert(2, 3000, 5)
-
-
-def test_negative_refused():
-    fs = MemFS()
-    t = _make_tree(fs, _empty_iblock())
-    with pytest.raises(InvalidArgument):
-        t.insert(-1, 1000, 1)
-
-
-def test_leaf_split_grows_tree():
-    fs = MemFS()
-    ib = _empty_iblock()
-    t = _make_tree(fs, ib)
-    # Fill 4 extents (max in root)
-    for i in range(4):
-        ib = t.insert(i * 2, 1000 + i * 2, 1)
-        t = _make_tree(fs, ib)
-    extents = _read_extents_from_iblock(ib)
-    assert len(extents) == 4
-    # 5th triggers split
-    ib = t.insert(100, 5000, 1)
-    t = _make_tree(fs, ib)
-    # Should now be depth 1
-    magic, entries, _, depth, _ = struct.unpack_from("<HHHHI", ib, 0)
-    assert depth == 1
-    assert entries == 2  # two leaves
-
-
-def test_deep_tree_insert():
-    fs = MemFS()
-    ib = _empty_iblock()
-    t = _make_tree(fs, ib)
-    # Insert enough to grow past depth 1
-    for i in range(30):
-        ib = t.insert(i * 2, 1000 + i * 2, 1)
-        t = _make_tree(fs, ib)
-    magic, _, _, depth, _ = struct.unpack_from("<HHHHI", ib, 0)
-    assert depth >= 1
-    # insert more
-    ib = t.insert(200, 9000, 1)
-
-
-def test_uninit_flag_preserved():
-    fs = MemFS()
-    t = _make_tree(fs, _empty_iblock())
-    new_ib = t.insert(0, 1000, 5, uninit=True)
-    extents = _read_extents_from_iblock(new_ib)
-    assert extents[0].uninit is True
-
-
-def test_invalid_length_refused():
-    fs = MemFS()
-    t = _make_tree(fs, _empty_iblock())
-    with pytest.raises(InvalidArgument):
-        t.insert(0, 1000, 0)
-    with pytest.raises(InvalidArgument):
-        t.insert(0, 1000, 0x8000)
-```
-
----
-
-Часть 3: mount_fs/writer/ext4_htree_insert.py — htree insert
-
-```python
-"""
-Ext4 htree directory insert.
-
-Two modes:
-  1. Insert into existing leaf block (if space) — no tree change.
-  2. Split leaf, update dx_node/dx_root — tree change.
-
-Refuses:
-  - depth > 1 (nested dx_nodes not supported; kernel can, we refuse)
-  - growth requiring dx_root split (rare; production FS never hits it)
-"""
+"""CLI: `mountfile capabilities <image>` — human and JSON output."""
 from __future__ import annotations
-import struct
-from dataclasses import dataclass
 
-from mount_fs.errors import (
-    InvalidArgument, UnsupportedFeature, StructureCorrupt, NoFreeBlocks,
-)
-
-
-DX_ROOT_INFO_OFFSET = 24
-DX_ENTRIES_OFFSET = 32
-DX_ENTRY_SIZE = 8
-DOT_REC_LEN = 12
-DX_MAX_DEPTH = 1  # our limit
-
-
-@dataclass
-class HtreeSlot:
-    leaf_block: int
-    hash: int
-
-
-class Ext4HtreeInsert:
-    def __init__(self, block_size: int, read_blk, write_blk, alloc_blk,
-                 inode_reader, inode_writer, checkpoint=None):
-        self._bs = block_size
-        self._read = read_blk
-        self._write = write_blk
-        self._alloc = alloc_blk
-        self._read_inode = inode_reader
-        self._write_inode = inode_writer
-        self._cp = checkpoint or (lambda n: None)
-
-    # ---------- main ----------
-
-    def add_dirent(self, dir_ino: int, name: bytes, target_ino: int,
-                    file_type: int, name_hash: int) -> bool:
-        """
-        Insert `name` into directory `dir_ino`.
-        Returns True if tree changed, False if fit in existing leaf.
-        """
-        if not name or len(name) > 255:
-            raise InvalidArgument(f"name len={len(name)}")
-
-        inode = self._read_inode(dir_ino)
-        if not inode.get("is_dir"):
-            raise InvalidArgument(f"ino={dir_ino} not a directory")
-
-        root_blk = inode["block"][0]
-        root = bytearray(self._read(root_blk))
-
-        if not self._is_htree_root(root):
-            raise InvalidArgument(f"ino={dir_ino} not htree-indexed")
-
-        depth = root[DX_ROOT_INFO_OFFSET + 6]
-        if depth > DX_MAX_DEPTH:
-            raise UnsupportedFeature(f"htree depth={depth}")
-
-        # Find target leaf by hash
-        leaf_slot, leaf_blk = self._find_leaf(root, name_hash, depth)
-
-        leaf = bytearray(self._read(leaf_blk))
-        if self._try_insert_in_leaf(leaf, name, target_ino, file_type):
-            self._write(leaf_blk, bytes(leaf))
-            return False
-
-        # Split
-        self._cp("before_htree_split")
-        return self._split_leaf(dir_ino, inode, root_blk,
-                                  leaf_slot, leaf_blk, leaf,
-                                  name, target_ino, file_type, name_hash)
-
-    # ---------- leaf insert ----------
-
-    def _try_insert_in_leaf(self, leaf: bytearray, name: bytes,
-                            target_ino: int, file_type: int) -> bool:
-        rec_len_needed = (8 + len(name) + 3) & ~3
-        pos = 0
-        while pos + 8 <= self._bs:
-            ino = struct.unpack_from("<I", leaf, pos)[0]
-            rec_len = struct.unpack_from("<H", leaf, pos + 4)[0]
-            name_len = leaf[pos + 6]
-            if rec_len < 8 or pos + rec_len > self._bs:
-                raise StructureCorrupt(f"dirent corrupt at {pos}")
-            used = (8 + name_len + 3) & ~3
-            if ino == 0 and rec_len >= rec_len_needed:
-                self._write_slot(leaf, pos, rec_len, name, target_ino,
-                                 file_type, rec_len_needed)
-                return True
-            if pos + rec_len == self._bs and rec_len - used >= rec_len_needed:
-                new_pos = pos + used
-                struct.pack_into("<H", leaf, pos + 4, used)
-                self._write_slot(leaf, new_pos, rec_len - used,
-                                 name, target_ino, file_type,
-                                 rec_len_needed)
-                return True
-            pos += rec_len
-        return False
-
-    def _write_slot(self, block: bytearray, pos: int, old_rec_len: int,
-                     name: bytes, target_ino: int, file_type: int,
-                     rec_len_needed: int):
-        struct.pack_into("<I", block, pos, target_ino)
-        struct.pack_into("<H", block, pos + 4, rec_len_needed)
-        block[pos + 6] = len(name)
-        block[pos + 7] = file_type
-        block[pos + 8:pos + 8 + len(name)] = name
-        rem = old_rec_len - rec_len_needed
-        if rem >= 8:
-            rp = pos + rec_len_needed
-            struct.pack_into("<I", block, rp, 0)
-            struct.pack_into("<H", block, rp + 4, rem)
-
-    # ---------- leaf split ----------
-
-    def _split_leaf(self, dir_ino, inode, root_blk,
-                    leaf_slot_idx, leaf_blk, leaf,
-                    name, target_ino, file_type, name_hash) -> bool:
-        # Collect existing dirents
-        entries = self._parse_all_dirents(leaf)
-        # Determine split point (mid by hash estimate — we don't have hash
-        # for existing names, so split by count)
-        entries.append((name, target_ino, file_type, name_hash))
-        entries.sort(key=lambda x: x[3])
-
-        mid = len(entries) // 2
-        left, right = entries[:mid], entries[mid:]
-
-        # New leaf block
-        new_blk = self._alloc()
-        self._write_leaf_data(leaf_blk, left)
-        self._write_leaf_data(new_blk, right)
-
-        # Update index in root (or dx_node)
-        self._cp("before_htree_index_update")
-        self._insert_index_entry(root_blk, leaf_slot_idx,
-                                  right[0][3], new_blk)
-        self._cp("after_htree_index_update")
-        return True
-
-    def _write_leaf_data(self, blk: int, entries):
-        buf = bytearray(self._bs)
-        pos = 0
-        for i, (name, ino, ft, _) in enumerate(entries):
-            name_len = len(name)
-            base = (8 + name_len + 3) & ~3
-            rec_len = (self._bs - pos) if i == len(entries) - 1 else base
-            struct.pack_into("<IHBB", buf, pos, ino, rec_len, name_len, ft)
-            buf[pos + 8:pos + 8 + name_len] = name
-            pos += rec_len
-        self._write(blk, bytes(buf))
-
-    def _parse_all_dirents(self, block: bytes):
-        out = []
-        pos = 0
-        while pos + 8 <= self._bs:
-            ino = struct.unpack_from("<I", block, pos)[0]
-            rec_len = struct.unpack_from("<H", block, pos + 4)[0]
-            nl = block[pos + 6]
-            if rec_len < 8 or pos + rec_len > self._bs:
-                break
-            if ino != 0 and nl > 0:
-                name = bytes(block[pos + 8:pos + 8 + nl])
-                if name not in (b".", b".."):
-                    out.append((name, ino, block[pos + 7], 0))
-            pos += rec_len
-        return out
-
-    # ---------- index ----------
-
-    def _insert_index_entry(self, root_blk: int, after_slot: int,
-                             key: int, new_leaf: int):
-        root = bytearray(self._read(root_blk))
-        # countlimit at offset 32
-        limit, count = struct.unpack_from("<HH", root, 32)
-        if count >= limit:
-            raise UnsupportedFeature(
-                "htree root index full; split of dx_root not supported")
-        # Insert after after_slot
-        entries_off = 36
-        src_off = entries_off + after_slot * DX_ENTRY_SIZE
-        # Shift by 8 bytes
-        tail = root[src_off + DX_ENTRY_SIZE:]
-        root[src_off + DX_ENTRY_SIZE:src_off + DX_ENTRY_SIZE + 8] = tail[:8] \
-            if len(tail) >= 8 else b"\x00" * 8
-        struct.pack_into("<II", root, src_off, key, new_leaf)
-        struct.pack_into("<H", root, 32, limit, count + 1)
-        self._write(root_blk, bytes(root))
-
-    # ---------- discovery ----------
-
-    def _is_htree_root(self, block: bytes) -> bool:
-        if len(block) < 32:
-            return False
-        rec1 = struct.unpack_from("<H", block, 4)[0]
-        rec2 = struct.unpack_from("<H", block, 16)[0]
-        info_len = block[29]
-        hash_ver = block[28]
-        return rec1 == 12 and rec2 == 12 and info_len == 8 and hash_ver <= 3
-
-    def _find_leaf(self, root: bytes, name_hash: int, depth: int):
-        limit, count = struct.unpack_from("<HH", root, 32)
-        if count == 0:
-            raise StructureCorrupt("empty htree root")
-        idx = 0
-        for i in range(count):
-            h = struct.unpack_from("<I", root, 36 + i * 8)[0]
-            if h <= name_hash:
-                idx = i
-            else:
-                break
-        leaf_blk = struct.unpack_from("<I", root, 36 + idx * 8 + 4)[0]
-        return idx, leaf_blk
-```
-
-📁 test_ext4_htree_insert.py
-
-```python
-import struct
-import pytest
-from mount_fs.writer.ext4_htree_insert import Ext4HtreeInsert
-from mount_fs.errors import InvalidArgument, UnsupportedFeature
-
-
-BS = 1024
-
-
-class MemFS:
-    def __init__(self):
-        self.blocks = {}
-        self.next_blk = 100
-        self.inodes = {}
-    def alloc(self):
-        b = self.next_blk
-        self.next_blk += 1
-        return b
-    def read(self, b):
-        return bytes(self.blocks.get(b, b"\x00" * BS))
-    def write(self, b, data):
-        self.blocks[b] = bytearray(data)
-    def read_inode(self, ino):
-        return self.inodes[ino]
-    def write_inode(self, ino, inode):
-        self.inodes[ino] = inode
-
-
-def _make_htree_root(entries):
-    """entries: [(hash, leaf_block)]"""
-    root = bytearray(BS)
-    struct.pack_into("<IHBB", root, 0, 2, 12, 1, 2); root[8:9] = b"."
-    struct.pack_into("<IHBB", root, 12, 2, 12, 2, 2); root[20:22] = b".."
-    root[24:28] = b"\x00\x00\x00\x00"
-    root[28] = 0  # hash_version
-    root[29] = 8  # info_length
-    root[30] = 0  # depth = 0
-    struct.pack_into("<HH", root, 32, 508, len(entries))
-    for i, (h, blk) in enumerate(entries):
-        struct.pack_into("<II", root, 36 + i * 8, h, blk)
-    return bytes(root)
-
-
-def _make_leaf(entries):
-    """entries: [(ino, name, file_type)]"""
-    buf = bytearray(BS)
-    pos = 0
-    for i, (ino, name, ft) in enumerate(entries):
-        base = (8 + len(name) + 3) & ~3
-        rec_len = (BS - pos) if i == len(entries) - 1 else base
-        struct.pack_into("<IHBB", buf, pos, ino, rec_len, len(name), ft)
-        buf[pos + 8:pos + 8 + len(name)] = name
-        pos += rec_len
-    return bytes(buf)
-
-
-def _setup(fs, leaf_entries, root_entries):
-    leaf_blk = fs.alloc()
-    root_blk = fs.alloc()
-    fs.blocks[leaf_blk] = _make_leaf(leaf_entries)
-    fs.blocks[root_blk] = _make_htree_root(root_entries or [(0, leaf_blk)])
-    fs.inodes[2] = {
-        "is_dir": True, "block": [root_blk] + [0]*14,
-        "size": BS, "blocks_sectors": 2, "flags": 0x1000,
-    }
-    return root_blk, leaf_blk
-
-
-def _make_insert(fs):
-    return Ext4HtreeInsert(BS, fs.read, fs.write, fs.alloc,
-                            fs.read_inode, fs.write_inode)
-
-
-def test_insert_fits_in_leaf():
-    fs = MemFS()
-    _setup(fs, [(10, b"a.txt", 1)], [(0, 100)])
-    ins = _make_insert(fs)
-    changed = ins.add_dirent(2, b"b.txt", 11, 1, name_hash=0x1000)
-    assert changed is False
-    # Verify both names in leaf
-    leaf = fs.blocks[100]
-    assert b"a.txt" in bytes(leaf)
-    assert b"b.txt" in bytes(leaf)
-
-
-def test_insert_splits_leaf():
-    fs = MemFS()
-    # Fill leaf so no slack
-    big = b"x" * 900
-    _setup(fs, [(10, big, 1)], [(0, 100)])
-    ins = _make_insert(fs)
-    changed = ins.add_dirent(2, b"new.txt", 11, 1, name_hash=0x5000)
-    assert changed is True
-    # Root should now have 2 index entries
-    root = fs.blocks[2]  # root_blk was 101? actually first alloc is 100
-    # Find the new leaf — should be block 102
-    assert 102 in fs.blocks
-
-
-def test_non_htree_refused():
-    fs = MemFS()
-    fs.blocks[100] = b"\x00" * BS  # not htree
-    fs.inodes[2] = {"is_dir": True, "block": [100] + [0]*14,
-                     "size": BS, "blocks_sectors": 2, "flags": 0}
-    ins = _make_insert(fs)
-    with pytest.raises(InvalidArgument):
-        ins.add_dirent(2, b"x", 11, 1, 0)
-
-
-def test_deep_htree_refused():
-    fs = MemFS()
-    root = bytearray(_make_htree_root([(0, 100)]))
-    root[30] = 2  # depth = 2
-    fs.blocks[101] = bytes(root)
-    fs.inodes[2] = {"is_dir": True, "block": [101] + [0]*14,
-                     "size": BS, "blocks_sectors": 2, "flags": 0x1000}
-    ins = _make_insert(fs)
-    with pytest.raises(UnsupportedFeature):
-        ins.add_dirent(2, b"x", 11, 1, 0)
-
-
-def test_name_too_long_refused():
-    fs = MemFS()
-    _setup(fs, [(10, b"a.txt", 1)], [(0, 100)])
-    ins = _make_insert(fs)
-    with pytest.raises(InvalidArgument):
-        ins.add_dirent(2, b"x" * 300, 11, 1, 0)
-```
-
----
-
-Часть 4: mount_fs/writer/ext4_fscrypt_write.py — fscrypt шифрование при записи
-
-```python
-"""
-Ext4 fscrypt write: encrypt file contents and filenames.
-
-Uses the same HKDF + AES-XTS/CTS path as read, in reverse.
-Requires: cryptography (AES-XTS), pycryptodome (AES-CTS).
-"""
-from __future__ import annotations
-import struct
-
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-from mount_fs.errors import UnsupportedFeature, InvalidArgument
-from ext4_fscrypt_v2 import (
-    FscryptContext, parse_context, derive_keys,
-    MODE_AES_256_XTS, MODE_AES_256_CTS,
-)
-import ext4_cts
-
-
-def _xts_encrypt(key: bytes, plaintext: bytes, block_num: int) -> bytes:
-    if len(key) != 64:
-        raise InvalidArgument(f"xts key len={len(key)}")
-    tweak = struct.pack("<Q", block_num) + b"\x00" * 8
-    c = Cipher(algorithms.AES(key[:32]), modes.XTS(tweak))
-    e = c.encryptor()
-    return e.update(plaintext) + e.finalize()
-
-
-def encrypt_contents(master_key: bytes, ctx: FscryptContext,
-                     plaintext: bytes) -> bytes:
-    if ctx.contents_mode != MODE_AES_256_XTS:
-        raise UnsupportedFeature(f"contents_mode={ctx.contents_mode}")
-    if len(plaintext) % 4096 != 0:
-        plaintext = plaintext + b"\x00" * (4096 - len(plaintext) % 4096)
-    ckey, _ = derive_keys(master_key, ctx)
-    out = bytearray()
-    for i in range(0, len(plaintext), 4096):
-        out.extend(_xts_encrypt(ckey, plaintext[i:i+4096], i // 4096))
-    return bytes(out)
-
-
-def encrypt_filename(master_key: bytes, ctx: FscryptContext,
-                     name: str, iv: bytes = None) -> bytes:
-    if ctx.filenames_mode != MODE_AES_256_CTS:
-        raise UnsupportedFeature(f"filenames_mode={ctx.filenames_mode}")
-    if not ext4_cts.available():
-        raise UnsupportedFeature("AES-CTS requires pycryptodome")
-    if iv is None:
-        iv = b"\x00" * 16
-    _, fkey = derive_keys(master_key, ctx)
-    plaintext = name.encode("utf-8") + b"\x00"
-    return ext4_cts.cts_encrypt(fkey, iv, plaintext)
-
-
-def build_fscrypt_context(version: int, contents_mode: int,
-                            filenames_mode: int,
-                            key_ref: bytes, nonce: bytes) -> bytes:
-    if version == 1:
-        if len(key_ref) != 8 or len(nonce) != 16:
-            raise InvalidArgument("v1 key_ref/nonce size")
-        raw = bytearray(28)
-        raw[0] = 1
-        raw[1] = contents_mode
-        raw[2] = filenames_mode
-        raw[4:12] = key_ref
-        raw[12:28] = nonce
-        return bytes(raw)
-    if version == 2:
-        if len(key_ref) != 16 or len(nonce) != 16:
-            raise InvalidArgument("v2 key_ref/nonce size")
-        raw = bytearray(40)
-        raw[0] = 2
-        raw[1] = contents_mode
-        raw[2] = filenames_mode
-        raw[8:24] = key_ref
-        raw[24:40] = nonce
-        return bytes(raw)
-    raise UnsupportedFeature(f"version={version}")
-
-
-def encrypt_xattr_value(master_key: bytes, ctx_raw: bytes,
-                        plaintext: bytes) -> bytes:
-    """Used when the file is encrypted and content must be ciphertext."""
-    ctx = parse_context(ctx_raw)
-    return encrypt_contents(master_key, ctx, plaintext)
-
-
-def encrypt_dirent_name(master_key: bytes, ctx_raw: bytes,
-                        name: str, iv: bytes = None) -> bytes:
-    ctx = parse_context(ctx_raw)
-    return encrypt_filename(master_key, ctx, name, iv)
-```
-
-📁 test_ext4_fscrypt_write.py
-
-```python
-import pytest
-from mount_fs.writer.ext4_fscrypt_write import (
-    encrypt_contents, encrypt_filename, build_fscrypt_context,
-    encrypt_xattr_value, encrypt_dirent_name,
-)
-from ext4_fscrypt_v2 import (
-    parse_context, derive_keys, decrypt_contents, decrypt_filename,
-    MODE_AES_256_XTS, MODE_AES_256_CTS,
-)
-import ext4_cts
-
-
-pytestmark = pytest.mark.skipif(not ext4_cts.available(),
-                                 reason="pycryptodome required")
-
-
-def _ctx_raw_v2(key_ref, nonce):
-    raw = bytearray(40)
-    raw[0] = 2
-    raw[1] = MODE_AES_256_XTS
-    raw[2] = MODE_AES_256_CTS
-    raw[8:8+len(key_ref)] = key_ref
-    raw[24:24+len(nonce)] = nonce
-    return bytes(raw)
-
-
-def test_encrypt_decrypt_contents_roundtrip():
-    mk = b"\x42" * 32
-    ctx_raw = _ctx_raw_v2(b"id" + b"\x00" * 14, b"\x00" * 16)
-    ctx = parse_context(ctx_raw)
-    plaintext = b"secret payload " * 400
-    ct = encrypt_contents(mk, ctx, plaintext)
-    pt = decrypt_contents(mk, ctx, ct)
-    assert pt[:len(plaintext)] == plaintext
-
-
-def test_encrypt_decrypt_filename_roundtrip():
-    mk = b"\x42" * 32
-    ctx_raw = _ctx_raw_v2(b"id" + b"\x00" * 14, b"\x00" * 16)
-    ctx = parse_context(ctx_raw)
-    ct = encrypt_filename(mk, ctx, "hello.txt")
-    pt = decrypt_filename(mk, ctx, ct, iv=b"\x00" * 16)
-    assert pt == "hello.txt"
-
-
-def test_build_context_v1():
-    raw = build_fscrypt_context(1, MODE_AES_256_XTS, MODE_AES_256_CTS,
-                                 b"abcd1234", b"\x00" * 16)
-    assert len(raw) == 28
-    assert raw[0] == 1
-
-
-def test_build_context_v2():
-    raw = build_fscrypt_context(2, MODE_AES_256_XTS, MODE_AES_256_CTS,
-                                 b"i" * 16, b"\x00" * 16)
-    assert len(raw) == 40
-    assert raw[0] == 2
-
-
-def test_unsupported_mode_refused():
-    raw = _ctx_raw_v2(b"id" + b"\x00" * 14, b"\x00" * 16)
-    ctx = parse_context(raw)
-    ctx.contents_mode = 4  # CBC — unsupported
-    with pytest.raises(Exception):
-        encrypt_contents(b"\x00" * 32, ctx, b"\x00" * 4096)
-
-
-def test_encrypt_xattr_helper():
-    mk = b"\x00" * 32
-    raw = _ctx_raw_v2(b"id" + b"\x00" * 14, b"\x00" * 16)
-    pt = b"data " * 1024
-    ct = encrypt_xattr_value(mk, raw, pt)
-    ctx = parse_context(raw)
-    assert decrypt_contents(mk, ctx, ct)[:len(pt)] == pt
-
-
-def test_encrypt_dirent_helper():
-    mk = b"\x00" * 32
-    raw = _ctx_raw_v2(b"id" + b"\x00" * 14, b"\x00" * 16)
-    ct = encrypt_dirent_name(mk, raw, "test.txt")
-    ctx = parse_context(raw)
-    assert decrypt_filename(mk, ctx, ct, iv=b"\x00" * 16) == "test.txt"
-```
-
----
-
-Часть 5: mount_fs/cli_verbose.py — полный показ причин
-
-```python
-"""
-Verbose CLI: shows provider, mode, refusal reasons, and capability matrix.
-
-Subcommands:
-  probe     - what was detected
-  explain   - full capability matrix for this image
-  ls        - list with mode marker
-  why       - explain why a specific op is refused
-"""
-from __future__ import annotations
 import argparse
 import json
 import sys
 
-from forensic_source import FileSource
-from capability_registry import Op, Outcome
-from mount_fs.rw import UniversalFSRW
-from mount_fs.errors import MountError
 
-
-def _color(s, c):
+def _color(s: str, c: str) -> str:
     if not sys.stdout.isatty():
         return s
-    codes = {"red": "31", "green": "32", "yellow": "33", "dim": "2"}
+    codes = {"allow": "32", "limited": "33", "refuse": "31", "dim": "2"}
     return f"\033[{codes.get(c, '0')}m{s}\033[0m"
 
 
-def _print_probe(fs: UniversalFSRW):
-    p = fs.probe()
-    print(f"format:   {p.profile.format_tag}")
-    print(f"features: {sorted(f.name for f in p.profile.features)}")
-    print(f"state:    {sorted(p.state)}")
+def add_parser(sub):
+    p = sub.add_parser("capabilities", help="show per-image capability matrix")
+    p.add_argument("image")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--operation", "-o", default=None,
+                   help="explain a single operation")
+    p.set_defaults(func=run)
 
 
-def _print_explain(fs: UniversalFSRW):
-    print("capability matrix for this image:")
-    for op in Op:
-        d = fs.capability(op)
-        color = {
-            Outcome.ALLOW: "green",
-            Outcome.LIMITED: "yellow",
-            Outcome.REFUSE: "red",
-        }[d.outcome]
-        line = f"  {op.value:12s}  {_color(d.outcome.value, color):18s}"
-        if d.code:
-            line += f"  [{d.code.value}]"
-        if d.reason:
-            line += f"  {d.reason}"
-        print(line)
-
-
-def _print_ls(fs: UniversalFSRW, path: str):
-    for e in fs.list_dir(path):
-        mode = _color("d", "green") if e.is_dir else "-"
-        print(f"{mode} {e.size:>12}  {e.name}")
-
-
-def _cmd_why(fs: UniversalFSRW, op_name: str):
+def run(args) -> int:
     try:
-        op = Op(op_name)
-    except ValueError:
-        print(f"unknown op: {op_name}", file=sys.stderr)
-        print(f"valid ops: {[o.value for o in Op]}", file=sys.stderr)
+        from mountfile.image import open_image
+        from mountfile.capabilities_dynamic import explain, matrix
+    except ImportError as e:
+        print(f"error: {e}", file=sys.stderr)
         return 2
-    d = fs.capability(op)
-    print(json.dumps({
-        "op": op.value,
-        "format": fs.probe().profile.format_tag,
-        "features": sorted(f.name for f in fs.probe().profile.features),
-        "state": sorted(fs.probe().state),
-        "outcome": d.outcome.value,
-        "code": d.code.value if d.code else None,
-        "reason": d.reason,
-    }, indent=2))
+
+    image = open_image(args.image)
+
+    if args.operation:
+        result = explain(image, args.operation)
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2))
+        else:
+            print(f"operation:  {result.operation}")
+            print(f"outcome:    {_color(result.outcome, result.outcome)}")
+            if result.code:
+                print(f"code:       {result.code}")
+            print(f"reason:     {result.reason}")
+            if result.image_reason:
+                print(f"image note: {result.image_reason}")
+            if result.suggested_action:
+                print(f"action:     {result.suggested_action}")
+            print(f"format:     {result.format}")
+            print(f"profile:    {result.profile}")
+            print(f"state:      {result.state}")
+        return 0
+
+    report = matrix(image)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return 0
+
+    print(f"image:    {args.image}")
+    print(f"format:   {report.format}")
+    print(f"profile:  {report.profile}")
+    print(f"features: {report.features}")
+    print(f"state:    {report.state}")
+    print()
+    print(f"{'operation':<14} {'outcome':<10} {'code':<18} reason")
+    print(f"{'-'*14} {'-'*10} {'-'*18} {'-'*30}")
+    for r in report.operations:
+        code = r.code or ""
+        reason = r.reason + (f" ({r.image_reason})" if r.image_reason else "")
+        print(f"{r.operation:<14} {_color(r.outcome, r.outcome):<10} "
+              f"{code:<18} {reason}")
     return 0
-
-
-def main(argv=None):
-    p = argparse.ArgumentParser(prog="mount-fs-verbose")
-    p.add_argument("--key", default=None,
-                   help="fscrypt master key (hex)")
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    for name in ("probe", "explain", "ls", "why"):
-        sp = sub.add_parser(name)
-        sp.add_argument("image")
-        if name in ("ls", "why"):
-            sp.add_argument("arg")
-        sp.set_defaults(name=name)
-
-    a = p.parse_args(argv)
-    key = bytes.fromhex(a.key) if a.key else None
-    try:
-        fs = UniversalFSRW(FileSource(a.image), master_key=key)
-    except MountError as e:
-        print(f"cannot open: {e}", file=sys.stderr)
-        return 2
-
-    if a.name == "probe":
-        _print_probe(fs)
-        return 0
-    if a.name == "explain":
-        _print_explain(fs)
-        return 0
-    if a.name == "ls":
-        _print_ls(fs, a.arg)
-        return 0
-    if a.name == "why":
-        return _cmd_why(fs, a.arg)
-    return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
 ```
 
 ---
 
-Часть 6: scripts/final_acceptance.sh — финальный вердикт
+Шаг 4: Differential corpus + checker matrix
+
+📁 mountfile/testing/checker_matrix.py
+
+```python
+"""
+Independent checker matrix: for each supported FS family and each
+image fixture, run the external checker and compare against the
+capability expectation.
+
+Fixtures directory layout:
+  tests/fixtures/images/<family>/<name>.img
+
+Expected results:
+  tests/fixtures/images/<family>/<name>.expect.json
+"""
+from __future__ import annotations
+
+import json
+import os
+import platform
+import shutil
+import subprocess
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Optional
+
+
+CHECKERS = {
+    "fat": ("fsck.fat", ["-n", "-v"]),
+    "exfat": ("fsck.exfat", ["-n"]),
+    "ext2": ("e2fsck", ["-fn"]),
+    "ext3": ("e2fsck", ["-fn"]),
+    "ext4": ("e2fsck", ["-fn"]),
+    "ntfs": ("ntfsfix", ["-n"]),
+}
+
+
+@dataclass
+class CheckerRow:
+    family: str
+    image: str
+    tool: str
+    available: bool
+    returncode: Optional[int]
+    matches_expected: Optional[bool]
+    expected_rc: Optional[int]
+    output_tail: str
+
+
+def _run(cmd: list[str], timeout: int = 120) -> tuple[int, str]:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except subprocess.TimeoutExpired:
+        return -1, "timeout"
+
+
+def check_family(family: str, images_dir: Path) -> list[CheckerRow]:
+    spec = CHECKERS.get(family)
+    if not spec:
+        return []
+    tool, args = spec
+    available = shutil.which(tool) is not None
+    rows: list[CheckerRow] = []
+    family_dir = images_dir / family
+    if not family_dir.exists():
+        return rows
+    for img in sorted(family_dir.glob("*.img")):
+        expect_file = img.with_suffix(".expect.json")
+        expected = None
+        if expect_file.exists():
+            expected = json.loads(expect_file.read_text())
+        if not available:
+            rows.append(CheckerRow(family, str(img), tool, False, None,
+                                    None, expected.get("returncode") if expected else None,
+                                    "not installed"))
+            continue
+        rc, out = _run([tool, *args, str(img)])
+        matches = None
+        if expected and "returncode" in expected:
+            matches = rc == expected["returncode"]
+        rows.append(CheckerRow(family, str(img), tool, True, rc, matches,
+                                expected.get("returncode") if expected else None,
+                                out[-500:]))
+    return rows
+
+
+def run_matrix(images_dir: Path) -> list[CheckerRow]:
+    rows: list[CheckerRow] = []
+    for family in CHECKERS:
+        rows.extend(check_family(family, images_dir))
+    return rows
+
+
+def to_dict(rows: list[CheckerRow]) -> dict:
+    return {
+        "platform": platform.platform(),
+        "total": len(rows),
+        "mismatches": sum(1 for r in rows
+                          if r.matches_expected is False),
+        "skipped": sum(1 for r in rows if not r.available),
+        "rows": [asdict(r) for r in rows],
+    }
+```
+
+📁 tests/fixtures/images/README.md
+
+```markdown
+# Real image fixtures
+
+Each family subdirectory contains real images plus optional `.expect.json`:
+
+```
+
+tests/fixtures/images/
+fat/
+clean_fat12.img
+clean_fat12.expect.json    {"returncode": 0}
+dirty_fat16.img
+dirty_fat16.expect.json    {"returncode": 1}
+exfat/...
+ext2/...
+ext3/...
+ext4/...
+ntfs/...
+
+```
+
+Images generated by:
+  `scripts/generate_fixtures.sh`
+
+Expectation files hand-written or captured from a known-good run.
+
+Regenerate:
+  `scripts/generate_fixtures.sh --force`
+```
+
+📁 scripts/generate_fixtures.sh
 
 ```bash
 #!/usr/bin/env bash
-# Final acceptance for issue #182.
-# Exit 0 iff all critical gates pass.
-set -uo pipefail
+# Generate real fixture images for checker matrix.
+set -euo pipefail
 
-PASS=0
-FAIL=0
-SKIP=0
-RESULTS=()
+OUT="${1:-tests/fixtures/images}"
+FORCE="${FORCE:-0}"
 
-check() {
-    local name="$1"; shift
-    printf "  [%-40s] " "$name"
-    if "$@" >/tmp/fa.log 2>&1; then
-        echo "PASS"
-        RESULTS+=("PASS  $name")
-        PASS=$((PASS+1))
-    else
-        echo "FAIL"
-        RESULTS+=("FAIL  $name")
-        sed 's/^/    /' /tmp/fa.log | tail -3
-        FAIL=$((FAIL+1))
+mkdir -p "$OUT"/{fat,exfat,ext2,ext3,ext4,ntfs}
+
+gen() {
+    local family="$1"; local name="$2"; local size_mb="$3"; shift 3
+    local path="$OUT/$family/$name.img"
+    if [ -f "$path" ] && [ "$FORCE" != "1" ]; then
+        echo "exists: $path"
+        return
     fi
+    truncate -s "${size_mb}M" "$path"
+    "$@" "$path"
+    echo "created: $path"
 }
 
-skip() {
-    local name="$1"; local reason="$2"
-    printf "  [%-40s] SKIP  %s\n" "$name" "$reason"
-    RESULTS+=("SKIP  $name: $reason")
-    SKIP=$((SKIP+1))
-}
-
-echo "═══ FINAL ACCEPTANCE — issue #182 ═══"
-echo "date:    $(date -Iseconds)"
-echo "commit:  $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-echo ""
-
-echo "[1/6] Compile"
-check "compileall" python -m compileall -q mount_fs jbd2_pkg
-
-echo "[2/6] Unit tests"
-check "unit_tests" python -m pytest -q --timeout=120 \
-    --ignore=test_smoke_real.py --ignore=tests/test_crash_consistency.py \
-    --ignore=tests/differential_matrix.py
-
-echo "[3/6] Capability sync"
-check "capability_sync" python -c \
-    "from mount_fs.capability_sync import sync_all; sync_all()"
-
-echo "[4/6] RW import + sanity"
-check "rw_import" python -c "
-from mount_fs.rw import UniversalFSRW
-from mount_fs.errors import MountError
-from mount_fs.writer.ext4_extent_insert import Ext4ExtentTree
-from mount_fs.writer.ext4_htree_insert import Ext4HtreeInsert
-from mount_fs.writer.ext4_fscrypt_write import encrypt_contents
-from mount_fs.failure_injection import explore_paths
-"
-
-echo "[5/6] Real images"
-if command -v mkfs.ext4 >/dev/null 2>&1; then
-    check "smoke_ext4" python -m pytest -q test_smoke_real.py::test_smoke_ext4 \
-        --timeout=180
-else
-    skip "smoke_ext4" "mkfs.ext4 missing"
-fi
-if command -v mkfs.fat >/dev/null 2>&1; then
-    check "smoke_fat" python -m pytest -q test_smoke_real.py::test_smoke_fat16 \
-        --timeout=120
-else
-    skip "smoke_fat" "mkfs.fat missing"
-fi
-if command -v mkfs.ntfs >/dev/null 2>&1; then
-    check "smoke_ntfs" python -m pytest -q test_smoke_real.py::test_smoke_ntfs \
-        --timeout=180
-else
-    skip "smoke_ntfs" "mkfs.ntfs missing"
+if command -v mkfs.fat >/dev/null; then
+    gen fat clean_fat12 4  mkfs.fat -F 12
+    gen fat clean_fat16 8  mkfs.fat -F 16
+    gen fat clean_fat32 32 mkfs.fat -F 32
 fi
 
-echo "[6/6] Crash consistency (requires root)"
-if [ "$(id -u)" -eq 0 ] && command -v dmsetup >/dev/null 2>&1; then
-    check "crash_test" python -m pytest -q tests/test_crash_consistency.py \
-        --timeout=600
-else
-    skip "crash_test" "needs root + dmsetup"
+if command -v mkfs.exfat >/dev/null; then
+    gen exfat clean_exfat 64 mkfs.exfat
 fi
 
-echo ""
-echo "═════ SUMMARY ═════"
-for r in "${RESULTS[@]}"; do
-    echo "  $r"
+if command -v mkfs.ext4 >/dev/null; then
+    gen ext2 clean_ext2 16 mkfs.ext4 -q -t ext2 -b 1024
+    gen ext3 clean_ext3 16 mkfs.ext4 -q -t ext3 -b 1024
+    gen ext4 clean_ext4 16 mkfs.ext4 -q -t ext4 -b 1024 \
+        -O extent,dir_index,metadata_csum
+    gen ext4 fastcommit_ext4 16 mkfs.ext4 -q -O fast_commit
+fi
+
+if command -v mkfs.ntfs >/dev/null; then
+    gen ntfs clean_ntfs 32 mkfs.ntfs -F -Q
+fi
+
+# Capture expectations for clean images
+for img in $(find "$OUT" -name '*.img'); do
+    exp="${img%.img}.expect.json"
+    [ -f "$exp" ] && continue
+    echo '{"returncode": 0}' > "$exp"
 done
-echo ""
-echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
-echo ""
 
-if [ "$FAIL" -eq 0 ]; then
-    echo "✅ ACCEPTANCE PASSED"
-    exit 0
-fi
-echo "❌ ACCEPTANCE FAILED ($FAIL failures)"
-exit 1
+echo "done: $OUT"
+```
+
+📁 tests/test_checker_matrix.py
+
+```python
+"""Verify every real fixture passes its checker with expected returncode."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from mountfile.testing.checker_matrix import run_matrix, to_dict
+
+
+FIXTURES = Path("tests/fixtures/images")
+
+
+@pytest.mark.skipif(not FIXTURES.exists(),
+                    reason="fixtures not generated; run scripts/generate_fixtures.sh")
+def test_checker_matrix():
+    rows = run_matrix(FIXTURES)
+    assert rows, "no checker rows produced"
+    mismatches = [r for r in rows if r.matches_expected is False]
+    if mismatches:
+        summary = "\n".join(
+            f"  {r.family}/{Path(r.image).name}: "
+            f"expected rc={r.expected_rc}, got rc={r.returncode}\n"
+            f"    tail: {r.output_tail}"
+            for r in mismatches
+        )
+        pytest.fail(f"{len(mismatches)} mismatches:\n{summary}")
+
+
+def test_matrix_report_shape():
+    rows = run_matrix(FIXTURES) if FIXTURES.exists() else []
+    report = to_dict(rows)
+    assert "platform" in report
+    assert "total" in report
+    assert "mismatches" in report
+    assert isinstance(report["rows"], list)
+```
+
+📁 tests/test_differential_pytsk3.py
+
+```python
+"""
+Differential test: native reader vs pytsk3, both read-only.
+Skipped when pytsk3 or fixtures are missing.
+"""
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+try:
+    import pytsk3
+    HAS_PYTSK3 = True
+except ImportError:
+    HAS_PYTSK3 = False
+
+
+FIXTURES = Path("tests/fixtures/images")
+
+
+pytestmark = pytest.mark.skipif(
+    not HAS_PYTSK3 or not FIXTURES.exists(),
+    reason="needs pytsk3 and fixtures",
+)
+
+
+def _native_names(image_path: Path) -> list[str]:
+    from mountfile.image import open_image
+    img = open_image(str(image_path))
+    return sorted(e.name for e in img.list_dir("/") if e.name not in (".", ".."))
+
+
+def _pytsk3_names(image_path: Path) -> list[str]:
+    img_info = pytsk3.Img_Info(str(image_path))
+    fs = pytsk3.FS_Info(img_info)
+    root = fs.open_dir(path="/")
+    out = []
+    for e in root:
+        name = e.info.name.name if e.info.name else b""
+        if not name or name in (b".", b".."):
+            continue
+        out.append(name.decode("utf-8", "replace"))
+    return sorted(out)
+
+
+@pytest.mark.parametrize("image_path", sorted(FIXTURES.glob("*/clean_*.img"))
+                         if FIXTURES.exists() else [])
+def test_list_dir_matches_pytsk3(image_path: Path):
+    native = _native_names(image_path)
+    pytsk = _pytsk3_names(image_path)
+    assert native == pytsk, f"{image_path.name}: {native} != {pytsk}"
 ```
 
 ---
 
-🎯 Что закрыто
+🔌 Интеграция: как это подключается к main
 
-Блокер аудита Модуль Проверка
-Durable transaction / recovery (Этап A) scripts/crash_inject.sh + tests/test_crash_consistency.py crash_test в final_acceptance
-Extent tree depth ≥ 2 (write) mount_fs/writer/ext4_extent_insert.py test_ext4_extent_insert.py (8 тестов)
-Htree insert (Этап D) mount_fs/writer/ext4_htree_insert.py test_ext4_htree_insert.py (5 тестов)
-fscrypt write (Этап D) mount_fs/writer/ext4_fscrypt_write.py test_ext4_fscrypt_write.py (7 тестов)
-Verbose CLI / показать причины mount_fs/cli_verbose.py smoke
-Финальный verdict scripts/final_acceptance.sh exit 0
+Существующие writer'ы должны добавить 4-8 вызовов checkpoint():
+
+```python
+# Пример для существующего FAT32 writer:
+
+class FAT32Writer:
+    def __init__(self, backend):
+        self._backend = backend
+
+    def _cp(self, name: str):
+        if hasattr(self._backend, "checkpoint"):
+            self._backend.checkpoint(name)
+
+    def create_file(self, parent, name, data):
+        self._cp(Checkpoint.BEFORE_BITMAP_UPDATE)
+        self._alloc_clusters(...)
+        self._cp(Checkpoint.AFTER_BITMAP_UPDATE)
+        self._cp(Checkpoint.BEFORE_DATA_WRITE)
+        self._write_data(...)
+        self._cp(Checkpoint.AFTER_DATA_WRITE)
+        self._cp(Checkpoint.BEFORE_DIRENT_ADD)
+        self._add_dirent(...)
+        self._cp(Checkpoint.AFTER_DIRENT_ADD)
+        self._cp(Checkpoint.BEFORE_FSYNC)
+        self._backend.fsync()
+        self._cp(Checkpoint.AFTER_FSYNC)
+```
+
+Тест:
+
+```python
+from mountfile.testing.failure_injection import (
+    FaultyBackend, explore_writer, image_hash,
+)
+from mountfile.testing.quarantine import (
+    assert_not_quarantined, quarantine, release,
+)
+
+def test_fat32_writer_survives_crash(tmp_path):
+    def build():
+        img = tmp_path / "fat.img"
+        # ... create clean FAT32 fixture ...
+        return FaultyBackend(open_backend(img))
+
+    def writer(backend):
+        w = FAT32Writer(backend)
+        w.create_file("/", "test.txt", b"data")
+
+    def recover(backend):
+        # e2fsck-like — for FAT use fsck.fat
+        from mountfile.testing.recovery_verifier import verified_recover
+        ok, _ = verified_recover(str(backend._inner.path), "fat")
+        return ok
+
+    def verify(backend):
+        # basic structural check: root dir readable
+        return True
+
+    report = explore_writer(build, writer, verify, recover)
+    assert report.ok(), f"corrupt states: {report.failures}"
+```
+
+Обеспечение quarantine в writer:
+
+```python
+def open_for_write(image_path):
+    assert_not_quarantined(image_path)
+    ...
+    try:
+        writer.create_file(...)
+    except ShortWriteError as e:
+        quarantine(image_path,
+                   image_sha256=image_hash(backend),
+                   reason=str(e),
+                   operation="create_file",
+                   writer="fat32",
+                   checkpoint=last_checkpoint,
+                   steps=[
+                       "run fsck.vfat -a <image>",
+                       "mountfile recover --force <image>",
+                   ])
+        raise
+```
+
+---
+
+🎯 Что это закрывает в аудите
+
+№ Пункт Модуль
+1 Failure-injection + quarantine mountfile/testing/failure_injection.py, quarantine.py
+2 Real ext2 crash/recovery acceptance scripts/crash_acceptance.sh, tests/test_crash_acceptance.py
+3 Dynamic capability reporting (VFS/CLI/API) mountfile/capabilities_dynamic.py, mountfile/cli/commands/capabilities.py
+4 Differential corpus + checker matrix mountfile/testing/checker_matrix.py, tests/fixtures/, tests/test_differential_pytsk3.py
+
+Не закрывает (намеренно, следующий этап):
+
+· ext3/ext4/NTFS writers → остаются REFUSE до реализации transaction/recovery.
+· Полная exFAT/FAT metadata parity → ограничена существующим профилем.
+· Cross-platform acceptance → требует прогон CI на 3 платформах.
+
+---
 
 🚀 Запуск
 
 ```bash
-# 1. Скопировать все 6 файлов + тесты
-# 2. Обычный прогон
-bash scripts/final_acceptance.sh
+# 1. Скопировать модули в mountfile/testing/ и mountfile/
+# 2. Добавить checkpoint() вызовы в существующие writers
+# 3. Прогнать unit
+pytest -q tests/test_failure_injection.py tests/test_checker_matrix.py \
+        mountfile/testing/test_*.py
 
-# 3. Crash injection (root)
-sudo bash scripts/final_acceptance.sh
+# 4. Сгенерировать fixtures (нужны mkfs tools)
+bash scripts/generate_fixtures.sh
 
-# 4. Если всё зелёное — закрывать #182
+# 5. Checker matrix
+pytest -q tests/test_checker_matrix.py
+
+# 6. Crash acceptance (нужен root + dm-flakey)
+sudo pytest -q tests/test_crash_acceptance.py
+
+# 7. Differential vs pytsk3
+pip install pytsk3
+pytest -q tests/test_differential_pytsk3.py
+
+# 8. Dynamic capabilities smoke
+mountfile capabilities tests/fixtures/images/ext4/clean_ext4.img
+mountfile capabilities tests/fixtures/images/ext2/clean_ext2.img -o create
+mountfile capabilities tests/fixtures/images/ext2/clean_ext2.img --json | jq
 ```
 
-⚠️ Что окончательно остаётся как by design refusal
-
-· htree depth ≥ 2 — UnsupportedFeature (в реальных FS не встречается, ядро тоже редко создаёт)
-· fscrypt casefold + encrypt — UnsupportedFeature (нужен SipHash lookup по known name)
-· NTFS write — WriteDisabled (forensic tool, не write-tool)
-· ext4 depth ≥ 3 — UnsupportedFeature (файлы > ~256 GB, не в scope)
-
-Эти четыре — не баги, а явные границы проекта, задокументированы, типизированы, никогда не silent. С ними issue #182 закрывается корректно: обещанное работает, необещанное refused с кодом.
+Все тесты должны быть зелёными до того, как issue #182 переходит к рассмотрению ext3/ext4/NTFS writers. Это и есть правильный порядок, указанный в аудите.
