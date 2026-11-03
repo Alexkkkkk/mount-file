@@ -1090,11 +1090,14 @@ def test_native_ntfs_reopens_stream_before_reading_validated_runs(tmp_path):
     reader = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
     reader.image_path = str(image)
     reader.offset = 0
-    reader._image_size = image.stat().st_size
-    reader._end = reader._image_size
-    reader.profile = SimpleNamespace(boot=SimpleNamespace(cluster_size=256))
-    reader._stream = image.open("rb")
-    reader._stream.close()
+    reader._image_source = None
+    reader._volume_source = None
+    reader.profile = SimpleNamespace(
+        boot=SimpleNamespace(
+            cluster_size=256,
+            filesystem_size=image.stat().st_size,
+        )
+    )
 
     assert reader._read_runs((NtfsRun(1, 2, 2),), 256, 512) == bytes(range(256)) * 2
     reader.close()
