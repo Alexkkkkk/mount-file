@@ -50,6 +50,13 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 `api_operation` для данного интерфейса либо structured `refusal` с code и
 category. `constraint_ids` и `gates` описывают подтверждённые image-state и
 feature gates профиля; они не заменяют фактическую validation конкретного образа.
+Внутренний `mountfile.image_source.ImageSource` задаёт read-only positioned
+контракт без метода записи. `FileImageSource` выполняет точные чтения без общего
+курсорного состояния, а `BoundedImageSource` отказывает при любом чтении за
+выбранным диапазоном. NTFS boot/MFT validation и чтение run-ов используют этот
+контракт; короткое чтение после открытия образа возвращает typed refusal, а не
+частичный результат. Источник выявляет усечение, но не блокирует постороннюю
+процессную запись и не обещает snapshot-изоляцию.
 Каждый native provider также публикует `backend_status`: сериализуемый словарь
 с backend name, read/write capabilities, режимом и явной причиной отказа от
 записи. Пустой `write_capabilities` означает именно read-only native profile,

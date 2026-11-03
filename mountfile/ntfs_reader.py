@@ -10,11 +10,10 @@ log replay and every native NTFS write operation remain disabled.
 from __future__ import annotations
 
 import datetime as _dt
-import os
 import struct
 from dataclasses import dataclass, replace
-from pathlib import Path
 
+from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
 from mountfile.ntfs_mft import (
     NtfsFileRecordHeader,
     NtfsRecordError,
@@ -22,12 +21,7 @@ from mountfile.ntfs_mft import (
     parse_ntfs_file_record_header,
     validate_ntfs_file_reference,
 )
-from mountfile.ntfs_probe import (
-    NtfsBootProfile,
-    NtfsProbeError,
-    parse_ntfs_boot_sector,
-    probe_ntfs_boot_sector,
-)
+from mountfile.ntfs_probe import NtfsBootProfile, NtfsProbeError, parse_ntfs_boot_sector
 from mountfile.safety import RefusalCode, RefusalError, checked_range
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
@@ -144,7 +138,7 @@ class NtfsMetadataProfile:
     mft_record: NtfsFileRecordHeader
     mirror_record: NtfsFileRecordHeader
     attributes: tuple[NtfsAttributeSummary, ...]
-    logfile_restart: "NtfsLogFileRestartArea | None" = None
+    logfile_restart: NtfsLogFileRestartArea | None = None
 
     @property
     def mirror_matches_mft(self) -> bool:
@@ -985,16 +979,14 @@ def probe_ntfs_metadata(
 ) -> NtfsMetadataProfile:
     """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror."""
     try:
-        boot = probe_ntfs_boot_sector(
-            image_path, offset=offset, volume_size=volume_size
-        )
-        with open(image_path, "rb") as stream:
-            image_size = os.fstat(stream.fileno()).st_size
-            end = offset + boot.filesystem_size
-            _read_exact(stream, offset, 512, image_size, offset + volume_size)
-            backup_boot = _read_exact(
-                stream, boot.backup_boot_sector_image_offset, 512, image_size, end
+        with FileImageSource(image_path) as source:
+            volume = BoundedImageSource(source, offset, volume_size)
+            boot = parse_ntfs_boot_sector(
+                volume.read_at(0, 512), volume_size=volume_size
             )
+            boot = replace(boot, partition_offset=offset)
+            filesystem = BoundedImageSource(volume, 0, boot.filesystem_size)
+            backup_boot = filesystem.read_at(boot.backup_boot_sector_offset, 512)
             backup = parse_ntfs_boot_sector(
                 backup_boot, volume_size=boot.filesystem_size
             )
@@ -1034,13 +1026,9 @@ def probe_ntfs_metadata(
                 raise NtfsMetadataError(
                     "NTFS backup boot profile disagrees with primary boot"
                 )
-            record_offset = offset + boot.mft_offset
-            mirror_offset = offset + boot.mft_mirror_offset
-            raw_record = _read_exact(
-                stream, record_offset, boot.file_record_size, image_size, end
-            )
-            raw_mirror = _read_exact(
-                stream, mirror_offset, boot.file_record_size, image_size, end
+            raw_record = filesystem.read_at(boot.mft_offset, boot.file_record_size)
+            raw_mirror = filesystem.read_at(
+                boot.mft_mirror_offset, boot.file_record_size
             )
         mft_record = parse_ntfs_file_record_header(raw_record)
         mirror_record = parse_ntfs_file_record_header(raw_mirror)
@@ -1052,6 +1040,8 @@ def probe_ntfs_metadata(
             mft_record, cluster_count=boot.cluster_count
         )
         return NtfsMetadataProfile(boot, mft_record, mirror_record, attributes)
+    except ImageSourceError as exc:
+        raise NtfsMetadataError(str(exc), exc.code) from exc
     except (OSError, NtfsProbeError, NtfsRecordError) as exc:
         raise NtfsMetadataError(str(exc)) from exc
 
@@ -1093,12 +1083,11 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             raise NtfsMetadataError("an explicit NTFS volume_size is required")
         self.image_path = str(image_path)
         self.offset = int(offset)
-        self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
-        self._image_size = os.fstat(self._stream.fileno()).st_size
+        self._image_source: FileImageSource | None = None
+        self._volume_source: BoundedImageSource | None = None
         self.profile = probe_ntfs_metadata(
             self.image_path, offset=self.offset, volume_size=volume_size
         )
-        self._end = self.offset + self.profile.boot.filesystem_size
         self._mft_data = next(
             (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
             None,
@@ -1146,11 +1135,31 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         self.close()
 
     def close(self):
-        self._stream.close()
+        if self._volume_source is not None:
+            self._volume_source.close()
+            self._volume_source = None
+            self._image_source = None
+        elif self._image_source is not None:
+            self._image_source.close()
+            self._image_source = None
 
     def reopen(self):
-        if self._stream.closed:
-            self._stream = Path(self.image_path).open("rb")  # noqa: SIM115
+        if self._volume_source is not None and not self._volume_source.closed:
+            return self._volume_source
+        source = FileImageSource(self.image_path)
+        try:
+            volume = BoundedImageSource(
+                source,
+                self.offset,
+                self.profile.boot.filesystem_size,
+                close_parent=True,
+            )
+        except Exception:
+            source.close()
+            raise
+        self._image_source = source
+        self._volume_source = volume
+        return volume
 
     def _load_upcase_table(self) -> tuple[int, ...] | None:
         """Load $UpCase only when its unnamed DATA stream has the exact size."""
@@ -1587,7 +1596,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         return self._read_nonresident_range(data, offset, length)
 
     def _read_runs(self, runs, offset, length):
-        self.reopen()
+        volume = self.reopen()
         output = bytearray()
         wanted_end = offset + length
         for run in runs:
@@ -1597,21 +1606,8 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 continue
             take_start = max(offset, start)
             take_end = min(wanted_end, end)
-            absolute = (
-                self.offset
-                + run.lcn * self.profile.boot.cluster_size
-                + take_start
-                - start
-            )
-            output.extend(
-                _read_exact(
-                    self._stream,
-                    absolute,
-                    take_end - take_start,
-                    self._image_size,
-                    self._end,
-                )
-            )
+            relative = run.lcn * self.profile.boot.cluster_size + take_start - start
+            output.extend(volume.read_at(relative, take_end - take_start))
         if len(output) != length:
             raise NtfsMetadataError("NTFS DATA runlist does not cover requested range")
         return bytes(output)
