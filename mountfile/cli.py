@@ -42,6 +42,7 @@ from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .search_content import SearchError, search_files, search_image
+from .safety import RefusalError, code_for_message
 from .slack import SlackError, extract_slack
 from .timeline import (
     DEFAULT_HASH_LIMIT,
@@ -123,12 +124,16 @@ def cmd_status(args):
             writer_status = UniversalFSRW.backend_status(writer.info())
             payload["write_status"] = writer_status
         except (OSError, RuntimeError, ValueError) as exc:
+            refusal_code = code_for_message(str(exc))
             payload["write_status"] = {
                 "mode": "refused",
                 "write_capabilities": [],
                 "write_enabled": False,
                 "write_rejection_reason": str(exc),
-                "write_rejection_code": "unsupported_profile",
+                "write_rejection_code": refusal_code.value,
+                "write_rejection": RefusalError(
+                    str(exc), refusal_code
+                ).to_dict(),
             }
         finally:
             if writer is not None:

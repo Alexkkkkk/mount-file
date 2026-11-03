@@ -120,3 +120,34 @@ def test_status_preserves_typed_native_refusal_without_fallback(
     assert payload["backend"] == "unavailable"
     assert payload["refusal"]["code"] == "dirty_or_recovery_required"
     assert payload["write_enabled"] is False
+
+
+def test_status_classifies_writer_dirty_refusal(monkeypatch, tmp_path, capsys):
+    args = _args(tmp_path)
+    provider = SimpleNamespace(
+        backend_status={
+            "backend": "native-ext3-ro",
+            "mode": "read-only",
+            "read_capabilities": ["list"],
+            "write_capabilities": [],
+            "write_enabled": False,
+        },
+        close=lambda: None,
+    )
+
+    def reject_writer(*_args, **_kwargs):
+        raise RuntimeError("ext3 volume is dirty or requires journal recovery")
+
+    monkeypatch.setattr(cli, "_select", lambda *_args: (0, "ext3", "whole image"))
+    monkeypatch.setattr(cli, "volume_size_for_offset", lambda *_args: 8192)
+    monkeypatch.setattr(cli, "_provider", lambda *_args: (provider, "native-ext3-ro"))
+    monkeypatch.setattr(cli, "UniversalFSRW", reject_writer)
+
+    assert cli.cmd_status(args) == cli.OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["write_status"]["write_rejection_code"] == (
+        "dirty_or_recovery_required"
+    )
+    assert payload["write_status"]["write_rejection"]["category"] == (
+        "dirty_recovery"
+    )
