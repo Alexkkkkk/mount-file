@@ -21,6 +21,7 @@ The GUI checks GitHub Releases for a newer build on every start; see
 `mountfile/updater.py` and the README for the environment switches.
 """
 
+import logging
 import sys
 import traceback
 
@@ -36,8 +37,10 @@ try:
 
     if int(_sys.getrecursionlimit()) < 2000:
         _sys.setrecursionlimit(2000)
-except Exception:
-    pass
+except Exception as exc:
+    logging.getLogger(__name__).debug(
+        "unable to raise startup recursion limit", exc_info=exc
+    )
 
 
 # --- MOUNTFILE_FIX: OLMA integration ---------------------------------------
@@ -310,8 +313,10 @@ def main():
             _app_icon = appicon.app_icon()
             if _app_icon is not None and not _app_icon.isNull():
                 app.setWindowIcon(_app_icon)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "optional application icon unavailable", exc_info=exc
+            )
         _install_olma_runtime()
         win = MainWindow()
         win.show()

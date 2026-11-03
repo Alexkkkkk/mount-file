@@ -115,6 +115,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+extend-select = ["S110", "S112"]
 ignore = ["E501", "E402"]
 
 [tool.mypy]

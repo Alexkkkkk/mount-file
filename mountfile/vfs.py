@@ -16,6 +16,7 @@ existing writer APIs.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -276,8 +277,10 @@ class TskImage(ReadOnlyVFSStatMixin):
             if callable(close):
                 try:
                     close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "best-effort operation failed", exc_info=exc
+                    )
 
     def reopen(self):
         """Reopen the image after a writer has detached its temporary mount."""

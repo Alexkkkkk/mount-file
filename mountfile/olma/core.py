@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -129,8 +130,10 @@ class OlmaHandle:
     def __del__(self):
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
 
 
 @dataclass(frozen=True)
@@ -367,8 +370,10 @@ class OlmaTransaction:
             return
         try:
             self._h.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
         try:
             os.unlink(self._tmp)
         except OSError:

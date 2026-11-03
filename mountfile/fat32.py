@@ -12,6 +12,7 @@ WARNING: write operations modify the image in place. Always keep a backup.
 
 from __future__ import annotations
 
+import logging
 import math
 import struct
 from contextlib import contextmanager
@@ -64,8 +65,8 @@ def _safe_free_chain(fat_get, fat_set, start, mc=FAT32_MAX_CLUSTER):
         for v in _iter_chain(start, fat_get, mc):
             fat_set(v, 0)
             freed += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     return freed
 
 
@@ -845,7 +846,8 @@ class Fat32:
                     self._free_chain(first)
             except Exception as rollback_error:
                 raise _MutationRollbackError(
-                    "file data write failed and its allocation could not be freed"
+                    "file data write failed and its allocation could not be freed: %s"
+                    % rollback_error
                 ) from original_error
             raise
         raw = self._build_entries(filename, short, first, len(data))

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -49,8 +50,10 @@ class OlmaKnowledgeBase:
         if self.path.exists():
             try:
                 return json.loads(self.path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
         return {
             "version": self.VERSION,
             "created": time.time(),

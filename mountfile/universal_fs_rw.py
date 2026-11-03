@@ -373,8 +373,10 @@ class RWJournal:
                 if line.strip():
                     try:
                         self._prev = __import__("json").loads(line)["hash"]
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logging.getLogger(__name__).debug(
+                            "best-effort operation failed", exc_info=exc
+                        )
                     break
 
     def log(self, op: WriteOperation) -> None:
@@ -423,8 +425,10 @@ class ImageBackup:
         for old in backups[: -self.keep]:
             try:
                 old.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
 
     def latest(self) -> Path | None:
         prefix = f"{self.image.name}."
@@ -480,8 +484,10 @@ class RWBackend(ABC):
         if self._fh:
             try:
                 self._fh.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
             self._fh = None
 
     def _read_at(self, offset: int, length: int) -> bytes:
@@ -2324,8 +2330,10 @@ class NtfsRW(RWBackend):
             if callable(close):
                 try:
                     close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "best-effort operation failed", exc_info=exc
+                    )
 
     def _mount_point(self) -> Path:
         if sys.platform.startswith("win"):

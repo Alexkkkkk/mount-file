@@ -33,6 +33,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import struct
 
@@ -373,17 +374,18 @@ def _volume_candidates(path, udev=None, scan_limit=DEFAULT_SCAN_LIMIT):
                     extent_size=p.size_bytes,
                 )
             )
-    except Exception:
-        pass
-
+    except Exception as exc:
+        logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     if udev:
         try:
             from .rt809 import parse_udev
 
             for part in parse_udev(udev):
                 out.append(Candidate(part.offset, "raw", source="udev", name=part.name))
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
     return out
 
 

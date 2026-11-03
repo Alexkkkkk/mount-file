@@ -4,7 +4,7 @@
 
 PY ?= python3
 
-.PHONY: help install test test-standalone lint fmt exe mountfile-exe clean all-in-one sample \
+.PHONY: help install test test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample \
         sync sync-status sync-check sync-pr sync-watch
 
 help:
@@ -12,6 +12,7 @@ help:
 	@echo "make test       - run the test suite"
 	@echo "make test-standalone - run the standalone mountfile.py tests"
 	@echo "make lint       - ruff static check (E9,F63,F7,F82)"
+	@echo "make lint-correctness - repository-wide correctness lint (B006,E722,S110,S112,F841)"
 	@echo "make fmt        - apply ruff --fix + black + isort"
 	@echo "make exe        - build MountFile.exe with PyInstaller"
 	@echo "make mountfile-exe - build the standalone mountfile.py binary"
@@ -37,6 +38,9 @@ test-standalone:
 
 lint:
 	$(PY) -m ruff check . --select E9,F63,F7,F82
+
+lint-correctness:
+	$(PY) -m ruff check . --select B006,E722,S110,S112,F841
 
 fmt:
 	$(PY) -m ruff check --fix mountfile tests main.py || true
