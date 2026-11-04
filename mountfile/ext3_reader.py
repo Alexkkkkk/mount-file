@@ -849,6 +849,10 @@ class NativeExt4Image(NativeExt3Image):
                 return physical_start + logical - start, unwritten
         node = struct.pack("<15I", *inode.block_pointers)
         visited: set[int] = set()
+        # Every extent-index block reached during this walk. A data extent must
+        # never alias one of them: doing so would hand extent-tree metadata to
+        # the caller as file content.
+        tree_blocks: set[int] = set()
         expected_depth = None
         expected_lower = None
         expected_upper = None
@@ -900,6 +904,12 @@ class NativeExt4Image(NativeExt3Image):
                         or physical_start + length > self.blocks_count
                     ):
                         raise Ext3ReadError("extent physical range is out of bounds")
+                    if tree_blocks and not tree_blocks.isdisjoint(
+                        range(physical_start, physical_start + length)
+                    ):
+                        raise Ext3ReadError(
+                            "extent data range aliases an extent-tree block"
+                        )
                     previous_end = end
                     if start <= logical < end:
                         physical = physical_start + (logical - start)
@@ -945,6 +955,7 @@ class NativeExt4Image(NativeExt3Image):
                         "extent index block is outside filesystem bounds"
                     )
                 index_entries.append((logical_start, child))
+                tree_blocks.add(child)
                 if logical >= logical_start:
                     selected = pos
             if selected is None:
