@@ -41,8 +41,8 @@ from .fat32 import Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
-from .search_content import SearchError, search_files, search_image
 from .safety import RefusalError, code_for_message
+from .search_content import SearchError, search_files, search_image
 from .slack import SlackError, extract_slack
 from .timeline import (
     DEFAULT_HASH_LIMIT,
