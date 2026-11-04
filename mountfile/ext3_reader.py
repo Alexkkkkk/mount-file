@@ -111,9 +111,7 @@ class NativeExt3Image(NativeExt2Image):
         if profile.feature_incompat & ~incompat_allowed:
             raise Ext3ReadError("unsupported incompatible ext feature")
         ro_allowed = (
-            _RO_COMPAT_SPARSE_SUPER
-            | _RO_COMPAT_LARGE_FILE
-            | _RO_COMPAT_METADATA_CSUM
+            _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE | _RO_COMPAT_METADATA_CSUM
         )
         if profile.fs_type == "ext4":
             ro_allowed |= _RO_COMPAT_EXTRA_ISIZE | 0x0020  # DIR_NLINK
