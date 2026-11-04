@@ -44,3 +44,5 @@ bounded read-provider status и отдельный `write_status`, получе�
 неизменным.
 CLI и regression tests приведены к формату Black, используемому Quality
 workflow; локальный `black --check` проходит.
+
+- 2026-11-04: PR #347 (CLI `status` для issue #182) — style-commit зафиксирован вместе с обновлением статуса, validate-push проходит.
