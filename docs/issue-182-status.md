@@ -40,3 +40,5 @@
 - 2026-11-04: read-only per-filesystem preflight (профили, гейты, отказы) + CLI `preflight`.
 
 - 2026-11-04: PR #356 (preflight gate) — `mountfile/cli.py` и `mountfile/fs_preflight.py` приведены к black, импорты `tests/test_fs_preflight.py` к isort; Quality/lint проходят.
+
+- 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
