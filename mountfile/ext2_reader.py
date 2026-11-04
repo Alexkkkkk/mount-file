@@ -113,6 +113,7 @@ class _Inode:
     crtime_extra: int | None = None
     uid: int | None = None
     gid: int | None = None
+    generation: int = 0
 
     @property
     def mode_type(self) -> int:
@@ -718,9 +719,10 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             if physical == 0:
                 raise Ext2ReadError("directory contains a sparse block")
             block = self._read_block(physical)
+            data_end = self._directory_block_data_end(inode, logical, block)
             position = 0
-            while position < self.block_size:
-                if position + 8 > self.block_size:
+            while position < data_end:
+                if position + 8 > data_end:
                     raise Ext2ReadError("truncated directory entry header")
                 entry_inode, record_length = struct.unpack_from("<IH", block, position)
                 if self.has_filetype:
@@ -732,7 +734,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                 if (
                     record_length < 8
                     or record_length % 4
-                    or position + record_length > self.block_size
+                    or position + record_length > data_end
                 ):
                     raise Ext2ReadError("invalid directory record length")
                 if name_length > 255 or name_length > record_length - 8:
@@ -761,12 +763,17 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
                                 "directory exceeds the entry-count limit"
                             )
                 position += record_length
-            if position != self.block_size:
+            if position != data_end:
                 raise Ext2ReadError("directory records do not fill their data block")
         if len(cache) >= _MAX_CACHE_ITEMS:
             cache.clear()
         cache[inode.number] = tuple(result)
         return result
+
+    def _directory_block_data_end(
+        self, inode: _Inode, logical: int, block: bytes
+    ) -> int:
+        return self.block_size
 
     def _resolve(self, path: str) -> _Inode:
         inode = self._read_inode(2)
