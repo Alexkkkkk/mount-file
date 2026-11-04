@@ -91,7 +91,9 @@ def cmd_preflight(args):
     payload = preflight_image(args.image, offset=offset)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     reports = payload["volumes"]
-    return OK if reports and all(item["eligible_for_read"] for item in reports) else ERROR
+    return (
+        OK if reports and all(item["eligible_for_read"] for item in reports) else ERROR
+    )
 
 
 #: Subcommand names; main.py routes to this module when the executable is

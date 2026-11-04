@@ -38,3 +38,5 @@
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
 <!-- issue-182 validation checkpoint merge -->
 - 2026-11-04: read-only per-filesystem preflight (профили, гейты, отказы) + CLI `preflight`.
+
+- 2026-11-04: PR #356 (preflight gate) — `mountfile/cli.py` и `mountfile/fs_preflight.py` приведены к black, импорты `tests/test_fs_preflight.py` к isort; Quality/lint проходят.

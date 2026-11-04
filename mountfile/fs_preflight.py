@@ -265,9 +265,7 @@ def _probe_ext(report: PreflightReport) -> None:
             )
         )
     else:
-        reason = (
-            f"unknown ext feature bits are set (incompat=0x{profile.unknown_incompat_features:X} ro_compat=0x{profile.unknown_ro_compat_features:X})"
-        )
+        reason = f"unknown ext feature bits are set (incompat=0x{profile.unknown_incompat_features:X} ro_compat=0x{profile.unknown_ro_compat_features:X})"
         report.gates.append(
             _gate(
                 "known-features",
@@ -319,11 +317,13 @@ def _probe_ext(report: PreflightReport) -> None:
             "image-state",
             GATE_PASS if not profile.journal_recovery_needed else GATE_FAIL,
             journal_state,
-            None
-            if not profile.journal_recovery_needed
-            else _refusal(
-                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
-                "ext journal requires replay; replay is not write permission",
+            (
+                None
+                if not profile.journal_recovery_needed
+                else _refusal(
+                    RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+                    "ext journal requires replay; replay is not write permission",
+                )
             ),
         )
     )
@@ -551,9 +551,7 @@ def _apply_capability_status(report: PreflightReport, backend: str) -> None:
     )
     report.profile_id = str(status["profile_id"])
     report.read_capabilities = [str(item) for item in status["read_capabilities"]]
-    report.write_capabilities = [
-        str(item) for item in status["write_capabilities"]
-    ]
+    report.write_capabilities = [str(item) for item in status["write_capabilities"]]
     report.operations = dict(status["operations"])
     report.write_refusal = (
         None if status["write_rejection"] is None else dict(status["write_rejection"])
@@ -655,9 +653,10 @@ def preflight_filesystem(
         return report
 
     if offset + report.volume_size > image_size:
-        reason = (
-            "filesystem extent [0x%X, 0x%X) exceeds the %d-byte image"
-            % (offset, offset + report.volume_size, image_size)
+        reason = "filesystem extent [0x%X, 0x%X) exceeds the %d-byte image" % (
+            offset,
+            offset + report.volume_size,
+            image_size,
         )
         report.gates.append(
             _gate(
@@ -887,8 +886,9 @@ def preflight_image(
             "volumes": [report.to_dict()],
         }
     volumes = [
-        preflight_filesystem(image, offset=extent_offset, volume_size=extent_size)
-        .to_dict()
+        preflight_filesystem(
+            image, offset=extent_offset, volume_size=extent_size
+        ).to_dict()
         for extent_offset, extent_size in _partition_extents(image)
     ]
     return {

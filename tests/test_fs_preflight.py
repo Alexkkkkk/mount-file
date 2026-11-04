@@ -9,9 +9,9 @@ import pytest
 from mountfile.capabilities import get_native_capability_matrix
 from mountfile.ext_probe import probe_ext_superblock  # noqa: F401  (shared fixture use)
 from mountfile.fs_preflight import (
-    PREFLIGHT_SCHEMA_VERSION,
     GATE_FAIL,
     GATE_PASS,
+    PREFLIGHT_SCHEMA_VERSION,
     preflight_filesystem,
     preflight_image,
 )
