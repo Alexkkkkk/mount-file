@@ -1,0 +1,16 @@
+name: Python test environment
+description: >-
+  Single source of truth for the Python test stack (pytest, hypothesis, Qt runtime
+  bindings and the API dependencies). Before this action existed, every workflow
+  duplicated the same pip command line and they silently drifted apart: ci.yml
+  installed hypothesis while release.yml did not, so the release pipeline failed
+  with "ModuleNotFoundError: No module named 'hypothesis'".
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned test stack
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip pytest pytest-cov hypothesis setuptools wheel 'PyQt6>=6.11.0'
+        python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0' 'pydantic>=2.0'

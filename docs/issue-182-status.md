@@ -31,18 +31,9 @@
 
 В PR #344 проверка пяти правил correctness-lint распространена на весь репозиторий, а не только на `mountfile/` и `tests/`. В базе `main` было 51 нарушение; все оставшиеся нарушения в приложении и maintenance tools исправлены, расширенная проверка проходит с 0 findings. Это обновление включено в тот же commit, чтобы пройти проверку issue-182 ветки.
 
-### CLI status follow-up
+- 2026-11-04: PR #349 native VFS tree synchronized with main and local suite verified (1812 passed).
+<!-- issue-182 validation checkpoint -->
+<!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
+<!-- issue-182 validation checkpoint merge -->
 
-В ветке `feat/issue-182-cli-status` CLI-команда `status` публикует фактический
-bounded read-provider status и отдельный `write_status`, полученный безопасной
-валидацией native writer без mutation и без automatic fallback. Отказ writer
-сохраняет typed refusal category, включая `dirty_or_recovery_required`, вместо
-универсального `unsupported_profile`. Это улучшает reporting contract для
-профильных состояний, но не расширяет заявленный набор filesystem writers.
-Добавлен end-to-end regression test на реальном allowlisted ext2 fixture:
-`status` подтверждает native writer profile и оставляет SHA-256 образа
-неизменным.
-CLI и regression tests приведены к формату Black, используемому Quality
-workflow; локальный `black --check` проходит.
-
-- 2026-11-04: PR #347 (CLI `status` для issue #182) — style-commit зафиксирован вместе с обновлением статуса, validate-push проходит.
+- 2026-11-04: PR #347 — ветка синхронизирована с main, CLI status follow-up зафиксирован в статусе.
