@@ -48,6 +48,7 @@ def _valid_seed_input() -> bytes:
     struct.pack_into("<I", region, 0x58, 32)
     struct.pack_into("<I", region, 0x5C, 100)
     struct.pack_into("<I", region, 0x60, 2)
+    struct.pack_into("<H", region, 0x68, 0x0100)  # FileSystemRevision 1.00
     region[0x6C] = 9
     region[0x6D] = 0
     region[0x6E] = 1

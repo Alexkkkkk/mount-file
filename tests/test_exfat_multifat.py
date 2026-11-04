@@ -32,6 +32,7 @@ def _boot(number_of_fats=2, flags=1, backup_number_of_fats=None):
         struct.pack_into("<I", boot, 0x58, 40 if number_of_fats == 2 else 32)
         struct.pack_into("<I", boot, 0x5C, 100)
         struct.pack_into("<I", boot, 0x60, 2)
+        struct.pack_into("<H", boot, 0x68, 0x0100)
         struct.pack_into("<H", boot, 0x6A, flags)
         boot[0x6C] = 9
         boot[0x6E] = number_of_fats
