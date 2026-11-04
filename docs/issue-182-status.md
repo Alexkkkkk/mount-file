@@ -39,3 +39,4 @@
 - 2026-11-04: PR #352 — ветка синхронизирована с main, случайный пустой файл log удалён.
 
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
+- 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
