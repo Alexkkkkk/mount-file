@@ -1206,6 +1206,9 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             raise NtfsMetadataError("NTFS path component exceeds 255 UTF-16 code units")
         table = getattr(self, "_upcase_table", None)
         if table is None:
+            # Without $UpCase only the ASCII fold is exact; non-ASCII
+            # components keep their original code units, which can only ever
+            # make the comparison stricter (never a false positive match).
             if name.isascii():
                 encoded = name.lower().encode("utf-16le")
             return struct.unpack(f"<{len(encoded) // 2}H", encoded)
