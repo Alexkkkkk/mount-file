@@ -923,6 +923,7 @@ def test_ext4_unsupported_layout_profiles_fail_closed(field, bit, reason):
     with pytest.raises(Ext3ReadError, match=reason):
         NativeExt4Image._validate_profile(profile)
 
+
 def test_ext4_extra_isize_feature_requires_extended_inode_size():
     profile = SimpleNamespace(
         fs_type="ext4",
