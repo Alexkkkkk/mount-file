@@ -39,6 +39,7 @@ from .evidence import EvidenceManifestError, create_evidence_manifest
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
+from .fs_preflight import preflight_image
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .search_content import SearchError, search_files, search_image
@@ -71,12 +72,35 @@ def cmd_capabilities(args):
     return OK
 
 
+def cmd_preflight(args):
+    """Validate one extent (or every partition) and print the eligibility report.
+
+    This is a read-only gate report: it never selects a writer, never stages a
+    mutation and never modifies the image.
+    """
+    offset = None
+    if args.offset is not None:
+        offset = args.offset
+    elif args.volume is not None:
+        volumes = detect_volumes(args.image, scan_limit=args.scan_limit)
+        if not 1 <= args.volume <= len(volumes):
+            raise Fat32Error(
+                "no volume %d (image has %d)" % (args.volume, len(volumes))
+            )
+        offset = volumes[args.volume - 1].offset
+    payload = preflight_image(args.image, offset=offset)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    reports = payload["volumes"]
+    return OK if reports and all(item["eligible_for_read"] for item in reports) else ERROR
+
+
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
 COMMANDS = (
     "volumes",
     "info",
     "capabilities",
+    "preflight",
     "ls",
     "stat",
     "read-range",
@@ -872,6 +896,13 @@ def build_parser():
         "capabilities", help="print the versioned native read/write profile matrix"
     )
     sp.set_defaults(func=cmd_capabilities)
+
+    sp = sub.add_parser(
+        "preflight",
+        help="validate filesystem profile/state read-only and report refusals",
+    )
+    _add_target(sp)
+    sp.set_defaults(func=cmd_preflight)
 
     sp = sub.add_parser("ls", help="list a directory inside the image")
     _add_target(sp)
