@@ -73,6 +73,7 @@ def _region(sector_size=512):
     struct.pack_into("<I", boot, 0x5C, 100)
     struct.pack_into("<I", boot, 0x60, 2)
     struct.pack_into("<I", boot, 0x64, 0x12345678)
+    struct.pack_into("<H", boot, 0x68, 0x0100)
     struct.pack_into("<H", boot, 0x6A, 0)
     boot[0x6C] = {512: 9, 1024: 10, 2048: 11, 4096: 12}[sector_size]
     boot[0x6D] = 0
@@ -1349,6 +1350,21 @@ def test_rejects_corrupt_or_unsafe_boot_region(mutate):
         struct.pack_into("<I", region, 0x58, 10)
     with pytest.raises(ExfatProbeError):
         parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
+
+
+def test_rejects_unsupported_exfat_file_system_revision():
+    region = bytearray(_region())
+    for start in (0, 12 * 512):
+        struct.pack_into("<H", region, start + 0x68, 0x0200)
+    _refresh_exfat_region_checksums(region, 512)
+    with pytest.raises(ExfatProbeError, match="file-system revision"):
+        parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
+
+
+def test_accepts_exfat_1_00_revision():
+    region = bytearray(_region())
+    profile = parse_exfat_boot_region(bytes(region), volume_size=VOLUME_SIZE)
+    assert profile.cluster_count == 100
 
 
 def test_rejects_corrupt_exfat_backup_boot_checksum():

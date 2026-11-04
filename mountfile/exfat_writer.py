@@ -500,9 +500,21 @@ class NativeExfatWriter:
         else:
             bitmap[index >> 3] &= ~mask
 
-    def _free_clusters(self, bitmap, reader, needed, stream):
+    def _free_clusters(self, bitmap, reader, needed, stream, owners=None):
+        """Pick clusters the bitmap reports free and no stream already owns.
+
+        A bitmap entry claiming "free" for a cluster an existing stream walk
+        already owns is an inconsistency this writer must not exploit:
+        writing there would overwrite live data. Such clusters are never
+        allocated, and the mutation fails closed when they are the only
+        candidates left.
+        """
         result = []
+        skipped_owned = 0
         for cluster in range(2, reader.profile.cluster_count + 2):
+            if owners is not None and cluster in owners:
+                skipped_owned += 1
+                continue
             if not (bitmap[(cluster - 2) >> 3] & (1 << ((cluster - 2) & 7))):
                 fat_relative = (
                     reader.profile.fat_offset * reader.profile.bytes_per_sector
@@ -518,6 +530,11 @@ class NativeExfatWriter:
                 result.append(cluster)
                 if len(result) == needed:
                     return result
+        if skipped_owned:
+            raise ExfatWriteError(
+                "not enough free exFAT clusters: allocation bitmap marks "
+                f"{skipped_owned} cluster(s) free that existing streams own"
+            )
         raise ExfatWriteError("not enough free exFAT clusters")
 
     def _fat_write(self, stream, reader, cluster, value):
@@ -717,6 +734,7 @@ class NativeExfatWriter:
 
         def action(reader, stage):
             meta = self._metadata(reader)
+            owners = self._allocation_owners(reader, meta)
             existing = None
             try:
                 _dir, existing = self._locate(reader, path)
@@ -737,7 +755,9 @@ class NativeExfatWriter:
                         len(payload) + reader.profile.cluster_size - 1
                     ) // reader.profile.cluster_size
                     clusters = (
-                        self._free_clusters(bitmap, reader, count, stream)
+                        self._free_clusters(
+                            bitmap, reader, count, stream, owners=owners
+                        )
                         if count
                         else []
                     )
@@ -1011,6 +1031,7 @@ class NativeExfatWriter:
     def mkdir(self, path):
         def action(reader, stage):
             meta = self._metadata(reader)
+            owners = self._allocation_owners(reader, meta)
             try:
                 reader._find(path)
             except FileNotFoundError:
@@ -1022,7 +1043,9 @@ class NativeExfatWriter:
             directory, name = self._parent(reader, path)
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
-                cluster = self._free_clusters(bitmap, reader, 1, stream)[0]
+                cluster = self._free_clusters(
+                    bitmap, reader, 1, stream, owners=owners
+                )[0]
                 self._set_allocated(bitmap, cluster, True)
                 self._fat_write(stream, reader, cluster, _EOC)
                 self._write_rel(
