@@ -41,3 +41,4 @@
 =======
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 >>>>>>> origin/main
+- 2026-11-04: ветка CLI status синхронизирована с `main` (merge): конфликт status sheet разрешён, CLI-команда status не изменилась.
