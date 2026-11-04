@@ -35,3 +35,5 @@
 <!-- issue-182 validation checkpoint -->
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
 <!-- issue-182 validation checkpoint merge -->
+
+- 2026-11-04: PR #355 (exFAT probe/writer audit gaps) — `mountfile/exfat_writer.py` приведён к black, чтобы Quality/lint проходили.

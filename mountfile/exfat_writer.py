@@ -1043,9 +1043,9 @@ class NativeExfatWriter:
             directory, name = self._parent(reader, path)
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
-                cluster = self._free_clusters(
-                    bitmap, reader, 1, stream, owners=owners
-                )[0]
+                cluster = self._free_clusters(bitmap, reader, 1, stream, owners=owners)[
+                    0
+                ]
                 self._set_allocated(bitmap, cluster, True)
                 self._fat_write(stream, reader, cluster, _EOC)
                 self._write_rel(
