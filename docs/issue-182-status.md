@@ -30,3 +30,5 @@
 ### Quality-gate follow-up
 
 В PR #344 проверка пяти правил correctness-lint распространена на весь репозиторий, а не только на `mountfile/` и `tests/`. В базе `main` было 51 нарушение; все оставшиеся нарушения в приложении и maintenance tools исправлены, расширенная проверка проходит с 0 findings. Это обновление включено в тот же commit, чтобы пройти проверку issue-182 ветки.
+
+- 2026-11-04: PR #352 (fail-closed gaps exFAT/ext4/tests) — удалён случайный пустой файл `log`, status sheet обновлён, validate-push проходит.
