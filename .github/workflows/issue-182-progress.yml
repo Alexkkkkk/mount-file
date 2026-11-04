@@ -2,7 +2,7 @@ name: Issue 182 progress sync
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
 
 jobs:
   validate-push:

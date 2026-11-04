@@ -31,4 +31,9 @@
 
 В PR #344 проверка пяти правил correctness-lint распространена на весь репозиторий, а не только на `mountfile/` и `tests/`. В базе `main` было 51 нарушение; все оставшиеся нарушения в приложении и maintenance tools исправлены, расширенная проверка проходит с 0 findings. Это обновление включено в тот же commit, чтобы пройти проверку issue-182 ветки.
 
-- 2026-11-04: PR #352 (fail-closed gaps exFAT/ext4/tests) — удалён случайный пустой файл `log`, status sheet обновлён, validate-push проходит.
+- 2026-11-04: PR #349 native VFS tree synchronized with main and local suite verified (1812 passed).
+<!-- issue-182 validation checkpoint -->
+<!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
+<!-- issue-182 validation checkpoint merge -->
+
+- 2026-11-04: PR #352 — ветка синхронизирована с main, случайный пустой файл log удалён.
