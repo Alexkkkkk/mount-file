@@ -23,6 +23,23 @@ import tempfile
 import time
 from types import SimpleNamespace
 
+import pytest
+
+
+def _qt_bindings_available():
+    try:
+        import mountfile.qt_compat as _qt  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+# The batch-delete reporting tests exercise Qt widgets; without a Qt binding
+# they must skip instead of failing with ImportError.
+needs_qt = pytest.mark.skipif(
+    not _qt_bindings_available(), reason="нет установленных Qt-биндингов"
+)
+
 
 def _run_mixed_delete(monkeypatch, mode):
     from mountfile import tc_window
@@ -66,11 +83,13 @@ def _run_mixed_delete(monkeypatch, mode):
     return messages
 
 
+@needs_qt
 def test_f8_local_delete_reports_mixed_batch_counts(monkeypatch):
     messages = _run_mixed_delete(monkeypatch, "local")
     assert messages[-1] == "Удалено объектов: 1; не удалось: 1"
 
 
+@needs_qt
 def test_f8_image_delete_reports_mixed_batch_counts(monkeypatch):
     messages = _run_mixed_delete(monkeypatch, "img")
     assert messages[-1] == "Удалено объектов из образа: 1; не удалось: 1"

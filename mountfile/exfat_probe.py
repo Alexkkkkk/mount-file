@@ -18,8 +18,7 @@ _MAX_CLUSTER_SIZE = 32 * 1024 * 1024
 # VolumeFlags bits 0..3 are ActiveFat, VolumeDirty, MediaFailure and
 # ClearToZero; only the upper twelve bits are reserved by exFAT 1.00.
 _KNOWN_VOLUME_FLAGS = 0x000F
-# exFAT 1.00 is the only revision whose on-disk structures this bounded
-# profile validates; other major revisions fail closed.
+# exFAT 1.00 is the only revision whose structures this profile validates.
 _SUPPORTED_REVISION_MAJOR = 1
 
 NATIVE_EXFAT_TWO_FAT_REFUSAL = (
@@ -113,10 +112,10 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     number_of_fats = boot[0x6E]
     if number_of_fats not in (1, 2):
         raise ExfatProbeError("exFAT number of FATs is invalid")
-    # FileSystemRevision (offset 0x68) declares the on-disk exFAT version;
-    # the major number lives in the high byte. Only 1.x layouts are
-    # described by this profile, so anything else is refused before its
-    # metadata can be interpreted.
+    # FileSystemRevision (offset 0x68) declares the on-disk exFAT version:
+    # the major number lives in the high byte. Only 1.x layouts are described
+    # by this bounded profile, so any other major version is refused before
+    # its metadata can be interpreted.
     revision = struct.unpack_from("<H", boot, 0x68)[0]
     if revision >> 8 != _SUPPORTED_REVISION_MAJOR:
         raise ExfatProbeError("exFAT file-system revision is unsupported")

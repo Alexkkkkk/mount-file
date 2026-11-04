@@ -503,10 +503,10 @@ class NativeExfatWriter:
     def _free_clusters(self, bitmap, reader, needed, stream, owners=None):
         """Pick clusters the bitmap reports free and no stream already owns.
 
-        A bitmap entry claiming "free" for a cluster an existing stream walk
-        already owns is an inconsistency this writer must not exploit:
-        writing there would overwrite live data. Such clusters are never
-        allocated, and the mutation fails closed when they are the only
+        A bitmap entry that claims "free" for a cluster a directory/stream walk
+        already owns is an inconsistency this writer must not exploit: writing
+        there would overwrite live data. Such clusters are therefore never
+        allocated here, and the mutation fails closed when they are the only
         candidates left.
         """
         result = []
@@ -827,7 +827,11 @@ class NativeExfatWriter:
                     ) // reader.profile.cluster_size
                     if needed > len(old_chain):
                         extra = self._free_clusters(
-                            bitmap, reader, needed - len(old_chain), stream
+                            bitmap,
+                            reader,
+                            needed - len(old_chain),
+                            stream,
+                            owners=owners,
                         )
                         chain = old_chain + extra
                         for cluster in extra:
@@ -1031,7 +1035,6 @@ class NativeExfatWriter:
     def mkdir(self, path):
         def action(reader, stage):
             meta = self._metadata(reader)
-            owners = self._allocation_owners(reader, meta)
             try:
                 reader._find(path)
             except FileNotFoundError:
@@ -1043,6 +1046,7 @@ class NativeExfatWriter:
             directory, name = self._parent(reader, path)
             with stage.open("r+b") as stream:
                 bitmap = self._bitmap(stream, reader, meta)
+                owners = self._allocation_owners(reader, meta)
                 cluster = self._free_clusters(bitmap, reader, 1, stream, owners=owners)[
                     0
                 ]
