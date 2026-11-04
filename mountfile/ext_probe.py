@@ -56,7 +56,6 @@ _RO_COMPAT_PROJECT = 0x2000
 _RO_COMPAT_SHARED_BLOCKS = 0x4000
 _RO_COMPAT_VERITY = 0x8000
 _RO_COMPAT_ORPHAN_PRESENT = 0x10000
-_RO_COMPAT_METADATA_CSUM = 0x0400
 
 _KNOWN_INCOMPAT = (
     0x0001
@@ -75,6 +74,22 @@ _KNOWN_INCOMPAT = (
     | _INCOMPAT_INLINE_DATA
     | _INCOMPAT_ENCRYPT
     | _INCOMPAT_CASEFOLD
+)
+
+_KNOWN_RO_COMPAT = (
+    _RO_COMPAT_SPARSE_SUPER
+    | _RO_COMPAT_LARGE_FILE
+    | _RO_COMPAT_HUGE_FILE
+    | _RO_COMPAT_GDT_CSUM
+    | _RO_COMPAT_DIR_NLINK
+    | _RO_COMPAT_EXTRA_ISIZE
+    | _RO_COMPAT_BIGALLOC
+    | _RO_COMPAT_METADATA_CSUM
+    | _RO_COMPAT_READONLY
+    | _RO_COMPAT_PROJECT
+    | _RO_COMPAT_SHARED_BLOCKS
+    | _RO_COMPAT_VERITY
+    | _RO_COMPAT_ORPHAN_PRESENT
 )
 
 # These mirrors the strict Phase-1 ext2 writer profile; they are only a
@@ -127,6 +142,7 @@ class ExtSuperblockProfile:
     inode_size: int
     group_descriptor_size: int
     filesystem_uuid: bytes
+    creator_os: int
     revision: int
     state: int
     feature_compat: int
@@ -135,8 +151,10 @@ class ExtSuperblockProfile:
     label: str
     clean_unmounted: bool
     has_journal: bool
+    journal_inode: int | None
     journal_recovery_needed: bool
     unknown_incompat_features: int
+    unknown_ro_compat_features: int
     phase1_ext2_profile_candidate: bool
     write_gate_reasons: tuple[str, ...]
 
@@ -150,6 +168,18 @@ def _u16(buf: bytes, offset: int) -> int:
 
 def _u32(buf: bytes, offset: int) -> int:
     return struct.unpack_from("<I", buf, offset)[0]
+
+
+def _checked_add(left: int, right: int, limit: int, message: str) -> int:
+    if left < 0 or right < 0 or left > limit - right:
+        raise ExtProbeError(message)
+    return left + right
+
+
+def _checked_mul(left: int, right: int, limit: int, message: str) -> int:
+    if left < 0 or right < 0 or (left and right > limit // left):
+        raise ExtProbeError(message)
+    return left * right
 
 
 def _validate_superblock_checksum(
@@ -188,8 +218,12 @@ def _probe_stream(
     if offset > image_size:
         raise ExtProbeError("filesystem offset is outside the image")
     extent_size = image_size - offset if volume_size is None else int(volume_size)
-    if extent_size < 0 or offset + extent_size > image_size:
-        raise ExtProbeError("selected filesystem extent is outside the image")
+    _checked_add(
+        offset,
+        extent_size,
+        image_size,
+        "selected filesystem extent is outside the image",
+    )
     if extent_size < 2048:
         raise ExtProbeError("selected extent is too small for an ext superblock")
 
@@ -223,6 +257,7 @@ def _probe_stream(
     feature_compat = _u32(superblock, 0x5C)
     feature_incompat = _u32(superblock, 0x60)
     feature_ro_compat = _u32(superblock, 0x64)
+    creator_os = _u32(superblock, 0x48)
     _validate_superblock_checksum(superblock, feature_incompat, feature_ro_compat)
     if feature_incompat & _INCOMPAT_64BIT:
         blocks_count = blocks_low | (_u32(superblock, 0x150) << 32)
@@ -238,18 +273,19 @@ def _probe_stream(
         raise ExtProbeError("invalid ext block-group geometry")
     if inode_size < 128 or inode_size > block_size or inode_size % 4:
         raise ExtProbeError("invalid ext inode size")
-    filesystem_size = blocks_count * block_size
+    filesystem_size = _checked_mul(
+        blocks_count,
+        block_size,
+        extent_size,
+        "ext filesystem exceeds selected partition bounds",
+    )
     if filesystem_size > extent_size:
         raise ExtProbeError("ext filesystem exceeds selected partition bounds")
     if offset + filesystem_size > image_size:
         raise ExtProbeError("ext filesystem exceeds image bounds")
-    if (
-        group_descriptor_size < 32
-        or group_descriptor_size > block_size
-        or group_descriptor_size % 8
-    ):
+    if group_descriptor_size not in (32, 64):
         raise ExtProbeError("invalid ext group-descriptor size")
-    if feature_incompat & _INCOMPAT_64BIT and group_descriptor_size < 64:
+    if feature_incompat & _INCOMPAT_64BIT and group_descriptor_size != 64:
         raise ExtProbeError("64-bit ext profile requires 64-byte group descriptors")
     if not feature_incompat & _INCOMPAT_64BIT and group_descriptor_size != 32:
         raise ExtProbeError("non-64-bit ext profile has a non-classic descriptor size")
@@ -257,6 +293,12 @@ def _probe_stream(
     has_journal = bool(
         feature_compat & _COMPAT_HAS_JOURNAL or feature_incompat & _INCOMPAT_JOURNAL_DEV
     )
+    journal_inode = None
+    if has_journal and not feature_incompat & _INCOMPAT_JOURNAL_DEV:
+        journal_inode_value = _u32(superblock, 0xE0)
+        if not 1 <= journal_inode_value <= inodes_count:
+            raise ExtProbeError("internal journal inode is outside inode table")
+        journal_inode = journal_inode_value
     recovery_needed = bool(feature_incompat & _INCOMPAT_RECOVER)
     ext4_markers = bool(
         feature_incompat & _EXT4_MARKERS_INCOMPAT
@@ -266,6 +308,7 @@ def _probe_stream(
     fs_type = "ext4" if ext4_markers else "ext3" if has_journal else "ext2"
     state_clean = state == 0x0001
     unknown_incompat = feature_incompat & ~_KNOWN_INCOMPAT
+    unknown_ro_compat = feature_ro_compat & ~_KNOWN_RO_COMPAT
 
     reasons = []
     if fs_type != "ext2":
@@ -273,13 +316,17 @@ def _probe_stream(
             "journaled or ext4-featured profiles are read-only in this phase"
         )
     if has_journal:
-        reasons.append("JBD2 journal support and replay are not implemented")
+        reasons.append("JBD2 journaled profiles are outside the Phase-1 ext2 writer")
     if recovery_needed:
         reasons.append("superblock marks the filesystem as needing journal recovery")
     if not state_clean:
         reasons.append("superblock state is not exactly cleanly unmounted")
     if unknown_incompat:
         reasons.append(f"unknown incompatible feature flags 0x{unknown_incompat:08x}")
+    if unknown_ro_compat:
+        reasons.append(
+            f"unknown read-only-compatible feature flags 0x{unknown_ro_compat:08x}"
+        )
     if revision > 1:
         reasons.append("unsupported ext superblock revision")
     if blocks_per_group > block_size * 8 and not (
@@ -288,6 +335,51 @@ def _probe_stream(
         reasons.append("block-group size exceeds the ext block bitmap capacity")
     if inodes_per_group > block_size * 8:
         reasons.append("inode-group size exceeds the ext inode bitmap capacity")
+    group_numerator = _checked_add(
+        blocks_count - first_data_block,
+        blocks_per_group - 1,
+        blocks_count + blocks_per_group,
+        "ext block-group geometry arithmetic overflow",
+    )
+    inode_numerator = _checked_add(
+        inodes_count,
+        inodes_per_group - 1,
+        inodes_count + inodes_per_group,
+        "ext inode-group geometry arithmetic overflow",
+    )
+    group_count = group_numerator // blocks_per_group
+    inode_group_count = inode_numerator // inodes_per_group
+    if not 1 <= group_count <= 1_000_000:
+        reasons.append("ext block-group count is outside the bounded reader limit")
+    if inode_group_count > group_count:
+        reasons.append("inode groups exceed ext block groups")
+    gdt_offset = _checked_mul(
+        _checked_add(
+            first_data_block,
+            1,
+            blocks_count + 1,
+            "group descriptor offset arithmetic overflow",
+        ),
+        block_size,
+        filesystem_size,
+        "group descriptor offset exceeds filesystem bounds",
+    )
+    gdt_bytes = _checked_mul(
+        group_count,
+        group_descriptor_size,
+        filesystem_size,
+        "group descriptor table size exceeds filesystem bounds",
+    )
+    if (
+        _checked_add(
+            gdt_offset,
+            gdt_bytes,
+            filesystem_size,
+            "group descriptor table exceeds filesystem bounds",
+        )
+        > filesystem_size
+    ):
+        reasons.append("group descriptor table exceeds filesystem bounds")
     if block_size not in (1024, 2048, 4096):
         reasons.append("Phase-1 ext2 writer supports only 1, 2 or 4 KiB blocks")
     if feature_compat & ~_PHASE1_COMPAT:
@@ -314,6 +406,7 @@ def _probe_stream(
         inode_size=inode_size,
         group_descriptor_size=group_descriptor_size,
         filesystem_uuid=bytes(superblock[0x68:0x78]),
+        creator_os=creator_os,
         revision=revision,
         state=state,
         feature_compat=feature_compat,
@@ -322,8 +415,10 @@ def _probe_stream(
         label=superblock[0x78:0x88].split(b"\x00", 1)[0].decode("utf-8", "replace"),
         clean_unmounted=state_clean and not recovery_needed,
         has_journal=has_journal,
+        journal_inode=journal_inode,
         journal_recovery_needed=recovery_needed,
         unknown_incompat_features=unknown_incompat,
+        unknown_ro_compat_features=unknown_ro_compat,
         phase1_ext2_profile_candidate=candidate,
         write_gate_reasons=tuple(reasons),
     )

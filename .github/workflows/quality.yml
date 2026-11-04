@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
           cache: pip
@@ -32,6 +32,8 @@ jobs:
           python -m pip install ruff==0.4.10 black==24.4.2 isort==5.13.2
       - name: Static check (syntax + undefined names)
         run: ruff check . --select E9,F63,F7,F82 --output-format=github
+      - name: Correctness lint (issue #182 safety rules)
+        run: ruff check . --select B006,E722,S110,S112,F841 --output-format=github
       - name: Format check (black)
         run: black --check --diff .
       - name: Import order check (isort)

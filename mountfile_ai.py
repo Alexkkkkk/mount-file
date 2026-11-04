@@ -95,8 +95,13 @@ class Config:
         self.read_only = os.getenv("MOUNTFILE_READONLY", "1") != "0"
         self.audit_path = Path(os.getenv("MOUNTFILE_AUDIT", "./mountfile_audit.jsonl"))
         self.workspace = Path(os.getenv("MOUNTFILE_WORKDIR", "./ai_workspace"))
-        self.model = os.getenv("MOUNTFILE_MODEL", "gpt-4o-mini")
-        self.max_agent_rounds = int(os.getenv("MOUNTFILE_MAX_ROUNDS", "12"))
+        self.model = os.getenv("MOUNTFILE_MODEL") or os.getenv(
+            "OPENAI_MODEL", "gpt-4o-mini"
+        )
+        try:
+            self.max_agent_rounds = max(1, int(os.getenv("MOUNTFILE_MAX_ROUNDS", "12")))
+        except ValueError:
+            self.max_agent_rounds = 12
         self.allowlist: set[Path] = set()
         self.workspace.mkdir(parents=True, exist_ok=True)
 
@@ -244,13 +249,13 @@ def _require_tsk() -> None:
 
 
 SIGNATURES: list[tuple[bytes, int, str, str]] = [
-    (b"\x53\xEF", 0x438, "ext2/3/4", "superblock magic"),
+    (b"\x53\xef", 0x438, "ext2/3/4", "superblock magic"),
     (b"NTFS    ", 3, "ntfs", "NTFS OEM"),
     (b"MSWIN4.1", 3, "fat", "FAT boot sector"),
     (b"FAT12", 54, "fat12", ""),
     (b"FAT16", 54, "fat16", ""),
     (b"FAT32", 82, "fat32", ""),
-    (b"\x55\xAA", 510, "mbr", "MBR boot sig"),
+    (b"\x55\xaa", 510, "mbr", "MBR boot sig"),
 ]
 
 
@@ -280,8 +285,8 @@ def list_partitions(image: Path) -> list[PartitionInfo]:
         fs_type = None
         try:
             fs_type = str(pytsk3.FS_Info(img, offset=off).info.ftype)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("filesystem type probe failed at offset %d", off, exc_info=exc)
         parts.append(
             PartitionInfo(
                 addr=p.addr,
@@ -335,18 +340,21 @@ def search_files(
     start: str = "/",
     include_deleted: bool = True,
 ) -> list[FileEntry]:
+    if not isinstance(pattern, str) or not pattern or len(pattern) > 256:
+        raise ValueError("pattern must be a non-empty regex of at most 256 characters")
+    if re.search(r"(?:\\([^)]*)[+*]|\\([^)]*\\)[+*])", pattern):
+        raise ValueError("pattern uses a potentially catastrophic regex form")
     rx = re.compile(pattern, re.IGNORECASE)
     matches: list[FileEntry] = []
     stack, seen = [start], set()
-    while stack:
+    visits = 0
+    while stack and visits < 10000 and len(matches) < 1000:
         cur = stack.pop()
         if cur in seen:
             continue
         seen.add(cur)
-        try:
-            entries = list_directory(image, offset, cur)
-        except Exception:
-            continue
+        visits += 1
+        entries = list_directory(image, offset, cur)
         for e in entries:
             if e.deleted and not include_deleted:
                 continue
@@ -422,8 +430,8 @@ def hash_file(path: Path) -> str:
 # !!! REPLACE with real keys from mount-file resources/XOR_MST_*.bin !!!
 XOR_KEYS: dict[str, bytes] = {
     "identity": b"\x00" * 16,
-    "mstar_a": b"\xA5" * 16,
-    "mtk_a": b"\x5A" * 16,
+    "mstar_a": b"\xa5" * 16,
+    "mtk_a": b"\x5a" * 16,
 }
 
 
@@ -465,7 +473,8 @@ def auto_decrypt(image: Path) -> dict | None:
         out = CONFIG.workspace / f"{image.stem}.{name}.bin"
         try:
             res = try_xor_decrypt(image, name, out)
-        except Exception:
+        except Exception as exc:
+            log.debug("XOR key %s failed for %s", name, image, exc_info=exc)
             continue
         if any(h["kind"] != "mbr" for h in res["signatures"]):
             return res
@@ -745,7 +754,8 @@ def _t_detect_signatures(image_path: str) -> list[dict]:
     },
 )
 def _t_try_xor(image_path: str, key_name: str, output: str) -> dict:
-    return try_xor_decrypt(CONFIG.check(image_path), key_name, Path(output))
+    destination = (CONFIG.workspace / Path(output).name).resolve()
+    return try_xor_decrypt(CONFIG.check(image_path), key_name, destination)
 
 
 @register_tool(
@@ -771,7 +781,7 @@ def _t_auto_decrypt(image_path: str) -> dict | None:
     },
 )
 def _t_hash_file(path: str) -> dict:
-    p = Path(path).resolve()
+    p = (CONFIG.workspace / Path(path).name).resolve()
     if not p.is_file():
         raise FileNotFoundError(p)
     return {"path": str(p), "sha256": hash_file(p), "size": p.stat().st_size}
@@ -857,6 +867,12 @@ class Planner:
 class Executor:
     def run(self, plan: Plan, image: Path) -> list[ExecutionRecord]:
         records: list[ExecutionRecord] = []
+        limit = max(1, CONFIG.max_agent_rounds)
+        if len(plan.steps) > limit:
+            raise RuntimeError(
+                "agent plan exceeds MOUNTFILE_MAX_ROUNDS=%d; refusing to execute"
+                % limit
+            )
         for step in plan.steps:
             args = dict(step.args)
             spec_props = (

@@ -13,6 +13,8 @@ import os
 import struct
 from dataclasses import dataclass, replace
 
+from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
+
 _BOOT_SECTOR_SIZE = 512
 _NTFS_OEM_ID = b"NTFS    "
 _BOOT_SIGNATURE = b"\x55\xaa"
@@ -169,17 +171,16 @@ def probe_ntfs_boot_sector(
         raise NtfsProbeError("an explicit integer volume_size is required")
     if volume_size <= 0:
         raise NtfsProbeError("volume_size must be positive")
+    if volume_size < _BOOT_SECTOR_SIZE:
+        raise NtfsProbeError("selected volume is smaller than an NTFS boot sector")
     try:
-        with open(image_path, "rb") as stream:
-            image_size = os.fstat(stream.fileno()).st_size
-            if offset + volume_size > image_size:
+        with FileImageSource(image_path) as source:
+            if offset > source.size or volume_size > source.size - offset:
                 raise NtfsProbeError("selected volume extent exceeds image bounds")
-            if volume_size < _BOOT_SECTOR_SIZE:
-                raise NtfsProbeError(
-                    "selected volume is smaller than an NTFS boot sector"
-                )
-            stream.seek(offset)
-            boot_sector = stream.read(_BOOT_SECTOR_SIZE)
+            volume = BoundedImageSource(source, offset, volume_size)
+            boot_sector = volume.read_at(0, _BOOT_SECTOR_SIZE)
+    except ImageSourceError as exc:
+        raise NtfsProbeError(str(exc)) from exc
     except OSError as exc:
         raise NtfsProbeError(f"cannot read NTFS boot sector: {exc}") from exc
 

@@ -1,6 +1,7 @@
 import io
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,8 +12,10 @@ from mountfile import universal_fs_rw
 from mountfile.rw.universal import FsType as RWFsType
 from mountfile.rw.universal import Mode as RWMode
 from mountfile.rw.universal import create_rw
+from mountfile.safety import RefusalCategory, RefusalCode, RefusalRuntimeError
 from mountfile.universal_fs_rw import (
     Fat32RW,
+    FSInfo,
     LoopMountRW,
     UniversalFSRW,
     _image_path_parent_name,
@@ -101,7 +104,22 @@ def test_fat_api_accepts_backslash_image_paths(tmp_path):
 def _open_fat_rw(tmp_path):
     image = tmp_path / "fat32.img"
     make_fat32_image(image)
-    return image, Fat32RW(image)
+    return image, Fat32RW(image, volume_size=image.stat().st_size)
+
+
+def test_extract_recreates_directory_tree_with_hardened_writer(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/EVIDENCE")
+        fs.write_file("/EVIDENCE/report.txt", b"directory payload")
+        destination = tmp_path / "extracted"
+
+        assert fs.extract("/evidence", destination) == destination
+        assert (destination / "EVIDENCE" / "report.txt").read_bytes() == (
+            b"directory payload"
+        )
+    finally:
+        fs.close()
 
 
 def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):
@@ -109,6 +127,249 @@ def test_facade_uses_package_detector_instead_of_missing_module(tmp_path):
     image.write_bytes(b"not a filesystem")
     with pytest.raises(RuntimeError, match="no filesystem detected"):
         UniversalFSRW(image, auto_backup=False)
+
+
+def test_recognized_fat_profile_does_not_fall_through_to_mount_writer(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "malformed-fat.img"
+    image.write_bytes(b"not a valid FAT volume".ljust(512, b"\x00"))
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype="FAT32", offset=0, size=512, source="signature")
+        ],
+    )
+    monkeypatch.setattr(
+        universal_fs_rw,
+        "LoopMountRW",
+        lambda *_args, **_kwargs: pytest.fail("unexpected system mount fallback"),
+    )
+
+    with pytest.raises(RuntimeError, match="selected native profile was declined"):
+        UniversalFSRW(image, auto_backup=False)
+
+
+def test_legacy_mount_fallback_requires_explicit_opt_in(tmp_path, monkeypatch):
+    image = tmp_path / "legacy.img"
+    image.write_bytes(b"legacy volume".ljust(512, b"\x00"))
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype="hfs+", offset=0, size=512, source="signature")
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "hfs+")
+
+    with pytest.raises(RuntimeError, match="legacy mount fallback is disabled"):
+        UniversalFSRW(image, auto_backup=False)
+
+    fs = UniversalFSRW(image, auto_backup=False, allow_legacy_mount=True)
+    try:
+        assert isinstance(fs.backend, LoopMountRW)
+    finally:
+        fs.close()
+
+
+def test_backup_boot_signature_is_not_used_as_partition_boundary(tmp_path):
+    image = tmp_path / "fat32-backup.img"
+    make_fat32_image(image)
+
+    fs = UniversalFSRW(image, auto_backup=False)
+    try:
+        assert fs.volume_size == image.stat().st_size
+        assert fs.info().fs_type == "fat32"
+    finally:
+        fs.close()
+
+
+def test_inferred_whole_image_fat_requires_exact_bpb_length(tmp_path, monkeypatch):
+    image = tmp_path / "fat32-with-trailing-data.img"
+    make_fat32_image(image)
+    declared_size = image.stat().st_size
+    with image.open("ab") as stream:
+        stream.write(b"unassigned trailing bytes")
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype="FAT32", offset=0, size=None, source="signature")
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
+
+    with pytest.raises(RuntimeError, match="selected native profile was declined"):
+        UniversalFSRW(image, auto_backup=False)
+
+    fs = UniversalFSRW(image, auto_backup=False, volume_size=declared_size)
+    try:
+        assert fs.volume_size == declared_size
+        assert fs.info().fs_type == "fat32"
+    finally:
+        fs.close()
+
+
+def test_nonzero_signature_offset_requires_explicit_extent(tmp_path, monkeypatch):
+    image = tmp_path / "partitionless.img"
+    image.write_bytes(b"X" * 8192)
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype="FAT32", offset=4096, size=None, source="signature")
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
+
+    with pytest.raises(RuntimeError, match="exact volume_size required"):
+        UniversalFSRW(image, offset=4096, auto_backup=False)
+
+
+def test_native_fat_capability_matrix_is_explicit(tmp_path):
+    image = tmp_path / "capabilities-fat32.img"
+    make_fat32_image(image)
+    fs = UniversalFSRW(image, auto_backup=False)
+    try:
+        status = fs.capability_status()
+        assert status["write_enabled"] is True
+        assert status["write_capabilities"] == [
+            "write_file",
+            "mkdir",
+            "delete",
+            "rename",
+        ]
+        assert fs.info().write_capabilities == tuple(status["write_capabilities"])
+        assert fs.info().write_rejection_reason == ""
+        assert fs.info().write_rejection_code is None
+    finally:
+        fs.close()
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments"),
+    [
+        ("write_file", ("/NEW.TXT", b"blocked")),
+        ("mkdir", ("/NEW-DIR",)),
+        ("delete", ("/EXISTING.TXT",)),
+        ("rename", ("/OLD.TXT", "/NEW.TXT")),
+    ],
+)
+def test_typed_capability_refusal_precedes_backup_journal_and_backend(
+    tmp_path, operation, arguments
+):
+    image = tmp_path / "readonly.img"
+    original = b"unchanged image"
+    image.write_bytes(original)
+    calls = []
+
+    class Backend:
+        def info(self):
+            return FSInfo(
+                fs_type="ntfs",
+                offset=0,
+                backend="native-ntfs-ro",
+                write_strategy="native-ntfs-ro",
+            )
+
+        def write_file(self, *args):
+            calls.append(("backend", "write_file", args))
+
+        def mkdir(self, *args):
+            calls.append(("backend", "mkdir", args))
+
+        def delete(self, *args):
+            calls.append(("backend", "delete", args))
+
+        def rename(self, *args):
+            calls.append(("backend", "rename", args))
+
+    class Backup:
+        def create(self):
+            calls.append(("backup",))
+
+    class Journal:
+        def log(self, operation):
+            calls.append(("journal", operation))
+
+    fs = UniversalFSRW.__new__(UniversalFSRW)
+    fs.image = image
+    fs.backend = Backend()
+    fs.backup = Backup()
+    fs.journal = Journal()
+    fs._auto_backup = True
+    fs._backup_path = None
+
+    status = fs.capability_status()
+    assert status["write_rejection_code"] == "operation_not_supported"
+    with pytest.raises(RefusalRuntimeError) as caught:
+        getattr(fs, operation)(*arguments)
+
+    refusal = caught.value
+    assert isinstance(refusal, RuntimeError)
+    assert refusal.code is RefusalCode.OPERATION_NOT_SUPPORTED
+    assert refusal.category is RefusalCategory.UNSUPPORTED
+    assert refusal.to_dict() == {
+        "code": "operation_not_supported",
+        "category": "unsupported",
+        "message": str(refusal),
+    }
+    assert calls == []
+    assert fs._backup_path is None
+    assert image.read_bytes() == original
+
+
+@pytest.mark.parametrize("fs_type", ["ext3", "ext4", "NTFS"])
+def test_unsupported_native_profiles_report_reason_without_legacy_fallback(
+    tmp_path, monkeypatch, fs_type
+):
+    image = tmp_path / (fs_type.lower() + ".img")
+    image.write_bytes(b"placeholder".ljust(4096, b"\0"))
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(fstype=fs_type, offset=0, size=4096, source="test")
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: fs_type)
+    monkeypatch.setattr(
+        universal_fs_rw,
+        "LoopMountRW",
+        lambda *_args, **_kwargs: pytest.fail("legacy fallback must not be attempted"),
+    )
+    with pytest.raises(RuntimeError, match="unsupported") as excinfo:
+        UniversalFSRW(image, auto_backup=False)
+    message = str(excinfo.value).lower()
+    if fs_type.lower().startswith("ext"):
+        assert fs_type.lower() in message
+        assert "subprocess" in message
+    else:
+        assert "native ntfs writes are unsupported" in message
+
+
+def test_explicit_volume_size_preserves_partition_sentinel(tmp_path, monkeypatch):
+    image = tmp_path / "bounded-fat.img"
+    prefix = b"P" * 4096
+    partition = tmp_path / "partition.img"
+    make_fat32_image(partition)
+    volume = partition.read_bytes()
+    sentinel = b"NEXT-PARTITION-SENTINEL"
+    image.write_bytes(prefix + volume + sentinel)
+    monkeypatch.setattr(
+        "mountfile.firmware.detect_volumes",
+        lambda _image: [
+            SimpleNamespace(
+                fstype="FAT32", offset=len(prefix), size=len(volume), source="table"
+            )
+        ],
+    )
+    monkeypatch.setattr("mountfile.firmware.probe_filesystem", lambda *_: "FAT32")
+    fs = UniversalFSRW(
+        image, offset=len(prefix), volume_size=len(volume), auto_backup=False
+    )
+    try:
+        assert fs.volume_size == len(volume)
+        fs.write_file("/SENTINEL.TXT", b"bounded")
+    finally:
+        fs.close()
+    assert image.read_bytes()[-len(sentinel) :] == sentinel
 
 
 def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):
@@ -129,7 +390,10 @@ def test_exported_rw_factory_uses_working_native_fat32_backend(tmp_path):
         rw.close()
 
 
-@pytest.mark.parametrize("fs_type", ["iso9660", "squashfs", "jffs2", "ubifs"])
+@pytest.mark.parametrize(
+    "fs_type",
+    ["iso9660", "squashfs", "jffs2", "ubifs", "hfsplus", "HFS+", "apfs"],
+)
 def test_inherently_read_only_formats_fail_closed_before_mount(tmp_path, fs_type):
     image = tmp_path / "image.bin"
     image.write_bytes(b"read-only format placeholder")
@@ -289,7 +553,7 @@ def test_tsk_image_can_release_and_reopen_backing_handle(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(vfs, "pytsk3", fake_tsk)
 
-    provider = vfs.TskImage(str(image), offset=512)
+    provider = vfs.TskImage(str(image))
     provider.close()
     assert provider.fs is None
     assert provider.img is None
@@ -298,6 +562,7 @@ def test_tsk_image_can_release_and_reopen_backing_handle(tmp_path, monkeypatch):
     assert provider.fs is not None
     assert provider.img is not None
     assert [item[0] for item in opened] == ["img", "fs", "img", "fs"]
+    assert [item[1] for item in opened if item[0] == "fs"] == [0, 0]
 
 
 def test_failed_overwrite_allocation_preserves_original_file(tmp_path, monkeypatch):
@@ -464,5 +729,107 @@ def test_long_filename_rename_fails_closed_without_mutation(tmp_path):
 
         assert fs.read(source) == payload
         assert fs.stat(destination) is None
+    finally:
+        fs.close()
+
+
+def test_cross_directory_lfn_file_move_preserves_chain_and_payload(tmp_path):
+    _, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        payload = bytes((index * 29) % 256 for index in range(5000))
+        source = "/SOURCE/Original report.txt"
+        destination = "/DESTINATION/Final report.txt"
+        fs.write_file(source, payload)
+        original = fs.stat(source)
+        original_chain = fs._cluster_chain(original.inode)
+
+        fs.rename(source, destination)
+
+        moved = fs.stat(destination)
+        assert moved is not None
+        assert moved.is_dir is False
+        assert fs.stat(source) is None
+        assert fs._cluster_chain(moved.inode) == original_chain
+        assert fs.read(destination) == payload
+        assert [entry.name for entry in fs.list("/DESTINATION")] == ["Final report.txt"]
+    finally:
+        fs.close()
+
+
+def test_cross_directory_directory_move_updates_dotdot_and_rejects_descendant(
+    tmp_path,
+):
+    image, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        fs.mkdir("/SOURCE/MOVED")
+        fs.mkdir("/SOURCE/MOVED/CHILD")
+        fs.write_file("/SOURCE/MOVED/CHILD/child.bin", b"still reachable")
+        destination_parent_cluster = fs.stat("/DESTINATION").inode
+
+        fs.rename("/SOURCE/MOVED", "/DESTINATION/MOVED")
+
+        moved = fs.stat("/DESTINATION/MOVED")
+        assert moved is not None and moved.is_dir
+        assert fs._read_directory_parent_cluster(moved.inode) == (
+            destination_parent_cluster
+        )
+        assert fs.stat("/SOURCE/MOVED") is None
+        assert fs.read("/DESTINATION/MOVED/CHILD/child.bin") == b"still reachable"
+
+        unchanged_image = image.read_bytes()
+        with pytest.raises(ValueError, match="itself or a descendant"):
+            fs.rename("/DESTINATION/MOVED", "/DESTINATION/MOVED/CHILD/NESTED")
+        assert image.read_bytes() == unchanged_image
+    finally:
+        fs.close()
+
+
+def test_cross_directory_collision_is_rejected_without_image_change(tmp_path):
+    image, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        fs.write_file("/SOURCE/source.txt", b"source")
+        fs.write_file("/DESTINATION/Existing name.txt", b"destination")
+        unchanged_image = image.read_bytes()
+
+        with pytest.raises(FileExistsError):
+            fs.rename("/SOURCE/source.txt", "/DESTINATION/EXISTING NAME.TXT")
+
+        assert image.read_bytes() == unchanged_image
+        assert fs.read("/SOURCE/source.txt") == b"source"
+        assert fs.read("/DESTINATION/Existing name.txt") == b"destination"
+    finally:
+        fs.close()
+
+
+def test_cross_directory_rename_failure_discards_partial_staged_move(
+    tmp_path, monkeypatch
+):
+    image, fs = _open_fat_rw(tmp_path)
+    try:
+        fs.mkdir("/SOURCE")
+        fs.mkdir("/DESTINATION")
+        fs.write_file("/SOURCE/source.bin", b"source payload")
+        source_parent_cluster = fs.stat("/SOURCE").inode
+        unchanged_image = image.read_bytes()
+        write_dir_raw = fs._write_dir_raw
+
+        def fail_after_source_tombstone(cluster, data):
+            write_dir_raw(cluster, data)
+            if cluster == source_parent_cluster:
+                raise OSError("injected source tombstone failure")
+
+        monkeypatch.setattr(fs, "_write_dir_raw", fail_after_source_tombstone)
+        with pytest.raises(OSError, match="injected source tombstone failure"):
+            fs.rename("/SOURCE/source.bin", "/DESTINATION/moved.bin")
+
+        assert image.read_bytes() == unchanged_image
+        assert fs.read("/SOURCE/source.bin") == b"source payload"
+        assert fs.stat("/DESTINATION/moved.bin") is None
     finally:
         fs.close()

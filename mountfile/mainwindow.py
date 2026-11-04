@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import os
+import posixpath
 
 from .extract import extract_path
-from .fat32 import Fat32, Fat32Error, Fat32Provider
 from .firmware import detect_volumes
 from .hexview import HexView
 from .qt_compat import (
@@ -37,7 +37,9 @@ from .qt_compat import (
     SingleSelection,
     Stretch,
 )
+from .universal_fs_rw import UniversalFSRW
 from .vfs import (
+    LegacyFallbackAvailableError,
     RecognizedFilesystemError,
     TskError,
     open_image_provider,
@@ -249,7 +251,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.btn_extract)
         self.btn_save_hex = QPushButton("Save HEX")
         self.btn_save_hex.setToolTip(
-            "Записать изменённый файл обратно в образ (Ctrl+S)"
+            "Записать изменённый файл через поддержанный native writer (Ctrl+S)"
         )
         self.btn_save_hex.clicked.connect(self.save_hex)
         tb.addWidget(self.btn_save_hex)
@@ -263,16 +265,16 @@ class MainWindow(QMainWindow):
         self.btn_goto_hex = QPushButton("Go to…")
         self.btn_goto_hex.clicked.connect(self.goto_hex)
         tb.addWidget(self.btn_goto_hex)
-        self.btn_import = QPushButton("Import file… (FAT32)")
+        self.btn_import = QPushButton("Import file")
         self.btn_import.clicked.connect(self.import_file)
         tb.addWidget(self.btn_import)
-        self.btn_mkdir = QPushButton("New folder (FAT32)")
+        self.btn_mkdir = QPushButton("New folder")
         self.btn_mkdir.clicked.connect(self.make_dir)
         tb.addWidget(self.btn_mkdir)
-        self.btn_rename = QPushButton("Rename (FAT32)")
+        self.btn_rename = QPushButton("Rename")
         self.btn_rename.clicked.connect(self.rename_selected)
         tb.addWidget(self.btn_rename)
-        self.btn_delete = QPushButton("Delete (FAT32)")
+        self.btn_delete = QPushButton("Delete")
         self.btn_delete.clicked.connect(self.delete_selected)
         tb.addWidget(self.btn_delete)
 
@@ -309,8 +311,25 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 5000)
 
     def _set_write_enabled(self, on):
-        for w in (self.btn_import, self.btn_mkdir, self.btn_rename, self.btn_delete):
-            w.setEnabled(bool(on))
+        capabilities = set()
+        operations = {}
+        if on and self.writer is not None:
+            try:
+                status = self.writer.capability_status()
+                capabilities = set(status["write_capabilities"])
+                operations = status.get("operations", {})
+            except (AttributeError, RuntimeError, ValueError):
+                capabilities = set()
+                operations = {}
+
+        def enabled(canonical, legacy):
+            state = operations.get(canonical, {}).get("state")
+            return state == "available" if state is not None else legacy in capabilities
+
+        self.btn_import.setEnabled(enabled("write-file", "write_file"))
+        self.btn_mkdir.setEnabled(enabled("mkdir", "mkdir"))
+        self.btn_rename.setEnabled(enabled("rename", "rename"))
+        self.btn_delete.setEnabled(enabled("delete", "delete"))
 
     def _set_loaded(self, loaded):
         for w in (self.cmb_parts, self.btn_extract):
@@ -373,6 +392,7 @@ class MainWindow(QMainWindow):
                 "native-fat12-ro": "native FAT12 (Python, read-only)",
                 "native-fat16-ro": "native FAT16 (Python, read-only)",
                 "native-fat32-ro": "native FAT32 (Python, read-only)",
+                "native-exfat-ro": "native exFAT (Python, read-only)",
                 "native-ext3-ro": "native ext3 (Python, read-only)",
                 "native-ext4-ro": "native ext4 (Python, read-only)",
                 "native-ntfs-ro": "native NTFS (Python, read-only)",
@@ -383,6 +403,35 @@ class MainWindow(QMainWindow):
             self.backend = backend_names.get(
                 getattr(self.provider, "backend_name", ""), "read-only provider"
             )
+        except LegacyFallbackAvailableError as native_err:
+            answer = QMessageBox.question(
+                self,
+                "Попробовать legacy-парсер?",
+                "Встроенный reader не распознал формат тома. Попробовать The Sleuth Kit "
+                "для просмотра в режиме только чтения? Это не включает запись.\n\n%s"
+                % native_err,
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                self.provider = None
+                return
+            try:
+                self.provider = open_image_provider(
+                    self.image_path,
+                    offset=offset,
+                    volume_size=volume_size,
+                    allow_legacy_fallback=True,
+                )
+                self.backend = "The Sleuth Kit (legacy fallback; read-only)"
+            except TskError as fallback_err:
+                self.provider = None
+                QMessageBox.warning(
+                    self,
+                    "Не удалось открыть том",
+                    "Legacy reader не смог открыть том:\n%s" % fallback_err,
+                )
+                return
         except RecognizedFilesystemError as native_err:
             self.provider = None
             QMessageBox.warning(
@@ -394,50 +443,64 @@ class MainWindow(QMainWindow):
             )
             return
         except TskError as tsk_err:
-            try:
-                self.provider = Fat32Provider(self.image_path, offset=offset)
-                self.backend = "built-in FAT32 engine"
-            except (Fat32Error, OSError, ValueError) as fat_err:
-                self.provider = None
-                QMessageBox.warning(
-                    self,
-                    "Cannot mount volume",
-                    "No filesystem could be mounted at offset %d.\n\n"
-                    "The Sleuth Kit: %s\nBuilt-in FAT32 engine: %s\n\n"
-                    "Tip: pick another entry in the Volume list."
-                    % (offset, tsk_err, fat_err),
-                )
-                return
+            self.provider = None
+            QMessageBox.warning(
+                self,
+                "Cannot mount volume",
+                "No native or explicitly enabled legacy reader could open the "
+                "volume at offset %d.\n\n%s\n\nTip: pick another entry in "
+                "the Volume list." % (offset, tsk_err),
+            )
+            return
         self.model = ImageModel(self.provider)
         self.tree.setModel(self.model)
         self.tree.selectionModel().currentChanged.connect(self.on_selection)
         self.tree.header().setSectionResizeMode(0, Stretch)
         self.log_msg("Volume mounted @ offset %d via %s" % (offset, self.backend))
-        self._open_writer(offset)
+        if getattr(self.provider, "backend_name", "") in (
+            "pytsk3",
+            "pytsk3-fallback",
+        ):
+            self.writer = None
+            self.writer_fh = None
+            self.log_msg("Legacy reader mounted read-only; image writing is disabled")
+        else:
+            self._open_writer(offset)
 
     def _open_writer(self, offset):
         try:
-            fh = open(self.image_path, "r+b")
-            try:
-                self.writer = Fat32(fh, offset)
-            except Exception:
-                fh.close()
-                raise
-        except (Fat32Error, OSError) as e:
+            volume_size = volume_size_for_offset(self.image_path, offset)
+            self.writer = UniversalFSRW(
+                self.image_path,
+                offset=offset,
+                volume_size=volume_size,
+                allow_legacy_mount=False,
+            )
+        except (OSError, RuntimeError, ValueError) as e:
             self.writer = None
             self.writer_fh = None
             self._set_write_enabled(False)
             self.log_msg("Volume is read-only here (%s)" % e)
             return
-        self.writer_fh = fh
+        self.writer_fh = None
         self._set_write_enabled(True)
-        self.log_msg("FAT32 write support enabled (offset %d)" % offset)
+        status = self.writer.capability_status()
+        if status["write_enabled"]:
+            profile = status.get("profile_id", status["backend"])
+            self.log_msg(
+                "%s native write support enabled (matrix v%s, offset %d)"
+                % (profile, status.get("matrix_version", "n/a"), offset)
+            )
+        else:
+            self.log_msg(
+                "Volume is read-only here (%s)" % status["write_rejection_reason"]
+            )
 
     def _close_writer(self):
-        if self.writer_fh:
+        if self.writer is not None:
             try:
-                self.writer_fh.close()
-            except OSError:
+                self.writer.close()
+            except (OSError, RuntimeError):
                 pass
         self.writer_fh = None
         self.writer = None
@@ -478,14 +541,46 @@ class MainWindow(QMainWindow):
     def _hex_changed(self):
         """Keep the save action synchronized with the current document."""
         node = self._current_node()
+        write_file_supported = False
+        if self.writer is not None:
+            try:
+                write_file_supported = (
+                    "write_file"
+                    in self.writer.capability_status()["write_capabilities"]
+                )
+            except (AttributeError, RuntimeError, ValueError):
+                write_file_supported = False
         self.btn_save_hex.setEnabled(
             bool(
-                node and not node.is_dir and self.writer and self.hex_view.isModified()
+                node
+                and not node.is_dir
+                and write_file_supported
+                and self.hex_view.isModified()
             )
         )
 
+    def _perform_write(self, refresh_path, operation):
+        """Run one mutation without an image reader holding the target open.
+
+        Windows does not allow the staged writer to atomically replace an image
+        while the GUI's read handle is open. Close that handle before mutation,
+        then reopen the bounded provider and refresh the affected tree branch
+        whether the operation succeeds or raises.
+        """
+        if self.image_path and self.provider is not None:
+            provider = self.provider
+            if hasattr(provider, "close"):
+                provider.close()
+            self.provider = None
+            if self.model is not None:
+                self.model.provider = None
+        try:
+            return operation()
+        finally:
+            self._refresh_dir(refresh_path)
+
     def save_hex(self):
-        """Replace the selected file in the mounted FAT32 volume."""
+        """Replace the selected file through the mounted native writer."""
         node = self._current_node()
         if node is None or node.is_dir or self.writer is None:
             QMessageBox.information(
@@ -504,11 +599,10 @@ class MainWindow(QMainWindow):
         if ret != MB_Yes:
             return
         try:
-            parent = os.path.dirname(node.path) or "/"
-            self.writer.write_file(parent, node.name, data)
+            parent = posixpath.dirname(node.path) or "/"
+            self._perform_write(parent, lambda: self.writer.write_file(node.path, data))
             self.hex_view.setData(data)
             self.log_msg("HEX changes saved: %s (%d bytes)" % (node.path, len(data)))
-            self._refresh_dir(parent)
         except Exception as e:
             QMessageBox.critical(self, "HEX save failed", str(e))
 
@@ -589,7 +683,7 @@ class MainWindow(QMainWindow):
         node = self._current_node()
         if node is None or self.writer is None:
             return
-        target_dir = node.path if node.is_dir else (os.path.dirname(node.path) or "/")
+        target_dir = node.path if node.is_dir else (posixpath.dirname(node.path) or "/")
         src, _ = QFileDialog.getOpenFileName(self, "Import file", "")
         if not src:
             return
@@ -612,11 +706,11 @@ class MainWindow(QMainWindow):
         if ret != MB_Yes:
             return
         try:
-            self.writer.write_file(target_dir, name, data)
-            self.log_msg(
-                "Imported %s (%d bytes) -> %s%s" % (src, len(data), target_dir, name)
+            target_path = posixpath.join(target_dir, name)
+            self._perform_write(
+                target_dir, lambda: self.writer.write_file(target_path, data)
             )
-            self._refresh_dir(target_dir)
+            self.log_msg("Imported %s (%d bytes) -> %s" % (src, len(data), target_path))
         except Exception as e:
             QMessageBox.critical(self, "Import failed", str(e))
 
@@ -624,16 +718,16 @@ class MainWindow(QMainWindow):
         node = self._current_node()
         if node is None or self.writer is None:
             return
-        target_dir = node.path if node.is_dir else (os.path.dirname(node.path) or "/")
+        target_dir = node.path if node.is_dir else (posixpath.dirname(node.path) or "/")
         name, ok = QInputDialog.getText(
             self, "New folder", "Folder name in %s:" % target_dir
         )
         if not ok or not name.strip():
             return
         try:
-            self.writer.mkdir(target_dir, name.strip())
-            self.log_msg("Created folder %s%s" % (target_dir, name.strip()))
-            self._refresh_dir(target_dir)
+            target_path = posixpath.join(target_dir, name.strip())
+            self._perform_write(target_dir, lambda: self.writer.mkdir(target_path))
+            self.log_msg("Created folder %s" % target_path)
         except Exception as e:
             QMessageBox.critical(self, "mkdir failed", str(e))
 
@@ -648,9 +742,11 @@ class MainWindow(QMainWindow):
         if not ok or not new_name.strip():
             return
         try:
-            self.writer.rename(node.path, new_name.strip())
-            self.log_msg("Renamed %s -> %s" % (node.path, new_name.strip()))
-            self._refresh_dir(parent)
+            target_path = posixpath.join(parent, new_name.strip())
+            self._perform_write(
+                parent, lambda: self.writer.rename(node.path, target_path)
+            )
+            self.log_msg("Renamed %s -> %s" % (node.path, target_path))
         except Exception as e:
             QMessageBox.critical(self, "Rename failed", str(e))
 
@@ -671,15 +767,41 @@ class MainWindow(QMainWindow):
         if ret != MB_Yes:
             return
         try:
-            self.writer.delete(node.path, recursive=node.is_dir)
+            self._perform_write(
+                parent,
+                lambda: self.writer.delete(node.path, recursive=node.is_dir),
+            )
             self.log_msg("Deleted %s" % node.path)
-            self._refresh_dir(parent)
         except Exception as e:
             QMessageBox.critical(self, "Delete failed", str(e))
 
     def _refresh_dir(self, path):
         if not self.model:
             return
+
+        if self.image_path:
+            offset = self.cmb_parts.currentData()
+            if offset is None:
+                offset = 0
+            try:
+                volume_size = volume_size_for_offset(self.image_path, offset)
+                replacement = open_image_provider(
+                    self.image_path, offset=offset, volume_size=volume_size
+                )
+            except Exception as e:
+                message = "Image changed, but the reader could not be reopened: %s" % e
+                self.log_msg(message)
+                QMessageBox.warning(self, "Refresh failed", message)
+                return False
+
+            old_provider = self.provider
+            self.provider = replacement
+            self.model.provider = replacement
+            if old_provider is not None and hasattr(old_provider, "close"):
+                try:
+                    old_provider.close()
+                except Exception as e:
+                    self.log_msg("Could not close stale image reader: %s" % e)
 
         def walk(node, parts):
             if not parts:
@@ -693,6 +815,7 @@ class MainWindow(QMainWindow):
         node = walk(self.model.root, parts)
         if node is not None:
             self.model.reload(node)
+        return True
 
     def closeEvent(self, e):
         self._unmount()

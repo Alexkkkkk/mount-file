@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: MIT
-"""Bounded, read-only exFAT boot-region and geometry validation."""
+"""Bounded, read-only exFAT boot-region and geometry validation.
+
+A successful probe is not a native access decision: in particular it can
+describe a two-FAT TexFAT volume whose transaction semantics are unsupported.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,13 @@ _SIGNATURE = b"EXFAT   "
 _BOOT_REGION_SECTORS = 12
 _BOOT_REGIONS = 2
 _MAX_CLUSTER_SIZE = 32 * 1024 * 1024
+# VolumeFlags bits 0..3 are ActiveFat, VolumeDirty, MediaFailure and
+# ClearToZero; only the upper twelve bits are reserved by exFAT 1.00.
+_KNOWN_VOLUME_FLAGS = 0x000F
+
+NATIVE_EXFAT_TWO_FAT_REFUSAL = (
+    "exFAT NumberOfFats=2 (TexFAT) is unsupported for native browsing and writes"
+)
 
 
 class ExfatProbeError(ValueError):
@@ -26,6 +37,7 @@ class ExfatBootProfile:
     cluster_size: int
     volume_length: int
     number_of_fats: int
+    active_fat: int
     fat_offset: int
     fat_length: int
     cluster_heap_offset: int
@@ -98,6 +110,12 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     number_of_fats = boot[0x6E]
     if number_of_fats not in (1, 2):
         raise ExfatProbeError("exFAT number of FATs is invalid")
+    volume_flags = struct.unpack_from("<H", boot, 0x6A)[0]
+    if volume_flags & ~_KNOWN_VOLUME_FLAGS:
+        raise ExfatProbeError("exFAT volume flags contain reserved bits")
+    active_fat = volume_flags & 1
+    if active_fat >= number_of_fats:
+        raise ExfatProbeError("exFAT active FAT is outside NumberOfFats")
     fat_end = fat_offset + fat_length * number_of_fats
     if (
         fat_offset < 24
@@ -153,6 +171,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
         (0x5C, 4),
         (0x60, 4),
         (0x6C, 4),
+        (0x6E, 1),
     )
     if any(
         boot[start : start + size] != backup_boot[start : start + size]
@@ -160,20 +179,21 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
     ):
         raise ExfatProbeError("exFAT backup boot-sector geometry mismatch")
     return ExfatBootProfile(
-        0,
+        partition_offset,
         volume_size,
         bytes_per_sector,
         sectors_per_cluster,
         cluster_size,
         volume_length,
         number_of_fats,
+        active_fat,
         fat_offset,
         fat_length,
         heap_offset,
         cluster_count,
         root_cluster,
         struct.unpack_from("<I", boot, 0x64)[0],
-        struct.unpack_from("<H", boot, 0x6A)[0],
+        volume_flags,
         percent,
         calculated,
     )
@@ -182,6 +202,7 @@ def parse_exfat_boot_region(region: bytes, *, volume_size: int) -> ExfatBootProf
 def probe_exfat_boot_region(
     image_path, *, offset: int = 0, volume_size: int | None = None
 ) -> ExfatBootProfile:
+    """Inspect boot geometry only; a result does not grant read/write access."""
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ExfatProbeError("offset must be a non-negative integer")
     if (
@@ -216,6 +237,7 @@ def probe_exfat_boot_region(
 __all__ = [
     "ExfatBootProfile",
     "ExfatProbeError",
+    "NATIVE_EXFAT_TWO_FAT_REFUSAL",
     "exfat_boot_checksum",
     "parse_exfat_boot_region",
     "probe_exfat_boot_region",

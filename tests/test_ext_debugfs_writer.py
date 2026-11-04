@@ -48,7 +48,10 @@ def test_ext4_create_overwrite_and_verify_at_nonzero_offset(tmp_path):
     writer.write_file("/config/factorySrv.ini", b"UARTOnOff=1\r\n")
     assert writer.read_file("/config/factorySrv.ini") == b"UARTOnOff=1\r\n"
     provider = Ext234Provider(
-        str(image), offset=offset, volume_size=partition.stat().st_size
+        str(image),
+        offset=offset,
+        volume_size=partition.stat().st_size,
+        allow_legacy_debugfs=True,
     )
     listing = provider.list_dir("/config")
     assert listing == [

@@ -70,6 +70,7 @@ def test_closing_the_window_while_the_update_check_hangs_does_not_abort():
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env.pop("MOUNTFILE_NO_UPDATE", None)
+    env["MOUNTFILE_ENABLE_UPDATE_CHECK"] = "1"
 
     proc = subprocess.run(
         [sys.executable, "-c", CHILD],

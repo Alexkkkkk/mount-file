@@ -17,9 +17,17 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
-class FatReadError(ValueError):
+
+class FatReadError(RefusalError):
     """The selected FAT profile or requested read is invalid or unsupported."""
+
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
+        super().__init__(message, code)
 
 
 _MAX_READ_RANGE_BYTES = 16 * 1024 * 1024
@@ -42,6 +50,8 @@ class FatProfile:
     sectors_per_cluster: int
     reserved_sectors: int
     fat_count: int
+    fat_mirroring_enabled: bool
+    active_fat_index: int
     fat_sectors: int
     root_entries: int
     total_sectors: int
@@ -63,14 +73,20 @@ class _Entry:
     date: str
 
 
-class NativeFatImage:
+class NativeFatImage(ReadOnlyVFSStatMixin):
     """Read-only VFS provider for one bounded FAT12/16/32 filesystem."""
+
+    case_insensitive_paths = True
 
     def __init__(self, image_path, offset=0, volume_size=None):
         self.image_path = str(image_path)
         self.offset = int(offset)
         if self.offset < 0:
             raise FatReadError("negative filesystem offset")
+        if self.offset and volume_size is None:
+            raise FatReadError(
+                "an explicit FAT volume_size is required for a nonzero offset"
+            )
         self._stream = None
         self._lock = threading.RLock()
         self._image_size = 0
@@ -94,12 +110,24 @@ class NativeFatImage:
             self._max_cluster = self.cluster_count + 1
             self.root_name = self.image_path
             self.backend_name = f"native-fat{self.fat_type}-ro"
+            self._validate_metadata_copies()
         except (OSError, struct.error) as exc:
             self.close()
             raise FatReadError(str(exc)) from exc
         except Exception:
             self.close()
             raise
+
+    @staticmethod
+    def has_fat_family_marker(raw: bytes) -> bool:
+        """Return whether bytes carry a classic FAT type marker.
+
+        This is deliberately independent of BPB validation so dispatch can
+        fail closed for a labelled FAT boot sector whose geometry is malformed.
+        """
+        return len(raw) >= 90 and (
+            raw[54:59] in (b"FAT12", b"FAT16") or raw[82:87] == b"FAT32"
+        )
 
     @staticmethod
     def looks_like_boot_sector(raw: bytes) -> bool:
@@ -127,6 +155,7 @@ class NativeFatImage:
 
     def _parse_profile(self, selected_size) -> FatProfile:
         raw = self._read_absolute(self.offset, 512, image_only=True)
+        self._boot_sector = raw
         if not self.looks_like_boot_sector(raw):
             raise FatReadError("no valid FAT boot sector at the selected offset")
         bps = struct.unpack_from("<H", raw, 11)[0]
@@ -160,7 +189,19 @@ class NativeFatImage:
             fat_type = 16
         else:
             fat_type = 32
+        fat_mirroring_enabled = True
+        active_fat_index = 0
         if fat_type == 32:
+            ext_flags = struct.unpack_from("<H", raw, 40)[0]
+            if ext_flags & 0xFF70:
+                raise FatReadError("FAT32 extended flags contain reserved bits")
+            if ext_flags & 0x0080:
+                fat_mirroring_enabled = False
+                active_fat_index = ext_flags & 0x000F
+                if active_fat_index >= fat_count:
+                    raise FatReadError(
+                        "FAT32 active FAT index is outside the declared FAT copies"
+                    )
             if root_entries or fat16:
                 raise FatReadError("FAT32 BPB contains FAT12/16 root geometry")
             root_cluster = struct.unpack_from("<I", raw, 44)[0] & 0x0FFFFFFF
@@ -195,6 +236,8 @@ class NativeFatImage:
             sectors_per_cluster=spc,
             reserved_sectors=reserved,
             fat_count=fat_count,
+            fat_mirroring_enabled=fat_mirroring_enabled,
+            active_fat_index=active_fat_index,
             fat_sectors=fat_sectors,
             root_entries=root_entries,
             total_sectors=total_sectors,
@@ -222,17 +265,50 @@ class NativeFatImage:
             self._stream = Path(self.image_path).open("rb")
             self._image_size = os.fstat(self._stream.fileno()).st_size
             self.profile = self._parse_profile(self.volume_size)
+            self._validate_metadata_copies()
+
+    def _validate_metadata_copies(self) -> None:
+        """Reject inconsistent mirrored FAT metadata before any read access."""
+        if self.profile.fat_count > 1 and self.profile.fat_mirroring_enabled:
+            primary = self._read_at(
+                self.profile.reserved_sectors * self.block_size, self.fat_size
+            )
+            for index in range(1, self.profile.fat_count):
+                replica = self._read_at(
+                    self.profile.reserved_sectors * self.block_size
+                    + index * self.fat_size,
+                    self.fat_size,
+                )
+                if replica != primary:
+                    raise FatReadError("mirrored FAT copies are inconsistent")
+        if self.fat_type != 32:
+            return
+        backup_sector = struct.unpack_from("<H", self._boot_sector, 50)[0]
+        if not backup_sector:
+            return
+        backup = self._read_at(backup_sector * self.block_size, self.block_size)
+        if backup != self._boot_sector:
+            raise FatReadError("FAT32 backup boot sector is inconsistent")
 
     def _read_absolute(self, absolute: int, size: int, *, image_only=False) -> bytes:
         if self._stream is None:
             raise FatReadError("filesystem image is closed")
-        if absolute < 0 or size < 0 or absolute + size < absolute:
-            raise FatReadError("negative or overflowing FAT read range")
         if not image_only:
-            if absolute < self.offset or absolute + size > self.volume_end:
-                raise FatReadError("FAT read exceeds selected volume bounds")
-        if absolute + size > self._image_size:
-            raise FatReadError("FAT read exceeds image bounds")
+            checked_range(
+                absolute,
+                size,
+                lower=self.offset,
+                upper=self.volume_end,
+                context="FAT read exceeds selected volume bounds",
+                error_type=FatReadError,
+            )
+        checked_range(
+            absolute,
+            size,
+            upper=self._image_size,
+            context="FAT read exceeds image bounds",
+            error_type=FatReadError,
+        )
         with self._lock:
             self._stream.seek(absolute)
             data = self._stream.read(size)
@@ -241,27 +317,30 @@ class NativeFatImage:
         return data
 
     def _read_at(self, relative: int, size: int) -> bytes:
-        if relative < 0 or size < 0 or relative + size < relative:
-            raise FatReadError("negative or overflowing FAT read range")
+        checked_range(
+            relative,
+            size,
+            upper=self.volume_end - self.offset,
+            context="FAT read exceeds selected volume bounds",
+            error_type=FatReadError,
+        )
         return self._read_absolute(self.offset + relative, size)
 
     def _fat_entry(self, cluster: int) -> int:
         if cluster < 0 or cluster >= self.cluster_count + 2:
             raise FatReadError("FAT entry index is outside the declared table")
+        fat_offset = (
+            self.profile.reserved_sectors * self.block_size
+            + self.profile.active_fat_index * self.fat_size
+        )
         if self.fat_type == 12:
-            raw = self._read_at(
-                self.profile.reserved_sectors * self.block_size + (cluster * 3) // 2, 2
-            )
+            raw = self._read_at(fat_offset + (cluster * 3) // 2, 2)
             value = struct.unpack_from("<H", raw, 0)[0]
             return (value >> 4) if cluster & 1 else (value & 0x0FFF)
         if self.fat_type == 16:
-            raw = self._read_at(
-                self.profile.reserved_sectors * self.block_size + cluster * 2, 2
-            )
+            raw = self._read_at(fat_offset + cluster * 2, 2)
             return struct.unpack_from("<H", raw, 0)[0]
-        raw = self._read_at(
-            self.profile.reserved_sectors * self.block_size + cluster * 4, 4
-        )
+        raw = self._read_at(fat_offset + cluster * 4, 4)
         return struct.unpack_from("<I", raw, 0)[0] & 0x0FFFFFFF
 
     def _is_eoc(self, value: int) -> bool:

@@ -115,16 +115,23 @@ def test_open_mount_write_refresh_delete(tmp_path, app, dialogs, monkeypatch):
         win.tree.setCurrentIndex(win.model.index(1, 0))
         assert "HELLO.TXT" in win.info.toPlainText()
 
-        # A write through the window's own writer appears after a refresh.
-        win.writer.write_file("/", "NEW.BIN", b"1234567")
-        win._refresh_dir("/")
+        # The reader is closed before a staged replacement (required on Windows)
+        # and the refreshed tree uses a newly opened bounded provider.
+        previous_provider = win.provider
+
+        def write_new_file():
+            assert win.provider is None
+            win.writer.write_file("/NEW.BIN", b"1234567")
+
+        win._perform_write("/", write_new_file)
+        assert win.provider is not None
+        assert win.provider is not previous_provider
         assert win.model.canFetchMore(QModelIndex())
         win.model.fetchMore(QModelIndex())
         assert "NEW.BIN" in _rows(win.model)
 
         # Deleting a non-empty folder, exactly as the Delete button does.
-        win.writer.delete("/PHOTOS", recursive=True)
-        win._refresh_dir("/")
+        win._perform_write("/", lambda: win.writer.delete("/PHOTOS", recursive=True))
         win.model.fetchMore(QModelIndex())
         assert _rows(win.model) == ["HELLO.TXT", "NEW.BIN"]
     finally:

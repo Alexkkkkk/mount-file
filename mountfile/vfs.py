@@ -2,29 +2,31 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
 # Licensed under the MIT License - see the LICENSE file for details.
-"""Read-only filesystem providers for raw images.
+"""Read-only, bounded filesystem providers for raw images.
 
-``TskImage`` uses The Sleuth Kit (pytsk3) for formats without an accepted native
-profile. ``NativeFatImage`` reads FAT12/16/32 and ``NativeExt2Image`` reads a
-strict, clean ext2 subset in pure Python. Legacy format coverage still depends
-on the explicitly optional libtsk build.
-
-The module also exports a dependency-free ext superblock probe. The probe
-reports format features and geometry only; it does not browse files or authorize
-writes.
-The pure-Python NTFS probe validates boot-sector geometry and FILE-record USA
-fixups only; it does not replace the pytsk3 reader or enable NTFS writes.
+Native providers cover selected profiles of FAT12/16/32, ext2/3/4, exFAT and
+NTFS. Every provider follows the shared list/stat/read-file/read-range/extract
+contract.
+``TskImage`` is an explicitly optional compatibility fallback for unrecognized
+formats; a recognized but unsupported or malformed native profile is rejected
+without falling through to a different parser. Native NTFS browsing and all
+native readers are read-only. Write support is routed separately through the
+existing writer APIs.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
+from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
 from mountfile.ext_probe import ExtProbeError, probe_ext_superblock
 from mountfile.fat_reader import FatReadError, NativeFatImage
+from mountfile.safety import RefusalCode, RefusalError, checked_range, code_for_message
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 # --- MOUNTFILE_FIX: OLMA safe read -----------------------------------------
 try:
@@ -78,11 +80,39 @@ except ImportError:  # pragma: no cover
 
 
 class TskError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code or code_for_message(message)
+
+    @property
+    def category(self):
+        return RefusalError(str(self), self.code).category
+
+    def to_dict(self):
+        """Return the native refusal payload without losing code/category."""
+        return RefusalError(str(self), self.code).to_dict()
 
 
 class RecognizedFilesystemError(TskError):
     """A recognized filesystem was rejected and must not use another format parser."""
+
+
+class LegacyFallbackAvailableError(RecognizedFilesystemError):
+    """An unknown format may be tried with the explicit read-only legacy reader."""
+
+
+_TRUE = frozenset(("1", "true", "yes", "on", "да"))
+
+
+def legacy_tsk_enabled() -> bool:
+    """Return whether the optional external Sleuth Kit fallback is enabled.
+
+    Native VFS routing is deliberately offline and dependency-free by default.
+    Applications that explicitly need compatibility parsing for an unknown
+    format must opt in through ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` or the keyword
+    argument of :func:`open_image_provider`.
+    """
+    return os.environ.get("MOUNTFILE_ALLOW_LEGACY_TSK", "").strip().lower() in _TRUE
 
 
 def open_native_ext2(image_path, offset=0, volume_size=None):
@@ -94,11 +124,20 @@ def open_native_ext2(image_path, offset=0, volume_size=None):
     return NativeExt2Image(image_path, offset=offset, volume_size=volume_size)
 
 
-def open_native_ext3(image_path, offset=0, volume_size=None):
-    """Open the conservative classic-layout ext3/ext4 read-only provider."""
+def open_native_ext3(image_path, offset=0, volume_size=None, *, replay_journal=False):
+    """Open bounded ext3/ext4 read-only access with optional journal overlay.
+
+    ``replay_journal`` is explicit and in-memory only. Automatic VFS routing
+    leaves it disabled, so active journals remain fail-closed by default.
+    """
     profile = probe_ext_superblock(image_path, offset=offset, volume_size=volume_size)
     provider_type = NativeExt4Image if profile.fs_type == "ext4" else NativeExt3Image
-    return provider_type(image_path, offset=offset, volume_size=volume_size)
+    return provider_type(
+        image_path,
+        offset=offset,
+        volume_size=volume_size,
+        replay_journal=replay_journal,
+    )
 
 
 def volume_size_for_offset(image_path, offset):
@@ -176,18 +215,52 @@ def _fmt_mtime(meta):
         return ""
 
 
-class TskImage:
-    """Browsable view of one filesystem inside a raw image at `offset`."""
+def _legacy_tsk_extent(image_path, offset, volume_size):
+    """Require pytsk3's native file handle to cover exactly the selected image.
 
-    def __init__(self, image_path, offset=0):
-        if pytsk3 is None:
-            raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
+    pytsk3.Img_Info opens the entire file and has no per-filesystem extent
+    limit in this wrapper. Until a bounded image adapter is available, the
+    compatibility fallback is safe only for an unpartitioned whole-image
+    filesystem.
+    """
+    try:
+        offset = int(offset)
+        image_size = os.path.getsize(image_path)
+        if volume_size is not None:
+            volume_size = int(volume_size)
+    except (OSError, TypeError, ValueError, OverflowError) as exc:
+        raise TskError(f"cannot validate legacy pytsk3 image extent: {exc}") from exc
+
+    if offset < 0 or image_size <= 0 or offset > image_size:
+        raise TskError("invalid legacy pytsk3 image extent")
+    if volume_size is not None and (
+        volume_size <= 0 or offset + volume_size > image_size
+    ):
+        raise TskError("selected filesystem extent exceeds image bounds")
+    if offset != 0 or (volume_size is not None and volume_size != image_size):
+        raise TskError(
+            "legacy pytsk3 fallback cannot safely constrain a selected partition; "
+            "refusing bounded extent"
+        )
+    return image_size
+
+
+class TskImage(ReadOnlyVFSStatMixin):
+    """Browsable legacy view for a filesystem spanning an entire image file."""
+
+    def __init__(self, image_path, offset=0, volume_size=None):
         self.image_path = str(image_path)
         self.offset = int(offset)
+        self.volume_size = _legacy_tsk_extent(self.image_path, self.offset, volume_size)
+        if pytsk3 is None:
+            raise TskError("pytsk3 is not installed. Run: pip install pytsk3")
         self.backend_name = "pytsk3"
+        self.img = None
+        self.fs = None
         try:
             self._open_image()
         except Exception as e:
+            self.close()
             raise TskError(str(e)) from e
         self.root_name = image_path
 
@@ -204,13 +277,24 @@ class TskImage:
             if callable(close):
                 try:
                     close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "best-effort operation failed", exc_info=exc
+                    )
 
     def reopen(self):
         """Reopen the image after a writer has detached its temporary mount."""
         if getattr(self, "fs", None) is None:
-            self._open_image()
+            # The image may have been resized while its handle was closed.
+            # Revalidate the original whole-image extent before opening it again.
+            _legacy_tsk_extent(self.image_path, self.offset, self.volume_size)
+            try:
+                self._open_image()
+            except Exception as exc:
+                # FS_Info can fail after Img_Info opened a file. Do not retain
+                # that handle or leave a half-open provider on retry.
+                self.close()
+                raise TskError(str(exc)) from exc
 
     def list_dir(self, path="/"):
         out = []
@@ -251,9 +335,19 @@ class TskImage:
     def read_file_range(self, path, offset=0, length=1 << 20):
         f = self._open(path)
         size = int(f.info.meta.size)
+        try:
+            checked_range(offset, 0, upper=size, context="VFS file read offset")
+            if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+                checked_range(0, length, upper=0, context="VFS file read length")
+            length = min(length, size - offset)
+            _, end = checked_range(
+                offset, length, upper=size, context="VFS file read range"
+            )
+        except RefusalError as exc:
+            raise TskError(str(exc), exc.code) from exc
         if offset >= size:
             return b""
-        length = min(length, size - offset)
+        length = end - offset
         chunks = []
         got = 0
         while got < length:
@@ -300,11 +394,35 @@ def _has_ntfs_boot_magic(image_path, offset, volume_size):
             volume_size = int(volume_size)
         with open(image_path, "rb") as stream:
             image_size = os.fstat(stream.fileno()).st_size
-            if volume_size is not None and (
-                volume_size <= 0 or offset + volume_size > image_size
-            ):
-                raise TskError("selected filesystem extent exceeds image bounds")
-            if offset + 11 > image_size:
+            if volume_size is not None:
+                if volume_size <= 0:
+                    raise TskError("selected filesystem extent exceeds image bounds")
+                try:
+                    checked_range(
+                        offset,
+                        volume_size,
+                        upper=image_size,
+                        context="selected filesystem extent exceeds image bounds",
+                    )
+                except RefusalError as exc:
+                    raise TskError(str(exc)) from exc
+                try:
+                    checked_range(
+                        3,
+                        8,
+                        upper=volume_size,
+                        context="NTFS boot signature exceeds selected volume bounds",
+                    )
+                except RefusalError:
+                    return False
+            try:
+                checked_range(
+                    offset + 3,
+                    8,
+                    upper=image_size,
+                    context="NTFS boot signature exceeds image bounds",
+                )
+            except RefusalError:
                 return False
             stream.seek(offset + 3)
             return stream.read(8) == b"NTFS    "
@@ -328,13 +446,82 @@ def _has_fat_boot_magic(image_path, offset, volume_size):
             if volume_size is not None and volume_size < 512:
                 return False
             stream.seek(offset)
-            return NativeFatImage.looks_like_boot_sector(stream.read(512))
+            raw = stream.read(512)
+            return NativeFatImage.has_fat_family_marker(
+                raw
+            ) or NativeFatImage.looks_like_boot_sector(raw)
     except OSError as exc:
         raise TskError(f"cannot inspect image for native FAT: {exc}") from exc
 
 
-def open_image_provider(image_path, offset=0, volume_size=None):
-    """Open a read-only provider with fail-closed routing for recognized formats."""
+def _has_exfat_boot_magic(image_path, offset, volume_size):
+    try:
+        offset = int(offset)
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
+            if volume_size <= 0 or offset + volume_size > os.path.getsize(image_path):
+                raise TskError("selected filesystem extent exceeds image bounds")
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset + 11 > image_size:
+                return False
+            if volume_size is not None and volume_size < 512:
+                return False
+            stream.seek(offset + 3)
+            return stream.read(8) == b"EXFAT   "
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for native exFAT: {exc}") from exc
+
+
+def _detect_macos_filesystem(image_path, offset, volume_size):
+    """Return an explicit macOS filesystem name without opening a backend."""
+    try:
+        offset = int(offset)
+        if offset < 0:
+            raise TskError("negative filesystem offset")
+        if volume_size is not None:
+            volume_size = int(volume_size)
+            if volume_size <= 0 or offset + volume_size > os.path.getsize(image_path):
+                raise TskError("selected filesystem extent exceeds image bounds")
+        with open(image_path, "rb") as stream:
+            image_size = os.fstat(stream.fileno()).st_size
+            if offset + 1026 > image_size:
+                return None
+            if volume_size is not None and volume_size < 1026:
+                return None
+            stream.seek(offset + 1024)
+            marker = stream.read(2)
+            if marker in (b"H+", b"HX"):
+                return "HFS+"
+            stream.seek(offset + 0x20)
+            if stream.read(4) in (b"NXSB", b"APSB"):
+                return "APFS"
+    except OSError as exc:
+        raise TskError(f"cannot inspect image for macOS filesystem: {exc}") from exc
+    return None
+
+
+def _refusal_code(exc):
+    """Preserve a typed native refusal; leave legacy exceptions classified by text."""
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, RefusalCode) else None
+
+
+def open_image_provider(
+    image_path, offset=0, volume_size=None, *, allow_legacy_fallback=None
+):
+    """Open a bounded native provider without external fallback by default.
+
+    Supported native profiles are always handled in-process. ``pytsk3`` is an
+    optional compatibility backend for genuinely unrecognized formats and is
+    only reachable when ``allow_legacy_fallback=True`` or
+    ``MOUNTFILE_ALLOW_LEGACY_TSK=1`` is set. Since its image handle cannot enforce
+    a partition-sized read boundary, this fallback is limited to a filesystem
+    spanning the whole image file. A recognized-but-unsupported profile remains
+    fail-closed regardless of this flag.
+    """
     if _has_ext_superblock_magic(image_path, offset, volume_size):
         if volume_size is None:
             raise RecognizedFilesystemError(
@@ -357,7 +544,8 @@ def open_image_provider(image_path, offset=0, volume_size=None):
                 return open_native_ext2(image_path, offset, volume_size)
             except Ext2ReadError as exc:
                 raise RecognizedFilesystemError(
-                    f"native ext2 reader declined the ext profile: {exc}"
+                    f"native ext2 reader declined the ext profile: {exc}",
+                    code=_refusal_code(exc),
                 ) from exc
         if profile.fs_type in ("ext3", "ext4"):
             if not profile.clean_unmounted or profile.journal_recovery_needed:
@@ -368,8 +556,28 @@ def open_image_provider(image_path, offset=0, volume_size=None):
                 return open_native_ext3(image_path, offset, volume_size)
             except Ext3ReadError as exc:
                 raise RecognizedFilesystemError(
-                    f"native ext3/ext4 reader declined the ext profile: {exc}"
+                    f"native ext3/ext4 reader declined the ext profile: {exc}",
+                    code=_refusal_code(exc),
                 ) from exc
+
+    if _has_exfat_boot_magic(image_path, offset, volume_size):
+        if volume_size is None:
+            raise RecognizedFilesystemError(
+                "recognized exFAT volume requires an explicit bounded extent"
+            )
+        try:
+            probe_exfat_profile(image_path, offset=offset, volume_size=volume_size)
+        except Exception as exc:
+            raise RecognizedFilesystemError(
+                f"invalid exFAT boot profile: {exc}", code=_refusal_code(exc)
+            ) from exc
+        try:
+            return NativeExfatImage(image_path, offset=offset, volume_size=volume_size)
+        except ExfatReadError as exc:
+            raise RecognizedFilesystemError(
+                f"native exFAT reader declined the exFAT profile: {exc}",
+                code=_refusal_code(exc),
+            ) from exc
 
     if _has_ntfs_boot_magic(image_path, offset, volume_size):
         if volume_size is None:
@@ -380,7 +588,8 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             return open_native_ntfs_metadata(image_path, offset, volume_size)
         except Exception as exc:
             raise RecognizedFilesystemError(
-                f"native NTFS reader declined the NTFS profile: {exc}"
+                f"native NTFS reader declined the NTFS profile: {exc}",
+                code=_refusal_code(exc),
             ) from exc
 
     if _has_fat_boot_magic(image_path, offset, volume_size):
@@ -388,7 +597,26 @@ def open_image_provider(image_path, offset=0, volume_size=None):
             return NativeFatImage(image_path, offset=offset, volume_size=volume_size)
         except FatReadError as exc:
             raise RecognizedFilesystemError(
-                f"native FAT reader declined the FAT profile: {exc}"
+                f"native FAT reader declined the FAT profile: {exc}",
+                code=_refusal_code(exc),
             ) from exc
 
-    return TskImage(image_path, offset=offset)
+    macos_filesystem = _detect_macos_filesystem(image_path, offset, volume_size)
+    if macos_filesystem:
+        raise RecognizedFilesystemError(
+            f"recognized {macos_filesystem} image requires its explicit read-only adapter"
+        )
+
+    if allow_legacy_fallback is None:
+        allow_legacy_fallback = legacy_tsk_enabled()
+    if not allow_legacy_fallback:
+        raise LegacyFallbackAvailableError(
+            "filesystem is not covered by the native offline providers; "
+            "legacy pytsk3 fallback is disabled (set "
+            "MOUNTFILE_ALLOW_LEGACY_TSK=1 or pass allow_legacy_fallback=True)"
+        )
+    try:
+        _legacy_tsk_extent(image_path, offset, volume_size)
+    except TskError as exc:
+        raise RecognizedFilesystemError(str(exc), code=_refusal_code(exc)) from exc
+    return TskImage(image_path, offset=offset, volume_size=volume_size)

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import mmap
 import os
 import random
@@ -209,7 +210,10 @@ class CachedFS:
                         "mtime": meta.mtime if meta else None,
                     }
                 )
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
                 continue
         self._listing.put(path, rows)
         return rows

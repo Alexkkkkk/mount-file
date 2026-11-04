@@ -17,14 +17,16 @@ Licensed under the MIT License - see the LICENSE file for details.
 # Mount File
 
 **Файловый менеджер для raw-образов дисков и дампов NAND/eMMC.** Просмотр и
-извлечение файлов, чтение таблиц разделов MBR/GPT, а в образах FAT32 — создание,
-перезапись и удаление файлов и папок. Вся работа идёт с файлом образа: проект
-никогда не пишет данные обратно на устройство.
+извлечение файлов, чтение таблиц разделов MBR/GPT, bounded native read для FAT,
+ext, exFAT и NTFS, а также ограниченная native-запись в FAT32, ext2 и exFAT.
+Вся работа идёт с файлом образа: проект никогда не пишет данные обратно на
+устройство.
 
 > **English:** Mount File is a desktop file manager for raw disk images and
 > NAND/eMMC dumps — browse and extract files, read MBR/GPT partition tables,
-> and create/replace/delete files and folders in FAT32 images. Everything
-> happens inside the image file; nothing is flashed back to the device.
+> inspect bounded native FAT, ext, exFAT and NTFS profiles, and perform limited
+> writes in FAT12/16/32, ext2 and exFAT images. Everything happens inside the image
+> file; nothing is flashed back to the device.
 
 | | |
 |---|---|
@@ -41,10 +43,14 @@ Licensed under the MIT License - see the LICENSE file for details.
 > Подробности и безопасная локальная синхронизация — [в руководстве](docs/sync.md).
 
 > **Статус проекта.** Issue [#87](https://github.com/Alexkkkkk/mount-file/issues/87) —
-> это roadmap, а не заявление о готовой forensic-платформе. Штатно
-> поддерживается запись **только в FAT32**; DFIR-команды, AI-слой, YARA,
-> carving и универсальный RW-слой имеют экспериментальные или частичные
-> реализации. Подробности — в разделе [Ограничения](#ограничения).
+> это roadmap, а не заявление о готовой forensic-платформе. Native-запись
+> поддерживается в ограниченных профилях FAT12/16/32, ext2 и exFAT; это не означает
+> полную поддержку этих форматов или crash-safe транзакции при отключении
+> питания. ext3/ext4 и NTFS остаются read-only в native-пути. DFIR-команды,
+> AI-слой, YARA, carving и универсальный RW-слой имеют экспериментальные или
+> частичные реализации. Срез возможностей и критерии native FS ведутся в
+> [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182); подробности —
+> также в разделе [Ограничения](#ограничения).
 
 ## Содержание
 
@@ -67,6 +73,7 @@ Licensed under the MIT License - see the LICENSE file for details.
 - [Структура проекта](#структура-проекта)
 - [Ограничения](#ограничения)
 - [Участие в разработке](#участие-в-разработке)
+- [Поддержка проекта](#поддержка-проекта)
 - [Лицензия](#лицензия)
 
 ## Состав проекта
@@ -85,14 +92,16 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 - **Разметка диска:** определение MBR и GPT, выбор раздела или всего образа,
   чтение смещений из файла `udev`.
-- **Просмотр и извлечение:** встроенные bounded pure-Python readers для FAT12/16/32
-  и ограниченных clean ext2/ext3/ext4 профилей выбираются первыми; The Sleuth Kit
-  (`pytsk3`) остаётся явно optional fallback для остальных форматов — exFAT,
-  NTFS, HFS+, ISO9660 и других файловых систем, поддерживаемых установленной
-  сборкой `libtsk`.
-- **Запись в FAT32:** создание и перезапись файлов, длинные имена (LFN) и
-  имена 8.3, создание каталогов, переименование и удаление, выделение и
-  освобождение кластеров — собственным движком `mountfile/fat32.py`.
+- **Просмотр и извлечение:** bounded pure-Python readers поддерживают выбранные
+  профили FAT12/16/32, clean ext2/ext3/ext4, exFAT и NTFS. `pytsk3` — optional
+  compatibility fallback для нераспознанных форматов. Узнанный, но dirty,
+  повреждённый или неподдержанный native-профиль не передаётся другому parser-у.
+- **Ограниченная native-запись:** FAT32 поддерживает создание/перезапись файлов,
+  каталоги, переименование и удаление; ограниченный clean ext2-профиль и
+  bounded exFAT-профиль также имеют native writer-ы. У каждого профиля есть
+  ограничения по состоянию тома, структурам и операциям; unsupported-профили
+  отклоняются, а не исправляются автоматически. Полная матрица приведена в
+  разделе [Ограничения](#ограничения).
 - **Авто-подбор рабочего тома:** поиск реальной файловой системы в дампах, где
   таблица разделов отсутствует или указывает на контейнер (см.
   [авто-подбор](#авто-подбор-рабочего-тома)).
@@ -102,7 +111,9 @@ Licensed under the MIT License - see the LICENSE file for details.
 - **Дампы RT809H:** расшифровка зашифрованных дампов eMMC MStar (MST) и
   MediaTek (MTK) по встроенным XOR-таблицам (`mountfile/data/XOR_MST_00.bin`,
   `XOR_MTK_00.bin`) и разбиение дампа на партиции по файлу `udev`.
-- **HEX-просмотр** первых 1 МБ выбранного файла.
+- **Встроенный HEX-редактор:** просмотр и изменение байтов в HEX- и ASCII-колонках,
+  вставка и удаление, отмена/повтор, поиск и переход к смещению; сохранение
+  подтверждается отдельно, а перед записью в образ создаётся резервная копия.
 
 ### Интерфейс
 
@@ -116,8 +127,9 @@ Licensed under the MIT License - see the LICENSE file for details.
 - Колонки Имя / Тип / Размер / Дата / Атрибуты: «Имя» занимает свободное место,
   у папок тип — «Папка», размер — `<Папка>`, атрибуты — `----c`; длинные имена
   обрезаются по центру и видны целиком в подсказке.
-- Перед записью в FAT32-образ GUI предлагает создать резервную копию
-  `<image>.bak`; при ошибке копирования операция записи отменяется.
+- Перед первой mutation в текущей GUI-сессии native writer автоматически
+  сохраняет полную копию образа в `~/.mountfile/backups`; если копирование не
+  удаётся, запись не начинается. Хранятся последние три копии на имя образа.
 
 ### DFIR, AI и служебное
 
@@ -151,15 +163,15 @@ Licensed under the MIT License - see the LICENSE file for details.
 |---|---|
 | Python | 3.10+ (`requires-python = ">=3.10"`; CI проверяет 3.10–3.12) |
 | Qt | PyQt6 ≥ 6.11 для основного приложения |
-| `pytsk3` | optional extra `legacy-tsk`; legacy чтение неподдержанных native-профилей |
+| `pytsk3` | optional extra `legacy-tsk`; явно включаемый compatibility fallback для форматов, не распознанных native routing |
 | REST API (необязательно) | `fastapi`, `uvicorn`, `httpx` |
 | AI-слой (необязательно) | `mcp[cli]`, `pydantic`, `openai` |
 | Системные пакеты (Linux) | `libgl1`, `libegl1`, `libxkbcommon-x11-0`, `libdbus-1-3`, `libxcb-cursor0` |
 | Системные инструменты (по желанию) | `debugfs` для ext (на Windows — `debugfs.exe` или WSL с `e2fsprogs`); `ntfs-3g` для NTFS на Linux; ImDisk Virtual Disk Driver для NTFS/exFAT/FAT12/16 на Windows (нужен запуск от администратора) |
 
 `requirements.txt` — полный набор зависимостей для Python 3.10+. Обычная
-установка через `pip install .` включает PyQt6, а `pytsk3` подключается только
-через extra `legacy-tsk`; последние версии
+установка через `pip install .` включает PyQt6, а `pytsk3` устанавливается только
+через extra `legacy-tsk` и не включается как автоматический fallback; последние версии
 этих зависимостей указаны в `pyproject.toml`. Файлы и сценарии Win7/Python 3.8 сохранены как
 legacy-артефакты, но текущий пакет требует Python 3.10+, поэтому этот релиз не
 заявляет поддержку Windows 7.
@@ -248,8 +260,10 @@ python install_mountfile.py --dev         # дополнительно инст�
 | `--dry-run` | напечатать команды и ничего не выполнять |
 
 Скрипт идемпотентен: готовый `.venv` переиспользуется, повторный запуск ничего
-не ломает. В полном профиле `pytsk3` устанавливается как legacy fallback; в
-`--minimal` он не нужен. Если выбранный optional wheel недоступен, ошибка
+не ломает. В полном профиле `pytsk3` устанавливается как optional compatibility
+dependency, но runtime fallback всё равно требует явного opt-in; в `--minimal`
+он не нужен. Recognized unsupported/dirty native profiles завершаются отказом,
+а не переходят на `pytsk3`. Если выбранный optional wheel недоступен, ошибка
 показывается явно и не маскируется сообщением «Готово».
 Проверяются `pip check` и импорты выбранного профиля; ошибка не маскируется
 сообщением «Готово». Visual Studio C++ Build Tools не устанавливаются безусловно:
@@ -319,13 +333,15 @@ python main.py --olma <команда># слой самоанализа OLMA (с
 
 В окне выберите образ (**File → Open image…**), затем том в списке **Volume**
 (раздел или **Whole image**). Двойной щелчок открывает папку или файл в
-HEX-просмотрщике, кнопка **Extract…** извлекает файл на диск. Для тома FAT32
-доступны **Import file…** и **New folder**.
+встроенном HEX-редакторе, кнопка **Extract…** извлекает файл на диск. **Import**,
+**New folder**, **Rename**, **Delete** и сохранение HEX доступны только если
+выбранный том проходит native writer profile gates для FAT12/16, FAT32, ext2
+или exFAT.
 
 > ⚠️ **Импорт, создание, переименование и удаление изменяют сам файл образа.**
-> Работайте с копией образа или сделайте резервную копию заранее. `--backup`
-> создаёт соседний файл `<image>.bak`, но не заменяет независимую резервную
-> копию и проверку свободного места.
+> Работайте с копией образа. GUI перед первой записью создаёт снимок в
+> `~/.mountfile/backups`; CLI `--backup` создаёт соседний `<image>.bak`. Ни один
+> из этих механизмов не заменяет проверку свободного места и независимую копию.
 
 ## Командная строка
 
@@ -333,20 +349,20 @@ CLI живёт в `mountfile/cli.py` и доступен и через `python m
 `python -m mountfile`; Qt для него не требуется.
 
 ```text
-python -m mountfile {volumes,info,ls,get,put,mkdir,mv,rm,decode,split,autopick,
+python -m mountfile {volumes,info,ls,stat,read-range,capabilities,get,put,mkdir,mv,rm,decode,split,autopick,
                      grep,hash,timeline,timeline-export,timestomp,yara,
                      unallocated-scan,slack,timeline-build,timeline-query,
                      search,yara-scan,timestomp-scan,slack-extract,live-diff} …
 ```
 
-### Команды изменения образа (FAT32)
+### Команды изменения образа
 
 | Команда | Назначение | Запись в образ |
 |---|---|---:|
-| `put` | записать локальные файлы в образ | **да, FAT32** |
-| `mkdir` | создать каталог | **да, FAT32** |
-| `mv` | переименовать запись в том же каталоге | **да, FAT32** |
-| `rm` | удалить файл или каталог | **да, FAT32** |
+| `put` | записать локальные файлы в образ | зависит от backend и выбранного ограниченного профиля |
+| `mkdir` | создать каталог | зависит от backend и выбранного ограниченного профиля |
+| `mv` | переименовать запись в том же каталоге | зависит от backend и выбранного ограниченного профиля |
+| `rm` | удалить файл или каталог | зависит от backend и выбранного ограниченного профиля |
 
 Команды записи без `--yes` ничего не делают, показывают предупреждение и
 возвращают код **2**. Код возврата: `0` — успех, `1` — ошибка, `2` — нужно
@@ -359,6 +375,9 @@ python -m mountfile {volumes,info,ls,get,put,mkdir,mv,rm,decode,split,autopick,
 | `volumes` | список найденных томов и смещений | нет |
 | `info` | размер, сигнатура и сводка томов | нет |
 | `ls` | содержимое каталога внутри образа | нет |
+| `stat` | JSON-метаданные пути из выбранного native/legacy reader | нет |
+| `read-range` | bounded диапазон байтов regular file (до 16 MiB) | только новый output-файл, если указан |
+| `capabilities` | версия и список ограниченных native read/write профилей | нет |
 | `get` | извлечь файл или каталог во внешний каталог | нет |
 | `autopick` | автоматически подобрать рабочий том | нет |
 | `decode` | расшифровать дамп RT809H (MST/MTK) | создаёт новый файл |
@@ -400,8 +419,8 @@ cluster chain — это должен сделать вызывающий код
 
 ### Общие аргументы целевых команд
 
-Применимы к `volumes`, `info`, `ls`, `get`, `put`, `mkdir`, `mv`, `rm`,
-`autopick`:
+Применимы к `volumes`, `info`, `ls`, `stat`, `read-range`, `get`, `put`, `mkdir`,
+`mv`, `rm`, `autopick`:
 
 | Аргумент | Действие |
 |---|---|
@@ -468,14 +487,16 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 
 | Клавиши | Действие |
 |---|---|
-| `Enter` / двойной щелчок | открыть каталог, текстовый файл — в системном редакторе, остальное — в HEX-просмотре |
+| `Enter` / двойной щелчок | открыть каталог, текстовый файл — в системном редакторе, остальное — во встроенном HEX-редакторе |
 | `Backspace` | на уровень вверх |
 | `Space` / `Insert` | отметить файл |
 | `Ctrl+A` | выделить всё |
 | `Tab` | другая панель |
 | `Ctrl+U` | поменять панели местами |
 | `Ctrl+T` / `Ctrl+W` | создать / закрыть вкладку |
-| `F3` / `F4` | просмотр / правка: текстовые файлы открываются в системном редакторе, остальное — HEX-просмотр |
+| `F3` / `F4` | F3: текст — в системном редакторе, бинарный файл — во встроенном HEX-редакторе; F4: правка поддерживаемого текста |
+| `Ctrl+S` | сохранить изменения в HEX-редакторе |
+| `Ctrl+F` / `Ctrl+G` | найти байты / перейти к смещению в HEX-редакторе |
 | `F5` / `F6` | копирование / перемещение между панелями |
 | `F7` / `F8` | создать каталог / удаление |
 | `F9` | показать или скрыть меню |
@@ -485,10 +506,14 @@ NAND-дампов не обрабатываются. В GUI авто-подбо�
 | `Ctrl+I` | AI: добавить файл для анализа |
 
 `F4` редактирует текстовые файлы до 2 MiB. Сохранение в образ требует writer:
-FAT32 и ограниченный профиль чистого ext2 имеют встроенную запись. В фазе 1
-native ext2 использует allowlisted features и один single-indirect block
-(до `12 + block_size/4` data blocks на файл); sparse/double/triple-indirect
-не поддерживаются. ext2 вне этого профиля и ext3/4 остаются read-only в GUI и
+  bounded native write-профили существуют для FAT12/16, FAT32, чистого ext2 и
+  exFAT. Native ext2 использует allowlisted features: regular files и каталоги
+  поддерживают bounded direct/single/double-indirect blocks до 64 MiB; sparse и
+  triple-indirect не поддержаны.
+  FAT12/16 writer ограничен packed FAT и фиксированным root directory и не
+  означает полного write parity. Native exFAT принимает проверенный профиль с
+  одной или двумя FAT и разрешённым ActiveFat/VolumeFlags; unsupported/dirty
+  metadata отвергается. ext2 вне этого профиля, ext3/4 и NTFS остаются read-only в GUI и
 `WriteEngine`: legacy `debugfs` доступен только как явный library-level
 compatibility opt-in (`allow_legacy_debugfs=True`), а не как автоматический
 fallback (`debugfs.exe`/WSL на Windows).
@@ -529,12 +554,22 @@ python mountfile.py --version
 
 ## Настройки и окружение
 
-При запуске приложение проверяет GitHub Releases в фоновом потоке; отсутствие
-сети не блокирует работу.
+Основной VFS и native read/write-путь работают локально, в процессе Python и
+без сети, `pytsk3`, системных mount-команд или filesystem-драйверов. Для
+неизвестного формата VFS завершается понятной ошибкой, а не подключает внешний
+fallback молча. Совместимость с `pytsk3` включается только явно через
+`MOUNTFILE_ALLOW_LEGACY_TSK=1` или `allow_legacy_fallback=True`; legacy writer-ы
+так же требуют своих explicit opt-in флагов.
+
+Проверка GitHub Releases при старте выключена по умолчанию. Сетевые обновления
+и AI/API-интеграции являются отдельными opt-in возможностями; ручная проверка
+обновлений из меню остаётся доступной.
 
 | Переменная окружения | Действие |
 |---|---|
-| `MOUNTFILE_NO_UPDATE=1` | отключить проверку обновлений |
+| `MOUNTFILE_ENABLE_UPDATE_CHECK=1` | разрешить сетевую проверку обновлений при старте |
+| `MOUNTFILE_NO_UPDATE=1` | дополнительно отключить проверку обновлений |
+| `MOUNTFILE_ALLOW_LEGACY_TSK=1` | явно разрешить `pytsk3` для нераспознанных native-профилями форматов |
 | `MOUNTFILE_AUTO_UPDATE=1` | устанавливать найденное обновление без подтверждения |
 | `MOUNTFILE_UPDATE_REPO=owner/repo` | проверять релизы другого репозитория |
 | `MOUNTFILE_UPDATE_URL=https://…` | прямой URL на JSON последнего релиза |
@@ -717,6 +752,12 @@ pytest tests/ -v
 | синтетические образы для прогона | `make sample` |
 | очистка артефактов | `make clean` |
 
+Pytest запускается с `-ra`: итоговый вывод перечисляет skipped/xfail тесты и
+причины. CI также публикует `test-results.xml` отдельным artifact для каждой
+комбинации ОС/Python; в JUnit XML сохранены исходы и сообщения skip/xfail.
+Смотрите артефакт соответствующего job, прежде чем сравнивать проценты coverage
+или трактовать зелёный job как полный прогон всех optional integrations.
+
 `mountfile_all.py` прогоняет доступный функционал за один запуск. Команды над
 образом по умолчанию работают без записи; демонстрационные операции записи
 включаются только с `--allow-write`:
@@ -767,7 +808,7 @@ mount-file/
 │   ├── extract.py              извлечение файлов и каталогов
 │   ├── firmware.py             поиск и проверка файловых систем
 │   ├── rt809.py                расшифровка MST/MTK и разбиение по udev
-│   ├── hexview.py              HEX-просмотр
+│   ├── hexview.py              встроенный HEX-редактор
 │   ├── tc_window.py            основное двухпанельное окно
 │   ├── tc_style.py             темы и настройки
 │   ├── mainwindow.py           упрощённое окно (используется тестами)
@@ -801,21 +842,44 @@ mount-file/
 
 ## Ограничения
 
-- **Запись зависит от файловой системы и системного backend.** FAT32 и
-  allowlisted clean ext2 имеют встроенные writers; ext2 вне native-профиля и
-  ext3/4 по умолчанию остаются read-only. Legacy `debugfs` (на Windows через
-  WSL с `e2fsprogs`) требует явного library-level compatibility opt-in;
-  NTFS — `ntfs-3g` на Linux или
-  ImDisk и права администратора на Windows. На Windows ImDisk поддерживает
-  NTFS, exFAT и FAT12/16 через системный драйвер. Остальные ФС доступны только
-  для просмотра/извлечения, если их поддерживает установленная `libtsk`.
-- **Без `pytsk3`** доступны собственные readers FAT32 и supported clean ext2;
-  чтение других ФС зависит от внешнего reader/backend.
-- Native FAT32 и supported ext2 subset не требуют внешних CLI. Явный legacy
-  ext2/3/4 compatibility backend использует `debugfs`; NTFS/exFAT/FAT12/16 на Windows требуют ImDisk,
-  а NTFS на Linux — `ntfs-3g`.
-  Если требуемый backend отсутствует, приложение явно отказывает в записи, а
-  не сообщает об успехе после открытия тома только для чтения.
+- **Запись зависит от поддерживаемого профиля.** Ограниченные FAT12/16, FAT32,
+  allowlisted clean ext2 и exFAT имеют native writers; у каждого остаются явные
+  ограничения операций и metadata layout. Native NTFS и ext3/ext4 writers
+  выключены до реализации проверяемого on-volume journal/recovery пути.
+  Legacy `debugfs`, `ntfs-3g` и системные mount/drivers доступны только как
+  отдельные compatibility пути там, где они явно разрешены.
+- **Извлечение ограничено по ресурсам.** По умолчанию один файл ограничен 1 GiB,
+  дерево — 4 GiB, 100 000 файлов и 200 000 записей, глубина вложенных каталогов — 64 уровня.
+  `mountfile.extract.ExtractionLimits` позволяет снизить или изменить эти
+  пределы. При отказе посреди дерева ранее извлечённые файлы остаются на месте;
+  атомарность всего дерева не обещается. Range-capable провайдеры читаются
+  чанками; совместимый whole-file API проверяется по размеру перед записью,
+  но может сначала буферизовать файл в памяти.
+- **FAT write scope:** bounded native writers есть для FAT12/16 и FAT32.
+  FAT12/16 требуют фиксированный root directory и поддерживают ограниченный
+  набор мутаций; FAT32 требует согласованные mirrored copies и не поддерживает
+  active-FAT semantics. Это не полная FAT write parity. Системная запись через
+  ImDisk на Windows — отдельный compatibility route.
+- **exFAT read/write scope:** native reader и writer принимают только ограниченный
+  профиль с одной FAT и проверенной служебной metadata. Двух-FAT TexFAT
+  отвергается независимо от active FAT и bitmap до native чтения или записи;
+  boot probe проверяет геометрию и сам по себе не разрешает доступ. Dirty,
+  media-failure, ClearToZero и неизвестные флаги запрещают запись; это не полная
+  совместимость со всеми exFAT томами и не power-loss guarantee; ClearToZero
+  допускается только при чтении.
+- **Без `pytsk3`** работают bounded native readers FAT12/16/32, выбранных clean
+  ext2/ext3/ext4 профилей, exFAT и NTFS. Каждый parser требует корректные bounds
+  и fail-closed на dirty, неизвестных и повреждённых профилях.
+- Native FAT12/16, FAT32, ext2 и exFAT write profiles не запускают внешние filesystem CLI.
+  Если операция не входит в активный профиль, приложение явно отказывает в
+  записи, а не сообщает об успехе после открытия тома только для чтения.
+- Версионируемый машинно-читаемый контракт операций native-профилей доступен в
+  `mountfile.capabilities.get_native_capability_matrix()` и используется для
+  сериализации VFS/RW capability status. Schema v5 сохраняет прежние списки
+  capabilities и добавляет полный canonical operation/refusal map вместе с
+  профильными state/feature gates. Он описывает операции API, а не заменяет
+  проверку geometry/features конкретного образа и не обещает full FS parity;
+  точный volume всё равно должен пройти профильные validators.
 - Для неатомарных writer-ов `debugfs` и `ntfs-3g` перед каждой операцией записи
   создаётся временный снимок всего образа. Это повышает надёжность восстановления,
   но требует свободного места примерно под размер образа и может заметно увеличить
@@ -829,15 +893,41 @@ mount-file/
   образа, в который записываете.
 
 ## Участие в разработке
-
 1. Форк → ветка `feat/my-feature`.
 2. `pip install -e ".[dev]"` + `pre-commit install`.
 3. Тесты в `tests/`, коммиты в формате [Conventional Commits](https://www.conventionalcommits.org/).
 4. PR.
-
 Подробнее — [CONTRIBUTING.md](CONTRIBUTING.md). Вопросы по уязвимостям — по
 правилам [SECURITY.md](SECURITY.md), без публичных issue. Правила общения —
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) (Contributor Covenant v2.1).
+
+## Поддержка проекта
+
+![Реклама поддержки open-source проектов](docs/assets/project-donation-ad.png)
+
+Готовая рекламная кампания и макеты находятся в [документации по донатам](docs/donation-campaign.md).
+Если проект оказался полезен и вы хотите поддержать его развитие, можно отправить
+добровольный донат в сети **TON**:
+
+Подробности и безопасные рекомендации собраны в [руководстве по поддержке](docs/donations.md).
+
+```text
+UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv
+```
+
+- [Открыть TON-кошелёк для оплаты](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation)
+- [Открыть адрес в TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
+- Сеть: **TON**
+- Назначение: поддержка разработки, тестирования и автоматизации MountFile
+
+![QR-код для доната в TON](docs/assets/ton-donation-qr.png)
+
+Отсканируйте QR-код приложением TON-кошелька или используйте payment link выше.
+Сумма не задана — выберите её самостоятельно перед подтверждением транзакции.
+
+Проверяйте адрес перед отправкой и не отправляйте на него активы из другой сети.
+Этот адрес предназначен только для добровольной поддержки и не является обещанием
+доходности, возврата средств или финансовой услугой.
 
 ## Лицензия
 
@@ -879,3 +969,21 @@ SOFTWARE.
 ```
 
 [LICENSE](LICENSE) © 2026 Alexkkkkk.
+
+<!-- DONATION-CAMPAIGN -->
+## Support the next release
+
+![Support open-source projects](https://raw.githubusercontent.com/Alexkkkkk/mount-file/main/docs/assets/project-donation-ad.png)
+
+Your support funds the next release: development, testing, documentation, and maintenance.
+
+**Donate in TON:** `UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv`
+
+[Open in a TON wallet](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=Project%20support) · [Verify in TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv) · [Read the campaign](https://github.com/Alexkkkkk/mount-file/blob/main/docs/donation-campaign.md)
+
+Donations are voluntary. Check the address and network before sending. Never share a seed phrase, private key, or confirmation code.
+
+If MountFile helps you inspect or extract files from disk images, please consider
+supporting its continued development. If you cannot donate, starring the
+repository, reporting a reproducible issue, contributing a fix, or sharing
+MountFile with someone who may need it is also valuable.

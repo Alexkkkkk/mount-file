@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mountfile"
-version = "1.55.0"
+version = "1.72.1"
 description = "GUI-инструмент для работы с raw-образами NAND/eMMC/дисков"
 readme = "README.md"
 dependencies = [
@@ -50,6 +50,7 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "hypothesis>=6",
+    "pydantic>=2.0",
     "ruff>=0.4",
     "black>=24.4",
     "isort>=5.13",
@@ -87,6 +88,7 @@ fuzz = [
 
 [project.scripts]
 mountfile = "mountfile.__main__:main"
+mountfile-ai = "mountfile_ai:main"
 mountfile-rw = "mountfile_rw_complete:main"
 mountfile-rw-v2 = "mountfile_rw_v2:main"
 
@@ -95,6 +97,7 @@ mountfile-rw-v2 = "mountfile_rw_v2:main"
 # py-modules setuptools ships only the ``mountfile`` package and the
 # ``mountfile-rw`` / ``mountfile-rw-v2`` entry points never get installed.
 py-modules = [
+    "mountfile_ai",
     "mountfile_universal_rw",
     "mountfile_rw_complete",
     "mountfile_rw_v2",
@@ -112,6 +115,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+extend-select = ["S110", "S112"]
 ignore = ["E501", "E402"]
 
 [tool.mypy]

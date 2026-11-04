@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Offline wheel smoke tests for the supported commands and package resources."""
+
 from __future__ import annotations
 
 import os
@@ -21,6 +22,7 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     shutil.copy2(ROOT / "LICENSE", source / "LICENSE")
     shutil.copytree(ROOT / "mountfile", source / "mountfile")
     for module in (
+        "mountfile_ai.py",
         "mountfile_rw_complete.py",
         "mountfile_rw_v2.py",
         "mountfile_universal_rw.py",
@@ -54,19 +56,27 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     assert len(wheel_paths) == 1
     wheel_path = wheel_paths[0]
     resource_name = "mountfile/data/install-windows-components.ps1"
+    ollama_resource = "mountfile/data/install-ollama.ps1"
     with zipfile.ZipFile(wheel_path) as wheel:
         names = set(wheel.namelist())
         assert resource_name in names
+        assert ollama_resource in names
         assert "install_mountfile.py" not in names
         entry_points_name = next(
             name for name in names if name.endswith(".dist-info/entry_points.txt")
         )
         entry_points = wheel.read(entry_points_name).decode("utf-8")
         assert "mountfile = mountfile.__main__:main" in entry_points
+        assert "mountfile-ai = mountfile_ai:main" in entry_points
         assert "mountfile-install" not in entry_points
+        assert "mountfile_ai.py" in names
         assert (
             wheel.read(resource_name)
             == (ROOT / "scripts/install-windows-components.ps1").read_bytes()
+        )
+        assert (
+            wheel.read(ollama_resource)
+            == (ROOT / "mountfile/data/install-ollama.ps1").read_bytes()
         )
 
     target = tmp_path / "installed"
@@ -91,6 +101,8 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     assert install.returncode == 0, install.stdout + install.stderr
 
     smoke_code = """
+import mountfile_ai
+assert callable(mountfile_ai.main)
 from importlib.resources import files
 from mountfile.__main__ import main
 resource = files('mountfile').joinpath('data', 'install-windows-components.ps1')

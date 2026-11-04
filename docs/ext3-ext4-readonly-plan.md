@@ -1,12 +1,12 @@
 # План: conservative read-only ext3/ext4 profiles
 
-Статус: только план, инварианты и рекомендации. Общая рабочая копия не изменялась, commit/push не выполнялись.
+Статус на 2026-10-29: документ описывает safety-инварианты и будущие этапы; часть read-only профилей уже реализована в `main` (`c63e10f`). `NativeExt3Image` допускает только явно запрошенный ограниченный in-memory replay классического JBD2 descriptor/data/commit формата. Это не полноценное journal recovery и не разрешение на запись. Текущий bounded ext4 reader поддерживает ограниченный classic/extent профиль; `64BIT`, `flex_bg`, `bigalloc` и `metadata_csum` остаются неподдержанными и fail-closed. Native ext3/ext4 writers отсутствуют. Актуальная capability-матрица и статус draft PR находятся в [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
 
 ## 1. Цель и границы
 
-Добавить в существующие `mountfile/ext2_reader.py` и `mountfile/vfs.py` два явно ограниченных профиля: `native-ext3-ro` для classic inode pointers + linear directories + JBD2 validation и `native-ext4-ro` для того же чтения с отдельно включаемыми extents и 64-bit/group layouts.
+Развивать существующие `mountfile/ext2_reader.py` и `mountfile/vfs.py` как явно ограниченные профили: `native-ext3-ro` для classic inode pointers + linear directories + JBD2 validation и `native-ext4-ro` для bounded classic/extent reads. Включение 64-bit/group layouts остаётся будущим этапом и требует отдельной реализации и тестов; его нельзя считать частью текущего профиля.
 
-Оба профиля открывают image только `rb`, требуют явные `offset` и `volume_size`, не выполняют journal replay, не исправляют metadata и не имеют writer API. Любой неизвестный feature bit, dirty/recovery state, checksum mismatch, malformed layout, overflow или выход за выбранный extent означает fail-closed ошибку. Если обнаружен ext superblock, отказ native-профиля не должен незаметно переключаться на `pytsk3`; fallback допустим только для нераспознанных ext-образов или отдельного opt-in legacy режима.
+Оба профиля открывают image только `rb`, требуют явные `offset` и `volume_size`, не исправляют metadata и не имеют writer API. Обычный режим отвергает активный journal. Только явный `replay_journal=True` включает ограниченный memory-only replay; source image не изменяется. Любой неизвестный feature bit, dirty/recovery state, checksum mismatch, malformed layout, overflow или выход за выбранный extent означает fail-closed ошибку. Если обнаружен ext superblock, отказ native-профиля не должен незаметно переключаться на `pytsk3`; fallback допустим только для нераспознанных ext-образов или отдельного opt-in legacy режима.
 
 ## 2. Feature gating
 
@@ -40,11 +40,13 @@ Inode number проверять в `1..inodes_count`; inode читать цел�
 
 ## 5. JBD2 state и recovery detection
 
-Добавить отдельный bounded JBD2 reader; on-disk JBD2 поля — big-endian. Проверять magic `0xC03B3998`, block type 3/4, journal block size, `s_first`, `s_maxlen`, `s_start`, sequence, ring bounds, UUID и journal feature bits. Revoke, 64-bit, async commit, checksum v2/v3 и fast commit разрешать только после реализации, иначе reject.
+Добавить отдельный bounded JBD2 reader; on-disk JBD2 поля — big-endian. Проверять magic `0xC03B3998`, block type 3/4, journal block size, `s_first`, `s_maxlen`, `s_start`, sequence, ring bounds, UUID и journal feature bits. Classic 32-bit revoke records разрешены только после строгой проверки targets; 64-bit, async commit, checksum v2/v3 и fast commit остаются reject.
 
-`EXT*_INCOMPAT_RECOVER`, dirty `s_state`, error state и fast commit означают отказ: replay отсутствует. `jbd2.s_start == 0` сам по себе не доказывает clean journal. Требуется доказать пустой корректный ring по geometry/sequence/head/tail либо полностью просканировать ring и доказать отсутствие валидной незаписанной транзакции.
+В superblock `s_first` находится по offset `0x14`, `s_sequence` — `0x18`, а `s_start` — `0x1c`. Третий word общего header по offset `0x08` не заменяет `s_sequence`; fixtures должны задавать эти поля независимо.
 
-Любая descriptor/data/revoke sequence с commit record, которая не доказанно checkpointed, означает `RecoveryRequired`. Неполный transaction, повреждённый header, неизвестный block type или непроверяемый checksum также являются отказом. Не писать journal и не менять superblock. Native writes запрещены до реализации ordering, checkpointing, revoke handling, checksums и crash-injection tests.
+`EXT*_INCOMPAT_RECOVER`, dirty `s_state`, error state и fast commit означают отказ; ограниченный overlay не снимает эти gates и не считается recovery. `jbd2.s_start == 0` сам по себе не доказывает clean journal. Требуется доказать пустой корректный ring по geometry/sequence/head/tail либо полностью просканировать ring и доказать отсутствие валидной незаписанной транзакции. Текущий opt-in replay принимает только ограниченную линейную последовательность classic descriptor/data/commit records и публикует overlay лишь после успешной проверки всей принятой последовательности.
+
+Неполный transaction, повреждённый header, неизвестный block type или непроверяемый checksum означают отказ. Текущий ограниченный replay не поддерживает ring wraparound, checksummed/64-bit/fast-commit feature bits или общую проверку head/tail; такие профили должны оставаться неподдержанными и fail-closed. Classic 32-bit revoke records проверяются на корректный count, границы образа, дубликаты, journal-data overlap и конфликт с writes той же транзакции. Overlay атомарен только как read-only in-memory view после полной проверки принятого линейного префикса; это не доказывает, что транзакции checkpointed, и не является заменой полноценному JBD2 recovery. Не писать journal и не менять superblock. Native writes запрещены до реализации ordering, checkpointing, checksums и crash-injection tests.
 
 ## 6. Checksum invariants
 
@@ -117,4 +119,6 @@ Read-only phase complete only when every accepted feature maps to a tested capab
 
 ### Реализованный milestone
 
-Добавлен bounded ext4 extent-tree profile: проверяются magic, entry limits, depth consistency, sorted index keys, cycle avoidance, logical/physical bounds, holes и unwritten extents. `64BIT`, metadata checksums, htree, fast commit и journal replay остаются fail-closed.
+Добавлен bounded ext4 extent-tree profile: проверяются magic, entry limits, depth consistency, sorted index keys, cycle avoidance, logical/physical bounds, holes и unwritten extents. `64BIT`, metadata checksums, htree и fast commit остаются fail-closed. Для ext3 добавлен отдельный opt-in memory-only replay узкого classic JBD2 формата с проверенными 32-bit revoke records; он не поддерживает wraparound/checksums, не предназначен для dirty/recovery-required volumes и остаётся fail-closed по умолчанию.
+
+Для профилей с `resize_inode` bounded reader также учитывает `s_reserved_gdt_blocks`: primary и backup reserved-GDT интервалы исключаются из ext2/ext3/ext4 data-block references, а выход диапазона за группу и ненулевой reserved-GDT count без `resize_inode` отвергаются. Это только защита read-only parsing; online resize и любые journaled writes не поддерживаются.

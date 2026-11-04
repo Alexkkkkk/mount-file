@@ -3,11 +3,12 @@
 # Licensed under the MIT License - see the LICENSE file for details.
 """mountfile — file manager for raw disk images.
 
-Supports MBR/GPT partition tables, browsing of FAT/NTFS/EXT/... via The
-Sleuth Kit (pytsk3), and read-write operations through the safe package RW
-facade: native FAT32; ext2/3/4 via e2fsprogs/debugfs; NTFS via ntfs-3g on Linux
-or ImDisk plus the Windows filesystem driver on Windows; and exFAT/FAT12/16 via
-ImDisk on Windows. Other detected filesystems need an available RW backend.
+Supports MBR/GPT partition tables and bounded in-process read-only providers
+for FAT12/16/32, ext2/3/4, exFAT and NTFS.  The optional ``pytsk3`` backend is
+an explicit compatibility fallback for unrecognized whole-image filesystems.
+Read-write operations use the safe package RW facade and advertise only the
+validated native profiles; external tools and OS mount drivers remain
+optional compatibility backends rather than prerequisites for native reads.
 """
 
-__version__ = "1.55.0"
+__version__ = "1.72.1"

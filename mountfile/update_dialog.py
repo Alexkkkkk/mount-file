@@ -39,6 +39,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -470,8 +471,10 @@ class DownloadWorker(QThread):
         self._cancel = True
         try:
             self.requestInterruption()
-        except Exception:  # pragma: no cover - заглушка без Qt
-            pass
+        except Exception as exc:  # pragma: no cover - заглушка без Qt
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
 
     def is_cancelled(self):
         return self._cancel
@@ -744,8 +747,10 @@ class UpdateDialog(QDialog):
         self.setMinimumSize(620, 470)
         try:
             self.setWindowFlags(self.windowFlags() & ~_window_context_help_hint())
-        except Exception:  # pragma: no cover - экзотический биндинг
-            pass
+        except Exception as exc:  # pragma: no cover - экзотический биндинг
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
         self._setup_ui()
         self._apply_style()
         self._fade_in()
@@ -929,8 +934,10 @@ class UpdateDialog(QDialog):
                 import webbrowser
 
                 webbrowser.open(self.release_url)
-            except Exception:  # pragma: no cover - браузер есть не всегда
-                pass
+            except Exception as exc:  # pragma: no cover - браузер есть не всегда
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
 
     def _on_later(self):
         if self._busy:
@@ -1106,8 +1113,10 @@ class UpdateDialog(QDialog):
                     cancel = getattr(worker, "cancel", None)
                     if callable(cancel):
                         cancel()
-            except Exception:  # pragma: no cover - заглушка без Qt
-                pass
+            except Exception as exc:  # pragma: no cover - заглушка без Qt
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
         super().closeEvent(event)
 
 

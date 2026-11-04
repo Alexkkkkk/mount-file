@@ -12,6 +12,7 @@ WARNING: write operations modify the image in place. Always keep a backup.
 
 from __future__ import annotations
 
+import logging
 import math
 import struct
 from contextlib import contextmanager
@@ -64,8 +65,8 @@ def _safe_free_chain(fat_get, fat_set, start, mc=FAT32_MAX_CLUSTER):
         for v in _iter_chain(start, fat_get, mc):
             fat_set(v, 0)
             freed += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     return freed
 
 
@@ -133,6 +134,9 @@ class Fat32:
             raise Fat32Error("invalid sectors-per-cluster")
         self.reserved = struct.unpack_from("<H", bpb, 14)[0]
         self.nfats = bpb[16]
+        self.ext_flags = struct.unpack_from("<H", bpb, 40)[0]
+        if self.ext_flags & 0x0080:
+            raise Fat32Error("non-mirrored FAT32 mode is unsupported")
         spf32 = struct.unpack_from("<I", bpb, 36)[0]
         if spf32 == 0:
             raise Fat32Error("FAT12/16 not supported by this module")
@@ -146,6 +150,16 @@ class Fat32:
         # condition `fsck.fat` reports as "Free cluster summary wrong".
         self.fsinfo_sector = struct.unpack_from("<H", bpb, 48)[0]
         self.backup_boot_sector = struct.unpack_from("<H", bpb, 50)[0]
+        if self.fsinfo_sector not in (0, 0xFFFF) and not (
+            1 <= self.fsinfo_sector < self.reserved
+        ):
+            raise Fat32Error("FSInfo sector is outside the reserved region")
+        if (
+            self.fsinfo_sector not in (0, 0xFFFF)
+            and self.backup_boot_sector
+            and self.fsinfo_sector == self.backup_boot_sector
+        ):
+            raise Fat32Error("FSInfo sector aliases the backup boot sector")
         self.fat_start = self.offset + self.reserved * self.bps
         self.fat_size = self.spf * self.bps
         self.data_start = (
@@ -164,6 +178,8 @@ class Fat32:
         if self.offset + total_sectors * self.bps > physical_size:
             raise Fat32Error("FAT32 BPB volume extends beyond image EOF")
         self.volume_end = self.offset + total_sectors * self.bps
+        self._validate_backup_boot_sector()
+        self._validate_fat_copies()
         cluster_count = data_sectors // self.spc
         if cluster_count < 65525:
             raise Fat32Error("not FAT32 (cluster count %d)" % cluster_count)
@@ -173,6 +189,29 @@ class Fat32:
             raise Fat32Error("invalid FAT32 root cluster")
         self.cluster_count = cluster_count
         self._alloc_hint = 2
+
+    def _validate_fat_copies(self):
+        """Require identical mirrored FATs before exposing mutation APIs."""
+        if self.nfats <= 1:
+            return
+        primary = self._read(self.fat_start, self.fat_size)
+        for index in range(1, self.nfats):
+            replica = self._read(
+                self.fat_start + index * self.fat_size,
+                self.fat_size,
+            )
+            if replica != primary:
+                raise Fat32Error("mirrored FAT32 copies are inconsistent")
+
+    def _validate_backup_boot_sector(self):
+        """Require a declared FAT32 backup boot sector to match the primary."""
+        if not self.backup_boot_sector:
+            return
+        backup_offset = self.offset + self.backup_boot_sector * self.bps
+        primary = self._read(self.offset, self.bps)
+        backup = self._read(backup_offset, self.bps)
+        if backup != primary:
+            raise Fat32Error("FAT32 backup boot sector is inconsistent")
 
     # ------------------------------------------------------------------ IO
     def _read(self, pos, size):
@@ -801,13 +840,14 @@ class Fat32:
         first = self._alloc_chain(nclusters) if nclusters else 0
         try:
             self._write_chain_data(first, data)
-        except Exception as original_error:
+        except BaseException as original_error:
             try:
                 if first >= 2:
                     self._free_chain(first)
             except Exception as rollback_error:
                 raise _MutationRollbackError(
-                    "file data write failed and its allocation could not be freed"
+                    "file data write failed and its allocation could not be freed: %s"
+                    % rollback_error
                 ) from original_error
             raise
         raw = self._build_entries(filename, short, first, len(data))

@@ -10,6 +10,7 @@ CLI: python mountfile_grep.py <image> <pattern> [--unicode] [--regex]
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import sys
 from pathlib import Path
@@ -78,7 +79,10 @@ def search_content(
             # Декодируем в UTF-16LE, игнорируя ошибки
             try:
                 text = data.decode("utf-16-le", errors="ignore")
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "UTF-16 decoding failed at offset %d", base_offset, exc_info=exc
+                )
                 continue
             for match in compiled.finditer(text):
                 # Пересчитываем смещение в байтах

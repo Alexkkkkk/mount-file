@@ -56,6 +56,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 |---|---|---:|
 | `volumes` | найденные тома и смещения | нет |
 | `info` | размер, сигнатура и сводка томов | нет |
+| `capabilities` | versioned native profile matrix без открытия образа | нет |
 | `ls` | список каталога | нет |
 | `get` | извлечение файла или каталога | нет |
 | `put` | записать локальные файлы | **да, FAT32** |
@@ -93,6 +94,12 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 показывает предупреждение и возвращает код **2**. Нормальный результат — **0**,
 ошибка — **1**; `Ctrl+C` возвращает **130**.
 
+`python -m mountfile capabilities` печатает schema v5 JSON. Поля
+`read_capabilities` и `write_capabilities` сохранены для existing clients, а
+`operations` публикует полный canonical набор с `available`/`refused`, точным
+именем API method и structured refusal code. `constraint_ids` и `gates`
+описывают accepted bounded profile; они не обходят validation выбранного image.
+
 ## Примеры чтения
 
 ```bash
@@ -103,9 +110,13 @@ python -m mountfile ls dump.bin /system --auto
 python -m mountfile get dump.img /photos -o ./evidence/photos
 ```
 
-`get` извлекает во внешний каталог и не меняет образ. При отсутствии `pytsk3`
-чтение ограничено встроенным FAT32-провайдером; NTFS, EXT и другие ФС требуют
-`pytsk3` и поддержки установленной `libtsk`.
+`get` извлекает во внешний каталог и не меняет образ. Встроенные pure-Python
+провайдеры читают только поддерживаемые профили FAT12/16/32, clean ext2/3/4,
+exFAT и NTFS; для них `pytsk3` не требуется. Поддержка ограничена проверенными
+вариантами форматов, а не всеми возможными томами. `pytsk3`/`libtsk` — отдельный,
+явно включаемый compatibility fallback для нераспознанных форматов. Если формат
+распознан, но его профиль повреждён, dirty или не поддерживается, чтение
+отклоняется безопасно, без автоматической передачи другому parser-у.
 
 ## Примеры FAT32-записи
 

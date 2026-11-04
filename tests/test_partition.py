@@ -181,6 +181,20 @@ class TestGptRobustness:
             f.write(struct.pack("<Q", IMG_SECTORS))
         assert list_partitions(path) == []
 
+    def test_rejected_gpt_extent_does_not_consume_protective_sentinel(self):
+        path = _blank_image(self.tmp)
+        self._gpt_image(path, 128, 128)
+        sentinel = b"outside-selected-volume"
+        with open(path, "r+b") as f:
+            f.seek(IMG_SECTORS * SECTOR_SIZE - len(sentinel))
+            f.write(sentinel)
+            f.seek(2 * SECTOR_SIZE + 40)
+            f.write(struct.pack("<Q", IMG_SECTORS))
+        assert list_partitions(path) == []
+        with open(path, "rb") as f:
+            f.seek(IMG_SECTORS * SECTOR_SIZE - len(sentinel))
+            assert f.read(len(sentinel)) == sentinel
+
 
 if __name__ == "__main__":
     for cls in (TestExtendedMBR, TestGptRobustness):

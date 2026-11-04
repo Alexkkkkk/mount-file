@@ -264,6 +264,9 @@ def test_sha256_file(tmp_path):
 # ------------------------------------------------------------- настройки
 def test_environment_switches(monkeypatch):
     monkeypatch.delenv("MOUNTFILE_NO_UPDATE", raising=False)
+    monkeypatch.delenv("MOUNTFILE_ENABLE_UPDATE_CHECK", raising=False)
+    assert updater.disabled()
+    monkeypatch.setenv("MOUNTFILE_ENABLE_UPDATE_CHECK", "1")
     assert not updater.disabled()
     monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
     assert updater.disabled()

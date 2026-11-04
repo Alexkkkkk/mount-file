@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: MIT
 """Regression coverage for the in-process, limited-profile ext2 writer."""
 
+import hashlib
+import json
+import os
 import shutil
+import struct
 import subprocess
+import sys
 
 import pytest
 
+import mountfile.ext2_native as ext2_native
 from mountfile.ext2_native import NativeExt2Error, NativeExt2ImageWriter
 
 MKE2FS = shutil.which("mke2fs")
@@ -37,6 +43,22 @@ def _make_ext2(path, size=16 * 1024 * 1024, block_size=4096):
     )
 
 
+def _set_inode_flags(path, inode_number, flags):
+    with open(path, "r+b") as stream:
+        stream.seek(1024)
+        superblock = stream.read(1024)
+        block_size = 1024 << int.from_bytes(superblock[24:28], "little")
+        first_data_block = int.from_bytes(superblock[20:24], "little")
+        inodes_per_group = int.from_bytes(superblock[40:44], "little")
+        inode_size = int.from_bytes(superblock[88:90], "little")
+        group, index = divmod(inode_number - 1, inodes_per_group)
+        gdt = (first_data_block + 1) * block_size
+        stream.seek(gdt + group * 32 + 8)
+        inode_table = int.from_bytes(stream.read(4), "little")
+        stream.seek(inode_table * block_size + index * inode_size + 32)
+        stream.write(flags.to_bytes(4, "little"))
+
+
 def _assert_e2fsck_clean(path):
     if not E2FSCK:
         pytest.skip("e2fsck is required for independent fixture validation")
@@ -50,7 +72,20 @@ def test_native_ext2_file_and_directory_crud_is_consistent(tmp_path):
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
 
+    root_links_before = writer._fs._u16(writer._fs._read_inode(2), 26)
     writer.mkdir("/evidence")
+    assert writer._fs._u16(writer._fs._read_inode(2), 26) == root_links_before + 1
+    directory_entry = writer._fs._lookup_child(2, b"evidence")
+    assert directory_entry is not None
+    directory_inode = directory_entry["inode"]
+    assert writer._fs._u16(writer._fs._read_inode(directory_inode), 26) == 2
+    _, _, directory_entries = writer._fs._dir_entries(directory_inode)
+    dot_entries = {
+        item["name_bytes"]: item["inode"]
+        for item in directory_entries
+        if item["name_bytes"] in (b".", b"..")
+    }
+    assert dot_entries == {b".": directory_inode, b"..": 2}
     writer.write_file("/evidence/one.bin", b"first\x00payload")
     assert writer.read_file("/evidence/one.bin") == b"first\x00payload"
     writer.write_file("/evidence/one.bin", b"replacement" * 300)
@@ -86,6 +121,85 @@ def test_native_ext2_single_indirect_file_roundtrip_and_reclamation(
     _assert_e2fsck_clean(image)
 
 
+@pytest.mark.parametrize("block_size", [1024, 2048, 4096])
+def test_native_ext2_double_indirect_file_roundtrip_replace_and_delete(
+    tmp_path, block_size
+):
+    image = tmp_path / "double-indirect.ext2"
+    _make_ext2(image, size=64 * 1024 * 1024, block_size=block_size)
+    writer = NativeExt2ImageWriter(image)
+    entries_per_block = block_size // 4
+    size = (12 + entries_per_block + 17) * block_size + 37
+    payload = bytes(index % 251 for index in range(size))
+
+    writer.write_file("/double.bin", payload)
+    assert writer.read_file("/double.bin") == payload
+    inode_number = next(
+        entry["inode"]
+        for entry in writer.list_dir("/")
+        if entry["name"] == "double.bin"
+    )
+    raw = writer._fs._read_inode(inode_number)
+    assert writer._fs._u32(raw, 40 + 13 * 4) != 0
+    assert (
+        len(
+            writer._fs._inode_blocks(
+                raw, allow_indirect=True, allow_double_indirect=True
+            )
+        )
+        == (size + block_size - 1) // block_size
+    )
+    assert len(writer._fs._inode_pointer_blocks(raw, allow_double_indirect=True)) >= 3
+    _assert_e2fsck_clean(image)
+
+    writer.write_file("/double.bin", b"small replacement")
+    assert writer.read_file("/double.bin") == b"small replacement"
+    raw = writer._fs._read_inode(inode_number)
+    assert writer._fs._inode_pointer_blocks(raw, allow_double_indirect=True) == []
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/double.bin")
+    assert "double.bin" not in {item["name"] for item in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
+def test_native_ext2_directory_grows_through_single_indirect_block(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "indirect-directory.ext2"
+    _make_ext2(image, size=16 * 1024 * 1024, block_size=1024)
+    writer = NativeExt2ImageWriter(image)
+    names = [f"{index:03d}-" + "x" * 235 for index in range(60)]
+
+    def populate_many(fs, file_names):
+        fs.mkdir("/crowded")
+        for name in file_names:
+            fs.write_file("/crowded/" + name, b"")
+
+    from mountfile.ext2_native import _Ext2FS
+
+    monkeypatch.setattr(_Ext2FS, "populate_many_for_test", populate_many, raising=False)
+    writer._mutate("populate_many_for_test", names)
+
+    entries = writer.list_dir("/crowded")
+    assert {entry["name"] for entry in entries} == set(names)
+    _, raw, _ = writer._fs._resolve("/crowded")
+    assert raw is not None
+    assert writer._fs._u32(raw, 40 + 12 * 4) != 0
+    assert len(writer._fs._inode_blocks(raw, allow_indirect=True)) > 12
+    _assert_e2fsck_clean(image)
+
+    def remove_many(fs, file_names):
+        for name in file_names:
+            fs.delete("/crowded/" + name)
+        fs.delete("/crowded")
+
+    monkeypatch.setattr(_Ext2FS, "remove_many_for_test", remove_many, raising=False)
+    writer._mutate("remove_many_for_test", names)
+    assert "crowded" not in {entry["name"] for entry in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
 def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     tmp_path,
 ):
@@ -114,6 +228,227 @@ def test_native_ext2_works_at_nonzero_partition_offset_and_preserves_neighbors(
     check_image = tmp_path / "partition-after.ext2"
     check_image.write_bytes(check_extent)
     _assert_e2fsck_clean(check_image)
+
+
+def test_native_ext2_writer_range_refusal_preserves_image_bytes(tmp_path):
+    image = tmp_path / "bounded-write.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+
+    with pytest.raises(NativeExt2Error) as caught:
+        writer._fs._write_at(writer._fs.filesystem_size - 1, b"overflow")
+
+    assert caught.value.code is ext2_native.RefusalCode.RANGE_OUT_OF_BOUNDS
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_mkdir_preflights_parent_link_overflow_before_allocation(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "link-overflow.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    parent_raw = writer._fs._read_inode(2)
+    struct.pack_into("<H", parent_raw, 26, 0xFFFF)
+    writer._fs._write_inode(2, parent_raw)
+    before = image.read_bytes()
+
+    allocations = []
+    allocate_inode = ext2_native._Ext2FS._allocate_inode
+    allocate_block = ext2_native._Ext2FS._allocate_block
+
+    def record_inode_allocation(fs, *args, **kwargs):
+        allocations.append("inode")
+        return allocate_inode(fs, *args, **kwargs)
+
+    def record_block_allocation(fs, *args, **kwargs):
+        allocations.append("block")
+        return allocate_block(fs, *args, **kwargs)
+
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_inode", record_inode_allocation)
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_block", record_block_allocation)
+
+    with pytest.raises(NativeExt2Error, match="parent link counter overflow"):
+        writer.mkdir("/refused")
+
+    assert allocations == []
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_grows_and_deletes_directory_through_single_indirect_block(
+    tmp_path, monkeypatch
+):
+    partition = tmp_path / "partition.ext2"
+    _make_ext2(partition, size=8 * 1024 * 1024, block_size=1024)
+    prefix = b"before-selected-extent" * 17
+    suffix = b"after-selected-extent" * 17
+    image = tmp_path / "disk.img"
+    image.write_bytes(prefix + partition.read_bytes() + suffix)
+
+    writer = NativeExt2ImageWriter(
+        image, offset=len(prefix), volume_size=partition.stat().st_size
+    )
+    original_free_space = writer.free_space()
+    writer.mkdir("/grown")
+    entry_size = (8 + 255 + 3) & ~3
+    entries_per_block = (writer.block_size - 24) // entry_size
+    names = [f"{index:04d}-" + "x" * 250 for index in range(12 * entries_per_block + 4)]
+    direct_names = names[: 12 * entries_per_block]
+    for name in direct_names:
+        writer.write_file("/grown/" + name, b"")
+
+    before_transition = image.read_bytes()
+    original_write_block = ext2_native._Ext2FS._write_block
+    staged_writes = 0
+
+    def fail_pointer_table_write(fs, block, data):
+        nonlocal staged_writes
+        staged_writes += 1
+        if staged_writes == 2:
+            raise OSError("injected indirect-table write failure")
+        return original_write_block(fs, block, data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ext2_native._Ext2FS, "_write_block", fail_pointer_table_write)
+        with pytest.raises(OSError, match="indirect-table"):
+            writer.write_file("/grown/" + names[len(direct_names)], b"")
+    assert image.read_bytes() == before_transition
+
+    for name in names[len(direct_names) :]:
+        writer.write_file("/grown/" + name, b"")
+
+    directory_inode = next(
+        item["inode"] for item in writer.list_dir("/") if item["name"] == "grown"
+    )
+    raw = writer._fs._read_inode(directory_inode)
+    single_indirect = writer._fs._u32(raw, 40 + 12 * 4)
+    assert single_indirect
+    directory_blocks = writer._fs._inode_blocks(raw, allow_indirect=True)
+    assert len(directory_blocks) == 14
+    pointers = writer._fs._read_block(single_indirect)
+    assert writer._fs._u32(pointers, 0) == directory_blocks[12]
+    assert writer._fs._u32(pointers, 4) == directory_blocks[13]
+    assert not any(pointers[8:])
+    assert writer._fs._u32(raw, 28) == 15 * (writer.block_size // 512)
+    assert writer.read_file("/grown/" + names[-1]) == b""
+
+    writer.mkdir("/right")
+    writer.rename("/grown", "/right/moved")
+    assert "grown" not in {entry["name"] for entry in writer.list_dir("/")}
+    moved_entries = writer.list_dir("/right/moved")
+    assert {entry["name"] for entry in moved_entries} == set(names)
+    right_inode = next(
+        entry["inode"] for entry in writer.list_dir("/") if entry["name"] == "right"
+    )
+    moved_inode = next(
+        entry["inode"]
+        for entry in writer.list_dir("/right")
+        if entry["name"] == "moved"
+    )
+    dotdot = writer._fs._lookup_child(moved_inode, b"..")
+    assert dotdot is not None and dotdot["inode"] == right_inode
+    assert writer.read_file("/right/moved/" + names[-1]) == b""
+    with image.open("rb") as stream:
+        stream.seek(len(prefix))
+        moved_extent = stream.read(partition.stat().st_size)
+    moved_check_image = tmp_path / "partition-after-directory-move.ext2"
+    moved_check_image.write_bytes(moved_extent)
+    _assert_e2fsck_clean(moved_check_image)
+
+    for name in names:
+        writer.delete("/right/moved/" + name)
+    writer.delete("/right/moved")
+    writer.delete("/right")
+    assert writer.free_space() == original_free_space
+    assert "right" not in {entry["name"] for entry in writer.list_dir("/")}
+    with image.open("rb") as stream:
+        assert stream.read(len(prefix)) == prefix
+        stream.seek(len(prefix) + partition.stat().st_size)
+        assert stream.read() == suffix
+        stream.seek(len(prefix))
+        checked_extent = stream.read(partition.stat().st_size)
+    check_image = tmp_path / "partition-after-directory-growth.ext2"
+    check_image.write_bytes(checked_extent)
+    _assert_e2fsck_clean(check_image)
+
+
+def test_native_ext2_grows_directory_through_double_indirect_blocks(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "double-indirect-directory.ext2"
+    _make_ext2(image, size=32 * 1024 * 1024, block_size=1024)
+    writer = NativeExt2ImageWriter(image)
+    names = [f"{index:04d}-" + "x" * 245 for index in range(810)]
+
+    def populate_many(fs, file_names):
+        fs.mkdir("/crowded")
+        for name in file_names:
+            fs.write_file("/crowded/" + name, b"")
+
+    from mountfile.ext2_native import _Ext2FS
+
+    monkeypatch.setattr(_Ext2FS, "populate_many_for_test", populate_many, raising=False)
+    writer._mutate("populate_many_for_test", names)
+
+    listed = writer.list_dir("/crowded")
+    assert {entry["name"] for entry in listed} == set(names)
+    directory_inode = next(
+        entry["inode"] for entry in writer.list_dir("/") if entry["name"] == "crowded"
+    )
+    raw = writer._fs._read_inode(directory_inode)
+    assert writer._fs._u32(raw, 40 + 13 * 4) != 0
+    directory_blocks = writer._fs._inode_blocks(
+        raw, allow_indirect=True, allow_double_indirect=True
+    )
+    assert len(directory_blocks) > 12 + writer.block_size // 4
+    pointer_blocks = writer._fs._inode_pointer_blocks(raw, allow_double_indirect=True)
+    assert len(pointer_blocks) >= 3
+    _assert_e2fsck_clean(image)
+
+    def remove_many(fs, file_names):
+        for name in file_names:
+            fs.delete("/crowded/" + name)
+        fs.delete("/crowded")
+
+    monkeypatch.setattr(_Ext2FS, "remove_many_for_test", remove_many, raising=False)
+    writer._mutate("remove_many_for_test", names)
+    assert "crowded" not in {entry["name"] for entry in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
+@pytest.mark.parametrize("corruption", ["double", "unused-slot"])
+def test_native_ext2_rejects_corrupt_single_indirect_directory_map(
+    tmp_path, corruption
+):
+    image = tmp_path / "corrupt-directory.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024, block_size=1024)
+    writer = NativeExt2ImageWriter(image)
+    writer.mkdir("/grown")
+    entry_size = (8 + 255 + 3) & ~3
+    entries_per_block = (writer.block_size - 24) // entry_size
+    for index in range(12 * entries_per_block + 1):
+        writer.write_file(
+            f"/grown/{index:04d}-" + "x" * 250,
+            b"",
+        )
+
+    directory_inode = next(
+        item["inode"] for item in writer.list_dir("/") if item["name"] == "grown"
+    )
+    raw = writer._fs._read_inode(directory_inode)
+    indirect_block = writer._fs._u32(raw, 40 + 12 * 4)
+    with image.open("r+b") as stream:
+        if corruption == "double":
+            stream.seek(writer._fs._block_offset(indirect_block))
+            stream.write((indirect_block).to_bytes(4, "little"))
+        else:
+            stream.seek(writer._fs._block_offset(indirect_block) + 8)
+            stream.write((writer._fs._u32(raw, 40)).to_bytes(4, "little"))
+
+    reopened = NativeExt2ImageWriter(image)
+    with pytest.raises(NativeExt2Error, match="indirect (pointer )?block|duplicate"):
+        reopened.list_dir("/grown")
 
 
 def test_native_ext2_requires_explicit_extent_for_nonzero_offset(tmp_path):
@@ -155,9 +490,41 @@ def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
 
     with pytest.raises(NativeExt2Error, match="traversal"):
         writer.write_file("/../escape", b"bad")
-    max_bytes = (12 + writer.block_size // 4) * writer.block_size
-    with pytest.raises(NativeExt2Error, match="single-indirect"):
-        writer.write_file("/too-large.bin", b"x" * (max_bytes + 1))
+
+    max_bytes = 64 * 1024 * 1024
+
+    class OversizedPayload:
+        def __len__(self):
+            return max_bytes + 1
+
+        def __bytes__(self):
+            raise AssertionError("oversized payload must be rejected before copying")
+
+    with pytest.raises(NativeExt2Error, match="double-indirect"):
+        writer.write_file("/too-large.bin", OversizedPayload())
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_refuses_mutation_inside_flagged_directories(tmp_path):
+    image = tmp_path / "flagged-directory.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    writer.mkdir("/locked")
+    locked_inode = next(
+        entry["inode"] for entry in writer.list_dir("/") if entry["name"] == "locked"
+    )
+
+    _set_inode_flags(image, 2, 0x10)  # EXT2_IMMUTABLE_FL on the root directory.
+    before = image.read_bytes()
+    with pytest.raises(NativeExt2Error, match="flagged ext2 directories"):
+        writer.write_file("/blocked-at-root", b"must not be committed")
+    assert image.read_bytes() == before
+
+    _set_inode_flags(image, 2, 0)
+    _set_inode_flags(image, locked_inode, 0x10)
+    before = image.read_bytes()
+    with pytest.raises(NativeExt2Error, match="flagged ext2 directories"):
+        writer.write_file("/locked/blocked", b"must not be committed")
     assert image.read_bytes() == before
 
 
@@ -232,6 +599,434 @@ def test_native_ext2_staging_failure_does_not_modify_original(tmp_path, monkeypa
     assert image.read_bytes() == before
 
 
+def test_native_ext2_rolls_back_and_verifies_restored_extent_hash(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+    hash_stream = writer._hash_stream
+    hash_calls = 0
+
+    def reject_committed_hash(stream, offset, size):
+        nonlocal hash_calls
+        hash_calls += 1
+        digest = hash_stream(stream, offset, size)
+        if hash_calls == 2:
+            return b"\x00" * len(digest)
+        return digest
+
+    monkeypatch.setattr(writer, "_hash_stream", reject_committed_hash)
+    with pytest.raises(
+        NativeExt2Error, match="committed ext2 extent failed SHA-256 verification"
+    ):
+        writer.write_file("/not-committed.txt", b"staged only")
+
+    assert hash_calls == 7
+    assert image.read_bytes() == before
+    assert not image.with_name(image.name + ".mountfile-ext2-recovery.json").exists()
+    assert not list(tmp_path.glob(".filesystem.ext2.mountfile-ext2-recovery-*.bin"))
+
+
+def test_native_ext2_short_rollback_write_is_not_claimed_as_restored(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+    hash_stream = writer._hash_stream
+    hash_calls = 0
+    image_write_opens = 0
+    original_open = open
+
+    def reject_committed_hash(stream, offset, size):
+        nonlocal hash_calls
+        hash_calls += 1
+        digest = hash_stream(stream, offset, size)
+        if hash_calls == 2:
+            return b"\x00" * len(digest)
+        return digest
+
+    class ShortWriteStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def write(self, _data):
+            return 0
+
+    def short_rollback_open(path, mode="r", *args, **kwargs):
+        nonlocal image_write_opens
+        stream = original_open(path, mode, *args, **kwargs)
+        if str(path) == str(image) and mode == "r+b":
+            image_write_opens += 1
+            if image_write_opens == 3:
+                return ShortWriteStream(stream)
+        return stream
+
+    monkeypatch.setattr(writer, "_hash_stream", reject_committed_hash)
+    monkeypatch.setattr(ext2_native, "open", short_rollback_open, raising=False)
+    with pytest.raises(
+        NativeExt2Error,
+        match="commit and rollback both failed.*short write while restoring ext2 recovery snapshot",
+    ):
+        writer.write_file("/not-restored.txt", b"staged only")
+
+    assert image_write_opens == 3
+    assert hash_calls == 6
+    assert image.read_bytes() != before
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    snapshot = image.with_name(recovery["snapshot"])
+    staged_snapshot = image.with_name(recovery["staged_snapshot"])
+    assert snapshot.is_file()
+    assert snapshot.read_bytes() == before
+    assert staged_snapshot.is_file()
+
+    # External edits after the failure must not be overwritten by recovery.
+    pending_image = image.read_bytes()
+    pending_stat = image.stat()
+    with image.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(bytes([pending_image[0] ^ 1]))
+    monkeypatch.undo()
+    with pytest.raises(NativeExt2Error, match="image changed since ext2 failure"):
+        NativeExt2ImageWriter(image)
+    assert marker.is_file()
+
+    # If the exact post-failure image is restored, a later writer open can
+    # restore the snapshot and remove the marker.
+    with image.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(pending_image[:1])
+    os.utime(image, ns=(pending_stat.st_atime_ns, recovery["mtime_ns"]))
+
+    # Simulate a process failure after the restored bytes are fsynced but
+    # before the marker is removed; the next open must finish cleanup safely.
+    original_unlink = os.unlink
+
+    def fail_marker_unlink(path):
+        if str(path) == str(marker):
+            raise OSError("injected crash before recovery marker cleanup")
+        return original_unlink(path)
+
+    monkeypatch.setattr(ext2_native.os, "unlink", fail_marker_unlink)
+    with pytest.raises(NativeExt2Error, match="automatic recovery failed"):
+        NativeExt2ImageWriter(image)
+    assert image.read_bytes() == before
+    assert marker.is_file()
+    monkeypatch.undo()
+
+    NativeExt2ImageWriter(image)
+    assert image.read_bytes() == before
+    assert not marker.exists()
+    assert not snapshot.exists()
+    assert not staged_snapshot.exists()
+
+
+def test_native_ext2_recovers_after_process_dies_mid_commit(tmp_path):
+    partition = tmp_path / "partition.ext2"
+    _make_ext2(partition, size=8 * 1024 * 1024)
+    filesystem = partition.read_bytes()
+    prefix = b"before-partition" * 128
+    suffix = b"after-partition" * 128
+    offset = 4096
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"P" * (offset - len(prefix)) + prefix + filesystem + suffix)
+    volume_offset = offset
+    before = image.read_bytes()
+    crashed_temp = tmp_path / "crashed-temp"
+    crashed_temp.mkdir()
+    crash_script = f"""
+import os
+import tempfile
+from mountfile import ext2_native
+from mountfile.ext2_native import NativeExt2ImageWriter
+
+tempfile.tempdir = {str(crashed_temp)!r}
+image = {str(image)!r}
+real_open = open
+image_write_opens = 0
+
+class CrashDuringWrite:
+    def __init__(self, stream):
+        self.stream = stream
+        self.write_calls = 0
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+    def write(self, data):
+        self.write_calls += 1
+        count = len(data) if self.write_calls == 1 else max(1, len(data) // 2)
+        written = self.stream.write(data[:count])
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        if self.write_calls == 2:
+            os._exit(73)
+        return written
+
+def crash_open(path, mode='r', *args, **kwargs):
+    global image_write_opens
+    stream = real_open(path, mode, *args, **kwargs)
+    if os.fspath(path) == image and mode == 'r+b':
+        image_write_opens += 1
+        if image_write_opens == 2:
+            return CrashDuringWrite(stream)
+    return stream
+
+ext2_native.open = crash_open
+writer = NativeExt2ImageWriter(image, offset={volume_offset}, volume_size={len(filesystem)})
+writer.write_file('/interrupted.txt', b'this transaction must roll back')
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_script],
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert crashed.returncode == 73, crashed.stdout + crashed.stderr
+    assert image.read_bytes() != before
+
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    assert recovery["format"] == 3
+    assert recovery["phase"] == "commit_in_progress"
+    snapshot = image.with_name(recovery["snapshot"])
+    staged_snapshot = image.with_name(recovery["staged_snapshot"])
+    assert snapshot.read_bytes() == filesystem
+    assert len(recovery["staged_sha256"]) == 64
+    assert staged_snapshot.is_file()
+    assert staged_snapshot.stat().st_size == len(filesystem)
+
+    recovery_crash_script = f"""
+import os
+from mountfile import ext2_native
+from mountfile.ext2_native import NativeExt2ImageWriter
+
+image = {str(image)!r}
+real_open = open
+image_write_opens = 0
+
+class CrashDuringRecovery:
+    def __init__(self, stream):
+        self.stream = stream
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+    def write(self, data):
+        count = max(1, len(data) // 2)
+        written = self.stream.write(data[:count])
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        os._exit(74)
+
+def crash_open(path, mode='r', *args, **kwargs):
+    global image_write_opens
+    stream = real_open(path, mode, *args, **kwargs)
+    if os.fspath(path) == image and mode == 'r+b':
+        image_write_opens += 1
+        if image_write_opens == 2:
+            return CrashDuringRecovery(stream)
+    return stream
+
+ext2_native.open = crash_open
+NativeExt2ImageWriter(image, offset={volume_offset}, volume_size={len(filesystem)})
+"""
+    recovery_crashed = subprocess.run(
+        [sys.executable, "-c", recovery_crash_script],
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert recovery_crashed.returncode == 74, (
+        recovery_crashed.stdout + recovery_crashed.stderr
+    )
+    assert marker.is_file()
+
+    writer = NativeExt2ImageWriter(
+        image, offset=volume_offset, volume_size=len(filesystem)
+    )
+    assert image.read_bytes() == before
+    assert not marker.exists()
+    assert not snapshot.exists()
+    assert not staged_snapshot.exists()
+    assert "interrupted.txt" not in {entry["name"] for entry in writer.list_dir("/")}
+    recovered_partition = tmp_path / "recovered.ext2"
+    recovered_partition.write_bytes(
+        image.read_bytes()[offset : offset + len(filesystem)]
+    )
+    _assert_e2fsck_clean(recovered_partition)
+
+
+def test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup(
+    tmp_path,
+):
+    image = tmp_path / "commit-complete.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    before = image.read_bytes()
+    crash_temp = tmp_path / "commit-crash-temp"
+    crash_temp.mkdir()
+    crash_script = f"""
+import os
+import tempfile
+from mountfile.ext2_native import NativeExt2ImageWriter
+
+tempfile.tempdir = {str(crash_temp)!r}
+image = {str(image)!r}
+
+def crash_before_cleanup(self, marker_path, snapshot, staged_snapshot=None):
+    os._exit(75)
+
+NativeExt2ImageWriter._clear_recovery_snapshot = crash_before_cleanup
+writer = NativeExt2ImageWriter(image)
+writer.write_file('/unacknowledged.txt', b'commit was not acknowledged')
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_script],
+        cwd=os.getcwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert crashed.returncode == 75, crashed.stdout + crashed.stderr
+    assert image.read_bytes() != before
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    assert recovery["phase"] == "commit_in_progress"
+
+    writer = NativeExt2ImageWriter(image)
+    assert image.read_bytes() == before
+    assert not marker.exists()
+    assert not image.with_name(recovery["snapshot"]).exists()
+    assert not image.with_name(recovery["staged_snapshot"]).exists()
+    assert "unacknowledged.txt" not in {entry["name"] for entry in writer.list_dir("/")}
+
+
+def test_native_ext2_cleanup_failure_after_commit_does_not_roll_back(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "cleanup-failure.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+
+    def fail_cleanup(marker_path, snapshot, staged_snapshot=None):
+        raise OSError("injected sidecar cleanup failure")
+
+    monkeypatch.setattr(writer, "_clear_recovery_snapshot", fail_cleanup)
+    with pytest.raises(NativeExt2Error, match="commit is verified and durable"):
+        writer.write_file("/committed.txt", b"do not undo a verified commit")
+
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    assert image.read_bytes() != before
+    assert marker.is_file()
+    recovery = json.loads(marker.read_text(encoding="utf-8"))
+    assert (
+        NativeExt2ImageWriter._hash_extent(str(image), 0, len(before)).hex()
+        == recovery["staged_sha256"]
+    )
+    assert image.with_name(recovery["snapshot"]).is_file()
+    assert image.with_name(recovery["staged_snapshot"]).is_file()
+
+
+def test_native_ext2_refuses_to_overwrite_unknown_commit_bytes(tmp_path):
+    image = tmp_path / "external-change.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    writer = NativeExt2ImageWriter(image)
+    before = image.read_bytes()
+    after = bytearray(before)
+    after[0] ^= 1
+    rollback = tmp_path / "before.ext2"
+    staged = tmp_path / "staged.ext2"
+    rollback.write_bytes(before)
+    staged.write_bytes(after)
+    snapshot, staged_snapshot, _staged_hash, marker_path = (
+        writer._preserve_recovery_snapshot(
+            str(rollback), hashlib.sha256(before).digest(), str(staged)
+        )
+    )
+
+    external = bytearray(before)
+    external[0] ^= 2
+    image.write_bytes(external)
+    with pytest.raises(
+        NativeExt2Error, match="outside the verified before/after snapshots"
+    ):
+        NativeExt2ImageWriter(image)
+
+    assert image.read_bytes() == external
+    assert os.path.isfile(marker_path)
+    assert os.path.isfile(snapshot)
+    assert os.path.isfile(staged_snapshot)
+
+
+def test_native_ext2_blocks_writes_for_dangling_recovery_marker_symlink(tmp_path):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image, size=8 * 1024 * 1024)
+    before = image.read_bytes()
+    marker = image.with_name(image.name + ".mountfile-ext2-recovery.json")
+    try:
+        marker.symlink_to(tmp_path / "missing-marker-target")
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+
+    with pytest.raises(NativeExt2Error, match="recovery marker is a symbolic link"):
+        NativeExt2ImageWriter(image)
+
+    assert marker.is_symlink()
+    assert image.read_bytes() == before
+
+
+def test_native_ext2_rejects_concurrent_change_before_commit(tmp_path, monkeypatch):
+    image = tmp_path / "concurrent-change.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    original_copy_extent = writer._copy_extent
+    calls = 0
+
+    def mutate_after_staging(destination):
+        nonlocal calls
+        digest = original_copy_extent(destination)
+        calls += 1
+        if calls == 1:
+            with image.open("r+b") as stream:
+                stream.seek(512)
+                value = stream.read(1)
+                stream.seek(512)
+                stream.write(bytes([value[0] ^ 0x01]))
+        return digest
+
+    monkeypatch.setattr(writer, "_copy_extent", mutate_after_staging)
+    with pytest.raises(NativeExt2Error, match="changed concurrently"):
+        writer.write_file("/not-committed.txt", b"must not be committed")
+    assert calls == 1
+    assert not any(
+        entry["name"] == "not-committed.txt" for entry in writer.list_dir("/")
+    )
+
+
 def test_large_file_high_size_is_not_misreported_as_empty(tmp_path):
     image = tmp_path / "filesystem.ext2"
     _make_ext2(image)
@@ -263,11 +1058,11 @@ def test_large_file_high_size_is_not_misreported_as_empty(tmp_path):
         )
         == (1 << 32) + 1
     )
-    with pytest.raises(NativeExt2Error, match="single-indirect"):
+    with pytest.raises(NativeExt2Error, match="double-indirect"):
         writer.read_file("/large.bin")
 
 
-def test_native_ext2_rejects_double_indirect_file_blocks(tmp_path):
+def test_native_ext2_rejects_corrupt_double_indirect_file_pointer(tmp_path):
     image = tmp_path / "double-indirect.ext2"
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
@@ -292,7 +1087,7 @@ def test_native_ext2_rejects_double_indirect_file_blocks(tmp_path):
         stream.write((1).to_bytes(4, "little"))
 
     reader = NativeExt2ImageWriter(image)
-    with pytest.raises(NativeExt2Error, match="double/triple"):
+    with pytest.raises(NativeExt2Error, match="double-indirect pointer beyond"):
         reader.read_file("/file.bin")
 
 

@@ -34,6 +34,9 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Optional, Protocol, Sequence, Union
 
+from mountfile.capabilities import get_native_capability_matrix
+from mountfile.safety import RefusalError, RefusalRuntimeError
+
 try:  # Optional by design: importing mountfile must not require FastAPI.
     from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
     from fastapi.responses import JSONResponse, Response
@@ -82,6 +85,8 @@ class ServiceRegistry(Protocol):
         length: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> Any: ...
 
+    def filesystem_status(self, image: str, offset: int = 0) -> Any: ...
+
     def timeline(
         self, image: Optional[str] = None, limit: int = 100, path: Optional[str] = None
     ) -> Any: ...
@@ -94,6 +99,11 @@ _OPERATION_NAMES = {
     "images": ("list_images", "images", "get_images", "image_list"),
     "ls": ("filesystem_ls", "list_directory", "ls", "list"),
     "read": ("filesystem_read", "read_file", "file_read", "read"),
+    "status": (
+        "filesystem_status",
+        "filesystem_capability_status",
+        "capability_status",
+    ),
     "timeline": ("timeline", "get_timeline", "list_timeline", "timeline_events"),
     "health": ("health", "healthcheck", "health_check"),
 }
@@ -418,6 +428,22 @@ def _configured_images(roots: Sequence[Path]) -> list[dict[str, str]]:
 def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, APIPathError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, (RefusalError, RefusalRuntimeError)):
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=exc.to_dict()
+        )
+    refusal_payload = getattr(exc, "to_dict", None)
+    if callable(refusal_payload):
+        try:
+            payload = refusal_payload()
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping) and {"code", "category", "message"} <= set(
+            payload
+        ):
+            return HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=payload
+            )
     if isinstance(exc, (FileNotFoundError, KeyError)):
         return HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="resource not found"
@@ -552,6 +578,11 @@ def create_app(
         except Exception as exc:
             raise _http_error(exc)
 
+    @app.get("/capabilities", dependencies=[_dependency()])
+    def capabilities() -> Any:
+        """Expose the versioned native profile catalog without opening an image."""
+        return get_native_capability_matrix()
+
     def _filesystem_context(
         image: Optional[str],
         path: str,
@@ -642,6 +673,35 @@ def create_app(
             return Response(content=bytes(value), media_type="application/octet-stream")
         return JSONResponse(content=_json_value(value))
 
+    def _status_impl(image: Optional[str], offset: int) -> Any:
+        """Return the selected backend's v5 capability/refusal status.
+
+        The injected registry is responsible for opening and validating the
+        image. This transport only validates its configured host-image boundary
+        and deliberately exposes no mutation endpoint.
+        """
+        try:
+            image_path, _virtual_path, partition_offset = _filesystem_context(
+                image, "/", offset
+            )
+        except Exception as exc:
+            raise _http_error(exc)
+        operation = _find_operation(service_registry, "status")
+        if operation is None:
+            raise _http_error(
+                ServiceUnavailableError("filesystem capability status is unavailable")
+            )
+        try:
+            return _json_value(
+                _invoke(
+                    operation,
+                    {"image": image_path, "offset": partition_offset},
+                    "status",
+                )
+            )
+        except Exception as exc:
+            raise _http_error(exc)
+
     @app.get("/filesystem/ls", dependencies=[_dependency()])
     def filesystem_ls(
         image: Optional[str] = Query(default=None),
@@ -667,6 +727,13 @@ def create_app(
     ) -> Any:
         return _read_impl(image, path, offset, length)
 
+    @app.get("/filesystem/status", dependencies=[_dependency()])
+    def filesystem_status(
+        image: Optional[str] = Query(default=None),
+        offset: int = Query(default=0),
+    ) -> Any:
+        return _status_impl(image, offset)
+
     @app.get("/fs/read", include_in_schema=False, dependencies=[_dependency()])
     def fs_read(
         image: Optional[str] = Query(default=None),
@@ -675,6 +742,13 @@ def create_app(
         length: int = Query(default=max_response_bytes),
     ) -> Any:
         return _read_impl(image, path, offset, length)
+
+    @app.get("/fs/status", include_in_schema=False, dependencies=[_dependency()])
+    def fs_status(
+        image: Optional[str] = Query(default=None),
+        offset: int = Query(default=0),
+    ) -> Any:
+        return _status_impl(image, offset)
 
     # Path-style routes are kept as compatibility aliases for clients that use
     # an image id in the URL.  The id is still resolved through the exact same
@@ -697,6 +771,12 @@ def create_app(
         length: int = Query(default=max_response_bytes),
     ) -> Any:
         return _read_impl(image_id, path, offset, length)
+
+    @app.get(
+        "/fs/{image_id}/status", include_in_schema=False, dependencies=[_dependency()]
+    )
+    def fs_image_status(image_id: str, offset: int = Query(default=0)) -> Any:
+        return _status_impl(image_id, offset)
 
     def _timeline_impl(
         image: Optional[str],

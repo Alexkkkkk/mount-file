@@ -1,0 +1,1018 @@
+{
+  "backend_execution_order": [
+    {
+      "backend": "native",
+      "discarded_warmup": true,
+      "pair_index": 0,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": true,
+      "pair_index": 0,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 1,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 1,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 2,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 2,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 3,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 3,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 4,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 4,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 5,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 5,
+      "status": "ok"
+    }
+  ],
+  "backends": {
+    "native": {
+      "backend": "native-ext2",
+      "block_size": 4096,
+      "blocks_count": 8192,
+      "fs_type": "ext2",
+      "inodes_count": 8192,
+      "iterations": [
+        {
+          "elapsed_seconds": 0.040797302999635576,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.00080860100024438,
+              0.0006051909999769123,
+              0.0006219060001058097,
+              0.0009342820003439556,
+              0.00113518899979681,
+              0.002839826000126777,
+              0.0008779280001363077,
+              0.0007860440000513336,
+              0.0007190070000433479,
+              0.010129466999842407
+            ],
+            "list_dir": [
+              0.00026592599988362053,
+              0.0004179779998594313
+            ],
+            "read_range": [
+              8.153599992510863e-05,
+              6.954000036785146e-05,
+              8.696800023244577e-05,
+              0.00015450599994437653,
+              0.0002145689995813882,
+              0.00020313899995016982,
+              0.000147491000006994,
+              0.00013962999992145342,
+              0.00015397300012409687,
+              0.0004871739997724944
+            ],
+            "stat": [
+              0.00014590599994335207,
+              0.00014908999992258032,
+              0.00015512100026171538,
+              0.00016012700007195235,
+              0.00015758300014567794,
+              0.00014624400000684545,
+              0.0004291469999770925,
+              0.0003503430002638197,
+              0.0003495710002425767,
+              0.00014532499972119695
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.04057508699997925,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0008026519999475568,
+              0.0005832580000060261,
+              0.0006361089999700198,
+              0.0008625089999441116,
+              0.0010854809997908887,
+              0.002887474000090151,
+              0.0009013049998429778,
+              0.0007562340001641132,
+              0.0006984279998505372,
+              0.010209075999682682
+            ],
+            "list_dir": [
+              0.00024155600021913415,
+              0.00039447000017389655
+            ],
+            "read_range": [
+              7.132100017770426e-05,
+              6.85549998706847e-05,
+              8.431000014752499e-05,
+              0.00015412099992317962,
+              0.00022242200020627934,
+              0.00020677400016211323,
+              0.00014763799981665215,
+              0.0001390219999848341,
+              0.00015045999998619664,
+              0.0004944519996570307
+            ],
+            "stat": [
+              0.0001517410000815289,
+              0.00014001599993207492,
+              0.0001734770003167796,
+              0.00013827500015395344,
+              0.00016046300015659654,
+              0.00015399699987028725,
+              0.00042313199992349837,
+              0.00034783999990395387,
+              0.0003400040000087756,
+              0.00013014400019528694
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.03975755900000877,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0007686159997319919,
+              0.0005674379999618395,
+              0.0006090150000090944,
+              0.0008605490002082661,
+              0.0010922920000666636,
+              0.002765469000223675,
+              0.000759345000005851,
+              0.0007221579999168171,
+              0.0006805409998378309,
+              0.00998105000007854
+            ],
+            "list_dir": [
+              0.0002811469998960092,
+              0.00039263299959202413
+            ],
+            "read_range": [
+              7.214899960672483e-05,
+              6.906399994477397e-05,
+              8.409600013692398e-05,
+              0.0001544570000078238,
+              0.00021213999980318476,
+              0.00018970700011777808,
+              0.00014473400005954318,
+              0.00013784100019620382,
+              0.00013707799962503486,
+              0.00047790200005692896
+            ],
+            "stat": [
+              0.00014127099984762026,
+              0.00013666799986822298,
+              0.00013253199995233444,
+              0.00013623299992104876,
+              0.0001423539997631451,
+              0.00014489800014416687,
+              0.0003893590001098346,
+              0.00034215400000903173,
+              0.00033795199988162494,
+              0.0001289460001316911
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.04017270600024858,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0007497440001316136,
+              0.000594375999753538,
+              0.000659829999676731,
+              0.0008643070000289299,
+              0.0010906259999501344,
+              0.0027004019998457807,
+              0.0008336020000569988,
+              0.0007323730001189688,
+              0.0007088649999786867,
+              0.010241971000141348
+            ],
+            "list_dir": [
+              0.00026154399984079646,
+              0.0003784779996749421
+            ],
+            "read_range": [
+              7.16489998922043e-05,
+              6.73000004098867e-05,
+              8.440800002063042e-05,
+              0.000160431000040262,
+              0.0002183100000365812,
+              0.00019128299982185126,
+              0.00014282999973147525,
+              0.00013784899965685327,
+              0.00013736600021729828,
+              0.0004964219997418695
+            ],
+            "stat": [
+              0.0001380469998366607,
+              0.00013354099974094424,
+              0.0001350179995824874,
+              0.00013896499967813725,
+              0.00014507900004900876,
+              0.0001458740002817649,
+              0.00038268800017249305,
+              0.00034640400008356664,
+              0.00033855199990284746,
+              0.00013059599996267934
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.040477779999946506,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0007928800000627234,
+              0.0005839479999849573,
+              0.0005618670002149884,
+              0.0008578169999964302,
+              0.0011026139995919948,
+              0.0028175000002192974,
+              0.0008455079996565473,
+              0.0007471339999938209,
+              0.0007386420002148952,
+              0.010190736999902583
+            ],
+            "list_dir": [
+              0.0002646210000420979,
+              0.0004350950002844911
+            ],
+            "read_range": [
+              7.353599994530668e-05,
+              7.00979999237461e-05,
+              8.529499973519705e-05,
+              0.00015805899965926073,
+              0.00021857299998373492,
+              0.00019526999994923244,
+              0.00014652300023954012,
+              0.00013862800005881581,
+              0.00013895699976274045,
+              0.0004949519998262986
+            ],
+            "stat": [
+              0.00014995999981692876,
+              0.00013756199996350915,
+              0.00013500200020644115,
+              0.00013858799957233714,
+              0.00016472100014652824,
+              0.00014640800009146915,
+              0.0004165260002082505,
+              0.00034558299967102357,
+              0.00034047100007228437,
+              0.00012866799988842104
+            ]
+          },
+          "range_read_bytes": 3765248
+        }
+      ],
+      "median_iteration_seconds": 0.040477779999946506,
+      "open_seconds": {
+        "max_seconds": 0.00026143800005229423,
+        "median_seconds": 0.00023093900017556734,
+        "min_seconds": 0.00022577700019610347,
+        "p95_seconds": 0.00026143800005229423,
+        "samples": 5
+      },
+      "operations": {
+        "extract": {
+          "calls_per_iteration": 10,
+          "max_seconds": 0.010241971000141348,
+          "median_iteration_total_seconds": 0.019238646999838238,
+          "median_seconds": 0.0008056265000959684,
+          "min_seconds": 0.0005618670002149884,
+          "p95_seconds": 0.010190736999902583,
+          "samples": 50
+        },
+        "list_dir": {
+          "calls_per_iteration": 2,
+          "max_seconds": 0.0004350950002844911,
+          "median_iteration_total_seconds": 0.0006737799994880334,
+          "median_seconds": 0.00032981249978547567,
+          "min_seconds": 0.00024155600021913415,
+          "p95_seconds": 0.0004350950002844911,
+          "samples": 10
+        },
+        "read_range": {
+          "calls_per_iteration": 10,
+          "max_seconds": 0.0004964219997418695,
+          "median_iteration_total_seconds": 0.0017198909990838729,
+          "median_seconds": 0.00014562850014954165,
+          "min_seconds": 6.73000004098867e-05,
+          "p95_seconds": 0.0004944519996570307,
+          "samples": 50
+        },
+        "stat": {
+          "calls_per_iteration": 10,
+          "max_seconds": 0.0004291469999770925,
+          "median_iteration_total_seconds": 0.002103488999637193,
+          "median_seconds": 0.00014774900000702473,
+          "min_seconds": 0.00012866799988842104,
+          "p95_seconds": 0.0004165260002082505,
+          "samples": 50
+        }
+      }
+    },
+    "pytsk3": {
+      "backend": "pytsk3",
+      "iterations": [
+        {
+          "elapsed_seconds": 0.21532146799972907,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0008557569999538828,
+              0.000611295999988215,
+              0.0006967459999032144,
+              0.0008925990000534512,
+              0.0014260999996622559,
+              0.0027347739996912424,
+              0.0006897470002513728,
+              0.0006786120002288953,
+              0.000691854999786301,
+              0.09217887800014068
+            ],
+            "list_dir": [
+              0.007962591999785218,
+              0.00021545499976127758
+            ],
+            "read_range": [
+              5.929199960519327e-05,
+              6.342699998640455e-05,
+              7.811399973434163e-05,
+              0.00013502699994205614,
+              0.00030766700001549907,
+              0.00017766900009519304,
+              3.7029999930382473e-05,
+              4.044399975100532e-05,
+              6.0104000112914946e-05,
+              0.007934038000257715
+            ],
+            "stat": [
+              0.007936228000289702,
+              0.007887218000178109,
+              0.007910669000011694,
+              0.00788595499989242,
+              0.007956225000270933,
+              0.007957948000239412,
+              0.00815620499997749,
+              0.008109040999897843,
+              0.00811337300001469,
+              0.007882901999892056
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.2168593320002401,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0007890070000939886,
+              0.0006091709997235739,
+              0.0006775950000701414,
+              0.0009929739999279263,
+              0.0015107460003491724,
+              0.0027766289999817673,
+              0.0007233389997054473,
+              0.0007257030001710518,
+              0.0007040649998089066,
+              0.09308838900005867
+            ],
+            "list_dir": [
+              0.0080293089999941,
+              0.0002252120002594893
+            ],
+            "read_range": [
+              6.440399965867982e-05,
+              5.983400023978902e-05,
+              8.466200006296276e-05,
+              0.00014320699983727536,
+              0.00032150000015462865,
+              0.00019427699999141623,
+              3.9392999951815e-05,
+              4.1584999962651636e-05,
+              6.158899986985489e-05,
+              0.008013432000097964
+            ],
+            "stat": [
+              0.007933972000046197,
+              0.007960393000303156,
+              0.007931043000098725,
+              0.007919973999833019,
+              0.00795217999984743,
+              0.007967087999986688,
+              0.008276929000203381,
+              0.008168652999756887,
+              0.00811458699990908,
+              0.007932141999845044
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.21551741799976298,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0008179710002877982,
+              0.0006797370001550007,
+              0.0007328000001507462,
+              0.0009493539996583422,
+              0.0014188549998834787,
+              0.0026254049998897244,
+              0.000643985999886354,
+              0.000601704000018799,
+              0.0006198460000632622,
+              0.09275599900001907
+            ],
+            "list_dir": [
+              0.007980562000284408,
+              0.00022111700036475668
+            ],
+            "read_range": [
+              5.9299999975337414e-05,
+              6.253299989111838e-05,
+              8.459700029561645e-05,
+              0.00015061700014484813,
+              0.00029682700005650986,
+              0.00016730700008338317,
+              3.721899975062115e-05,
+              4.182299971944303e-05,
+              5.842200016559218e-05,
+              0.007984639999904175
+            ],
+            "stat": [
+              0.007927317999929073,
+              0.007936310999866691,
+              0.007896761000210972,
+              0.00787092299970027,
+              0.007960352999816678,
+              0.007878356000219355,
+              0.008200570999633783,
+              0.008133721999911359,
+              0.008127584999783721,
+              0.007899871000063285
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.21787319600025512,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0008331019998877309,
+              0.0006972220003262919,
+              0.0007058539999889035,
+              0.0010090900000250258,
+              0.0015070540002852795,
+              0.002729637000356888,
+              0.0007768220002617454,
+              0.0007504910004172416,
+              0.0007681400002184091,
+              0.09302837400036879
+            ],
+            "list_dir": [
+              0.008075596000253427,
+              0.0002268110001750756
+            ],
+            "read_range": [
+              6.204900000739144e-05,
+              7.304400014618295e-05,
+              9.238399979949463e-05,
+              0.00014701400004923926,
+              0.0003306410003460769,
+              0.0001864900000327907,
+              3.752200018425356e-05,
+              4.224900021654321e-05,
+              6.28930001767003e-05,
+              0.007988398000179586
+            ],
+            "stat": [
+              0.007930304000183241,
+              0.007942029999867373,
+              0.007954361999964021,
+              0.00794006799969793,
+              0.008053235999796016,
+              0.007956725999974879,
+              0.008258755000042584,
+              0.008206814999994094,
+              0.008208882999952039,
+              0.007952015999762807
+            ]
+          },
+          "range_read_bytes": 3765248
+        },
+        {
+          "elapsed_seconds": 0.2182946540001467,
+          "extracted_bytes": 16348160,
+          "file_sha256": {
+            "/bench/large_10m.dat": "7d1397da31af1760f8d90ab1663dce367ce7b31cbecec3fd24c437ebf9fb3291",
+            "/bench/large_1m.dat": "5285b8f6c404f010ab2893ae8b37876e04fab26b5bed8b958faccbd76252bc12",
+            "/bench/large_4m.dat": "7210f42581329e0c72bfe4dc73d858529ed59b27b3ac67efaba35e36b25c99c0",
+            "/bench/many/file_000.dat": "010581c99e739a27ea9cdd5be98007e0e2fc65f61a4582e077d06a2c49fe5d00",
+            "/bench/many/file_008.dat": "5fe9cee575c379b7174d2dc299572752e1272092c009eb61becf9c24367c7e9e",
+            "/bench/many/file_016.dat": "645c76737f79464dd0160583bdc09482dd5df67d548a80661dc5dc9cc0799aee",
+            "/bench/medium_512k.dat": "f4c969f4a500ef917f32f4396a49633a652d8f28c5cda0b744e0657bf7042799",
+            "/bench/small_16k.dat": "fe32b13f7e6ea73ded40098f8c53063f587a445b3f3f52a5c291bea1f479288b",
+            "/bench/small_64k.dat": "a7340a53c7847f14960e7623748cbb84547c4ae99a1d699299cc3d6762e4bd52",
+            "/bench/tiny_1k.dat": "11e4ce936e606aaa7d2e5629f2e6341db2b189af6bad84be9c6a844f8ac945a5"
+          },
+          "file_sizes_bytes": {
+            "/bench/large_10m.dat": 10485760,
+            "/bench/large_1m.dat": 1048576,
+            "/bench/large_4m.dat": 4194304,
+            "/bench/many/file_000.dat": 4096,
+            "/bench/many/file_008.dat": 4096,
+            "/bench/many/file_016.dat": 4096,
+            "/bench/medium_512k.dat": 524288,
+            "/bench/small_16k.dat": 16384,
+            "/bench/small_64k.dat": 65536,
+            "/bench/tiny_1k.dat": 1024
+          },
+          "listed_entries": 32,
+          "operation_counts": {
+            "extract": 10,
+            "list_dir": 2,
+            "read_range": 10,
+            "stat": 10
+          },
+          "operation_seconds": {
+            "extract": [
+              0.0008385989999624144,
+              0.0007703320002292458,
+              0.0007289110003512178,
+              0.0011449290000200563,
+              0.0016257759998552501,
+              0.0030293770000753284,
+              0.0007469379997928627,
+              0.0007139270001061959,
+              0.0007032120001895237,
+              0.09228772999995272
+            ],
+            "list_dir": [
+              0.007988061999640195,
+              0.00022485099998448277
+            ],
+            "read_range": [
+              6.504400016638101e-05,
+              6.863799990242114e-05,
+              9.768500012796721e-05,
+              0.00015672199970140355,
+              0.0003486030000203755,
+              0.00023020799972073291,
+              4.21089998781099e-05,
+              4.179799998382805e-05,
+              6.407500040950254e-05,
+              0.008011782999801653
+            ],
+            "stat": [
+              0.00796035999974265,
+              0.00796917299976485,
+              0.008016493000013725,
+              0.008046736999858695,
+              0.008100926000224717,
+              0.00813869400008116,
+              0.00842223700010436,
+              0.008234246000029088,
+              0.008097569000256044,
+              0.007886963000146352
+            ]
+          },
+          "range_read_bytes": 3765248
+        }
+      ],
+      "median_iteration_seconds": 0.2168593320002401,
+      "open_seconds": {
+        "max_seconds": 0.0004903249996459635,
+        "median_seconds": 0.00046433900024567265,
+        "min_seconds": 0.00044642600005317945,
+        "p95_seconds": 0.0004903249996459635,
+        "samples": 5
+      },
+      "operations": {
+        "extract": {
+          "calls_per_iteration": 10,
+          "max_seconds": 0.09308838900005867,
+          "median_iteration_total_seconds": 0.10258973100053481,
+          "median_seconds": 0.000782914500177867,
+          "min_seconds": 0.000601704000018799,
+          "p95_seconds": 0.09275599900001907,
+          "samples": 50
+        },
+        "list_dir": {
+          "calls_per_iteration": 2,
+          "max_seconds": 0.008075596000253427,
+          "median_iteration_total_seconds": 0.008212912999624677,
+          "median_seconds": 0.004094701499980147,
+          "min_seconds": 0.00021545499976127758,
+          "p95_seconds": 0.008075596000253427,
+          "samples": 10
+        },
+        "read_range": {
+          "calls_per_iteration": 10,
+          "max_seconds": 0.008013432000097964,
+          "median_iteration_total_seconds": 0.00902268400113826,
+          "median_seconds": 7.557899994026229e-05,
+          "min_seconds": 3.7029999930382473e-05,
+          "p95_seconds": 0.007988398000179586,
+          "samples": 50
+        },
+        "stat": {
+          "calls_per_iteration": 10,
+          "max_seconds": 0.00842223700010436,
+          "median_iteration_total_seconds": 0.08015696099982961,
+          "median_seconds": 0.007959150500028045,
+          "min_seconds": 0.00787092299970027,
+          "p95_seconds": 0.008258755000042584,
+          "samples": 50
+        }
+      }
+    }
+  },
+  "cache_state": {
+    "label": "unspecified",
+    "managed_by_harness": false,
+    "note": "The harness does not flush or control the operating-system page cache; paired backends alternate order to reduce systematic order bias."
+  },
+  "comparison": {
+    "baseline": "pytsk3",
+    "content_equivalent": true,
+    "content_mismatches": [],
+    "metric": "median full-iteration wall time; provider open excluded",
+    "native_to_baseline_ratio": 0.1866545452602505,
+    "note": "This comparison is descriptive; publish repeated results and cache methodology before claiming benchmark acceptance.",
+    "relative_change_percent": -81.33454547397496,
+    "target_max_regression_percent": 20,
+    "within_target_for_this_run": true
+  },
+  "environment": {
+    "implementation": "CPython",
+    "platform": "Linux-6.18.38+-aarch64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "extent": {
+    "offset_bytes": 0,
+    "volume_size_bytes": 33554432
+  },
+  "image": {
+    "path": "/tmp/issue182-10m-final-run1-20261029/bench.ext2",
+    "sha256": "2eb5a1b64d081d789fc5eb810489f7e2608dafb8015d7430db9489a7d41f6a43",
+    "size_bytes": 33554432
+  },
+  "schema_version": 2,
+  "workload": {
+    "directories": [
+      "/bench",
+      "/bench/many"
+    ],
+    "extraction": "complete file, temporary destination, size verified",
+    "paths": [
+      "/bench/tiny_1k.dat",
+      "/bench/small_16k.dat",
+      "/bench/small_64k.dat",
+      "/bench/medium_512k.dat",
+      "/bench/large_1m.dat",
+      "/bench/large_4m.dat",
+      "/bench/many/file_000.dat",
+      "/bench/many/file_008.dat",
+      "/bench/many/file_016.dat",
+      "/bench/large_10m.dat"
+    ],
+    "range_read_limit_bytes_per_file": 1048576,
+    "repeats": 5,
+    "stat_implementation": "provider.stat; shared adapter may traverse list_dir components",
+    "warmups": 1
+  }
+}

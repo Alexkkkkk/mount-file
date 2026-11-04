@@ -19,6 +19,7 @@ separate output directory.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,7 +116,10 @@ def find_slack_regions_from_fs(
             continue
         try:
             meta_file = fs.open_meta(inode=meta.addr)
-        except Exception:  # pragma: no cover - damaged inode
+        except Exception as exc:  # pragma: no cover - damaged inode
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
             continue
         region = slack_region_for(path, real_size, _runs(meta_file), block_size)
         if region is not None and region.length >= min_slack:

@@ -67,6 +67,19 @@ def test_extract_streams_ranged_provider_in_bounded_chunks(
     assert provider.calls == [(0, 4), (4, 4), (8, 2)]
 
 
+def test_extract_respects_explicit_provider_range_limit(tmp_path, monkeypatch):
+    payload = bytes(range(10))
+    provider = RangeProvider(payload)
+    provider.max_read_range_bytes = 3
+    destination = tmp_path / "limited.bin"
+    monkeypatch.setattr(extract_module, "_COPY_CHUNK_SIZE", 8)
+
+    assert extract_file(provider, "/large.bin", destination) == len(payload)
+
+    assert destination.read_bytes() == payload
+    assert provider.calls == [(0, 3), (3, 3), (6, 3), (9, 1)]
+
+
 @pytest.mark.parametrize(
     "use_dir_fd", sorted({False, bool(extract_module._HAS_DIR_FD)})
 )
@@ -104,7 +117,12 @@ def test_extract_does_not_follow_destination_symlink(tmp_path):
     assert link.is_symlink()
 
 
-def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path):
+@pytest.mark.parametrize(
+    "use_dir_fd", sorted({False, bool(extract_module._HAS_DIR_FD)})
+)
+def test_extract_file_does_not_follow_intermediate_destination_symlink(
+    tmp_path, monkeypatch, use_dir_fd
+):
     outside = tmp_path / "outside"
     outside.mkdir()
     protected = outside / "secret.bin"
@@ -116,6 +134,7 @@ def test_extract_file_does_not_follow_intermediate_destination_symlink(tmp_path)
     except (NotImplementedError, OSError):
         pytest.skip("symlinks unavailable in test environment")
 
+    monkeypatch.setattr(extract_module, "_HAS_DIR_FD", use_dir_fd)
     with pytest.raises(ExtractError, match="symlink|safely"):
         extract_file(
             TreeProvider(), "/secret.bin", destination_root / "nested/secret.bin"

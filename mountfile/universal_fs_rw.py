@@ -5,7 +5,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
 Расширяет UniversalFS записью через стратегии с явными ограничениями:
 
-  1. NativeFat32Writer  — FAT12/16/32, прямая правка FAT + LFN + каталогов
+  1. NativeFat32Writer  — bounded native FAT32 writer (FAT, LFN, каталоги)
   2. NativeExt2Writer   — ограниченный clean ext2 profile, in-process Python
   3. ExtDebugfsWriter   — явный legacy ext2/3/4 compatibility backend через `debugfs -w`
   4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
@@ -28,6 +28,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import hashlib
 import logging
@@ -38,14 +39,26 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
+from mountfile.capabilities import (
+    NATIVE_WRITE_PROFILES_BY_STRATEGY,
+    RW_READ_CAPABILITIES,
+    RW_WRITE_CAPABILITIES,
+    canonical_operation_for_api_operation,
+    get_native_capability_status,
+)
+from mountfile.extract import ExtractionLimits, extract_file, extract_path
 from mountfile.rw.journal import Journal as _VerifiedJournal
+from mountfile.safety import (
+    RefusalCode,
+    RefusalError,
+    RefusalRuntimeError,
+    checked_range,
+)
 
 try:
     import pytsk3
@@ -54,11 +67,77 @@ except ImportError:
 
 log = logging.getLogger("mountfile.universal_fs_rw")
 
+
+@contextlib.contextmanager
+def _exclusive_image_lock(image: Path):
+    """Serialize cooperating writers with a stable sidecar lock file."""
+    lock_path = Path(str(image.resolve()) + ".mountfile.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("r+b") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 # These formats can be inspected/carved, but they do not have a writable
 # filesystem semantics that a loop mount can safely provide.  Refusing a
 # mutation is preferable to mounting them with a misleading ``rw`` option and
 # reporting success after the kernel silently kept the image read-only.
-INHERENTLY_READ_ONLY_FS = frozenset({"iso9660", "iso", "squashfs", "jffs2", "ubifs"})
+INHERENTLY_READ_ONLY_FS = frozenset(
+    {
+        "iso9660",
+        "iso",
+        "squashfs",
+        "jffs2",
+        "ubifs",
+        "hfs",
+        "hfsplus",
+        "apfs",
+    }
+)
 
 
 def _normalise_mount_fs(fs_type: str) -> str:
@@ -256,6 +335,10 @@ class FSInfo:
     total_size: int = 0
     writable: bool = False
     write_strategy: str = ""
+    read_capabilities: tuple[str, ...] = RW_READ_CAPABILITIES
+    write_capabilities: tuple[str, ...] = ()
+    write_rejection_reason: str = ""
+    write_rejection_code: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -290,8 +373,10 @@ class RWJournal:
                 if line.strip():
                     try:
                         self._prev = __import__("json").loads(line)["hash"]
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logging.getLogger(__name__).debug(
+                            "best-effort operation failed", exc_info=exc
+                        )
                     break
 
     def log(self, op: WriteOperation) -> None:
@@ -340,8 +425,10 @@ class ImageBackup:
         for old in backups[: -self.keep]:
             try:
                 old.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
 
     def latest(self) -> Path | None:
         prefix = f"{self.image.name}."
@@ -352,6 +439,33 @@ class ImageBackup:
 # =============================================================================
 # 3. БАЗОВЫЙ КЛАСС ЧТЕНИЯ/ЗАПИСИ
 # =============================================================================
+class _RWBackendExtractionProvider:
+    """Adapt RWBackend reads to the hardened destination writer.
+
+    Do not require ``stat`` here: some backends resolve names case-insensitively
+    while the generic RWBackend.stat performs an exact-case directory lookup.
+    Use a backend reader's bounded range API where available, and retain the
+    whole-file compatibility path for backends exposing only ``read``.
+    """
+
+    def __init__(self, backend: RWBackend):
+        self._backend = backend
+        reader = getattr(backend, "_reader", None)
+        file_size = getattr(reader, "file_size", None)
+        read_range = getattr(reader, "read_file_range", None)
+        if callable(file_size) and callable(read_range):
+            self.file_size = file_size
+            self.read_file_range = read_range
+            self.max_read_range_bytes = getattr(reader, "max_read_range_bytes", 1 << 20)
+
+    def list_dir(self, path: str = "/") -> list[dict]:
+        """Expose the RW backend tree in the hardened extractor's shape."""
+        return [entry.to_dict() for entry in self._backend.list(path)]
+
+    def read_file(self, path: str) -> bytes:
+        return self._backend.read(path)
+
+
 class RWBackend(ABC):
     """Unified read/write interface."""
 
@@ -370,8 +484,10 @@ class RWBackend(ABC):
         if self._fh:
             try:
                 self._fh.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "best-effort operation failed", exc_info=exc
+                )
             self._fh = None
 
     def _read_at(self, offset: int, length: int) -> bytes:
@@ -423,11 +539,36 @@ class RWBackend(ABC):
                 return e
         return None
 
-    def extract(self, path: str, dest: Path) -> Path:
-        data = self.read(path)
+    def extract(
+        self,
+        path: str,
+        dest: Path,
+        *,
+        limits: ExtractionLimits | None = None,
+    ) -> Path:
         dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        provider = _RWBackendExtractionProvider(self)
+        normalized = "/" + str(path or "/").strip().strip("/")
+        source_path = normalized
+        if normalized == "/":
+            is_dir = True
+        else:
+            parent, name = _image_path_parent_name(normalized)
+            entry = next(
+                (
+                    candidate
+                    for candidate in self.list(parent)
+                    if candidate.name.casefold() == name.casefold()
+                ),
+                None,
+            )
+            is_dir = entry is not None and entry.is_dir
+            if entry is not None and entry.is_dir:
+                source_path = entry.path
+        if is_dir:
+            extract_path(provider, source_path, dest, limits=limits)
+        else:
+            extract_file(provider, source_path, dest, limits=limits)
         return dest
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
@@ -442,18 +583,331 @@ class RWBackend(ABC):
 
 
 # =============================================================================
-# 4. NATIVE FAT32 (read + write)
+# 4. NATIVE EXFAT (phase-one read + limited write)
+# =============================================================================
+class NativeExfatRW(RWBackend):
+    """Bounded exFAT writer for profile-validated file and directory operations."""
+
+    def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
+        super().__init__(image, offset)
+        from mountfile.exfat_reader import NativeExfatImage
+        from mountfile.exfat_writer import NativeExfatWriter
+
+        self._reader = NativeExfatImage(image, offset=offset, volume_size=volume_size)
+        self._writer = NativeExfatWriter(image, offset=offset, volume_size=volume_size)
+        self.volume_size = int(volume_size)
+
+    def close(self) -> None:
+        self._reader.close()
+
+    def info(self) -> FSInfo:
+        return FSInfo(
+            fs_type="exfat",
+            offset=self.offset,
+            backend="native-exfat-rw",
+            label=self._reader.volume_label,
+            total_size=self._reader.profile.volume_length
+            * self._reader.profile.bytes_per_sector,
+            writable=True,
+            write_strategy="native-exfat-phase1",
+        )
+
+    def list(self, path: str = "/") -> list[FSEntry]:
+        return [
+            FSEntry(
+                name=item["name"],
+                path=(path.rstrip("/") + "/" + item["name"]).replace("//", "/"),
+                size=item["size"],
+                is_dir=item["is_dir"],
+            )
+            for item in self._reader.list_dir(path)
+        ]
+
+    def read(self, path: str) -> bytes:
+        return self._reader.read_file(path)
+
+    def _mutate(self, operation: str, *args, **kwargs) -> None:
+        """Release the source handle for Windows replace, then refresh the reader."""
+        self._reader.close()
+        try:
+            getattr(self._writer, operation)(*args, **kwargs)
+        except BaseException as mutation_error:
+            try:
+                self._reader.reopen()
+            except Exception as reopen_error:
+                raise mutation_error from reopen_error
+            raise
+        else:
+            self._reader.reopen()
+
+    def write_file(self, path: str, data: bytes) -> None:
+        self._mutate("write_file", path, data)
+
+    def mkdir(self, path: str) -> None:
+        self._mutate("mkdir", path)
+
+    def delete(self, path: str, recursive: bool = False) -> None:
+        self._mutate("delete", path, recursive=recursive)
+
+    def rename(self, src: str, dst: str) -> None:
+        self._mutate("rename", src, dst)
+
+
+# =============================================================================
+# 5. NATIVE FAT32 (read + write)
 # =============================================================================
 class Fat32RW(RWBackend):
-    """Native FAT12/16/32 — read + write без внешних утилит."""
+    """Bounded native FAT32 read/write without external utilities.
+
+    The historical class remains FAT32-only. ``Fat1216RW`` below enables the
+    same transactional engine after validating classic fixed-root geometry.
+    """
+
+    ALLOW_FAT1216 = False
 
     ATTR_DIR = 0x10
     ATTR_LFN = 0x0F
     ATTR_VOL = 0x08
 
-    def __init__(self, image: Path, offset: int = 0):
+    def __init__(self, image: Path, offset: int = 0, volume_size: int | None = None):
         super().__init__(image, offset)
+        if offset < 0:
+            raise ValueError("negative FAT volume offset")
+        image_size = self.image.stat().st_size
+        inferred_whole_image = volume_size is None
+        self._inferred_whole_image = inferred_whole_image
+        if volume_size is None:
+            if offset != 0:
+                raise ValueError(
+                    "an explicit FAT volume_size is required at nonzero offsets"
+                )
+            volume_size = image_size
+        if (
+            not isinstance(volume_size, int)
+            or isinstance(volume_size, bool)
+            or volume_size <= 0
+            or offset + volume_size < offset
+            or offset + volume_size > image_size
+        ):
+            raise ValueError("FAT extent exceeds image bounds")
+        self.volume_size = volume_size
+        self._selected_volume_size = volume_size
+        self._in_staged_mutation = False
+        self._quarantine_marker = Path(str(self.image) + ".mountfile-quarantined")
         self._parse_bpb()
+
+    def _read_at(self, offset: int, length: int) -> bytes:
+        try:
+            checked_range(offset, length, upper=self.volume_size)
+        except RefusalError as exc:
+            raise RefusalError(
+                "FAT read exceeds selected volume bounds", exc.code
+            ) from exc
+        return super()._read_at(offset, length)
+
+    def _write_at(self, offset: int, data: bytes) -> None:
+        try:
+            checked_range(offset, len(data), upper=self.volume_size)
+        except RefusalError as exc:
+            raise RefusalError(
+                "FAT write exceeds selected volume bounds", exc.code
+            ) from exc
+        with self.image.open("r+b") as stream:
+            stream.seek(self.offset + offset)
+            written = stream.write(data)
+            if written != len(data):
+                raise OSError(
+                    "short write at FAT offset 0x%X: %d of %d bytes"
+                    % (offset, written or 0, len(data))
+                )
+
+    def _temporary_sibling(self, suffix: str) -> Path:
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{self.image.name}.",
+            suffix=suffix,
+            dir=str(self.image.parent),
+        )
+        os.close(descriptor)
+        return Path(name)
+
+    def _verify_staged_mutation(
+        self, image: Path, operation: str, arguments: tuple
+    ) -> None:
+        verifier = type(self)(
+            image,
+            offset=self.offset,
+            volume_size=self._selected_volume_size,
+        )
+        try:
+            if operation == "write_file":
+                path, expected = arguments
+                actual = verifier.read(path)
+                if actual != expected:
+                    raise OSError("staged FAT read-back did not match written data")
+            elif operation == "mkdir":
+                (path,) = arguments
+                entry = verifier.stat(path)
+                if entry is None or not entry.is_dir:
+                    raise OSError("staged FAT read-back did not find created directory")
+            elif operation == "delete":
+                path, _recursive = arguments
+                if verifier.stat(path) is not None:
+                    raise OSError("staged FAT read-back found deleted entry")
+            elif operation == "rename":
+                source, destination = arguments
+                source_parent_cluster, _ = verifier._walk_to(source)
+                destination_parent_cluster, _ = verifier._walk_to(destination)
+                if source.casefold() == destination.casefold():
+                    if (
+                        verifier.stat(source) is None
+                        and verifier.stat(destination) is None
+                    ):
+                        raise OSError("staged FAT read-back lost renamed entry")
+                else:
+                    if verifier.stat(source) is not None:
+                        raise OSError("staged FAT read-back retained renamed source")
+                    destination_entry = verifier.stat(destination)
+                    if destination_entry is None:
+                        raise OSError("staged FAT read-back lost renamed entry")
+                    if (
+                        destination_entry.is_dir
+                        and source_parent_cluster != destination_parent_cluster
+                        and verifier._read_directory_parent_cluster(
+                            destination_entry.inode
+                        )
+                        != destination_parent_cluster
+                    ):
+                        raise OSError(
+                            "staged FAT read-back found an invalid moved-directory '..' entry"
+                        )
+            else:
+                raise RuntimeError(f"unknown staged FAT operation: {operation}")
+        finally:
+            verifier.close()
+
+    def _mutate_staged(self, operation: str, *arguments):
+        inplace = getattr(self, f"_{operation}_inplace")
+        if self._in_staged_mutation:
+            return inplace(*arguments)
+        if self._quarantine_marker.exists():
+            raise RuntimeError(
+                "FAT image is quarantined after a failed rollback; inspect "
+                f"{self._quarantine_marker} before writing"
+            )
+        if self.image.is_symlink():
+            raise ValueError("refusing staged FAT writes through a symlink")
+
+        original = self.image
+        parent = original.parent.resolve()
+        with _exclusive_image_lock(original):
+            metadata = original.stat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("staged FAT writes require a regular image file")
+            if metadata.st_nlink != 1:
+                raise ValueError("staged FAT writes refuse multiply-linked images")
+            source_identity = (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+            original_hash = _sha256_file(original)
+            image_size = metadata.st_size
+            if shutil.disk_usage(parent).free < image_size * 2:
+                raise OSError(
+                    "insufficient free space for staged FAT image and rollback copy"
+                )
+
+            staged = self._temporary_sibling(".mountfile-stage")
+            rollback: Path | None = None
+            keep_rollback = False
+            try:
+                rollback = self._temporary_sibling(".mountfile-rollback")
+                shutil.copy2(original, staged)
+                shutil.copy2(original, rollback)
+                staged_stat = original.stat()
+                if (
+                    (
+                        staged_stat.st_dev,
+                        staged_stat.st_ino,
+                        staged_stat.st_size,
+                        staged_stat.st_mtime_ns,
+                        staged_stat.st_ctime_ns,
+                    )
+                    != source_identity
+                    or _sha256_file(staged) != original_hash
+                    or _sha256_file(rollback) != original_hash
+                ):
+                    raise RuntimeError(
+                        "source image changed while creating FAT staging copies"
+                    )
+                self.image = staged
+                self._in_staged_mutation = True
+                try:
+                    result = inplace(*arguments)
+                finally:
+                    self.image = original
+                    self._in_staged_mutation = False
+
+                _fsync_file(staged)
+                self._verify_staged_mutation(staged, operation, arguments)
+                current_stat = original.stat()
+                current_identity = (
+                    current_stat.st_dev,
+                    current_stat.st_ino,
+                    current_stat.st_size,
+                    current_stat.st_mtime_ns,
+                    current_stat.st_ctime_ns,
+                )
+                if (
+                    current_identity != source_identity
+                    or _sha256_file(original) != original_hash
+                ):
+                    raise RuntimeError(
+                        "source image changed during staged FAT mutation; "
+                        "staged changes were discarded"
+                    )
+
+                committed = False
+                try:
+                    os.replace(staged, original)
+                    committed = True
+                    _fsync_directory(parent)
+                    self._verify_staged_mutation(original, operation, arguments)
+                except BaseException as commit_error:
+                    if not committed:
+                        raise
+                    try:
+                        assert rollback is not None
+                        os.replace(rollback, original)
+                        _fsync_directory(parent)
+                        if _sha256_file(original) != original_hash:
+                            raise OSError("restored image hash does not match snapshot")
+                    except BaseException as rollback_error:
+                        keep_rollback = True
+                        self._quarantine_marker.write_text(
+                            f"rollback={rollback}\n"
+                            f"commit_error={commit_error!r}\n"
+                            f"rollback_error={rollback_error!r}\n",
+                            encoding="utf-8",
+                        )
+                        raise RuntimeError(
+                            "FAT commit and rollback both failed; image is "
+                            f"quarantined and rollback copy retained at {rollback}"
+                        ) from rollback_error
+                    raise
+                return result
+            finally:
+                self.image = original
+                self._in_staged_mutation = False
+                for temporary in (staged, rollback):
+                    if (
+                        temporary is not None
+                        and temporary.exists()
+                        and not (temporary == rollback and keep_rollback)
+                    ):
+                        temporary.unlink()
 
     def _parse_bpb(self) -> None:
         bs = self._read_at(0, 512)
@@ -470,6 +924,16 @@ class Fat32RW(RWBackend):
         self.fat_size = (
             struct.unpack("<H", bs[22:24])[0] or struct.unpack("<I", bs[36:40])[0]
         )
+        if (
+            self.bytes_per_sector not in (512, 1024, 2048, 4096)
+            or self.sectors_per_cluster == 0
+            or self.sectors_per_cluster & (self.sectors_per_cluster - 1)
+            or self.reserved_sectors == 0
+            or self.num_fats not in (1, 2)
+            or self.fat_size == 0
+            or self.total_sectors == 0
+        ):
+            raise ValueError("invalid FAT geometry")
 
         root_secs = (
             self.root_entries * 32 + self.bytes_per_sector - 1
@@ -480,6 +944,8 @@ class Fat32RW(RWBackend):
             - self.num_fats * self.fat_size
             - root_secs
         )
+        if data_secs <= 0:
+            raise ValueError("invalid FAT layout: no data sectors remain")
         self.cluster_count = max(0, data_secs // self.sectors_per_cluster)
 
         if self.cluster_count < 4085:
@@ -495,19 +961,72 @@ class Fat32RW(RWBackend):
             self.reserved_sectors + self.num_fats * self.fat_size
         ) * self.bytes_per_sector
         self.data_start = self.root_dir_offset + root_secs * self.bytes_per_sector
+        declared_bytes = self.total_sectors * self.bytes_per_sector
+        if declared_bytes > self.volume_size:
+            raise ValueError("FAT BPB exceeds the selected volume extent")
+        if self._inferred_whole_image and declared_bytes != self.volume_size:
+            raise ValueError(
+                "FAT BPB must cover the whole image when volume_size is omitted"
+            )
+        self.volume_size = declared_bytes
 
         if self.fat_type == 32:
+            ext_flags = struct.unpack("<H", bs[40:42])[0]
+            if ext_flags & 0x0080:
+                raise ValueError("non-mirrored FAT32 mode is unsupported")
+            if self.num_fats > 1:
+                primary = self._read_at(
+                    self.fat_offset, self.fat_size * self.bytes_per_sector
+                )
+                for index in range(1, self.num_fats):
+                    replica = self._read_at(
+                        self.fat_offset + index * self.fat_size * self.bytes_per_sector,
+                        self.fat_size * self.bytes_per_sector,
+                    )
+                    if replica != primary:
+                        raise ValueError("mirrored FAT32 copies are inconsistent")
+            backup_sector = struct.unpack("<H", bs[50:52])[0]
+            if backup_sector:
+                backup_offset = backup_sector * self.bytes_per_sector
+                if backup_offset + self.bytes_per_sector > declared_bytes:
+                    raise ValueError("FAT32 backup boot sector exceeds volume bounds")
+                if (
+                    self._read_at(backup_offset, self.bytes_per_sector)
+                    != bs[: self.bytes_per_sector]
+                ):
+                    raise ValueError("FAT32 backup boot sector is inconsistent")
             self.root_cluster = struct.unpack("<I", bs[44:48])[0] & 0x0FFFFFFF
-            if self.root_cluster < 2:
-                self.root_cluster = 2
+            if not 2 <= self.root_cluster < self.cluster_count + 2:
+                raise ValueError("invalid FAT32 root cluster")
+            if self.cluster_count + 2 > self.fat_size * self.bytes_per_sector // 4:
+                raise ValueError("FAT32 FAT is too small for the declared volume")
             # FSINFO only caches the allocator state; the FAT stays the source
             # of truth.  The pointer is kept so the writer paths below can
             # refresh that cache - a stale free-cluster count is exactly what
             # `fsck.fat` reports as "Free cluster summary wrong".
             self.fsinfo_sector = struct.unpack("<H", bs[48:50])[0]
-        else:
+            if self.fsinfo_sector not in (0, 0xFFFF) and not (
+                1 <= self.fsinfo_sector < self.reserved_sectors
+            ):
+                raise ValueError("FAT32 FSInfo sector is outside the reserved region")
+            if (
+                self.fsinfo_sector not in (0, 0xFFFF)
+                and backup_sector
+                and self.fsinfo_sector == backup_sector
+            ):
+                raise ValueError("FAT32 FSInfo sector aliases the backup boot sector")
+        elif self.ALLOW_FAT1216:
+            if not self.root_entries:
+                raise ValueError("FAT12/16 requires a fixed root directory")
             self.root_cluster = 0
-            self.fsinfo_sector = 0
+            bits_per_entry = 12 if self.fat_type == 12 else 16
+            capacity = self.fat_size * self.bytes_per_sector * 8 // bits_per_entry
+            if self.cluster_count + 2 > capacity:
+                raise ValueError("FAT12/16 FAT is too small for the declared volume")
+        else:
+            raise ValueError(
+                "native FAT12/16 writes are unsupported; use the read-only FAT reader"
+            )
 
     # ---- FSINFO ------------------------------------------------------------
     def free_clusters(self) -> tuple:
@@ -555,6 +1074,8 @@ class Fat32RW(RWBackend):
 
     # ---- FAT ---------------------------------------------------------------
     def _fat_get(self, cluster: int) -> int:
+        if not 0 <= cluster < self.cluster_count + 2:
+            raise ValueError("FAT entry is outside the declared data area")
         if self.fat_type == 32:
             return (
                 struct.unpack("<I", self._read_at(self.fat_offset + cluster * 4, 4))[0]
@@ -589,11 +1110,28 @@ class Fat32RW(RWBackend):
                 self._write_at(off, struct.pack("<H", new))
 
     def _cluster_chain(self, start: int, max_n: int = 100_000) -> list[int]:
+        if start in (0, 1):
+            return []
+        eoc = {12: 0xFF8, 16: 0xFFF8, 32: 0x0FFFFFF8}[self.fat_type]
+        bad = {12: 0xFF7, 16: 0xFFF7, 32: 0x0FFFFFF7}[self.fat_type]
+        if not 2 <= start < self.cluster_count + 2:
+            raise ValueError("FAT chain starts outside the data area")
         chain, seen, cur = [], set(), start
-        while 2 <= cur < 0x0FFFFFF8 and cur not in seen and len(chain) < max_n:
+        while (
+            2 <= cur < self.cluster_count + 2 and cur not in seen and len(chain) < max_n
+        ):
             chain.append(cur)
             seen.add(cur)
-            cur = self._fat_get(cur)
+            nxt = self._fat_get(cur)
+            if nxt >= eoc:
+                return chain
+            if nxt in (0, 1, bad) or not 2 <= nxt < self.cluster_count + 2:
+                raise ValueError("FAT chain contains an invalid link")
+            cur = nxt
+        if cur in seen:
+            raise ValueError("FAT cluster chain contains a cycle")
+        if len(chain) >= max_n:
+            raise ValueError("FAT cluster chain exceeds safety limit")
         return chain
 
     def _cluster_offset(self, cluster: int) -> int:
@@ -607,9 +1145,13 @@ class Fat32RW(RWBackend):
         self._write_at(self._cluster_offset(cluster), data)
 
     def _read_chain(self, start: int, size: int | None = None) -> bytes:
+        if size == 0 and start in (0, 1):
+            return b""
         chain = self._cluster_chain(start)
         if not chain:
-            return self._read_at(self._cluster_offset(start), size or self.cluster_size)
+            if size:
+                raise ValueError("non-empty FAT file has no cluster chain")
+            return b""
         data = b"".join(self._read_cluster(c) for c in chain)
         return data[:size] if size is not None else data
 
@@ -628,8 +1170,9 @@ class Fat32RW(RWBackend):
         if count == 0:
             return []
         clusters = self._find_free_cluster(count)
+        eoc = {12: 0xFFF, 16: 0xFFFF, 32: 0x0FFFFFFF}[self.fat_type]
         for i, c in enumerate(clusters):
-            self._fat_set(c, 0x0FFFFFFF if i == len(clusters) - 1 else clusters[i + 1])
+            self._fat_set(c, eoc if i == len(clusters) - 1 else clusters[i + 1])
         # zero fill
         zero = b"\x00" * self.cluster_size
         for c in clusters:
@@ -924,7 +1467,14 @@ class Fat32RW(RWBackend):
         for part in parts[:-1]:
             raw = self._read_dir_raw(cur_cluster)
             entries = self._parse_dir_raw(raw, cur_path)
-            found = next((e for e in entries if e.name == part and e.is_dir), None)
+            found = next(
+                (
+                    e
+                    for e in entries
+                    if e.name.casefold() == part.casefold() and e.is_dir
+                ),
+                None,
+            )
             if not found:
                 raise FileNotFoundError(f"dir not found: {part}")
             cur_cluster = found.inode
@@ -957,7 +1507,10 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        found = next((e for e in entries if e.name == name and e.is_dir), None)
+        found = next(
+            (e for e in entries if e.name.casefold() == name.casefold() and e.is_dir),
+            None,
+        )
         if not found:
             return []
         return self._parse_dir_raw(self._read_dir_raw(found.inode), found.path)
@@ -967,7 +1520,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        entry = next((e for e in entries if e.name == name), None)
+        entry = next((e for e in entries if e.name.casefold() == name.casefold()), None)
         if not entry:
             raise FileNotFoundError(path)
         if entry.is_dir:
@@ -975,11 +1528,16 @@ class Fat32RW(RWBackend):
         return self._read_chain(entry.inode, entry.size)
 
     def write_file(self, path: str, data: bytes) -> None:
+        self._mutate_staged("write_file", path, data)
+
+    def _write_file_inplace(self, path: str, data: bytes) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        existing = next((e for e in entries if e.name == name), None)
+        existing = next(
+            (e for e in entries if e.name.casefold() == name.casefold()), None
+        )
         if existing and existing.is_dir:
             raise IsADirectoryError(path)
         old_chain = (
@@ -1083,11 +1641,14 @@ class Fat32RW(RWBackend):
         return None
 
     def mkdir(self, path: str) -> None:
+        self._mutate_staged("mkdir", path)
+
+    def _mkdir_inplace(self, path: str) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        if any(e.name == name for e in entries):
+        if any(e.name.casefold() == name.casefold() for e in entries):
             raise FileExistsError(path)
         new_cluster = self._allocate_chain(1)[0]
         # init . and ..
@@ -1124,11 +1685,14 @@ class Fat32RW(RWBackend):
         self.sync_fsinfo()
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        self._mutate_staged("delete", path, recursive)
+
+    def _delete_inplace(self, path: str, recursive: bool = False) -> None:
         parent_cluster, name = self._walk_to(path)
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        entry = next((e for e in entries if e.name == name), None)
+        entry = next((e for e in entries if e.name.casefold() == name.casefold()), None)
         if not entry:
             raise FileNotFoundError(path)
         if entry.is_dir:
@@ -1159,52 +1723,276 @@ class Fat32RW(RWBackend):
             updated[offset] = 0xE5
         return bytes(updated)
 
-    def rename(self, src: str, dst: str) -> None:
-        """Rename a same-directory 8.3 entry without changing its cluster chain.
+    @staticmethod
+    def _validate_fat_move_name(name: str) -> None:
+        if not name or name in (".", ".."):
+            raise ValueError("invalid FAT destination name")
+        if name[-1] in (" ", "."):
+            raise ValueError("FAT names cannot end in a space or dot")
+        if any(ord(char) < 0x20 or char in '"*/:<>?\\|' for char in name):
+            raise ValueError("destination name contains a FAT-forbidden character")
+        try:
+            code_units = len(name.encode("utf-16le")) // 2
+        except UnicodeEncodeError as exc:
+            raise ValueError("destination name is not valid UTF-16") from exc
+        if code_units > 255:
+            raise ValueError("FAT long names cannot exceed 255 UTF-16 code units")
 
-        Long-filename and cross-directory renames are deliberately rejected
-        until they can be implemented with an atomic directory-entry update.
-        """
+    def _validate_lfn_group(
+        self, raw: bytes, short_entry_index: int, expected_name: str
+    ) -> None:
+        start = short_entry_index
+        while start >= 32:
+            previous = start - 32
+            if raw[previous] in (0x00, 0xE5) or raw[previous + 11] != self.ATTR_LFN:
+                break
+            start = previous
+        count = (short_entry_index - start) // 32
+        if count == 0:
+            return
+        if count > 20:
+            raise ValueError("source FAT long-name sequence is too large")
+
+        short_entry = raw[short_entry_index : short_entry_index + 32]
+        checksum = self._short_checksum(short_entry[:11])
+        offsets = list(range(start, short_entry_index, 32))
+        chunks: list[list[int]] = []
+        for index, offset in enumerate(offsets):
+            expected_sequence = count - index
+            expected_first = expected_sequence | (0x40 if index == 0 else 0)
+            if (
+                raw[offset] != expected_first
+                or raw[offset + 11] != self.ATTR_LFN
+                or raw[offset + 12] != 0
+                or raw[offset + 13] != checksum
+                or struct.unpack_from("<H", raw, offset + 26)[0] != 0
+            ):
+                raise ValueError("source FAT long-name sequence is malformed")
+            chunk = (
+                raw[offset + 1 : offset + 11]
+                + raw[offset + 14 : offset + 26]
+                + raw[offset + 28 : offset + 32]
+            )
+            chunks.append(
+                [
+                    struct.unpack_from("<H", chunk, cursor)[0]
+                    for cursor in range(0, len(chunk), 2)
+                ]
+            )
+        units = [unit for chunk in reversed(chunks) for unit in chunk]
+        if self._decode_lfn_units(units) != expected_name:
+            raise ValueError("source FAT long-name sequence does not match its entry")
+
+    def _read_directory_parent_cluster(self, directory_cluster: int) -> int:
+        if not 2 <= directory_cluster < self.cluster_count + 2:
+            raise ValueError("invalid moved FAT directory cluster")
+        raw = self._read_dir_raw(directory_cluster)
+        dot_name = b"." + b" " * 10
+        dotdot_name = b".." + b" " * 9
+        if len(raw) < 64:
+            raise ValueError("FAT directory lacks '.' and '..' entries")
+        dot = raw[:32]
+        dotdot = raw[32:64]
+        if (
+            dot[:11] != dot_name
+            or not dot[11] & self.ATTR_DIR
+            or dotdot[:11] != dotdot_name
+            or not dotdot[11] & self.ATTR_DIR
+        ):
+            raise ValueError("FAT directory has malformed '.' or '..' entries")
+        dot_high = struct.unpack_from("<H", dot, 20)[0]
+        dotdot_high = struct.unpack_from("<H", dotdot, 20)[0]
+        if dot_high & 0xF000 or dotdot_high & 0xF000:
+            raise ValueError("FAT directory cluster field has reserved bits set")
+        dot_cluster = struct.unpack_from("<H", dot, 26)[0] | (dot_high << 16)
+        if dot_cluster != directory_cluster:
+            raise ValueError("FAT directory '.' entry points to a different cluster")
+        parent_cluster = struct.unpack_from("<H", dotdot, 26)[0] | (dotdot_high << 16)
+        if parent_cluster == 0:
+            return self.root_cluster
+        if not 2 <= parent_cluster < self.cluster_count + 2:
+            raise ValueError("FAT directory '..' entry has an invalid parent cluster")
+        return parent_cluster
+
+    def _directory_parent_update(
+        self,
+        directory_cluster: int,
+        expected_old_parent: int,
+        new_parent: int,
+    ) -> bytes:
+        actual_parent = self._read_directory_parent_cluster(directory_cluster)
+        if actual_parent != expected_old_parent:
+            raise ValueError(
+                "FAT directory '..' entry does not match its source parent"
+            )
+        raw = bytearray(self._read_dir_raw(directory_cluster))
+        encoded_parent = 0 if new_parent == self.root_cluster else new_parent
+        struct.pack_into("<H", raw, 32 + 20, (encoded_parent >> 16) & 0x0FFF)
+        struct.pack_into("<H", raw, 32 + 26, encoded_parent & 0xFFFF)
+        return bytes(raw)
+
+    def _assert_destination_not_descendant(
+        self,
+        moved_directory_cluster: int,
+        destination_parent: str,
+        expected_parent_cluster: int,
+    ) -> None:
+        current_cluster = self.root_cluster
+        if current_cluster == moved_directory_cluster:
+            raise ValueError("cannot move the FAT root directory")
+        prefix = "/"
+        for component in destination_parent.replace("\\", "/").split("/"):
+            if not component:
+                continue
+            if current_cluster == moved_directory_cluster:
+                raise ValueError("cannot move a directory into itself or a descendant")
+            entries = self._parse_dir_raw(self._read_dir_raw(current_cluster), prefix)
+            matches = [
+                entry
+                for entry in entries
+                if entry.is_dir and entry.name.casefold() == component.casefold()
+            ]
+            if len(matches) != 1:
+                raise ValueError("destination parent path is ambiguous or invalid")
+            current_cluster = matches[0].inode
+            if current_cluster == moved_directory_cluster:
+                raise ValueError("cannot move a directory into itself or a descendant")
+            prefix = prefix.rstrip("/") + "/" + matches[0].name
+        if current_cluster != expected_parent_cluster:
+            raise RuntimeError("destination parent changed during FAT rename")
+
+    def rename(self, src: str, dst: str) -> None:
+        self._mutate_staged("rename", src, dst)
+
+    def _rename_inplace(self, src: str, dst: str) -> None:
+        """Rename within one directory or move an entry between FAT32 dirs."""
         src_parent, src_name = _image_path_parent_name(src)
         dst_parent, dst_name = _image_path_parent_name(dst)
-        if src_parent != dst_parent:
-            raise NotImplementedError("cross-directory rename not supported")
-        parent_cluster, _ = self._walk_to(src)
-        raw = self._read_dir_raw(parent_cluster)
-        parent_path = src_parent
-        entries = self._parse_dir_raw(raw, parent_path)
-        if src_name.casefold() == dst_name.casefold():
-            return
-        entry = next((e for e in entries if e.name == src_name), None)
-        if not entry:
+        if not src_name or not dst_name:
+            raise ValueError("FAT root cannot be renamed")
+        source_parent_cluster, _ = self._walk_to(src)
+        destination_parent_cluster, _ = self._walk_to(dst)
+        source_raw = self._read_dir_raw(source_parent_cluster)
+        source_entries = self._parse_dir_raw(source_raw, src_parent)
+        source_matches = [
+            item
+            for item in source_entries
+            if item.name.casefold() == src_name.casefold()
+        ]
+        if not source_matches:
             raise FileNotFoundError(src)
-        if any(e.name.casefold() == dst_name.casefold() for e in entries):
+        if len(source_matches) != 1:
+            raise ValueError("source FAT entry name is ambiguous")
+        entry = source_matches[0]
+        if (
+            source_parent_cluster == destination_parent_cluster
+            and src_name.casefold() == dst_name.casefold()
+        ):
+            return
+
+        destination_raw = self._read_dir_raw(destination_parent_cluster)
+        destination_entries = self._parse_dir_raw(destination_raw, dst_parent)
+        if any(
+            item.name.casefold() == dst_name.casefold() for item in destination_entries
+        ):
             raise FileExistsError(dst)
-        if not self._is_83_name(src_name) or not self._is_83_name(dst_name):
-            raise NotImplementedError(
-                "FAT rename currently supports only same-directory 8.3 names"
-            )
-        idx = self._find_entry_index(raw, entry, parent_path)
-        if idx is None:
+
+        source_index = self._find_entry_index(source_raw, entry, src_parent)
+        if source_index is None:
             raise RuntimeError(f"directory entry not found while renaming {src}")
 
-        short = self._short_name(dst_name)
-        short_raw = short[0].ljust(8, b" ") + short[1].ljust(3, b" ")
-        for other_idx in range(0, len(raw) - 31, 32):
-            if other_idx == idx:
-                continue
-            first = raw[other_idx]
-            if first in (0x00, 0xE5) or raw[other_idx + 11] == self.ATTR_LFN:
-                continue
-            if raw[other_idx : other_idx + 11] == short_raw:
-                raise FileExistsError(dst)
+        if source_parent_cluster == destination_parent_cluster:
+            if not self.ALLOW_FAT1216 and (
+                not self._is_83_name(src_name) or not self._is_83_name(dst_name)
+            ):
+                raise NotImplementedError(
+                    "FAT rename currently supports only same-directory 8.3 names"
+                )
+            self._validate_fat_move_name(dst_name)
+            self._validate_lfn_group(source_raw, source_index, entry.name)
+            short_raw = self._short_name_for_dir(dst_name, source_raw)
+            for other_idx in range(0, len(source_raw) - 31, 32):
+                if other_idx == source_index:
+                    continue
+                first = source_raw[other_idx]
+                if first in (0x00, 0xE5) or source_raw[other_idx + 11] == self.ATTR_LFN:
+                    continue
+                if source_raw[other_idx : other_idx + 11] == short_raw:
+                    raise FileExistsError(dst)
+            if not self.ALLOW_FAT1216:
+                updated = bytearray(source_raw)
+                updated[source_index : source_index + 11] = short_raw
+                self._write_dir_raw(source_parent_cluster, bytes(updated))
+                self.sync_fsinfo()
+                return
+            updated = bytearray(self._tombstone_entry_slots(source_raw, source_index))
+            lfn = (
+                self._lfn_entries(dst_name, short_raw)
+                if not self._is_83_name(dst_name)
+                else b""
+            )
+            slot = self._find_entry_slot(bytes(updated), len(lfn) // 32 + 1)
+            if slot is None:
+                raise RuntimeError(f"no free dir slot for {dst_name}")
+            updated[slot : slot + len(lfn)] = lfn
+            replacement = bytearray(source_raw[source_index : source_index + 32])
+            replacement[:11] = short_raw
+            updated[slot + len(lfn) : slot + len(lfn) + 32] = replacement
+            self._write_dir_raw(source_parent_cluster, bytes(updated))
+            self.sync_fsinfo()
+            return
 
-        # Updating the short-name bytes in place preserves the file's FAT
-        # chain and all other directory metadata; the old implementation
-        # called delete(), which freed the chain before recreating the entry.
-        buf = bytearray(raw)
-        buf[idx : idx + 11] = short_raw
-        self._write_dir_raw(parent_cluster, bytes(buf))
+        self._validate_fat_move_name(dst_name)
+        self._validate_lfn_group(source_raw, source_index, entry.name)
+        if entry.is_dir:
+            self._assert_destination_not_descendant(
+                entry.inode, dst_parent, destination_parent_cluster
+            )
+            updated_directory = self._directory_parent_update(
+                entry.inode, source_parent_cluster, destination_parent_cluster
+            )
+        else:
+            updated_directory = None
+
+        short_name = self._short_name_for_dir(dst_name, destination_raw)
+        lfn = (
+            self._lfn_entries(dst_name, short_name)
+            if not self._is_83_name(dst_name)
+            else b""
+        )
+        new_short_entry = bytearray(source_raw[source_index : source_index + 32])
+        new_short_entry[:11] = short_name
+        new_entry_set = lfn + bytes(new_short_entry)
+        slot = self._find_entry_slot(destination_raw, len(new_entry_set) // 32)
+        if slot is None:
+            raise RuntimeError(f"no free dir slot for {dst_name}")
+        updated_destination = bytearray(destination_raw)
+        updated_destination[slot : slot + len(new_entry_set)] = new_entry_set
+        updated_source = self._tombstone_entry_slots(source_raw, source_index)
+
+        # All edits happen against the private staged image. The public writer
+        # validates the resulting namespace and atomically replaces the source
+        # image only after the full move succeeds.
+        self._write_dir_raw(destination_parent_cluster, bytes(updated_destination))
+        if updated_directory is not None:
+            self._write_dir_raw(entry.inode, updated_directory)
+        self._write_dir_raw(source_parent_cluster, updated_source)
+        self.sync_fsinfo()
+
+
+class Fat1216RW(Fat32RW):
+    """Native bounded writer for FAT12 and FAT16 volumes."""
+
+    ALLOW_FAT1216 = True
+
+    def info(self) -> FSInfo:
+        value = super().info()
+        value.backend = "native-fat-rw"
+        value.write_strategy = "native-fat12-16"
+        return value
+
+
+NativeFat1216Writer = Fat1216RW
 
 
 # =============================================================================
@@ -1542,8 +2330,10 @@ class NtfsRW(RWBackend):
             if callable(close):
                 try:
                     close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "best-effort operation failed", exc_info=exc
+                    )
 
     def _mount_point(self) -> Path:
         if sys.platform.startswith("win"):
@@ -1941,7 +2731,12 @@ class UniversalFSRW:
     """
 
     def __init__(
-        self, image: Path, offset: int | None = None, auto_backup: bool = True
+        self,
+        image: Path,
+        offset: int | None = None,
+        auto_backup: bool = True,
+        allow_legacy_mount: bool = False,
+        volume_size: int | None = None,
     ):
         self.image = Path(image)
         self.offset = offset
@@ -1949,6 +2744,8 @@ class UniversalFSRW:
         self.journal = RWJournal(self.image)
         self.backup = ImageBackup(self.image)
         self._auto_backup = auto_backup
+        self.allow_legacy_mount = bool(allow_legacy_mount)
+        self._requested_volume_size = volume_size
         self._backup_path: Path | None = None
         self._open()
 
@@ -1979,25 +2776,73 @@ class UniversalFSRW:
             else:
                 fs_type, off = candidate.fstype, candidate.offset
             self.offset = off
-        next_offsets = [int(volume.offset) for volume in volumes if volume.offset > off]
-        boundary = min(next_offsets) if next_offsets else image_size
-        if candidate is not None and candidate.size:
-            boundary = min(boundary, off + int(candidate.size))
-        volume_size = max(0, min(image_size, boundary) - off)
+        if self._requested_volume_size is not None:
+            if not isinstance(self._requested_volume_size, int) or isinstance(
+                self._requested_volume_size, bool
+            ):
+                raise ValueError("volume_size must be an integer byte count")
+            volume_size = self._requested_volume_size
+            if (
+                volume_size <= 0
+                or off < 0
+                or off + volume_size < off
+                or off + volume_size > image_size
+            ):
+                raise ValueError("explicit volume_size exceeds image bounds")
+            if (
+                candidate is not None
+                and candidate.size
+                and volume_size > int(candidate.size)
+            ):
+                raise ValueError("explicit volume_size exceeds detected extent")
+        elif candidate is not None and candidate.size:
+            volume_size = int(candidate.size)
+        elif off == 0:
+            # A partitionless whole-image filesystem can use its own validated
+            # on-disk length; incidental backup boot-sector signatures are not
+            # partition boundaries.
+            volume_size = image_size
+        else:
+            raise RuntimeError(
+                "exact volume_size required for nonzero offsets without a "
+                "partition-table extent"
+            )
+        if off + volume_size > image_size:
+            raise ValueError("selected volume extent exceeds image bounds")
         self.volume_size = volume_size
+        inferred_whole_image_fat = (
+            self._requested_volume_size is None
+            and off == 0
+            and (candidate is None or not candidate.size)
+        )
         # ``probe_filesystem`` returns display names such as ``FAT32`` or
         # ``NTFS`` while the backend table is lowercase, so the match below
         # must be case-insensitive.
         fs_type_lower = str(fs_type).lower()
-        for cls, types in [
+        writer_types = [
+            (NativeExfatRW, ("exfat",)),
+            (Fat1216RW, ("fat12", "fat16")),
             (Fat32RW, ("fat", "fat12", "fat16", "fat32")),
             (Ext234RW, ("ext2", "ext3", "ext4")),
-            (NtfsRW, ("ntfs",)),
-        ]:
+        ]
+        if self.allow_legacy_mount:
+            writer_types.append((NtfsRW, ("ntfs",)))
+        for cls, types in writer_types:
             if fs_type_lower.startswith(types):
                 try:
-                    if cls is Ext234RW:
+                    if cls in (Ext234RW, NativeExfatRW):
                         self.backend = cls(self.image, off, volume_size=volume_size)
+                    elif cls in (Fat32RW, Fat1216RW):
+                        backend = cls(self.image, off, volume_size=volume_size)
+                        if (
+                            inferred_whole_image_fat
+                            and backend.volume_size != volume_size
+                        ):
+                            backend.close()
+                            raise ValueError(
+                                "FAT BPB must cover the inferred whole-image extent"
+                            )
+                        self.backend = backend
                     else:
                         self.backend = cls(self.image, off)
                     return
@@ -2010,10 +2855,31 @@ class UniversalFSRW:
                             raise RuntimeError(
                                 "refusing unsafe ext2 geometry/state: %s" % e
                             ) from e
+                        profile = str(fs_type).lower()
+                        if profile.startswith(("ext3", "ext4")):
+                            raise RuntimeError(
+                                "%s native write profile is unsupported; "
+                                "no subprocess or legacy fallback was attempted: %s"
+                                % (profile, e)
+                            ) from e
                         raise RuntimeError(
-                            "refusing unsupported ext profile without an explicit "
+                            "refusing unsupported ext2 profile without an explicit "
                             "legacy compatibility backend: %s" % e
                         ) from e
+                    raise RuntimeError(
+                        "refusing filesystem write because the selected native "
+                        "profile was declined: %s" % e
+                    ) from e
+        if fs_type_lower.startswith("ntfs") and not self.allow_legacy_mount:
+            raise RuntimeError(
+                "native NTFS writes are unsupported and not implemented; pass "
+                "allow_legacy_mount=True only for the explicit compatibility backend"
+            )
+        if not self.allow_legacy_mount:
+            raise RuntimeError(
+                "no native write profile for %s; legacy mount fallback is disabled"
+                % fs_type
+            )
         # Last resort remains opt-in through an actually detected filesystem.
         try:
             self.backend = LoopMountRW(self.image, off, fs_type)
@@ -2032,7 +2898,116 @@ class UniversalFSRW:
 
     # ---- read/write -------------------------------------------------------
     def info(self) -> FSInfo:
-        return self.backend.info()
+        info = self.backend.info()
+        # Keep the backend's identity, while making operation support explicit
+        # to CLI, GUI, and WriteEngine callers.  Browsability never implies RW.
+        capabilities = self.backend_status(info)
+        return FSInfo(
+            **{
+                **info.to_dict(),
+                "read_capabilities": tuple(capabilities["read_capabilities"]),
+                "write_capabilities": tuple(capabilities["write_capabilities"]),
+                "write_rejection_reason": capabilities["write_rejection_reason"],
+                "write_rejection_code": capabilities["write_rejection_code"],
+            }
+        )
+
+    @staticmethod
+    def backend_status(info: FSInfo) -> dict:
+        """Return a serialisable, conservative operation capability status."""
+        read = list(RW_READ_CAPABILITIES)
+        writable = bool(info.writable)
+        strategy = str(info.write_strategy or "")
+        native_profile = NATIVE_WRITE_PROFILES_BY_STRATEGY.get(strategy)
+        native_profile_matches = bool(
+            native_profile
+            and (
+                str(info.fs_type).casefold() == native_profile.filesystem.casefold()
+                or (
+                    strategy == "native-fat12-16"
+                    and str(info.fs_type).casefold() in {"fat12", "fat16"}
+                )
+            )
+            and str(info.backend) == native_profile.backend
+        )
+        if native_profile_matches:
+            rejection_reason = None
+            rejection_code = None
+            if not writable:
+                rejection_reason = (
+                    "native write strategy does not match the selected writable "
+                    "filesystem/backend profile"
+                )
+                rejection_code = RefusalCode.OPERATION_NOT_SUPPORTED
+            status = get_native_capability_status(
+                native_profile,
+                backend=info.backend,
+                write_enabled=writable,
+                write_rejection_reason=rejection_reason,
+                write_rejection_code=rejection_code,
+            )
+            if strategy == "native-fat12-16":
+                # The matrix has one shared profile for both variants. Publish
+                # the validated selection, not the profile's representative FAT12.
+                status["filesystem"] = str(info.fs_type).casefold().upper()
+            return status
+
+        rejection_code = None
+        if strategy in NATIVE_WRITE_PROFILES_BY_STRATEGY:
+            write = []
+            reason = (
+                "native write strategy does not match the selected writable "
+                "filesystem/backend profile"
+            )
+            rejection_code = RefusalCode.UNSUPPORTED_PROFILE.value
+        elif writable:
+            write = list(RW_WRITE_CAPABILITIES)
+            reason = ""
+        else:
+            write = []
+            reason = "write operations are unsupported for profile %s (%s)" % (
+                info.fs_type,
+                strategy or "read-only",
+            )
+            rejection_code = RefusalCode.OPERATION_NOT_SUPPORTED.value
+        status = {
+            "backend": info.backend,
+            "mode": "read-write" if write else "read-only",
+            "read_capabilities": read,
+            "write_capabilities": write,
+            "write_enabled": bool(write),
+            "write_rejection_reason": reason,
+            "write_rejection_code": rejection_code,
+            "write_rejection": (
+                None
+                if rejection_code is None
+                else RefusalRuntimeError(reason, RefusalCode(rejection_code)).to_dict()
+            ),
+        }
+        return status
+
+    def capability_status(self) -> dict:
+        """Expose the selected backend's bounded operation support."""
+        return self.backend_status(self.backend.info())
+
+    def _require_operation(self, operation: str) -> None:
+        status = self.capability_status()
+        if operation not in status["write_capabilities"]:
+            reason = status["write_rejection_reason"] or (
+                "operation is not advertised by the selected profile"
+            )
+            code = RefusalCode.OPERATION_NOT_SUPPORTED
+            canonical = canonical_operation_for_api_operation(
+                "universal-fs-rw", operation
+            )
+            if canonical is not None:
+                refusal = status.get("operations", {}).get(canonical, {}).get("refusal")
+                if isinstance(refusal, dict) and refusal.get("code"):
+                    code = RefusalCode(refusal["code"])
+            raise RefusalRuntimeError(
+                "%s is unsupported for %s: %s" % (operation, status["backend"], reason),
+                code,
+            )
 
     def list(self, path: str = "/") -> list[FSEntry]:
         return self.backend.list(path)
@@ -2040,8 +3015,14 @@ class UniversalFSRW:
     def read(self, path: str) -> bytes:
         return self.backend.read(path)
 
-    def extract(self, path: str, dest: Path) -> Path:
-        return self.backend.extract(path, dest)
+    def extract(
+        self,
+        path: str,
+        dest: Path,
+        *,
+        limits: ExtractionLimits | None = None,
+    ) -> Path:
+        return self.backend.extract(path, dest, limits=limits)
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
         yield from self.backend.walk(path)
@@ -2052,21 +3033,25 @@ class UniversalFSRW:
         self.journal.log(op)
 
     def write_file(self, path: str, data: bytes) -> None:
+        self._require_operation("write_file")
         op = WriteOperation("write", path, {"size": len(data)})
         self._audit_and_backup(op)
         self.backend.write_file(path, data)
 
     def mkdir(self, path: str) -> None:
+        self._require_operation("mkdir")
         op = WriteOperation("mkdir", path)
         self._audit_and_backup(op)
         self.backend.mkdir(path)
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        self._require_operation("delete")
         op = WriteOperation("delete", path, {"recursive": recursive})
         self._audit_and_backup(op)
         self.backend.delete(path, recursive)
 
     def rename(self, src: str, dst: str) -> None:
+        self._require_operation("rename")
         op = WriteOperation("rename", src, {"dst": dst})
         self._audit_and_backup(op)
         self.backend.rename(src, dst)
@@ -2080,7 +3065,8 @@ class UniversalFSRW:
         offset = self.offset if self.offset is not None else info.offset
         if getattr(info, "write_strategy", "") == "native-ext2":
             result["fsck"] = {
-                "skipped": "native ext2 metadata was validated after each staged mutation; no external repair tool was run"
+                "skipped": "native ext2 metadata was validated after each staged "
+                "mutation; no external repair tool was run"
             }
         elif fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
             command = ["e2fsck"]

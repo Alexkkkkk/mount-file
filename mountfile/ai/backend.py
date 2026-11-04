@@ -412,17 +412,22 @@ class OpenAiCompatBackend(AiBackend):
         return bool(self.api_key)
 
     def analyze(self, name, data, prompt=None, truncated=False, size=None):
-        if self.api_key:
-            transport_error = _api_key_transport_error(self.base_url)
-            if transport_error:
-                return AiResult(
-                    ok=False,
-                    backend=self.name,
-                    model=self.model,
-                    error=transport_error,
-                    bytes_read=len(data or b""),
-                    truncated=truncated,
-                )
+        transport_error = _api_key_transport_error(self.base_url)
+        parsed = urlsplit(self.base_url)
+        is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+        if (not is_loopback and not self.api_key) or transport_error:
+            return AiResult(
+                ok=False,
+                backend=self.name,
+                model=self.model,
+                error=(
+                    transport_error
+                    if self.api_key
+                    else "Удалённый AI-эндпоинт требует HTTPS и API-ключ."
+                ),
+                bytes_read=len(data or b""),
+                truncated=truncated,
+            )
         headers = {}
         if self.api_key:
             headers["Authorization"] = "Bearer " + self.api_key

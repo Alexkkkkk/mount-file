@@ -19,6 +19,8 @@ def _image(
     incompat=0x0002,
     ro_compat=0x0003,
     blocks_high=0,
+    journal_inode=8,
+    creator_os=0,
 ):
     image_size = block_size * blocks
     image = bytearray(image_size)
@@ -32,10 +34,12 @@ def _image(
     struct.pack_into("<H", sb, 0x38, 0xEF53)
     struct.pack_into("<H", sb, 0x3A, state)
     struct.pack_into("<I", sb, 0x4C, 1)
+    struct.pack_into("<I", sb, 0x48, creator_os)
     struct.pack_into("<H", sb, 0x58, 128)
     struct.pack_into("<I", sb, 0x5C, compat)
     struct.pack_into("<I", sb, 0x60, incompat)
     struct.pack_into("<I", sb, 0x64, ro_compat)
+    struct.pack_into("<I", sb, 0xE0, journal_inode)
     struct.pack_into("<I", sb, 0x150, blocks_high)
     sb[0x78:0x7C] = b"TEST"
     return bytes(image)
@@ -49,6 +53,13 @@ def test_clean_allowlisted_ext2_is_only_a_candidate_for_full_writer_validation()
     assert profile.phase1_ext2_profile_candidate
     assert profile.write_gate_reasons == ()
     assert profile.label == "TEST"
+    assert profile.creator_os == 0
+
+
+def test_superblock_probe_preserves_non_linux_creator_os():
+    profile = probe_ext_superblock(io.BytesIO(_image(creator_os=1)))
+
+    assert profile.creator_os == 1
 
 
 def test_journal_and_recovery_flags_keep_profile_read_only():
@@ -57,6 +68,7 @@ def test_journal_and_recovery_flags_keep_profile_read_only():
 
     assert profile.fs_type == "ext3"
     assert profile.has_journal
+    assert profile.journal_inode == 8
     assert profile.journal_recovery_needed
     assert not profile.clean_unmounted
     assert not profile.phase1_ext2_profile_candidate
@@ -71,8 +83,17 @@ def test_external_journal_device_is_not_misclassified_as_unjournaled_ext2():
 
     assert profile.fs_type == "ext3"
     assert profile.has_journal
+    assert profile.journal_inode is None
     assert not profile.phase1_ext2_profile_candidate
     assert any("JBD2" in reason for reason in profile.write_gate_reasons)
+
+
+@pytest.mark.parametrize("journal_inode", [0, 17, 0xFFFFFFFF])
+def test_internal_journal_inode_must_be_in_inode_table(journal_inode):
+    image = _image(compat=0x000C, journal_inode=journal_inode)
+
+    with pytest.raises(ExtProbeError, match="journal inode is outside inode table"):
+        probe_ext_superblock(io.BytesIO(image))
 
 
 def test_ext4_features_are_not_mistaken_for_ext2_block_pointers():
@@ -98,6 +119,26 @@ def test_metadata_checksum_profile_requires_a_valid_superblock_crc32c():
         probe_ext_superblock(io.BytesIO(image))
 
 
+def test_metadata_checksum_profile_exposes_no_write_eligibility_for_unknown_layout():
+    image = bytearray(_image(ro_compat=0x0403))
+    superblock = memoryview(image)[1024:2048]
+    superblock[0x175] = 1
+    struct.pack_into(
+        "<I", superblock, 0x3FC, ext4_superblock_checksum(bytes(superblock))
+    )
+
+    profile = probe_ext_superblock(io.BytesIO(image))
+    assert not profile.phase1_ext2_profile_candidate
+    assert any("ext4-featured" in reason for reason in profile.write_gate_reasons)
+
+
+def test_probe_rejects_checked_filesystem_size_arithmetic():
+    image = bytearray(_image())
+    struct.pack_into("<I", memoryview(image)[1024:2048], 0x04, 0xFFFFFFFF)
+    with pytest.raises(ExtProbeError, match="partition bounds"):
+        probe_ext_superblock(io.BytesIO(image))
+
+
 def test_dirty_state_and_unknown_incompat_flags_fail_closed():
     profile = probe_ext_superblock(
         io.BytesIO(_image(state=0x0003, incompat=0x40000002))
@@ -111,10 +152,33 @@ def test_dirty_state_and_unknown_incompat_flags_fail_closed():
     )
 
 
+def test_unknown_read_only_compatible_flags_are_reported():
+    profile = probe_ext_superblock(io.BytesIO(_image(ro_compat=0x80000003)))
+
+    assert profile.unknown_ro_compat_features == 0x80000000
+    assert not profile.phase1_ext2_profile_candidate
+    assert any(
+        "unknown read-only-compatible" in reason
+        for reason in profile.write_gate_reasons
+    )
+
+
 def test_64bit_block_count_is_used_for_extent_bounds():
     image = _image(incompat=0x0002 | 0x0080, blocks_high=1)
 
     with pytest.raises(ExtProbeError, match="partition bounds"):
+        probe_ext_superblock(io.BytesIO(image))
+
+
+def test_64bit_profile_requires_exact_64_byte_descriptors():
+    image = bytearray(_image(incompat=0x0002 | 0x0080, blocks_high=0))
+    sb = memoryview(image)[1024:2048]
+    struct.pack_into("<H", sb, 0xFE, 64)
+    profile = probe_ext_superblock(io.BytesIO(image))
+    assert profile.group_descriptor_size == 64
+
+    struct.pack_into("<H", sb, 0xFE, 72)
+    with pytest.raises(ExtProbeError, match="group-descriptor size"):
         probe_ext_superblock(io.BytesIO(image))
 
 

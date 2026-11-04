@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -165,7 +166,10 @@ def iter_file_entries(fs: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
             if _entry_is_dir(entry):
                 try:
                     child = entry.as_directory()
-                except Exception:
+                except Exception as exc:
+                    logging.getLogger(__name__).debug(
+                        "best-effort operation failed", exc_info=exc
+                    )
                     continue
                 yield from walk(child, path)
             elif _entry_is_file(entry):

@@ -8,6 +8,7 @@ import pytest
 
 from mountfile import cli, vfs
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
+from mountfile.safety import RefusalCategory, RefusalCode
 
 BLOCK_SIZE = 1024
 BLOCKS_COUNT = 64
@@ -16,12 +17,34 @@ INODE_TABLE_BLOCK = 5
 ROOT_DIR_BLOCK = 20
 
 
-def _put_inode(image, number, *, mode, size, pointers, flags=0, mtime=0):
-    offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (number - 1) * 128
+def _put_inode(
+    image,
+    number,
+    *,
+    mode,
+    size,
+    pointers,
+    flags=0,
+    atime=0,
+    ctime=0,
+    mtime=0,
+    links=1,
+    uid=0,
+    gid=0,
+):
+    inode_size = struct.unpack_from("<H", image, 1024 + 0x58)[0]
+    offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (number - 1) * inode_size
     struct.pack_into("<H", image, offset, mode)
+    struct.pack_into("<H", image, offset + 2, uid & 0xFFFF)
     struct.pack_into("<I", image, offset + 4, size & 0xFFFFFFFF)
+    struct.pack_into("<I", image, offset + 8, atime)
+    struct.pack_into("<I", image, offset + 12, ctime)
     struct.pack_into("<I", image, offset + 16, mtime)
+    struct.pack_into("<H", image, offset + 24, gid & 0xFFFF)
+    struct.pack_into("<H", image, offset + 26, links)
     struct.pack_into("<I", image, offset + 32, flags)
+    struct.pack_into("<H", image, offset + 120, (uid >> 16) & 0xFFFF)
+    struct.pack_into("<H", image, offset + 122, (gid >> 16) & 0xFFFF)
     for slot, block in enumerate(pointers):
         struct.pack_into("<I", image, offset + 40 + slot * 4, block)
 
@@ -41,7 +64,16 @@ def _dir_block(entries):
     return bytes(result)
 
 
-def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x0003):
+def _make_image(
+    path,
+    *,
+    state=1,
+    compat=0x0008,
+    incompat=0x0002,
+    ro_compat=0x0003,
+    creator_os=0,
+    inode_size=128,
+):
     image = bytearray(BLOCKS_COUNT * BLOCK_SIZE)
     sb = memoryview(image)[1024:2048]
     struct.pack_into("<I", sb, 0x00, INODES_COUNT)
@@ -53,10 +85,13 @@ def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x00
     struct.pack_into("<H", sb, 0x38, 0xEF53)
     struct.pack_into("<H", sb, 0x3A, state)
     struct.pack_into("<I", sb, 0x4C, 1)
-    struct.pack_into("<H", sb, 0x58, 128)
+    struct.pack_into("<H", sb, 0x58, inode_size)
+    struct.pack_into("<I", sb, 0x48, creator_os)
     struct.pack_into("<I", sb, 0x5C, compat)
     struct.pack_into("<I", sb, 0x60, incompat)
     struct.pack_into("<I", sb, 0x64, ro_compat)
+    if compat & 0x0004 and not incompat & 0x0008:
+        struct.pack_into("<I", sb, 0xE0, 8)
     sb[0x78:0x7C] = b"TEST"
 
     # Primary group descriptor: bitmaps at 3/4 and inode table at blocks 5-8.
@@ -70,9 +105,19 @@ def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x00
         mode=0x4000 | 0o755,
         size=BLOCK_SIZE,
         pointers=(ROOT_DIR_BLOCK,) + (0,) * 14,
+        links=2,
     )
     _put_inode(
-        image, 11, mode=0x8000 | 0o644, size=11, pointers=(21,) + (0,) * 14, mtime=1
+        image,
+        11,
+        mode=0x8000 | 0o644,
+        size=11,
+        pointers=(21,) + (0,) * 14,
+        atime=2,
+        ctime=3,
+        mtime=1,
+        uid=0x12345678,
+        gid=0x9ABCDEF0,
     )
 
     single_pointers = [0] * 15
@@ -135,6 +180,107 @@ def _make_image(path, *, state=1, compat=0x0008, incompat=0x0002, ro_compat=0x00
 
     path.write_bytes(image)
     return bytes(image)
+
+
+def _set_inode_flags(path, number, flags):
+    image = bytearray(path.read_bytes())
+    inode_size = struct.unpack_from("<H", image, 1024 + 0x58)[0]
+    offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (number - 1) * inode_size
+    struct.pack_into("<I", image, offset + 32, flags)
+    path.write_bytes(image)
+    return bytes(image)
+
+
+# Independent on-disk expectations, not a copy of the reader's mask. INDEX
+# remains accepted for non-directories, but never for a directory.
+_CLASSIC_READABLE_INODE_BITS = {
+    0x00000001,  # SECRM
+    0x00000002,  # UNRM
+    0x00000008,  # SYNC
+    0x00000010,  # IMMUTABLE
+    0x00000020,  # APPEND
+    0x00000040,  # NODUMP
+    0x00000080,  # NOATIME
+    0x00001000,  # INDEX on a non-directory (historic behavior)
+    0x00004000,  # JOURNAL_DATA
+    0x00008000,  # NOTAIL
+    0x00010000,  # DIRSYNC
+    0x00020000,  # TOPDIR
+}
+
+
+@pytest.mark.parametrize("bit", [1 << shift for shift in range(32)])
+def test_ext2_inode_flags_are_fail_closed_for_every_bit(tmp_path, bit):
+    image_path = tmp_path / "ext2-inode-flags.img"
+    _make_image(image_path)
+    original = _set_inode_flags(image_path, 11, bit | 0x40)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        if bit in _CLASSIC_READABLE_INODE_BITS:
+            assert provider.read_file("/hello.txt") == b"hello ext2!"
+            assert provider.stat("/hello.txt")["size"] == 11
+            assert provider._read_inode(11).flags == bit | 0x40
+        else:
+            for operation in (
+                lambda: provider.read_file("/hello.txt"),
+                lambda: provider.stat("/hello.txt"),
+                lambda: provider.list_dir("/"),
+            ):
+                with pytest.raises(Ext2ReadError, match=f"0x{bit:08x}") as exc:
+                    operation()
+                assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+                assert exc.value.category is RefusalCategory.UNSUPPORTED
+                assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+def test_ext2_reports_all_unsupported_bits_in_mixed_flag_word(tmp_path):
+    image_path = tmp_path / "ext2-mixed-flags.img"
+    _make_image(image_path)
+    original = _set_inode_flags(image_path, 11, 0x80000240)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext2ReadError, match="0x80000200") as exc:
+            provider.read_file("/hello.txt")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 11 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+def test_ext2_all_compatible_flags_can_be_combined(tmp_path):
+    image_path = tmp_path / "ext2-compatible-flags.img"
+    _make_image(image_path)
+    file_flags = sum(_CLASSIC_READABLE_INODE_BITS)
+    _set_inode_flags(image_path, 11, file_flags)
+    original = _set_inode_flags(image_path, 2, file_flags & ~0x1000)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        assert provider.read_file("/hello.txt") == b"hello ext2!"
+        assert provider._read_inode(11).flags == file_flags
+        assert any(entry["name"] == "hello.txt" for entry in provider.list_dir("/"))
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("flags", [0x00001000, 0x00000200, 0x80000000])
+def test_ext2_rejects_unsupported_directory_inode_before_listing(tmp_path, flags):
+    image_path = tmp_path / "ext2-directory-flags.img"
+    _make_image(image_path)
+    original = _set_inode_flags(image_path, 2, flags | 0x10)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        with pytest.raises(Ext2ReadError) as exc:
+            provider.list_dir("/")
+        assert exc.value.code is RefusalCode.UNSUPPORTED_PROFILE
+        assert 2 not in provider._inode_cache
+    finally:
+        provider.close()
+    assert image_path.read_bytes() == original
 
 
 def _dir_block_for(entries, block_size, filetype):
@@ -248,6 +394,80 @@ def test_reads_directory_and_direct_file_without_external_tools(tmp_path):
         provider.close()
 
 
+def test_read_file_assembles_large_files_from_bounded_ranges(monkeypatch):
+    provider = NativeExt2Image.__new__(NativeExt2Image)
+    size = NativeExt2Image.max_read_range_bytes + 123
+    calls = []
+
+    monkeypatch.setattr(provider, "file_size", lambda _path: size)
+
+    def read_range(_path, offset, length):
+        calls.append((offset, length))
+        return bytes(
+            (offset // NativeExt2Image.max_read_range_bytes) + 1 for _ in range(length)
+        )
+
+    monkeypatch.setattr(provider, "read_file_range", read_range)
+    data = provider.read_file("/large.bin")
+
+    assert calls == [
+        (0, NativeExt2Image.max_read_range_bytes),
+        (NativeExt2Image.max_read_range_bytes, 123),
+    ]
+    assert len(data) == size
+    assert data[:1] == b"\x01"
+    assert data[-1:] == b"\x02"
+
+
+def test_ext2_stat_exposes_inode_metadata_and_linux_ownership(tmp_path):
+    image_path = tmp_path / "ext2-stat-metadata.img"
+    original = _make_image(image_path)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        entry = provider.stat("/hello.txt")
+        assert entry["uid"] == 0x12345678
+        assert entry["gid"] == 0x9ABCDEF0
+        assert entry["accessed"] == "1970-01-01T00:00:02+00:00"
+        assert entry["ctime"] == "1970-01-01T00:00:03+00:00"
+        assert entry["modified"] == "1970-01-01T00:00:01+00:00"
+        assert entry["created"] == ""
+        assert entry["permissions"] == 0o644
+        assert entry["mode"] == 0x8000 | 0o644
+        assert entry["links"] == 1
+        listed = next(
+            item for item in provider.list_dir("/") if item["name"] == "hello.txt"
+        )
+        assert listed["uid"] == 0x12345678
+        assert listed["gid"] == 0x9ABCDEF0
+        root = provider.stat("/")
+        assert root["uid"] == 0
+        assert root["gid"] == 0
+        assert root["permissions"] == 0o755
+        assert root["links"] == 2
+    finally:
+        provider.close()
+
+
+def test_ext_owner_fields_are_unknown_for_non_linux_creator_os(tmp_path):
+    image_path = tmp_path / "ext2-nonlinux-owner.img"
+    original = _make_image(image_path, creator_os=1)
+    provider = NativeExt2Image(image_path, volume_size=len(original))
+    try:
+        entry = provider.stat("/hello.txt")
+        listed = next(
+            item for item in provider.list_dir("/") if item["name"] == "hello.txt"
+        )
+        root = provider.stat("/")
+        assert entry["uid"] is None
+        assert entry["gid"] is None
+        assert listed["uid"] is None
+        assert listed["gid"] is None
+        assert root["uid"] is None
+        assert root["gid"] is None
+    finally:
+        provider.close()
+
+
 def test_vfs_native_provider_does_not_require_pytsk3(tmp_path, monkeypatch):
     image_path = tmp_path / "vfs-ext2.img"
     _make_image(image_path)
@@ -349,15 +569,86 @@ def test_reads_single_double_and_triple_indirect_blocks(tmp_path):
         provider.close()
 
 
-def test_large_file_reads_are_limited_before_allocating(tmp_path):
+def test_range_reads_batch_contiguous_blocks_and_cache_indirect_tables(tmp_path):
+    image_path = tmp_path / "batched-range.img"
+    image = bytearray(_make_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (12 - 1) * 128
+    struct.pack_into("<I", image, inode_offset + 4, 15 * BLOCK_SIZE)
+    struct.pack_into("<III", image, 23 * BLOCK_SIZE, 24, 25, 26)
+    image[24 * BLOCK_SIZE : 25 * BLOCK_SIZE] = b"A" * BLOCK_SIZE
+    image[25 * BLOCK_SIZE : 26 * BLOCK_SIZE] = b"B" * BLOCK_SIZE
+    image[26 * BLOCK_SIZE : 27 * BLOCK_SIZE] = b"C" * BLOCK_SIZE
+    image_path.write_bytes(image)
+
+    provider = NativeExt2Image(image_path, volume_size=len(image))
+    pointer_reads = []
+    data_reads = []
+    read_at = provider._read_at
+
+    def counted_read_at(relative_offset, size):
+        if relative_offset == 23 * BLOCK_SIZE:
+            pointer_reads.append((relative_offset, size))
+        if 24 * BLOCK_SIZE <= relative_offset < 27 * BLOCK_SIZE:
+            data_reads.append((relative_offset, size))
+        return read_at(relative_offset, size)
+
+    provider._read_at = counted_read_at
+    try:
+        assert provider.read_file_range(
+            "/single.bin", 12 * BLOCK_SIZE, 3 * BLOCK_SIZE
+        ) == (b"A" * BLOCK_SIZE + b"B" * BLOCK_SIZE + b"C" * BLOCK_SIZE)
+        assert pointer_reads == [(23 * BLOCK_SIZE, BLOCK_SIZE)]
+        assert data_reads == [(24 * BLOCK_SIZE, 3 * BLOCK_SIZE)]
+    finally:
+        provider.close()
+
+
+def test_batched_range_still_rejects_free_data_block(tmp_path):
+    image_path = tmp_path / "free-block-in-contiguous-run.img"
+    image = bytearray(_make_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (12 - 1) * 128
+    struct.pack_into("<I", image, inode_offset + 4, 15 * BLOCK_SIZE)
+    struct.pack_into("<III", image, 23 * BLOCK_SIZE, 24, 25, 26)
+    # Block 25 is the second physical block of the contiguous data run.
+    group_index = 25 - 1  # first_data_block is 1 for this 1 KiB ext2 fixture.
+    image[3 * BLOCK_SIZE + group_index // 8] &= ~(1 << (group_index % 8))
+    image_path.write_bytes(image)
+
+    provider = NativeExt2Image(image_path, volume_size=len(image))
+    try:
+        with pytest.raises(Ext2ReadError, match="references a free block"):
+            provider.read_file_range("/single.bin", 12 * BLOCK_SIZE, 3 * BLOCK_SIZE)
+    finally:
+        provider.close()
+
+
+def test_range_read_keeps_noncontiguous_blocks_and_sparse_holes_separate(tmp_path):
+    image_path = tmp_path / "noncontiguous-range.img"
+    image = bytearray(_make_image(image_path))
+    inode_offset = INODE_TABLE_BLOCK * BLOCK_SIZE + (12 - 1) * 128
+    struct.pack_into("<I", image, inode_offset + 4, 15 * BLOCK_SIZE)
+    struct.pack_into("<III", image, 23 * BLOCK_SIZE, 24, 26, 0)
+    image[24 * BLOCK_SIZE : 25 * BLOCK_SIZE] = b"A" * BLOCK_SIZE
+    image[26 * BLOCK_SIZE : 27 * BLOCK_SIZE] = b"B" * BLOCK_SIZE
+    image_path.write_bytes(image)
+
+    provider = NativeExt2Image(image_path, volume_size=len(image))
+    try:
+        assert (
+            provider.read_file_range("/single.bin", 12 * BLOCK_SIZE, 3 * BLOCK_SIZE)
+            == b"A" * BLOCK_SIZE + b"B" * BLOCK_SIZE + b"\x00" * BLOCK_SIZE
+        )
+    finally:
+        provider.close()
+
+
+def test_large_file_range_reads_are_limited_before_allocating(tmp_path):
     image_path = tmp_path / "large-file.img"
     _make_image(image_path)
     provider = NativeExt2Image(image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
     try:
         with pytest.raises(Ext2ReadError, match="16 MiB"):
             provider.read_file_range("/triple.bin", 0, 17 * 1024 * 1024)
-        with pytest.raises(Ext2ReadError, match="16 MiB"):
-            provider.read_file("/triple.bin")
         assert (
             provider.read_file_range(
                 "/triple.bin", provider.file_size("/triple.bin") - 4, 1 << 40

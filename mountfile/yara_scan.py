@@ -22,6 +22,7 @@ Rules are compiled from a single ``.yar`` file or from a directory of them
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -243,7 +244,10 @@ def allocated_ranges(fs: Any, image_size: int) -> list[tuple[int, int]]:
     for _path, entry in iter_file_entries(fs):
         try:
             meta_file = fs.open_meta(inode=entry.info.meta.addr)
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort operation failed", exc_info=exc
+            )
             continue
         for attribute in meta_file:
             for run in attribute:
@@ -388,8 +392,8 @@ def _open_fs_with_path(path: Path) -> Any:
     fs = open_tsk_fs(path)
     try:
         setattr(fs, "_image_path", str(path))
-    except Exception:  # pragma: no cover - read-only proxy objects
-        pass
+    except Exception as exc:  # pragma: no cover - read-only proxy objects
+        logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     return fs
 
 

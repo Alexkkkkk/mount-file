@@ -38,8 +38,10 @@ from __future__ import annotations
 
 import atexit
 import fnmatch
+import logging
 import os
 import shutil
+import stat
 import tempfile
 import threading
 import webbrowser
@@ -124,6 +126,7 @@ from .qt_compat import (
     TableExtendedSelection,
     TB_InstantPopup,
     TB_TextBesideIcon,
+    WidgetWithChildrenShortcut,
     exec_dialog,
     standard_icon,
 )
@@ -156,6 +159,8 @@ class _UniversalImageWriter:
         self.fs_type = info.fs_type
         self.write_strategy = info.write_strategy
         self.writable = bool(info.writable)
+        self.write_capabilities = tuple(info.write_capabilities)
+        self.write_rejection_reason = info.write_rejection_reason
 
     @staticmethod
     def _join(directory, name):
@@ -245,7 +250,7 @@ PANEL_LEGEND = (
 #: F3..F8 as shown by the function key bar (the F9 menu toggle stays a
 #: shortcut only, exactly like the reference window).
 FKEYS = (
-    ("F3", "Просмотр"),
+    ("F3", "Просмотр/HEX"),
     ("F4", "Правка"),
     ("F5", "Копирование"),
     ("F6", "Перемещение"),
@@ -392,22 +397,52 @@ class HexEditorPage(QWidget):
         find = QPushButton("Найти")
         find.clicked.connect(self.find)
         buttons.addWidget(find)
+        self.goto_button = QPushButton("Перейти…")
+        self.goto_button.clicked.connect(self.goto)
+        buttons.addWidget(self.goto_button)
         buttons.addStretch(1)
         back = QPushButton("Назад к панелям")
-        back.clicked.connect(self._close_callback)
+        back.clicked.connect(self.request_close)
         buttons.addWidget(back)
         layout.addLayout(buttons)
+        self._shortcut_actions = []
+        for shortcut, callback in (
+            ("Ctrl+S", self.save),
+            ("Ctrl+F", self.find),
+            ("Ctrl+G", self.goto),
+        ):
+            action = QAction(shortcut, self)
+            action.setShortcut(QKeySequence(shortcut))
+            action.setShortcutContext(WidgetWithChildrenShortcut)
+            action.triggered.connect(lambda *_args, slot=callback: slot())
+            self.addAction(action)
+            self._shortcut_actions.append(action)
         self._changed()
         self.hex_view.setFocus()
 
     def _changed(self):
         modified = self.hex_view.isModified()
-        self.save_button.setEnabled(modified)
-        self.status.setText("Есть несохранённые изменения" if modified else "Сохранено")
+        can_save = self._save_callback is not None
+        self.save_button.setEnabled(modified and can_save)
+        if not can_save:
+            self.status.setText(
+                "Изменения не сохраняются: том только для чтения"
+                if modified
+                else "Только чтение"
+            )
+        else:
+            self.status.setText(
+                "Есть несохранённые изменения" if modified else "Сохранено"
+            )
 
     def save(self):
-        if self.hex_view.isModified() and self._save_callback(self.hex_view.data()):
-            self.hex_view.setData(self.hex_view.data())
+        if not self.hex_view.isModified() or self._save_callback is None:
+            return
+        try:
+            if self._save_callback(self.hex_view.data()):
+                self.hex_view.setData(self.hex_view.data())
+        except Exception as exc:
+            QMessageBox.critical(self, "Сохранение HEX не удалось", str(exc))
 
     def find(self):
         value, ok = QInputDialog.getText(self, "Поиск байтов", "HEX или текст:")
@@ -419,6 +454,38 @@ class HexEditorPage(QWidget):
             needle = value.encode("utf-8")
         pos = self.hex_view.find(needle)
         self.status.setText("Найдено: 0x%X" % pos if pos >= 0 else "Не найдено")
+
+    def goto(self):
+        value, ok = QInputDialog.getText(
+            self, "Перейти к смещению", "Смещение (десятичное или 0x…):"
+        )
+        if not ok or not value:
+            return
+        try:
+            offset = int(value.strip(), 0)
+        except ValueError:
+            QMessageBox.warning(self, "Перейти к смещению", "Некорректное смещение.")
+            return
+        if not self.hex_view.goto(offset):
+            QMessageBox.information(
+                self, "Перейти к смещению", "Нет загруженных данных."
+            )
+        else:
+            actual = min(max(offset, 0), len(self.hex_view.data()) - 1)
+            self.status.setText("Смещение: 0x%X" % actual)
+
+    def request_close(self):
+        if self.hex_view.isModified():
+            answer = QMessageBox.warning(
+                self,
+                "Несохранённые изменения",
+                "Вернуться к панелям и отбросить изменения HEX?",
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                return
+        self._close_callback()
 
 
 class TextEditorDialog(QDialog):
@@ -534,15 +601,72 @@ def _encode_editable_text(text, encoding, bom, newline):
     return (b"\xef\xbb\xbf" + data) if bom else data
 
 
-def _atomic_write_local(path, data):
-    """Replace a local text file atomically without leaving partial contents."""
+def _local_file_identity(metadata):
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _file_contents_match(stream, expected):
+    offset = 0
+    while True:
+        chunk = stream.read(1 << 20)
+        if not chunk:
+            return offset == len(expected)
+        end = offset + len(chunk)
+        if end > len(expected) or expected[offset:end] != chunk:
+            return False
+        offset = end
+
+
+def _atomic_write_local(path, data, expected_data=None, expected_identity=None):
+    """Atomically replace a regular local file without clobbering later edits."""
     parent = os.path.dirname(os.path.abspath(path))
+    original = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(original.st_mode):
+        raise RuntimeError("refusing to replace a non-regular local file")
+    baseline = expected_identity or _local_file_identity(original)
+
+    def verify_unchanged():
+        current = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or _local_file_identity(current) != baseline
+        ):
+            raise RuntimeError(
+                "local file changed since it was opened; refusing to overwrite"
+            )
+        with open(path, "rb") as source:
+            opened = os.fstat(source.fileno())
+            # On Windows, fstat metadata can differ from path stat after
+            # os.replace; path identity is checked on both sides of this read.
+            if not stat.S_ISREG(opened.st_mode) or (
+                expected_data is not None
+                and not _file_contents_match(source, expected_data)
+            ):
+                raise RuntimeError(
+                    "local file changed since it was opened; refusing to overwrite"
+                )
+        current = os.stat(path, follow_symlinks=False)
+        if _local_file_identity(current) != baseline:
+            raise RuntimeError(
+                "local file changed since it was opened; refusing to overwrite"
+            )
+
+    verify_unchanged()
     fd, temp_path = tempfile.mkstemp(prefix=".mountfile-edit-", dir=parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        os.chmod(temp_path, stat.S_IMODE(original.st_mode))
+        verify_unchanged()
         os.replace(temp_path, path)
     finally:
         if os.path.exists(temp_path):
@@ -1123,7 +1247,7 @@ class TcPanel(QWidget):
         else:
             open_label = "Просмотр (F3)"
         add(open_label, lambda: self.open_row(self.table.currentRow()), bool(entry))
-        add("HEX-просмотр", self.win.f3_hex_view, is_file)
+        add("HEX-редактор", self.win.f3_hex_view, is_file)
         add("AI-анализ", self.win.ai_analyze, is_file)
         menu.addSeparator()
         add(
@@ -1323,8 +1447,10 @@ class TcPanel(QWidget):
                 found = attrs.get(e["name"].upper())
                 if found is not None:
                     e["fat_attr"] = found
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "best-effort FAT attribute refresh failed", exc_info=exc
+            )
 
     def _sort_entries(self):
         key = {
@@ -1916,6 +2042,12 @@ class SettingsDialog(QDialog):
         )
         self.btn_ai_detect.clicked.connect(self._detect_ollama)
         lay.addRow("Локальный AI:", self.btn_ai_detect)
+        self.btn_ai_install = QPushButton("Установить Ollama и модель")
+        self.btn_ai_install.setToolTip(
+            "Скачает официальный установщик Ollama и выбранную локальную модель"
+        )
+        self.btn_ai_install.clicked.connect(self._install_ollama)
+        lay.addRow("Автонастройка:", self.btn_ai_install)
         self.ed_ai_key = QLineEdit(str(tc_style.SETTINGS.get("ai_api_key") or ""))
         self.ed_ai_key.setEchoMode(EchoPassword)
         lay.addRow("Ключ API:", self.ed_ai_key)
@@ -1932,6 +2064,11 @@ class SettingsDialog(QDialog):
         )
         self.chk_advise.setChecked(bool(tc_style.SETTINGS.get("ai_format_autohook")))
         lay.addRow("", self.chk_advise)
+        self.chk_consensus = QCheckBox(
+            "AI-гипотезы: включать консенсус второго доступного бэкенда"
+        )
+        self.chk_consensus.setChecked(bool(tc_style.SETTINGS.get("ai_consensus")))
+        lay.addRow("", self.chk_consensus)
         self.ed_advise_repo = QLineEdit(
             str(tc_style.SETTINGS.get("ai_github_repo") or "")
         )
@@ -1991,6 +2128,39 @@ class SettingsDialog(QDialog):
             )
         QMessageBox.warning(self, "AI не настроен", detail + "\n\n" + result["error"])
 
+    def _install_ollama(self):
+        """Launch the verified per-user Ollama installer after explicit consent."""
+        from .ollama_setup import DEFAULT_MODEL, OllamaSetupError
+
+        model = self.ed_ai_model.text().strip() or DEFAULT_MODEL
+        answer = QMessageBox.question(
+            self,
+            "Установить локальный AI?",
+            "MountFile скачает официальный установщик Ollama, проверит его цифровую "
+            "подпись и установит программу для текущего пользователя. Затем будет "
+            "загружена модель %s. Для Ollama нужно около 4 ГБ, а модель может занять "
+            "несколько гигабайт и потребовать дополнительное место. Нужен интернет.\n\n"
+            "Продолжить?" % model,
+            MB_Yes | MB_No,
+            MB_No,
+        )
+        if answer != MB_Yes:
+            return
+        try:
+            from .ollama_setup import launch_windows_ollama_setup
+
+            launch_windows_ollama_setup(model)
+        except OllamaSetupError as exc:
+            QMessageBox.warning(self, "Не удалось запустить установку", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Установка Ollama запущена",
+            "Установка и загрузка модели выполняются в отдельном окне PowerShell. "
+            "Дождитесь сообщения об успешном завершении, затем нажмите «Проверить и "
+            "настроить Ollama».",
+        )
+
 
 class MainWindow(QMainWindow):
     #: Сколько ждать завершения этапа обновления, прежде чем сбросить
@@ -2023,7 +2193,7 @@ class MainWindow(QMainWindow):
         self._apply_theme(tc_style.theme())
         self._set_loaded(False)
         self._update_cmd_prompt()
-        self._start_updater()
+        self._start_updater(startup=True)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2046,8 +2216,10 @@ class MainWindow(QMainWindow):
             icon = appicon.app_icon()
             if icon is not None and not icon.isNull():
                 self.setWindowIcon(icon)
-        except Exception:  # pragma: no cover - icons are cosmetic
-            pass
+        except Exception as exc:  # pragma: no cover - icons are cosmetic
+            logging.getLogger(__name__).debug(
+                "optional application icon unavailable", exc_info=exc
+            )
 
     # -------------------------------------------------------- screen fit
     def screen_geometry(self):
@@ -2088,10 +2260,13 @@ class MainWindow(QMainWindow):
             self.log_msg("Полный экран включен (F11 — выход)")
 
     # ----------------------------------------------------------- updater
-    def _start_updater(self):
-        """Check GitHub Releases on every start (background thread)."""
-        if updates_disabled():
-            self.log_msg("Автопроверка обновлений выключена (MOUNTFILE_NO_UPDATE=1)")
+    def _start_updater(self, startup=False):
+        """Run an explicit/manual update check without making startup online."""
+        if startup and updates_disabled():
+            self.log_msg(
+                "Автопроверка обновлений выключена; для opt-in задайте "
+                "MOUNTFILE_ENABLE_UPDATE_CHECK=1"
+            )
             return
         if self.updater is not None and self.updater.isRunning():
             return
@@ -2471,6 +2646,10 @@ class MainWindow(QMainWindow):
 
     def _show_panels(self):
         """Return from an embedded tool page to the two file panels."""
+        current = self.workspace_stack.currentWidget()
+        if isinstance(current, HexEditorPage):
+            self.workspace_stack.removeWidget(current)
+            current.deleteLater()
         self.workspace_stack.setCurrentWidget(self.splitter)
         self.workspace_hint.setText("Образы дисков · просмотр и извлечение")
 
@@ -2675,6 +2854,7 @@ class MainWindow(QMainWindow):
         tc_style.SETTINGS["ai_max_bytes"] = int(dlg.spn_ai_bytes.value()) * 1024
         tc_style.SETTINGS["ai_base_url_openai"] = dlg.ed_ai_url_openai.text().strip()
         tc_style.SETTINGS["ai_format_autohook"] = bool(dlg.chk_advise.isChecked())
+        tc_style.SETTINGS["ai_consensus"] = bool(dlg.chk_consensus.isChecked())
         tc_style.SETTINGS["ai_github_repo"] = dlg.ed_advise_repo.text().strip()
         tc_style.SETTINGS["ai_github_token"] = dlg.ed_advise_token.text().strip()
         tc_style.SETTINGS["olma_watch"] = bool(dlg.chk_olma.isChecked())
@@ -2813,13 +2993,32 @@ class MainWindow(QMainWindow):
                 reader = ai.local_reader(path)
             head, _truncated = ai.collect(reader, max_bytes=4096)
             backend = ai.build_backend(tc_style.SETTINGS)
+            backends = [backend]
+            if tc_style.SETTINGS.get("ai_consensus"):
+                alternate_key = "openai" if backend.name == "ollama" else "ollama"
+                alternate_settings = dict(tc_style.SETTINGS)
+                alternate_settings["ai_backend"] = alternate_key
+                alternate = ai.build_backend(alternate_settings)
+                if alternate.available():
+                    backends.append(alternate)
+            github = None
+            repo = tc_style.SETTINGS.get("ai_github_repo") or ""
+            token = tc_style.SETTINGS.get("ai_github_token") or ""
+            if repo and token:
+                from mountfile.ai_format_advisor_v2 import GitHubReporter
+
+                try:
+                    github = GitHubReporter(repo, token)
+                except ValueError:
+                    github = None
             self.log_msg(
-                "AI-гипотезный анализ: %s — ограниченный слепок, бэкенд %s"
-                % (entry["name"], backend.name)
+                "AI-гипотезный анализ: %s — ограниченный слепок, бэкенды %s"
+                % (entry["name"], ", ".join(item.name for item in backends))
             )
             advise_and_show(
                 path,
-                [backend],
+                backends,
+                github=github,
                 parent=self,
                 head=head,
                 size=int(entry.get("size") or 0),
@@ -3543,7 +3742,12 @@ class MainWindow(QMainWindow):
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
-        from .vfs import RecognizedFilesystemError, TskError, open_image_provider
+        from .vfs import (
+            LegacyFallbackAvailableError,
+            RecognizedFilesystemError,
+            TskError,
+            open_image_provider,
+        )
 
         try:
             panel.provider = open_image_provider(
@@ -3551,6 +3755,36 @@ class MainWindow(QMainWindow):
                 offset=offset,
                 volume_size=volume_size,
             )
+        except LegacyFallbackAvailableError as recognized_error:
+            answer = QMessageBox.question(
+                self,
+                "Попробовать legacy-парсер?",
+                "Встроенный reader не распознал формат тома. Попробовать The Sleuth Kit "
+                "для просмотра в режиме только чтения? Запись останется выключена.\n\n%s"
+                % recognized_error,
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                panel.provider = None
+                panel.refresh()
+                return False
+            try:
+                panel.provider = open_image_provider(
+                    self.image_path,
+                    offset=offset,
+                    volume_size=volume_size,
+                    allow_legacy_fallback=True,
+                )
+            except TskError as fallback_error:
+                panel.provider = None
+                panel.refresh()
+                QMessageBox.warning(
+                    self,
+                    "Не удалось открыть том",
+                    "Legacy reader не смог открыть том:\n%s" % fallback_error,
+                )
+                return False
         except RecognizedFilesystemError as recognized_error:
             panel.provider = None
             panel.refresh()
@@ -3605,24 +3839,36 @@ class MainWindow(QMainWindow):
 
         from .fat32 import Fat32, Fat32Error
 
-        fat_writer_ready = False
-        try:
-            fh = open(self.image_path, "r+b")
-        except OSError as e:
-            fh = None
-            fat_error = e
+        legacy_readonly = getattr(panel.provider, "backend_name", "") in (
+            "pytsk3",
+            "pytsk3-fallback",
+        )
+        fat_writer_ready = legacy_readonly
+        if legacy_readonly:
+            panel.writer = None
+            panel.writer_fh = None
+            panel.write_reason = "Legacy filesystem reader is explicitly read-only."
+            self.log_msg(
+                "Том @ offset %d открыт legacy-reader только для чтения" % offset
+            )
         else:
             try:
-                panel.writer = Fat32(fh, offset=offset)
-                panel.writer_fh = fh
-                panel.volume_label = "FAT32 ofs %d" % offset
-                self.log_msg(
-                    "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
-                )
-                fat_writer_ready = True
-            except Fat32Error as e:
-                fh.close()
+                fh = open(self.image_path, "r+b")
+            except OSError as e:
+                fh = None
                 fat_error = e
+            else:
+                try:
+                    panel.writer = Fat32(fh, offset=offset)
+                    panel.writer_fh = fh
+                    panel.volume_label = "FAT32 ofs %d" % offset
+                    self.log_msg(
+                        "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
+                    )
+                    fat_writer_ready = True
+                except Fat32Error as e:
+                    fh.close()
+                    fat_error = e
 
         # FAT32 keeps its native writer. The ordinary GUI enables writes only
         # for MountFile's in-process clean-ext2 profile; legacy debugfs is a
@@ -3999,6 +4245,7 @@ class MainWindow(QMainWindow):
                 self, "Просмотр", "Сначала выберите файл в активной панели."
             )
             return
+        local_identity = None
         try:
             full = p.join(entry["name"])
             if p.mode == "img":
@@ -4006,11 +4253,17 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as f:
                     data = f.read()
+                    # Snapshot the path metadata used by the atomic writer's
+                    # subsequent checks; expected_data also guards stale bytes.
+                    local_identity = _local_file_identity(
+                        os.stat(full, follow_symlinks=False)
+                    )
         except Exception as e:
             QMessageBox.critical(self, "Просмотр", str(e))
             return
 
         def save_edited(updated):
+            nonlocal data, local_identity
             answer = QMessageBox.warning(
                 self,
                 "Подтверждение записи HEX",
@@ -4029,27 +4282,27 @@ class MainWindow(QMainWindow):
                 parent = str(PurePosixPath(full).parent)
                 p.writer.write_file(parent, entry["name"], updated)
             else:
-                directory = os.path.dirname(full) or "."
-                fd, tmp = tempfile.mkstemp(prefix=".mountfile-hex-", dir=directory)
-                try:
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(updated)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(tmp, full)
-                finally:
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
+                _atomic_write_local(
+                    full,
+                    updated,
+                    expected_data=data,
+                    expected_identity=local_identity,
+                )
+                data = updated
+                local_identity = _local_file_identity(
+                    os.stat(full, follow_symlinks=False)
+                )
             p.refresh()
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
 
+        save_callback = save_edited if p.mode != "img" or p.writer is not None else None
         page = HexEditorPage(
             self,
             entry["name"],
             entry.get("size") or 0,
             data,
-            save_callback=save_edited,
+            save_callback=save_callback,
             close_callback=self._show_panels,
         )
         self._show_hex_page(page)
@@ -4081,6 +4334,7 @@ class MainWindow(QMainWindow):
             )
             return
         full = p.join(name)
+        local_identity = None
         try:
             if p.mode == "img":
                 if p.writer is None:
@@ -4090,6 +4344,7 @@ class MainWindow(QMainWindow):
             else:
                 with open(full, "rb") as stream:
                     data = stream.read(2 * 1024 * 1024 + 1)
+                    local_identity = _local_file_identity(os.fstat(stream.fileno()))
         except Exception as exc:
             QMessageBox.warning(self, "Правка", "Не удалось прочитать файл:\n%s" % exc)
             return
@@ -4138,7 +4393,12 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            _atomic_write_local(full, updated)
+            _atomic_write_local(
+                full,
+                updated,
+                expected_data=data,
+                expected_identity=local_identity,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Сохранение не удалось", str(exc))
             return
@@ -4556,11 +4816,26 @@ class MainWindow(QMainWindow):
         try:
             if updater.isRunning():
                 updater.requestInterruption()
-        except Exception:  # pragma: no cover - заглушка без Qt
-            pass
+        except Exception as exc:  # pragma: no cover - заглушка без Qt
+            logging.getLogger(__name__).debug(
+                "optional updater interruption unavailable", exc_info=exc
+            )
         _ORPHAN_THREADS.append(updater)
 
     def closeEvent(self, e):
+        page = getattr(self, "workspace_stack", None)
+        page = page.currentWidget() if page is not None else None
+        if isinstance(page, HexEditorPage) and page.hex_view.isModified():
+            answer = QMessageBox.warning(
+                self,
+                "Несохранённые изменения",
+                "Выйти без сохранения изменений HEX?",
+                MB_Yes | MB_No,
+                MB_No,
+            )
+            if answer != MB_Yes:
+                e.ignore()
+                return
         if self._text_tmp and text_editor.has_active_editors(self._text_tmp):
             QMessageBox.information(
                 self,

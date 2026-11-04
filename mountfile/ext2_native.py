@@ -1,29 +1,41 @@
 # SPDX-License-Identifier: MIT
 """Dependency-free writer for a deliberately small, validated ext2 profile.
 
-Phase 1 supports clean, unjournaled ext2 filesystems using block bitmaps,
-32-byte group descriptors, the FILETYPE directory-entry format, direct and
-single-indirect file data pointers, and no indexed directories. Mutations are
-staged against a copy of the selected filesystem extent and are committed only
-after structural read-back validation. This module does not claim ext3/ext4 support.
+The bounded profile supports clean, unjournaled ext2 filesystems using block
+bitmaps, 32-byte group descriptors, and the FILETYPE directory-entry format.
+Regular files and directories use direct, single-indirect, and bounded
+double-indirect pointers. Mutations are staged against a copy of the selected
+filesystem extent and are committed only after structural read-back validation.
+This module does not claim ext3/ext4 support.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
-import shutil
 import stat
 import struct
 import tempfile
 import threading
 import time
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
+
+from mountfile.safety import RefusalCode, RefusalError, checked_range, code_for_message
 
 
 class NativeExt2Error(RuntimeError):
     """A request is unsafe or unsupported by the native ext2 profile."""
+
+    def __init__(self, message: str, code: RefusalCode | None = None):
+        super().__init__(message)
+        self.code = RefusalCode(code) if code is not None else code_for_message(message)
+
+    @property
+    def category(self):
+        return RefusalError(str(self), self.code).category
 
 
 class NativeExt2UnsafeError(NativeExt2Error):
@@ -44,6 +56,55 @@ _INODE_INDEX = 0x00001000
 _INODE_UNSUPPORTED_FLAGS = _INODE_EXTENTS | _INODE_INDEX | 0x00000024 | 0x00000800
 _DIRECT_BLOCKS = 12
 _CHUNK = 1024 * 1024
+_MAX_NATIVE_EXT2_FILE_SIZE = 64 * 1024 * 1024
+
+
+@contextmanager
+def _image_process_lock(image_path):
+    """Hold an advisory exclusive lock on the image for one mutation lifecycle.
+
+    The lock is taken on the image itself, so it creates no sidecar files and
+    coordinates native writers in separate MountFile processes. It is advisory:
+    tools that do not participate in this locking protocol are still detected
+    where possible by the existing source-hash checks.
+    """
+    with open(image_path, "r+b") as stream:
+        acquired = False
+        try:
+            if os.name == "nt":
+                import errno
+                import msvcrt
+
+                while not acquired:
+                    stream.seek(0)
+                    try:
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                        acquired = True
+                    except OSError as exc:
+                        if exc.errno not in (
+                            errno.EACCES,
+                            errno.EAGAIN,
+                            errno.EDEADLK,
+                        ):
+                            raise
+                        time.sleep(0.05)
+            else:
+                import fcntl
+
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+                acquired = True
+            yield
+        finally:
+            if acquired:
+                if os.name == "nt":
+                    import msvcrt
+
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 class _Ext2FS:
@@ -110,7 +171,8 @@ class _Ext2FS:
             raise NativeExt2Error("unsupported ext2 inode size")
         if self.state != 1 or self.incompat & 0x0004:
             raise NativeExt2UnsafeError(
-                "ext2 volume is dirty or requires journal recovery; refusing writes"
+                "ext2 volume is dirty or requires journal recovery; refusing writes",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
             )
         if self.compat & ~_ALLOWED_COMPAT:
             raise NativeExt2Error("unsupported ext2 compatible feature flags")
@@ -198,12 +260,19 @@ class _Ext2FS:
 
     def _read_at(self, offset: int, length: int, absolute: bool = False) -> bytes:
         start = offset if absolute else self.offset + offset
-        end = start + length
-        if length < 0 or start < 0 or end > self.image_size:
-            raise NativeExt2Error("ext2 read is outside image bounds")
+        try:
+            checked_range(start, length, upper=self.image_size)
+        except RefusalError as exc:
+            raise NativeExt2Error(
+                "ext2 read is outside image bounds", exc.code
+            ) from exc
         if not absolute and hasattr(self, "filesystem_size"):
-            if start < self.offset or end > self.offset + self.filesystem_size:
-                raise NativeExt2Error("ext2 read is outside filesystem bounds")
+            try:
+                checked_range(offset, length, upper=self.filesystem_size)
+            except RefusalError as exc:
+                raise NativeExt2Error(
+                    "ext2 read is outside filesystem bounds", exc.code
+                ) from exc
         with self.path.open("rb") as stream:
             stream.seek(start)
             data = stream.read(length)
@@ -212,8 +281,12 @@ class _Ext2FS:
         return data
 
     def _write_at(self, offset: int, data: bytes) -> None:
-        if offset < 0 or offset + len(data) > self.filesystem_size:
-            raise NativeExt2Error("ext2 write is outside filesystem bounds")
+        try:
+            checked_range(offset, len(data), upper=self.filesystem_size)
+        except RefusalError as exc:
+            raise NativeExt2Error(
+                "ext2 write is outside filesystem bounds", exc.code
+            ) from exc
         with self.path.open("r+b") as stream:
             stream.seek(self.offset + offset)
             written = stream.write(data)
@@ -525,8 +598,12 @@ class _Ext2FS:
         bitmap = self._read_at(bitmap_off, self.block_size)
         return self._bit_is_set(bitmap, bit)
 
-    def _max_file_blocks(self) -> int:
-        return _DIRECT_BLOCKS + self.block_size // 4
+    def _max_file_blocks(self, *, allow_double_indirect=False) -> int:
+        entries = self.block_size // 4
+        pointer_capacity = _DIRECT_BLOCKS + entries
+        if allow_double_indirect:
+            pointer_capacity += entries * entries
+        return min(pointer_capacity, _MAX_NATIVE_EXT2_FILE_SIZE // self.block_size)
 
     def _validate_allocated_block(self, block: int, bitmap_cache: dict) -> None:
         if block in self._metadata:
@@ -545,58 +622,114 @@ class _Ext2FS:
             )
 
     def _inode_blocks(
-        self, inode_raw: bytes | bytearray, *, allow_indirect=False
+        self,
+        inode_raw: bytes | bytearray,
+        *,
+        allow_indirect=False,
+        allow_double_indirect=False,
     ) -> list[int]:
         values = struct.unpack_from("<15I", inode_raw, 40)
-        if not allow_indirect and any(values[_DIRECT_BLOCKS:]):
+        if allow_double_indirect:
+            allow_indirect = True
+            if values[_DIRECT_BLOCKS + 2]:
+                raise NativeExt2Error("triple-indirect ext2 files are unsupported")
+        elif not allow_indirect and any(values[_DIRECT_BLOCKS:]):
             raise NativeExt2Error(
                 "indirect blocks are unsupported for this ext2 object"
             )
-        if allow_indirect and any(values[_DIRECT_BLOCKS + 1 :]):
-            raise NativeExt2Error("double/triple-indirect ext2 files are unsupported")
+        elif allow_indirect and any(values[_DIRECT_BLOCKS + 1 :]):
+            raise NativeExt2Error("double/triple-indirect ext2 blocks are unsupported")
+
         size = self._inode_size(inode_raw)
         count = math.ceil(size / self.block_size) if size else 0
-        if count > (self._max_file_blocks() if allow_indirect else _DIRECT_BLOCKS):
-            raise NativeExt2Error(
-                "native ext2 phase 1 exceeds direct plus single-indirect capacity"
-            )
+        max_blocks = (
+            self._max_file_blocks(allow_double_indirect=allow_double_indirect)
+            if allow_indirect
+            else _DIRECT_BLOCKS
+        )
+        if count > max_blocks:
+            level = "double-indirect" if allow_double_indirect else "single-indirect"
+            raise NativeExt2Error(f"native ext2 profile exceeds {level} capacity")
+
+        entries_per_block = self.block_size // 4
         direct_count = min(count, _DIRECT_BLOCKS)
         blocks = list(values[:direct_count])
         if any(values[direct_count:_DIRECT_BLOCKS]):
             raise NativeExt2UnsafeError(
                 "ext2 inode has allocated direct pointers beyond its file size"
             )
-        indirect_block = values[_DIRECT_BLOCKS] if allow_indirect else 0
-        indirect_count = count - direct_count
+
+        pointer_blocks = []
         bitmap_cache = {}
-        if indirect_count:
-            if not indirect_block:
+
+        def validate_pointer_block(block):
+            if not block:
                 raise NativeExt2Error("ext2 file has a missing indirect block")
-            self._validate_allocated_block(indirect_block, bitmap_cache)
+            if block in pointer_blocks:
+                raise NativeExt2UnsafeError("duplicate ext2 indirect pointer blocks")
+            self._validate_allocated_block(block, bitmap_cache)
+            pointer_blocks.append(block)
+
+        indirect_block = values[_DIRECT_BLOCKS] if allow_indirect else 0
+        remaining = count - direct_count
+        single_count = min(remaining, entries_per_block)
+        if single_count:
+            validate_pointer_block(indirect_block)
             indirect_pointers = struct.unpack(
-                "<%dI" % (self.block_size // 4), self._read_block(indirect_block)
+                f"<{entries_per_block}I", self._read_block(indirect_block)
             )
-            if any(indirect_pointers[indirect_count:]):
+            if any(indirect_pointers[single_count:]):
                 raise NativeExt2UnsafeError(
                     "ext2 indirect block contains pointers beyond the file size"
                 )
-            blocks.extend(indirect_pointers[:indirect_count])
+            blocks.extend(indirect_pointers[:single_count])
         elif indirect_block:
             raise NativeExt2UnsafeError(
                 "ext2 inode has an indirect pointer beyond its file size"
             )
+
+        double_count = remaining - single_count
+        double_root = values[_DIRECT_BLOCKS + 1] if allow_double_indirect else 0
+        if double_count:
+            validate_pointer_block(double_root)
+            top_level = struct.unpack(
+                f"<{entries_per_block}I", self._read_block(double_root)
+            )
+            child_count = math.ceil(double_count / entries_per_block)
+            if any(top_level[child_count:]):
+                raise NativeExt2UnsafeError(
+                    "ext2 double-indirect table has pointers beyond the file size"
+                )
+            for child_index in range(child_count):
+                child_block = top_level[child_index]
+                validate_pointer_block(child_block)
+                child_pointers = struct.unpack(
+                    f"<{entries_per_block}I", self._read_block(child_block)
+                )
+                data_count = min(
+                    entries_per_block,
+                    double_count - child_index * entries_per_block,
+                )
+                if any(child_pointers[data_count:]):
+                    raise NativeExt2UnsafeError(
+                        "ext2 second-level indirect table has pointers beyond the file size"
+                    )
+                blocks.extend(child_pointers[:data_count])
+        elif double_root:
+            raise NativeExt2UnsafeError(
+                "ext2 inode has a double-indirect pointer beyond its file size"
+            )
+
         if any(block == 0 for block in blocks):
             raise NativeExt2Error("sparse or corrupt ext2 files are not writable")
         if len(set(blocks)) != len(blocks):
             raise NativeExt2Error("duplicate ext2 data block pointers")
         for block in blocks:
             self._validate_allocated_block(block, bitmap_cache)
-        if indirect_block and indirect_block in blocks:
+        if set(pointer_blocks) & set(blocks):
             raise NativeExt2UnsafeError("indirect pointer block aliases file data")
         allocated_blocks = (
-            len(blocks)
-            + int(bool(indirect_block))
-            + int(bool(self._u32(inode_raw, 104)))
+            len(blocks) + len(pointer_blocks) + int(bool(self._u32(inode_raw, 104)))
         )
         expected_sectors = allocated_blocks * (self.block_size // 512)
         if self._u32(inode_raw, 28) != expected_sectors:
@@ -605,13 +738,39 @@ class _Ext2FS:
             )
         return blocks
 
+    def _inode_pointer_blocks(
+        self, inode_raw: bytes | bytearray, *, allow_double_indirect=False
+    ) -> list[int]:
+        """Return indirect metadata blocks after _inode_blocks validated them."""
+        values = struct.unpack_from("<15I", inode_raw, 40)
+        size = self._inode_size(inode_raw)
+        count = math.ceil(size / self.block_size) if size else 0
+        entries_per_block = self.block_size // 4
+        pointer_blocks = []
+        if count > _DIRECT_BLOCKS:
+            pointer_blocks.append(values[_DIRECT_BLOCKS])
+        if count > _DIRECT_BLOCKS + entries_per_block:
+            if not allow_double_indirect:
+                raise NativeExt2Error("double-indirect ext2 object is not enabled")
+            double_root = values[_DIRECT_BLOCKS + 1]
+            pointer_blocks.append(double_root)
+            double_count = count - _DIRECT_BLOCKS - entries_per_block
+            child_count = math.ceil(double_count / entries_per_block)
+            top_level = struct.unpack(
+                f"<{entries_per_block}I", self._read_block(double_root)
+            )
+            pointer_blocks.extend(top_level[:child_count])
+        return pointer_blocks
+
     def _inode_data(self, raw: bytes | bytearray) -> bytes:
         size = self._inode_size(raw)
-        if size > self._max_file_blocks() * self.block_size:
+        if size > self._max_file_blocks(allow_double_indirect=True) * self.block_size:
             raise NativeExt2Error(
-                "native ext2 phase 1 exceeds single-indirect capacity"
+                "native ext2 phase 1 exceeds double-indirect capacity"
             )
-        blocks = self._inode_blocks(raw, allow_indirect=True)
+        blocks = self._inode_blocks(
+            raw, allow_indirect=True, allow_double_indirect=True
+        )
         data = b"".join(self._read_block(block) for block in blocks)
         return data[:size]
 
@@ -652,7 +811,7 @@ class _Ext2FS:
         if stat.S_IFMT(mode) != stat.S_IFDIR:
             raise NotADirectoryError("ext2 path component is not a directory")
         flags = self._u32(raw, 32)
-        if flags & _INODE_UNSUPPORTED_FLAGS:
+        if flags:
             raise NativeExt2Error("indexed or flagged ext2 directories are unsupported")
         if self._u32(raw, 104):
             # Keep support simple: directory ACL blocks are preserved, but
@@ -663,7 +822,9 @@ class _Ext2FS:
         size = self._u32(raw, 4)
         if size % self.block_size:
             raise NativeExt2Error("ext2 directory size is not block-aligned")
-        blocks = self._inode_blocks(raw)
+        blocks = self._inode_blocks(
+            raw, allow_indirect=True, allow_double_indirect=True
+        )
         if len(blocks) * self.block_size != size:
             raise NativeExt2Error("ext2 directory size/pointer count mismatch")
         found = []
@@ -789,6 +950,18 @@ class _Ext2FS:
         out[8 : 8 + len(name)] = name
         return bytes(out)
 
+    def _validate_inserted_entry(
+        self, parent: int, name: bytes, inode: int, file_type: int
+    ) -> None:
+        """Reparse a changed directory and confirm the exact inserted entry.
+
+        In particular, this revalidates the complete direct/single-indirect
+        directory map from the on-disk bytes before a staged extent can commit.
+        """
+        entry = self._lookup_child(parent, name)
+        if entry is None or entry["inode"] != inode or entry["file_type"] != file_type:
+            raise NativeExt2Error("staged ext2 directory entry failed read-back")
+
     def _insert_entry(
         self, parent: int, name: bytes, inode: int, file_type: int
     ) -> None:
@@ -814,6 +987,7 @@ class _Ext2FS:
                     self._write_block(block, bytes(buf))
                     self._touch_inode(parent_raw)
                     self._write_inode(parent, parent_raw)
+                    self._validate_inserted_entry(parent, name, inode, file_type)
                     return
                 minimum = self._minimum_dirent(
                     bytes(buf[cursor + 8 : cursor + 8 + name_len])
@@ -828,26 +1002,96 @@ class _Ext2FS:
                     self._write_block(block, bytes(buf))
                     self._touch_inode(parent_raw)
                     self._write_inode(parent, parent_raw)
+                    self._validate_inserted_entry(parent, name, inode, file_type)
                     return
                 cursor += rec_len
         current_blocks = len(blocks)
-        if current_blocks >= _DIRECT_BLOCKS:
+        if current_blocks >= self._max_file_blocks(allow_double_indirect=True):
             raise NativeExt2Error(
-                "ext2 directory needs indirect blocks; unsupported in phase 1"
+                "native ext2 directory exceeds double-indirect capacity"
             )
         preferred = (parent - 1) // self.inodes_per_group
         new_block = self._allocate_block(preferred)
         buf = self._make_dirent(inode, self.block_size, name, file_type)
         self._write_block(new_block, buf)
-        struct.pack_into("<I", parent_raw, 40 + current_blocks * 4, new_block)
+
+        allocated_blocks = 1
+        entries_per_block = self.block_size // 4
+        double_start = _DIRECT_BLOCKS + entries_per_block
+        if current_blocks < _DIRECT_BLOCKS:
+            struct.pack_into("<I", parent_raw, 40 + current_blocks * 4, new_block)
+        elif current_blocks < double_start:
+            indirect_block = self._u32(parent_raw, 40 + _DIRECT_BLOCKS * 4)
+            pointer_index = current_blocks - _DIRECT_BLOCKS
+            if indirect_block:
+                pointers = bytearray(self._read_block(indirect_block))
+                if self._u32(pointers, pointer_index * 4):
+                    raise NativeExt2UnsafeError(
+                        "ext2 directory indirect block has an unexpected pointer"
+                    )
+            else:
+                if current_blocks != _DIRECT_BLOCKS:
+                    raise NativeExt2UnsafeError(
+                        "ext2 directory has no indirect pointer block"
+                    )
+                indirect_block = self._allocate_block(preferred)
+                pointers = bytearray(self.block_size)
+                struct.pack_into(
+                    "<I", parent_raw, 40 + _DIRECT_BLOCKS * 4, indirect_block
+                )
+                allocated_blocks += 1
+            struct.pack_into("<I", pointers, pointer_index * 4, new_block)
+            self._write_block(indirect_block, bytes(pointers))
+        else:
+            double_index = current_blocks - double_start
+            child_index, pointer_index = divmod(double_index, entries_per_block)
+            double_root = self._u32(parent_raw, 40 + (_DIRECT_BLOCKS + 1) * 4)
+            if double_root:
+                top_level = bytearray(self._read_block(double_root))
+            else:
+                if child_index != 0 or pointer_index != 0:
+                    raise NativeExt2UnsafeError(
+                        "ext2 directory has no double-indirect pointer block"
+                    )
+                double_root = self._allocate_block(preferred)
+                top_level = bytearray(self.block_size)
+                struct.pack_into(
+                    "<I", parent_raw, 40 + (_DIRECT_BLOCKS + 1) * 4, double_root
+                )
+                allocated_blocks += 1
+
+            child_block = self._u32(top_level, child_index * 4)
+            if child_block:
+                pointers = bytearray(self._read_block(child_block))
+            else:
+                if pointer_index != 0 or any(
+                    self._u32(top_level, index * 4)
+                    for index in range(child_index + 1, entries_per_block)
+                ):
+                    raise NativeExt2UnsafeError(
+                        "ext2 directory double-indirect table has an unexpected gap"
+                    )
+                child_block = self._allocate_block(preferred)
+                pointers = bytearray(self.block_size)
+                struct.pack_into("<I", top_level, child_index * 4, child_block)
+                self._write_block(double_root, bytes(top_level))
+                allocated_blocks += 1
+
+            if self._u32(pointers, pointer_index * 4):
+                raise NativeExt2UnsafeError(
+                    "ext2 directory double-indirect block has an unexpected pointer"
+                )
+            struct.pack_into("<I", pointers, pointer_index * 4, new_block)
+            self._write_block(child_block, bytes(pointers))
         self._put32(parent_raw, 4, self._u32(parent_raw, 4) + self.block_size)
         self._put32(
             parent_raw,
             28,
-            self._u32(parent_raw, 28) + self.block_size // 512,
+            self._u32(parent_raw, 28) + allocated_blocks * (self.block_size // 512),
         )
         self._touch_inode(parent_raw)
         self._write_inode(parent, parent_raw)
+        self._validate_inserted_entry(parent, name, inode, file_type)
 
     def _remove_entry(self, parent: int, entry: dict) -> None:
         buf = bytearray(self._read_block(entry["block"]))
@@ -899,11 +1143,23 @@ class _Ext2FS:
         return self._inode_data(inode_raw)
 
     def write_file(self, path: str, data: bytes) -> None:
+        maximum_bytes = (
+            self._max_file_blocks(allow_double_indirect=True) * self.block_size
+        )
+        try:
+            incoming_size = len(data)
+        except TypeError:
+            data = bytes(data)
+            incoming_size = len(data)
+        if incoming_size > maximum_bytes:
+            raise NativeExt2Error(
+                "native ext2 phase 1 exceeds double-indirect capacity"
+            )
         if not isinstance(data, bytes):
             data = bytes(data)
-        if len(data) > self._max_file_blocks() * self.block_size:
+        if len(data) > maximum_bytes:
             raise NativeExt2Error(
-                "native ext2 phase 1 exceeds single-indirect capacity"
+                "native ext2 phase 1 exceeds double-indirect capacity"
             )
         parent, name, _ = self._parent_and_name(path)
         existing = self._lookup_child(parent, name)
@@ -917,8 +1173,12 @@ class _Ext2FS:
                 raise NativeExt2Error(
                     "hard-linked files are not overwritten in phase 1"
                 )
-            old_blocks = self._inode_blocks(inode_raw, allow_indirect=True)
-            old_indirect = self._u32(inode_raw, 40 + _DIRECT_BLOCKS * 4)
+            old_blocks = self._inode_blocks(
+                inode_raw, allow_indirect=True, allow_double_indirect=True
+            )
+            old_pointer_blocks = self._inode_pointer_blocks(
+                inode_raw, allow_double_indirect=True
+            )
             preferred = (inode_num - 1) // self.inodes_per_group
         else:
             inode_num = self._allocate_inode((parent - 1) // self.inodes_per_group)
@@ -926,27 +1186,56 @@ class _Ext2FS:
             struct.pack_into("<H", inode_raw, 0, stat.S_IFREG | 0o644)
             struct.pack_into("<H", inode_raw, 26, 1)
             old_blocks = []
-            old_indirect = 0
+            old_pointer_blocks = []
             preferred = (parent - 1) // self.inodes_per_group
         needed = math.ceil(len(data) / self.block_size) if data else 0
         new_blocks = [self._allocate_block(preferred) for _ in range(needed)]
         for index, block in enumerate(new_blocks):
             chunk = data[index * self.block_size : (index + 1) * self.block_size]
             self._write_block(block, chunk.ljust(self.block_size, b"\x00"))
+        new_pointer_blocks = []
         new_indirect = 0
         if needed > _DIRECT_BLOCKS:
             new_indirect = self._allocate_block(preferred)
+            new_pointer_blocks.append(new_indirect)
             pointer_table = bytearray(self.block_size)
-            for index, block in enumerate(new_blocks[_DIRECT_BLOCKS:]):
+            single_count = min(needed - _DIRECT_BLOCKS, self.block_size // 4)
+            for index, block in enumerate(
+                new_blocks[_DIRECT_BLOCKS : _DIRECT_BLOCKS + single_count]
+            ):
                 struct.pack_into("<I", pointer_table, index * 4, block)
             self._write_block(new_indirect, bytes(pointer_table))
+        new_double_indirect = 0
+        entries_per_block = self.block_size // 4
+        double_start = _DIRECT_BLOCKS + entries_per_block
+        if needed > double_start:
+            new_double_indirect = self._allocate_block(preferred)
+            new_pointer_blocks.append(new_double_indirect)
+            double_table = bytearray(self.block_size)
+            double_data = new_blocks[double_start:]
+            for child_index, first in enumerate(
+                range(0, len(double_data), entries_per_block)
+            ):
+                child_block = self._allocate_block(preferred)
+                new_pointer_blocks.append(child_block)
+                child_table = bytearray(self.block_size)
+                chunk = double_data[first : first + entries_per_block]
+                for index, block in enumerate(chunk):
+                    struct.pack_into("<I", child_table, index * 4, block)
+                self._write_block(child_block, bytes(child_table))
+                struct.pack_into("<I", double_table, child_index * 4, child_block)
+            self._write_block(new_double_indirect, bytes(double_table))
         inode_raw[40:100] = b"\x00" * 60
         for index, block in enumerate(new_blocks[:_DIRECT_BLOCKS]):
             struct.pack_into("<I", inode_raw, 40 + index * 4, block)
         if new_indirect:
             struct.pack_into("<I", inode_raw, 40 + _DIRECT_BLOCKS * 4, new_indirect)
+        if new_double_indirect:
+            struct.pack_into(
+                "<I", inode_raw, 40 + (_DIRECT_BLOCKS + 1) * 4, new_double_indirect
+            )
         self._put32(inode_raw, 4, len(data))
-        allocated_blocks = len(new_blocks) + int(bool(new_indirect))
+        allocated_blocks = len(new_blocks) + len(new_pointer_blocks)
         self._put32(inode_raw, 28, allocated_blocks * self.block_size // 512)
         struct.pack_into("<I", inode_raw, 20, 0)  # dtime
         self._touch_inode(inode_raw)
@@ -957,13 +1246,17 @@ class _Ext2FS:
             self._insert_entry(parent, name, inode_num, 1)
         for block in old_blocks:
             self._free_block(block)
-        if old_indirect:
-            self._free_block(old_indirect)
+        for block in old_pointer_blocks:
+            self._free_block(block)
 
     def mkdir(self, path: str) -> None:
         parent, name, _ = self._parent_and_name(path)
         if self._lookup_child(parent, name) is not None:
             raise FileExistsError(path)
+        parent_raw = self._read_inode(parent)
+        links = self._u16(parent_raw, 26)
+        if links == 0xFFFF:
+            raise NativeExt2Error("ext2 parent link counter overflow")
         inode_num = self._allocate_inode(
             (parent - 1) // self.inodes_per_group, is_dir=True
         )
@@ -981,9 +1274,11 @@ class _Ext2FS:
         self._write_inode(inode_num, child)
         self._insert_entry(parent, name, inode_num, 2)
         parent_raw = self._read_inode(parent)
-        links = self._u16(parent_raw, 26)
-        if links == 0xFFFF:
-            raise NativeExt2Error("ext2 parent link counter overflow")
+        if self._u16(parent_raw, 26) != links:
+            raise NativeExt2Error(
+                "ext2 parent link count changed during mkdir",
+                RefusalCode.CONCURRENT_CHANGE,
+            )
         struct.pack_into("<H", parent_raw, 26, links + 1)
         self._touch_inode(parent_raw)
         self._write_inode(parent, parent_raw)
@@ -1006,20 +1301,25 @@ class _Ext2FS:
             _, _, children = self._dir_entries(inode_num)
             if any(item["name_bytes"] not in (b".", b"..") for item in children):
                 raise NativeExt2Error(
-                    "native ext2 phase 1 deletes only empty directories; recursive delete is unsupported"
+                    "native ext2 phase 1 deletes only empty directories; "
+                    "recursive delete is unsupported"
                 )
             if self._u16(raw, 26) != 2:
                 raise NativeExt2Error("unexpected ext2 directory link count")
         else:
             if self._u16(raw, 26) != 1:
                 raise NativeExt2Error("hard-linked files are not deleted in phase 1")
-        blocks = self._inode_blocks(raw, allow_indirect=not is_dir)
-        indirect_block = self._u32(raw, 40 + _DIRECT_BLOCKS * 4) if not is_dir else 0
+        blocks = self._inode_blocks(
+            raw,
+            allow_indirect=True,
+            allow_double_indirect=True,
+        )
+        pointer_blocks = self._inode_pointer_blocks(raw, allow_double_indirect=True)
         self._remove_entry(parent, entry)
         for block in blocks:
             self._free_block(block)
-        if indirect_block:
-            self._free_block(indirect_block)
+        for block in pointer_blocks:
+            self._free_block(block)
         parent_raw = self._read_inode(parent)
         if is_dir:
             links = self._u16(parent_raw, 26)
@@ -1128,9 +1428,487 @@ class NativeExt2ImageWriter:
         self.image_path = os.path.realpath(os.fspath(image_path))
         self.offset = int(offset)
         self.volume_size = int(volume_size) if volume_size is not None else None
-        self._fs = _Ext2FS(self.image_path, self.offset, self.volume_size)
         with self._locks_guard:
             self._lock = self._locks.setdefault(self.image_path, threading.RLock())
+        with self._lock:
+            if os.path.lexists(self._recovery_marker_path):
+                with _image_process_lock(self.image_path):
+                    self._recover_pending_transaction()
+            self._fs = _Ext2FS(self.image_path, self.offset, self.volume_size)
+
+    @property
+    def _recovery_marker_path(self) -> str:
+        return self.image_path + ".mountfile-ext2-recovery.json"
+
+    @staticmethod
+    def _hash_extent(path: str, offset: int, size: int) -> bytes:
+        digest = hashlib.sha256()
+        remaining = size
+        with open(path, "rb") as stream:
+            stream.seek(offset)
+            while remaining:
+                chunk = stream.read(min(_CHUNK, remaining))
+                if not chunk:
+                    raise NativeExt2Error("short read while hashing recovery extent")
+                digest.update(chunk)
+                remaining -= len(chunk)
+        return digest.digest()
+
+    @staticmethod
+    @contextmanager
+    def _open_recovery_snapshot(path: str, size: int):
+        """Open one regular snapshot without following symlinks where supported."""
+        if os.path.islink(path):
+            raise NativeExt2Error(
+                "ext2 recovery snapshot is a symbolic link; writes are blocked"
+            )
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            snapshot_stat = os.fstat(fd)
+            if not stat.S_ISREG(snapshot_stat.st_mode) or snapshot_stat.st_size != size:
+                raise NativeExt2Error(
+                    "ext2 recovery snapshot is not a regular file of the expected size"
+                )
+            with os.fdopen(fd, "rb") as stream:
+                fd = -1
+                yield stream
+        finally:
+            if fd >= 0:
+                with suppress(OSError):
+                    os.close(fd)
+
+    @staticmethod
+    def _hash_stream(stream, offset: int, size: int) -> bytes:
+        digest = hashlib.sha256()
+        stream.seek(offset)
+        remaining = size
+        while remaining:
+            chunk = stream.read(min(_CHUNK, remaining))
+            if not chunk:
+                raise NativeExt2Error("short read while hashing ext2 recovery stream")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        return digest.digest()
+
+    def _restore_recovery_extent(
+        self, image, snapshot_stream, *, offset: int, size: int, expected_hash: bytes
+    ) -> None:
+        snapshot_stream.seek(0)
+        image.seek(offset)
+        remaining = size
+        while remaining:
+            chunk = snapshot_stream.read(min(_CHUNK, remaining))
+            if not chunk:
+                raise NativeExt2Error("ext2 recovery snapshot is truncated")
+            written = image.write(chunk)
+            if written != len(chunk):
+                raise NativeExt2Error(
+                    "short write while restoring ext2 recovery snapshot"
+                )
+            remaining -= len(chunk)
+        image.flush()
+        os.fsync(image.fileno())
+        if self._hash_stream(image, offset, size) != expected_hash:
+            raise NativeExt2Error(
+                "restored ext2 recovery extent failed SHA-256 verification"
+            )
+
+    def _verify_recovery_image_mix(
+        self, image, before_stream, after_stream, *, size: int
+    ) -> bool:
+        """Accept only sectors equal to the durable before- or after-image."""
+        image_stat = os.fstat(image.fileno())
+        remaining = size
+        image.seek(self.offset)
+        before_stream.seek(0)
+        after_stream.seek(0)
+        while remaining:
+            chunk_size = min(512, remaining)
+            current = image.read(chunk_size)
+            old = before_stream.read(chunk_size)
+            new = after_stream.read(chunk_size)
+            if (
+                len(current) != chunk_size
+                or len(old) != chunk_size
+                or len(new) != chunk_size
+            ):
+                return False
+            if current != old and current != new:
+                return False
+            remaining -= chunk_size
+        final_stat = os.fstat(image.fileno())
+        return (
+            image_stat.st_dev == final_stat.st_dev
+            and image_stat.st_ino == final_stat.st_ino
+            and image_stat.st_size == final_stat.st_size
+            and image_stat.st_mtime_ns == final_stat.st_mtime_ns
+        )
+
+    @staticmethod
+    def _fsync_parent(path: str) -> None:
+        if os.name == "nt":
+            return
+        directory = os.path.dirname(path) or "."
+        fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _atomic_write_json(path: str, payload: dict) -> None:
+        directory = os.path.dirname(path) or "."
+        fd, temporary = tempfile.mkstemp(
+            prefix=".mountfile-ext2-marker-", suffix=".tmp", dir=directory
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            NativeExt2ImageWriter._fsync_parent(path)
+        except Exception:
+            with suppress(OSError):
+                os.unlink(temporary)
+            raise
+
+    def _preserve_recovery_snapshot(
+        self,
+        rollback: str,
+        original_hash: bytes,
+        staged: str,
+        *,
+        phase: str = "commit_in_progress",
+    ) -> tuple[str, str, bytes, str]:
+        """Persist verified before/after images and their transaction marker."""
+        if phase not in {"commit_in_progress", "rollback_failed"}:
+            raise NativeExt2Error("invalid ext2 recovery phase")
+        directory = os.path.dirname(self.image_path) or "."
+        basename = os.path.basename(self.image_path)
+        snapshot_fd, snapshot = tempfile.mkstemp(
+            prefix=f".{basename}.mountfile-ext2-recovery-before-",
+            suffix=".bin",
+            dir=directory,
+        )
+        staged_fd = -1
+        staged_snapshot = None
+        try:
+            staged_fd, staged_snapshot = tempfile.mkstemp(
+                prefix=f".{basename}.mountfile-ext2-recovery-after-",
+                suffix=".bin",
+                dir=directory,
+            )
+            before_digest = hashlib.sha256()
+            before_fd = snapshot_fd
+            with os.fdopen(before_fd, "wb") as dst:
+                snapshot_fd = -1
+                with open(rollback, "rb") as src:
+                    remaining = self.filesystem_size
+                    while remaining:
+                        chunk = src.read(min(_CHUNK, remaining))
+                        if not chunk:
+                            raise NativeExt2Error("rollback snapshot is truncated")
+                        written = dst.write(chunk)
+                        if written != len(chunk):
+                            raise NativeExt2Error(
+                                "short write while preserving recovery snapshot"
+                            )
+                        before_digest.update(chunk)
+                        remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            if before_digest.digest() != original_hash:
+                raise NativeExt2Error("persistent rollback snapshot hash mismatch")
+            self._fsync_parent(snapshot)
+            after_digest = hashlib.sha256()
+            after_fd = staged_fd
+            with os.fdopen(after_fd, "wb") as dst:
+                staged_fd = -1
+                with open(staged, "rb") as src:
+                    remaining = self.filesystem_size
+                    while remaining:
+                        chunk = src.read(min(_CHUNK, remaining))
+                        if not chunk:
+                            raise NativeExt2Error("staged ext2 snapshot is truncated")
+                        written = dst.write(chunk)
+                        if written != len(chunk):
+                            raise NativeExt2Error(
+                                "short write while preserving staged ext2 snapshot"
+                            )
+                        after_digest.update(chunk)
+                        remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            staged_hash = after_digest.digest()
+            self._fsync_parent(staged_snapshot)
+            current_hash = self._hash_extent(
+                self.image_path, self.offset, self.filesystem_size
+            )
+            if phase == "commit_in_progress" and current_hash != original_hash:
+                raise NativeExt2Error(
+                    "image changed before ext2 recovery marker was established"
+                )
+            image_stat = os.stat(self.image_path)
+            marker = {
+                "format": 3,
+                "phase": phase,
+                "image": self.image_path,
+                "offset": self.offset,
+                "size": self.filesystem_size,
+                "original_sha256": original_hash.hex(),
+                "staged_sha256": staged_hash.hex(),
+                "observed_sha256": current_hash.hex(),
+                "device": image_stat.st_dev,
+                "inode": image_stat.st_ino,
+                "image_size": image_stat.st_size,
+                "mtime_ns": image_stat.st_mtime_ns,
+                "snapshot": os.path.basename(snapshot),
+                "staged_snapshot": os.path.basename(staged_snapshot),
+            }
+            self._atomic_write_json(self._recovery_marker_path, marker)
+            return snapshot, staged_snapshot, staged_hash, self._recovery_marker_path
+        except Exception as exc:
+            for fd in (snapshot_fd, staged_fd):
+                if fd >= 0:
+                    with suppress(OSError):
+                        os.close(fd)
+            if os.path.lexists(self._recovery_marker_path):
+                raise NativeExt2Error(
+                    f"persistent ext2 recovery snapshots retained at {snapshot} "
+                    f"and {staged_snapshot}; inspect the recovery marker before "
+                    f"retrying: {exc}"
+                ) from exc
+            for path in (snapshot, staged_snapshot):
+                if path and os.path.lexists(path):
+                    with suppress(OSError):
+                        os.unlink(path)
+            raise
+
+    @staticmethod
+    def _clear_recovery_snapshot(
+        marker_path: str, snapshot: str, staged_snapshot: str | None = None
+    ) -> None:
+        """Remove the marker before both snapshots, preserving crash-safe ordering."""
+        sidecars = tuple(path for path in (snapshot, staged_snapshot) if path)
+        if any(os.path.islink(path) for path in sidecars):
+            raise NativeExt2Error(
+                "ext2 recovery snapshot became a symbolic link; refusing cleanup"
+            )
+        if os.path.lexists(marker_path):
+            if os.path.islink(marker_path):
+                raise NativeExt2Error(
+                    "ext2 recovery marker became a symbolic link; refusing cleanup"
+                )
+            os.unlink(marker_path)
+            NativeExt2ImageWriter._fsync_parent(marker_path)
+        for sidecar in sidecars:
+            if os.path.lexists(sidecar):
+                os.unlink(sidecar)
+                NativeExt2ImageWriter._fsync_parent(sidecar)
+
+    def _mark_rollback_failed(self, marker_path: str) -> None:
+        """Tighten recovery to the exact post-failure image after rollback fails."""
+        with open(marker_path, encoding="utf-8") as stream:
+            marker = json.load(stream)
+        if not isinstance(marker, dict) or marker.get("format") not in (2, 3):
+            raise NativeExt2Error("ext2 recovery marker changed during rollback")
+        image_stat = os.stat(self.image_path)
+        marker["phase"] = "rollback_failed"
+        marker["observed_sha256"] = self._hash_extent(
+            self.image_path, self.offset, self.filesystem_size
+        ).hex()
+        marker["mtime_ns"] = image_stat.st_mtime_ns
+        self._atomic_write_json(marker_path, marker)
+
+    def _recover_pending_transaction(self) -> None:
+        marker_path = self._recovery_marker_path
+        if not os.path.lexists(marker_path):
+            return
+        if os.path.islink(marker_path):
+            raise NativeExt2Error(
+                "ext2 recovery marker is a symbolic link; refusing recovery"
+            )
+        try:
+            with open(marker_path, encoding="utf-8") as stream:
+                marker = json.load(stream)
+        except (OSError, ValueError) as exc:
+            raise NativeExt2Error(
+                "ext2 recovery marker is unreadable; writes are blocked"
+            ) from exc
+        if not isinstance(marker, dict) or marker.get("format") not in (1, 2, 3):
+            raise NativeExt2Error("unknown ext2 recovery marker; writes are blocked")
+        marker_format = marker["format"]
+        phase = marker.get("phase", "rollback_failed")
+        if marker_format in (2, 3) and phase not in {
+            "commit_in_progress",
+            "rollback_failed",
+        }:
+            raise NativeExt2Error("unknown ext2 recovery phase; writes are blocked")
+        try:
+            size = int(marker["size"])
+            offset = int(marker["offset"])
+            snapshot_name = marker["snapshot"]
+            original_hash = bytes.fromhex(marker["original_sha256"])
+            observed_hash = bytes.fromhex(marker["observed_sha256"])
+            if marker_format == 3:
+                staged_snapshot_name = marker["staged_snapshot"]
+                staged_hash = bytes.fromhex(marker["staged_sha256"])
+            else:
+                staged_snapshot_name = None
+                staged_hash = None
+        except (KeyError, TypeError, ValueError) as exc:
+            raise NativeExt2Error(
+                "invalid ext2 recovery marker; writes are blocked"
+            ) from exc
+        basename = os.path.basename(self.image_path)
+        before_prefix = f".{basename}.mountfile-ext2-recovery-before-"
+        legacy_prefix = f".{basename}.mountfile-ext2-recovery-"
+        if (
+            marker.get("image") != self.image_path
+            or offset != self.offset
+            or size <= 0
+            or (self.volume_size is not None and self.volume_size != size)
+            or len(original_hash) != 32
+            or len(observed_hash) != 32
+            or not isinstance(snapshot_name, str)
+            or os.path.basename(snapshot_name) != snapshot_name
+            or not snapshot_name.startswith(
+                before_prefix if marker_format == 3 else legacy_prefix
+            )
+            or not snapshot_name.endswith(".bin")
+            or (staged_hash is not None and len(staged_hash) != 32)
+        ):
+            raise NativeExt2Error(
+                "ext2 recovery marker does not match this image extent"
+            )
+        snapshot = os.path.join(os.path.dirname(self.image_path), snapshot_name)
+        if os.path.islink(snapshot) or not os.path.isfile(snapshot):
+            raise NativeExt2Error(
+                "ext2 recovery snapshot is missing or unsafe; writes are blocked"
+            )
+        staged_snapshot = None
+        if marker_format == 3:
+            after_prefix = f".{basename}.mountfile-ext2-recovery-after-"
+            if (
+                not isinstance(staged_snapshot_name, str)
+                or os.path.basename(staged_snapshot_name) != staged_snapshot_name
+                or not staged_snapshot_name.startswith(after_prefix)
+                or not staged_snapshot_name.endswith(".bin")
+                or staged_snapshot_name == snapshot_name
+            ):
+                raise NativeExt2Error("ext2 staged recovery snapshot name is invalid")
+            staged_snapshot = os.path.join(
+                os.path.dirname(self.image_path), staged_snapshot_name
+            )
+            if os.path.islink(staged_snapshot) or not os.path.isfile(staged_snapshot):
+                raise NativeExt2Error(
+                    "ext2 staged recovery snapshot is missing or unsafe; writes are blocked"
+                )
+        try:
+            with ExitStack() as stack:
+                snapshot_stream = stack.enter_context(
+                    self._open_recovery_snapshot(snapshot, size)
+                )
+                staged_stream = (
+                    stack.enter_context(
+                        self._open_recovery_snapshot(staged_snapshot, size)
+                    )
+                    if staged_snapshot is not None
+                    else None
+                )
+                image = stack.enter_context(open(self.image_path, "r+b"))
+                image_stat = os.fstat(image.fileno())
+                if (
+                    image_stat.st_dev != int(marker["device"])
+                    or image_stat.st_ino != int(marker["inode"])
+                    or image_stat.st_size != int(marker["image_size"])
+                ):
+                    raise NativeExt2Error(
+                        "image or recovery snapshot changed; automatic recovery refused"
+                    )
+                if self._hash_stream(snapshot_stream, 0, size) != original_hash:
+                    raise NativeExt2Error(
+                        "ext2 recovery snapshot hash mismatch; writes are blocked"
+                    )
+                if (
+                    staged_stream is not None
+                    and self._hash_stream(staged_stream, 0, size) != staged_hash
+                ):
+                    raise NativeExt2Error(
+                        "ext2 staged recovery snapshot hash mismatch; writes are blocked"
+                    )
+                current_hash = self._hash_stream(image, offset, size)
+                if current_hash == original_hash:
+                    # A previous recovery may have fsynced the restored bytes and
+                    # crashed before removing its marker. Make that path idempotent.
+                    image.flush()
+                    os.fsync(image.fileno())
+                    if self._hash_stream(image, offset, size) != original_hash:
+                        raise NativeExt2Error(
+                            "already-restored ext2 extent changed during recovery"
+                        )
+                else:
+                    if phase == "commit_in_progress" and marker_format == 3:
+                        if (
+                            staged_stream is None
+                            or not self._verify_recovery_image_mix(
+                                image, snapshot_stream, staged_stream, size=size
+                            )
+                        ):
+                            raise NativeExt2Error(
+                                "ext2 commit extent contains data outside the verified "
+                                "before/after snapshots; recovery sidecars retained "
+                                "and writes blocked"
+                            )
+                        if self._hash_stream(image, offset, size) != current_hash:
+                            raise NativeExt2Error(
+                                "ext2 image changed during recovery inspection; "
+                                "writes are blocked"
+                            )
+                    elif phase == "commit_in_progress":
+                        raise NativeExt2Error(
+                            "legacy ext2 commit marker has no after-image; automatic "
+                            "recovery refused and writes are blocked"
+                        )
+                    elif phase == "rollback_failed" and (
+                        image_stat.st_mtime_ns != int(marker["mtime_ns"])
+                        or current_hash != observed_hash
+                    ):
+                        raise NativeExt2Error(
+                            "image changed since ext2 failure; automatic recovery refused"
+                        )
+                    elif phase != "rollback_failed":
+                        raise NativeExt2Error(
+                            "unknown ext2 recovery phase; writes are blocked"
+                        )
+                    if (
+                        self._hash_stream(image, offset, size) != current_hash
+                        or self._hash_stream(snapshot_stream, 0, size) != original_hash
+                        or (
+                            staged_stream is not None
+                            and self._hash_stream(staged_stream, 0, size) != staged_hash
+                        )
+                    ):
+                        raise NativeExt2Error(
+                            "image or recovery snapshots changed immediately before "
+                            "restoration; writes are blocked"
+                        )
+                    self._restore_recovery_extent(
+                        image,
+                        snapshot_stream,
+                        offset=offset,
+                        size=size,
+                        expected_hash=original_hash,
+                    )
+            self._clear_recovery_snapshot(marker_path, snapshot, staged_snapshot)
+        except NativeExt2Error:
+            raise
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise NativeExt2Error(
+                "ext2 automatic recovery failed; writes are blocked"
+            ) from exc
 
     @property
     def filesystem_size(self):
@@ -1185,20 +1963,95 @@ class NativeExt2ImageWriter:
                 remaining -= len(chunk)
         return digest.digest()
 
+    def _restore_extent(self, rollback: str, original_hash: bytes) -> None:
+        rollback_error = None
+        try:
+            remaining = self.filesystem_size
+            with open(self.image_path, "r+b") as dst, open(rollback, "rb") as src:
+                dst.seek(self.offset)
+                while remaining:
+                    chunk = src.read(min(_CHUNK, remaining))
+                    if not chunk:
+                        raise NativeExt2Error("rollback ext2 extent is truncated")
+                    written = dst.write(chunk)
+                    if written != len(chunk):
+                        raise NativeExt2Error("short write while restoring ext2 extent")
+                    remaining -= len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+        except Exception as exc:
+            rollback_error = exc
+
+        try:
+            restored_hash = self._hash_source()
+        except Exception as verification_error:
+            if rollback_error is not None:
+                raise NativeExt2Error(
+                    "ext2 rollback write failed and restoration verification failed: "
+                    f"{rollback_error}"
+                ) from verification_error
+            raise NativeExt2Error(
+                "ext2 rollback restoration verification failed"
+            ) from verification_error
+
+        if restored_hash != original_hash:
+            if rollback_error is not None:
+                raise NativeExt2Error(
+                    "ext2 rollback write failed and restored extent SHA-256 did not "
+                    f"match: {rollback_error}"
+                )
+            raise NativeExt2Error("restored ext2 extent failed SHA-256 verification")
+        if rollback_error is not None:
+            raise rollback_error
+
     def _commit(self, staged: str, original_hash: bytes) -> None:
         if self._hash_source() != original_hash:
             raise NativeExt2Error(
-                "image changed concurrently; staged write was discarded"
+                "image changed concurrently; staged write was discarded",
+                RefusalCode.CONCURRENT_CHANGE,
             )
         with tempfile.TemporaryDirectory(prefix="mountfile-ext2-rollback-") as work:
             rollback = os.path.join(work, "original.ext2")
             current_hash = self._copy_extent(rollback)
             if current_hash != original_hash:
                 raise NativeExt2Error("image changed while preparing rollback snapshot")
-            staged_hash = hashlib.sha256()
-            remaining = self.filesystem_size
+            snapshot, staged_snapshot, expected_staged_hash, marker = (
+                self._preserve_recovery_snapshot(
+                    rollback, original_hash, staged, phase="commit_in_progress"
+                )
+            )
+            staged_digest = hashlib.sha256()
             try:
-                with open(self.image_path, "r+b") as dst, open(staged, "rb") as src:
+                with ExitStack() as stack:
+                    dst = stack.enter_context(open(self.image_path, "r+b"))
+                    src = stack.enter_context(open(staged, "rb"))
+                    with open(marker, encoding="utf-8") as marker_stream:
+                        marker_data = json.load(marker_stream)
+                    image_stat = os.fstat(dst.fileno())
+                    if (
+                        not isinstance(marker_data, dict)
+                        or marker_data.get("format") != 3
+                        or marker_data.get("image") != self.image_path
+                        or marker_data.get("offset") != self.offset
+                        or marker_data.get("size") != self.filesystem_size
+                        or marker_data.get("original_sha256") != original_hash.hex()
+                        or marker_data.get("staged_sha256")
+                        != expected_staged_hash.hex()
+                        or image_stat.st_dev != int(marker_data["device"])
+                        or image_stat.st_ino != int(marker_data["inode"])
+                        or image_stat.st_size != int(marker_data["image_size"])
+                    ):
+                        raise NativeExt2Error(
+                            "image or ext2 recovery marker changed before commit"
+                        )
+                    if (
+                        self._hash_stream(dst, self.offset, self.filesystem_size)
+                        != original_hash
+                    ):
+                        raise NativeExt2Error(
+                            "image changed before ext2 commit; staged write was discarded"
+                        )
+                    remaining = self.filesystem_size
                     dst.seek(self.offset)
                     while remaining:
                         chunk = src.read(min(_CHUNK, remaining))
@@ -1209,33 +2062,146 @@ class NativeExt2ImageWriter:
                             raise NativeExt2Error(
                                 "short write while committing ext2 extent"
                             )
-                        staged_hash.update(chunk)
+                        staged_digest.update(chunk)
                         remaining -= len(chunk)
                     dst.flush()
                     os.fsync(dst.fileno())
-                if self._hash_source() != staged_hash.digest():
-                    raise NativeExt2Error(
-                        "committed ext2 extent failed SHA-256 verification"
-                    )
-            except Exception as exc:
-                try:
-                    with (
-                        open(self.image_path, "r+b") as dst,
-                        open(rollback, "rb") as src,
+                    final_stat = os.fstat(dst.fileno())
+                    if (
+                        final_stat.st_dev != image_stat.st_dev
+                        or final_stat.st_ino != image_stat.st_ino
+                        or final_stat.st_size != image_stat.st_size
                     ):
-                        dst.seek(self.offset)
-                        shutil.copyfileobj(src, dst, _CHUNK)
-                        dst.flush()
-                        os.fsync(dst.fileno())
-                except Exception as rollback_exc:
+                        raise NativeExt2Error(
+                            "image identity changed during ext2 commit"
+                        )
+                    if (
+                        staged_digest.digest() != expected_staged_hash
+                        or self._hash_stream(dst, self.offset, self.filesystem_size)
+                        != expected_staged_hash
+                    ):
+                        raise NativeExt2Error(
+                            "committed ext2 extent failed SHA-256 verification"
+                        )
+            except Exception as exc:
+                restore_started = False
+                try:
+                    with ExitStack() as stack:
+                        before_stream = stack.enter_context(
+                            self._open_recovery_snapshot(snapshot, self.filesystem_size)
+                        )
+                        after_stream = stack.enter_context(
+                            self._open_recovery_snapshot(
+                                staged_snapshot, self.filesystem_size
+                            )
+                        )
+                        image = stack.enter_context(open(self.image_path, "r+b"))
+                        with open(marker, encoding="utf-8") as marker_stream:
+                            marker_data = json.load(marker_stream)
+                        image_stat = os.fstat(image.fileno())
+                        if (
+                            not isinstance(marker_data, dict)
+                            or marker_data.get("format") != 3
+                            or marker_data.get("original_sha256") != original_hash.hex()
+                            or marker_data.get("staged_sha256")
+                            != expected_staged_hash.hex()
+                            or image_stat.st_dev != int(marker_data["device"])
+                            or image_stat.st_ino != int(marker_data["inode"])
+                            or image_stat.st_size != int(marker_data["image_size"])
+                        ):
+                            raise NativeExt2Error(
+                                "image or ext2 recovery marker changed; rollback "
+                                "was not attempted"
+                            )
+                        current_hash = self._hash_stream(
+                            image, self.offset, self.filesystem_size
+                        )
+                        if current_hash == original_hash:
+                            if (
+                                self._hash_stream(
+                                    image, self.offset, self.filesystem_size
+                                )
+                                != original_hash
+                            ):
+                                raise NativeExt2Error(
+                                    "ext2 extent changed while verifying the before-image"
+                                )
+                        elif (
+                            not self._verify_recovery_image_mix(
+                                image,
+                                before_stream,
+                                after_stream,
+                                size=self.filesystem_size,
+                            )
+                            or self._hash_stream(
+                                image, self.offset, self.filesystem_size
+                            )
+                            != current_hash
+                            or self._hash_stream(before_stream, 0, self.filesystem_size)
+                            != original_hash
+                            or self._hash_stream(after_stream, 0, self.filesystem_size)
+                            != expected_staged_hash
+                        ):
+                            raise NativeExt2Error(
+                                "ext2 extent or recovery snapshots changed during "
+                                "before/after verification"
+                            )
+                        if current_hash != original_hash:
+                            restore_started = True
+                            self._restore_recovery_extent(
+                                image,
+                                before_stream,
+                                offset=self.offset,
+                                size=self.filesystem_size,
+                                expected_hash=original_hash,
+                            )
+                except Exception as recovery_exc:
+                    if restore_started:
+                        try:
+                            self._mark_rollback_failed(marker)
+                            recovery_detail = (
+                                f"durable recovery snapshots: {snapshot}, "
+                                f"{staged_snapshot}; marker: {marker}"
+                            )
+                        except Exception as preserve_exc:
+                            recovery_detail = (
+                                f"durable recovery snapshots retained at {snapshot} "
+                                f"and {staged_snapshot}; "
+                                "recovery marker may need manual inspection: "
+                                f"{preserve_exc}"
+                            )
+                        raise NativeExt2Error(
+                            "ext2 commit and rollback both failed; "
+                            f"{recovery_detail}; rollback error: {recovery_exc}"
+                        ) from exc
                     raise NativeExt2Error(
-                        "ext2 commit and rollback both failed; restore the persistent image backup: %s"
-                        % rollback_exc
+                        "ext2 commit failed; rollback was not attempted because "
+                        "the current extent or recovery snapshots could not be "
+                        f"verified; snapshots retained at {snapshot} and "
+                        f"{staged_snapshot}, marker: {marker}; writes are blocked: "
+                        f"{recovery_exc}"
                     ) from exc
+                try:
+                    self._clear_recovery_snapshot(marker, snapshot, staged_snapshot)
+                except Exception as cleanup_exc:
+                    raise NativeExt2Error(
+                        "ext2 rollback succeeded but recovery sidecar cleanup failed; "
+                        "the image is restored; inspect remaining sidecars before retry: "
+                        f"{cleanup_exc}"
+                    ) from cleanup_exc
                 raise
+            try:
+                self._clear_recovery_snapshot(marker, snapshot, staged_snapshot)
+            except Exception as cleanup_exc:
+                raise NativeExt2Error(
+                    "ext2 commit is verified and durable, but recovery sidecar "
+                    "cleanup failed; do not retry blindly; inspect marker and "
+                    f"snapshots {snapshot}, {staged_snapshot}: {cleanup_exc}"
+                ) from cleanup_exc
 
     def _mutate(self, method: str, *args, **kwargs):
-        with self._lock:
+        with self._lock, _image_process_lock(self.image_path):
+            self._recover_pending_transaction()
             current = _Ext2FS(self.image_path, self.offset, self.volume_size)
             if current.filesystem_size != self.filesystem_size:
                 raise NativeExt2Error(

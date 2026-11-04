@@ -145,6 +145,45 @@ def test_tsk_read_range(tmp_path):
     assert tsk.read_file_range("/HELLO.TXT", 11, 2) == b"CI"
 
 
+@needs_mkfs_vfat
+@needs_pytsk3
+def test_native_fat_matches_pytsk_on_real_mkfs_vfat_image(tmp_path):
+    from mountfile.fat_reader import NativeFatImage
+    from mountfile.vfs import TskImage
+
+    img = _make_vfat_image(tmp_path)
+    volume_size = os.path.getsize(img)
+    native = NativeFatImage(img, offset=0, volume_size=volume_size)
+    tsk = TskImage(img, offset=0, volume_size=volume_size)
+    try:
+        native_entries = {
+            entry["name"].casefold(): entry for entry in native.list_dir("/")
+        }
+        # Sleuth Kit exposes FAT metadata as synthetic $FAT/$MBR/$OrphanFiles
+        # entries; compare the user-visible directory namespace only.
+        tsk_entries = {
+            entry["name"].casefold(): entry
+            for entry in tsk.list_dir("/")
+            if not entry["name"].startswith("$")
+        }
+        assert native_entries.keys() == tsk_entries.keys()
+        assert native_entries["hello.txt"]["is_dir"] is False
+        assert tsk_entries["hello.txt"]["is_dir"] is False
+
+        expected = b"Mount File CI fixture\n"
+        assert native.file_size("/HELLO.TXT") == tsk.file_size("/HELLO.TXT")
+        assert native.read_file("/HELLO.TXT") == expected
+        assert tsk.read_file("/HELLO.TXT") == expected
+        assert (
+            native.read_file_range("/HELLO.TXT", 11, 2)
+            == tsk.read_file_range("/HELLO.TXT", 11, 2)
+            == b"CI"
+        )
+    finally:
+        native.close()
+        tsk.close()
+
+
 # ------------------------------------------------------- GUI builds headless
 
 

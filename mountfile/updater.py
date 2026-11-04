@@ -6,9 +6,9 @@
 
 Как это работает
 ----------------
-Проверка запускается при *каждом* старте приложения в фоновом потоке
-(QThread), поэтому окно не подвисает, а отсутствие сети или битый URL
-вообще не мешают работе: в лог падает одна строка и всё.
+Проверка может запускаться при старте приложения в фоновом потоке (QThread),
+но по умолчанию сетевой доступ при старте выключен. Поэтому отсутствие сети
+или битый URL вообще не мешают работе: в лог падает одна строка и всё.
 
 Источник обновлений — GitHub Releases репозитория ``Alexkkkkk/mount-file``
 (переопределяется переменной окружения ``MOUNTFILE_UPDATE_REPO``).
@@ -31,6 +31,7 @@
 --------------------
 ``MOUNTFILE_UPDATE_REPO=owner/repo``  другой репозиторий с релизами
 ``MOUNTFILE_NO_UPDATE=1``             выключить проверку обновлений
+``MOUNTFILE_ENABLE_UPDATE_CHECK=1``   разрешить сетевую проверку при старте
 ``MOUNTFILE_AUTO_UPDATE=1``           ставить без вопроса и перезапускаться
 ``MOUNTFILE_GIT_PULL=1``              в режиме исходников разрешить git pull
 ``MOUNTFILE_UPDATE_URL``              прямой URL на JSON последнего релиза
@@ -142,7 +143,12 @@ def update_url():
 
 
 def disabled():
-    return _flag("MOUNTFILE_NO_UPDATE")
+    """Whether automatic update checks are disabled.
+
+    Network access is opt-in. Manual checks still call :func:`check` directly,
+    while the GUI startup worker consults this gate first.
+    """
+    return _flag("MOUNTFILE_NO_UPDATE") or not _flag("MOUNTFILE_ENABLE_UPDATE_CHECK")
 
 
 def auto_install():
@@ -482,9 +488,10 @@ class Updater(QThread):
         self.current_version = current_version or app_version()
 
     def run(self):  # pragma: no cover - требует Qt-цикла
-        if disabled():
-            self.done.emit(False)
-            return
+        # StartupUpdater is started only after the GUI startup gate has
+        # approved network access. Direct callers of this worker are explicit
+        # manual checks and must remain functional even in offline-default
+        # mode.
         try:
             info = check(self.current_version)
         except Exception as exc:

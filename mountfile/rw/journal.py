@@ -102,7 +102,7 @@ class Journal:
                 self._conn.execute(
                     "UPDATE journal SET status='legacy_unknown', committed=1"
                 )
-        if "record_hash" not in columns:
+        if not had_record_hash:
             self._conn.execute("ALTER TABLE journal ADD COLUMN record_hash TEXT")
             if had_status:
                 self._conn.execute(

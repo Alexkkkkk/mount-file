@@ -9,6 +9,7 @@ volumes, journals, malformed metadata, and out-of-extent reads fail closed.
 
 from __future__ import annotations
 
+import datetime as _dt
 import math
 import os
 import struct
@@ -22,10 +23,17 @@ from mountfile.ext_probe import (
     ExtSuperblockProfile,
     probe_ext_superblock,
 )
+from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
-class Ext2ReadError(ValueError):
+class Ext2ReadError(RefusalError):
     """The ext2 profile or requested metadata is unsupported or malformed."""
+
+    def __init__(
+        self, message: str, code: RefusalCode = RefusalCode.MALFORMED_METADATA
+    ):
+        super().__init__(message, code)
 
 
 _COMPAT_HAS_JOURNAL = 0x0004
@@ -49,11 +57,32 @@ _EXT4_VERITY_FL = 0x00100000
 _EXT4_EA_INODE_FL = 0x00200000
 _EXT4_INLINE_DATA_FL = 0x10000000
 
+# These flags do not alter the on-disk file contents or block mapping.  The
+# INDEX bit is retained for non-directories as before; directories carrying it
+# are rejected separately.  Do not add compression state bits (including
+# NOCOMPR: historically it could request raw access to compressed ext2 data).
+# https://docs.kernel.org/filesystems/ext4/inodes.html
+_EXT_INODE_READ_FLAGS = (
+    0x00000001  # SECRM
+    | 0x00000002  # UNRM
+    | 0x00000008  # SYNC
+    | 0x00000010  # IMMUTABLE
+    | 0x00000020  # APPEND
+    | 0x00000040  # NODUMP
+    | 0x00000080  # NOATIME
+    | _EXT2_INDEX_FL  # checked by inode type below
+    | 0x00004000  # JOURNAL_DATA (write policy)
+    | 0x00008000  # NOTAIL
+    | 0x00010000  # DIRSYNC
+    | 0x00020000  # TOPDIR
+)
+
 _MAX_GROUPS = 1_000_000
 _MAX_DIRECTORY_BYTES = 64 * 1024 * 1024
 _MAX_DIRECTORY_ENTRIES = 1_000_000
 _MAX_CACHE_ITEMS = 4096
 _MAX_READ_RANGE_BYTES = 16 * 1024 * 1024
+_MAX_RANGE_INDIRECT_CACHE_ITEMS = 64
 
 
 @dataclass(frozen=True)
@@ -74,7 +103,16 @@ class _Inode:
     flags: int
     mtime: int
     block_pointers: tuple[int, ...]
-    generation: int = 0
+    atime: int = 0
+    ctime: int = 0
+    links_count: int = 0
+    atime_extra: int | None = None
+    ctime_extra: int | None = None
+    mtime_extra: int | None = None
+    crtime: int | None = None
+    crtime_extra: int | None = None
+    uid: int | None = None
+    gid: int | None = None
 
     @property
     def mode_type(self) -> int:
@@ -100,7 +138,7 @@ class _DirectoryEntry:
     file_type: int
 
 
-class NativeExt2Image:
+class NativeExt2Image(ReadOnlyVFSStatMixin):
     """Read-only VFS-compatible provider for a bounded ext2 image extent.
 
     ``volume_size`` is mandatory so every filesystem read can be proven to stay
@@ -108,6 +146,7 @@ class NativeExt2Image:
     """
 
     backend_name = "native-ext2"
+    max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
     def __init__(self, image_path, offset=0, volume_size=None):
         if volume_size is None:
@@ -122,6 +161,7 @@ class NativeExt2Image:
         self._block_bitmap_cache: dict[int, bytes] = {}
         self._inode_bitmap_cache: dict[int, bytes] = {}
         self._inode_cache: dict[int, _Inode] = {}
+        self._directory_cache: dict[int, tuple[_DirectoryEntry, ...]] = {}
 
         try:
             # The provider owns this read-only handle until close(); it cannot
@@ -144,6 +184,16 @@ class NativeExt2Image:
             self.feature_compat = self.profile.feature_compat
             self.feature_incompat = self.profile.feature_incompat
             self.feature_ro_compat = self.profile.feature_ro_compat
+            self.resize_inode = bool(self.feature_compat & _COMPAT_RESIZE_INODE)
+            self.reserved_gdt_blocks = (
+                struct.unpack("<H", self._read_at(1024 + 0xCE, 2))[0]
+                if self.profile.revision == 1
+                else 0
+            )
+            if self.reserved_gdt_blocks and not self.resize_inode:
+                raise Ext2ReadError(
+                    "reserved GDT blocks are declared without resize_inode"
+                )
             self.has_filetype = bool(self.feature_incompat & _INCOMPAT_FILETYPE)
             self.group_count = math.ceil(
                 (self.blocks_count - self.first_data_block) / self.blocks_per_group
@@ -166,6 +216,16 @@ class NativeExt2Image:
                 raise Ext2ReadError("group descriptor table exceeds filesystem bounds")
             self._primary_metadata_start = self.first_data_block
             self._primary_metadata_end = self.first_data_block + 1 + self._gdt_blocks
+            if self.reserved_gdt_blocks:
+                self._primary_metadata_end += self.reserved_gdt_blocks
+            primary_group_end = min(
+                self.blocks_count,
+                self.first_data_block + self.blocks_per_group,
+            )
+            if self._primary_metadata_end > primary_group_end:
+                raise Ext2ReadError(
+                    "primary reserved GDT metadata exceeds its block group"
+                )
         except (OSError, ExtProbeError) as exc:
             self.close()
             raise Ext2ReadError(str(exc)) from exc
@@ -236,13 +296,20 @@ class NativeExt2Image:
     def _read_at(self, relative_offset: int, size: int) -> bytes:
         if self._stream is None:
             raise Ext2ReadError("filesystem image is closed")
-        if relative_offset < 0 or size < 0:
-            raise Ext2ReadError("negative filesystem read range")
-        end = relative_offset + size
-        if end < relative_offset or end > self.filesystem_size:
-            raise Ext2ReadError("filesystem read exceeds selected partition bounds")
-        if self.offset + end > self._image_size:
-            raise Ext2ReadError("filesystem read exceeds image bounds")
+        _, end = checked_range(
+            relative_offset,
+            size,
+            upper=self.filesystem_size,
+            context="filesystem read exceeds selected partition bounds",
+            error_type=Ext2ReadError,
+        )
+        checked_range(
+            self.offset + relative_offset,
+            size,
+            upper=self._image_size,
+            context="filesystem read exceeds image bounds",
+            error_type=Ext2ReadError,
+        )
         with self._lock:
             self._stream.seek(self.offset + relative_offset)
             data = self._stream.read(size)
@@ -263,6 +330,13 @@ class NativeExt2Image:
             if value == 1:
                 return True
         return False
+
+    def _backup_metadata_end(self, first_block: int, end_block: int) -> int:
+        """Exclusive end of a group's backup superblock/GDT reservation."""
+        metadata_end = first_block + 1 + self._gdt_blocks + self.reserved_gdt_blocks
+        if metadata_end > end_block:
+            raise Ext2ReadError("backup reserved GDT metadata exceeds its block group")
+        return metadata_end
 
     def _group_descriptor(self, group: int) -> _GroupDescriptor:
         if not 0 <= group < self.group_count:
@@ -298,7 +372,7 @@ class NativeExt2Image:
             raise Ext2ReadError("inode table overlaps the inode bitmap")
         sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
         if self._has_super_backup(group, sparse):
-            backup_end = min(end_block, first_block + 1 + self._gdt_blocks)
+            backup_end = self._backup_metadata_end(first_block, end_block)
             metadata_ranges = (
                 (block_bitmap, block_bitmap + 1),
                 (inode_bitmap, inode_bitmap + 1),
@@ -367,14 +441,69 @@ class NativeExt2Image:
             raise Ext2ReadError("data block pointer references a free block")
         sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
         if self._has_super_backup(group, sparse):
-            backup_end = min(
-                descriptor.end_block,
-                descriptor.first_block + 1 + self._gdt_blocks,
+            backup_end = self._backup_metadata_end(
+                descriptor.first_block, descriptor.end_block
             )
             if descriptor.first_block <= block < backup_end:
                 raise Ext2ReadError(
                     "data block pointer references backup superblock metadata"
                 )
+
+    def _validate_data_block_run(self, first_block: int, count: int) -> None:
+        """Validate an ascending contiguous run without repeating group lookups."""
+        end_block = first_block + count
+        if (
+            count < 1
+            or first_block <= self.first_data_block
+            or end_block > self.blocks_count
+        ):
+            raise Ext2ReadError(
+                "data block pointer is outside allocatable filesystem bounds"
+            )
+
+        sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
+        block = first_block
+        while block < end_block:
+            group = (block - self.first_data_block) // self.blocks_per_group
+            descriptor = self._group_descriptor(group)
+            run_end = min(end_block, descriptor.end_block)
+            if run_end <= block:
+                raise Ext2ReadError("data block run exceeds block-group bounds")
+
+            if block <= descriptor.block_bitmap < run_end:
+                raise Ext2ReadError("data block pointer references a block bitmap")
+            if block <= descriptor.inode_bitmap < run_end:
+                raise Ext2ReadError("data block pointer references a block bitmap")
+            inode_table_end = descriptor.inode_table + descriptor.inode_table_blocks
+            if block < inode_table_end and run_end > descriptor.inode_table:
+                raise Ext2ReadError("data block pointer references an inode table")
+            if (
+                block < self._primary_metadata_end
+                and run_end > self._primary_metadata_start
+            ):
+                raise Ext2ReadError(
+                    "data block pointer references primary superblock metadata"
+                )
+            if self._has_super_backup(group, sparse):
+                backup_end = self._backup_metadata_end(
+                    descriptor.first_block, descriptor.end_block
+                )
+                if block < backup_end and run_end > descriptor.first_block:
+                    raise Ext2ReadError(
+                        "data block pointer references backup superblock metadata"
+                    )
+
+            start_bit = block - descriptor.first_block
+            bit_count = run_end - block
+            bitmap = self._bitmap(group, inode=False)
+            first_byte = start_bit // 8
+            last_bit = start_bit + bit_count
+            last_byte = (last_bit + 7) // 8
+            bits = int.from_bytes(bitmap[first_byte:last_byte], "little")
+            required = ((1 << bit_count) - 1) << (start_bit % 8)
+            if bits & required != required:
+                raise Ext2ReadError("data block pointer references a free block")
+            block = run_end
 
     def _read_block(self, block: int) -> bytes:
         if block == 0:
@@ -412,25 +541,23 @@ class NativeExt2Image:
             )
         else:
             size = size_low
-        unsupported_flags = (
-            _EXT2_COMPR_FL
-            | _EXT4_ENCRYPT_FL
-            | _EXT4_EXTENTS_FL
-            | _EXT4_VERITY_FL
-            | _EXT4_EA_INODE_FL
-            | _EXT4_INLINE_DATA_FL
-        )
-        if flags & unsupported_flags:
+        unsupported_flags = flags & ~_EXT_INODE_READ_FLAGS
+        if unsupported_flags:
             raise Ext2ReadError(
-                "inode uses unsupported compression, encryption or ext4 layout"
+                f"inode uses unsupported or unknown inode flags: 0x{unsupported_flags:08x}",
+                RefusalCode.UNSUPPORTED_PROFILE,
             )
         if mode & _S_IFMT == _S_IFDIR and flags & _EXT2_INDEX_FL:
-            raise Ext2ReadError("indexed directories are not supported by this profile")
+            raise Ext2ReadError(
+                "indexed directories are not supported by this profile",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         block_pointers = struct.unpack_from("<15I", raw, 40)
         addressable_blocks = 12 + self.block_size // 4
         addressable_blocks += (self.block_size // 4) ** 2 + (self.block_size // 4) ** 3
         if size > addressable_blocks * self.block_size:
             raise Ext2ReadError("inode size exceeds ext2 block-pointer capacity")
+        uid, gid = self._decode_inode_ownership(raw)
         inode = _Inode(
             number=number,
             mode=mode,
@@ -438,13 +565,38 @@ class NativeExt2Image:
             flags=flags,
             mtime=struct.unpack_from("<I", raw, 16)[0],
             block_pointers=block_pointers,
+            uid=uid,
+            gid=gid,
+            atime=struct.unpack_from("<I", raw, 8)[0],
+            ctime=struct.unpack_from("<I", raw, 12)[0],
+            links_count=struct.unpack_from("<H", raw, 26)[0],
         )
         if len(self._inode_cache) >= _MAX_CACHE_ITEMS:
             self._inode_cache.clear()
         self._inode_cache[number] = inode
         return inode
 
-    def _indirect_block(self, root: int, level: int, index: int) -> int:
+    def _decode_inode_ownership(self, raw: bytes) -> tuple[int | None, int | None]:
+        """Decode Linux ext UID/GID words without guessing another OS layout."""
+        if getattr(self.profile, "creator_os", None) != 0:
+            return None, None
+        if len(raw) < 124:
+            raise Ext2ReadError(
+                "Linux ext inode is truncated before UID/GID high words"
+            )
+        uid_low = struct.unpack_from("<H", raw, 2)[0]
+        gid_low = struct.unpack_from("<H", raw, 24)[0]
+        uid_high = struct.unpack_from("<H", raw, 120)[0]
+        gid_high = struct.unpack_from("<H", raw, 122)[0]
+        return uid_low | (uid_high << 16), gid_low | (gid_high << 16)
+
+    def _indirect_block(
+        self,
+        root: int,
+        level: int,
+        index: int,
+        block_cache: dict[int, bytes] | None = None,
+    ) -> int:
         if root == 0:
             return 0
         entries_per_block = self.block_size // 4
@@ -455,13 +607,25 @@ class NativeExt2Image:
         for depth in range(level, 0, -1):
             divisor = entries_per_block ** (depth - 1)
             slot, remaining = divmod(remaining, divisor)
-            block = self._read_block(pointer)
+            block = block_cache.get(pointer) if block_cache is not None else None
+            if block is None:
+                block = self._read_block(pointer)
+                if (
+                    block_cache is not None
+                    and len(block_cache) < _MAX_RANGE_INDIRECT_CACHE_ITEMS
+                ):
+                    block_cache[pointer] = block
             pointer = struct.unpack_from("<I", block, slot * 4)[0]
             if pointer == 0:
                 return 0
         return pointer
 
-    def _logical_block(self, inode: _Inode, logical: int) -> int:
+    def _logical_block(
+        self,
+        inode: _Inode,
+        logical: int,
+        block_cache: dict[int, bytes] | None = None,
+    ) -> int:
         if logical < 0:
             raise Ext2ReadError("negative logical block index")
         pointers = inode.block_pointers
@@ -470,14 +634,57 @@ class NativeExt2Image:
         entries = self.block_size // 4
         index = logical - 12
         if index < entries:
-            return self._indirect_block(pointers[12], 1, index)
+            return self._indirect_block(pointers[12], 1, index, block_cache)
         index -= entries
         if index < entries**2:
-            return self._indirect_block(pointers[13], 2, index)
+            return self._indirect_block(pointers[13], 2, index, block_cache)
         index -= entries**2
         if index < entries**3:
-            return self._indirect_block(pointers[14], 3, index)
+            return self._indirect_block(pointers[14], 3, index, block_cache)
         raise Ext2ReadError("logical block exceeds ext2 pointer capacity")
+
+    def _logical_block_run(
+        self,
+        inode: _Inode,
+        first_logical: int,
+        count: int,
+        block_cache: dict[int, bytes],
+    ) -> tuple[int, ...]:
+        """Map a bounded logical range, unpacking each single-indirect slice once."""
+        if first_logical < 0 or count < 1:
+            raise Ext2ReadError("invalid logical block range")
+        entries = self.block_size // 4
+        result = []
+        logical = first_logical
+        remaining = count
+        while remaining:
+            if logical < 12:
+                take = min(remaining, 12 - logical)
+                result.extend(inode.block_pointers[logical : logical + take])
+            elif logical < 12 + entries:
+                index = logical - 12
+                take = min(remaining, entries - index)
+                root = inode.block_pointers[12]
+                if root == 0:
+                    result.extend((0,) * take)
+                else:
+                    table = block_cache.get(root)
+                    if table is None:
+                        table = self._read_block(root)
+                        if len(block_cache) < _MAX_RANGE_INDIRECT_CACHE_ITEMS:
+                            block_cache[root] = table
+                    result.extend(struct.unpack_from(f"<{take}I", table, index * 4))
+            else:
+                # Double/triple-indirect ranges retain the established checked
+                # mapper; direct/single-indirect ranges take the bulk path above.
+                result.extend(
+                    self._logical_block(inode, logical + index, block_cache)
+                    for index in range(remaining)
+                )
+                break
+            logical += take
+            remaining -= take
+        return tuple(result)
 
     @staticmethod
     def _path_parts(path: str) -> list[str]:
@@ -493,6 +700,12 @@ class NativeExt2Image:
     def _directory_entries(self, inode: _Inode) -> list[_DirectoryEntry]:
         if not inode.is_dir:
             raise Ext2ReadError("requested path is not a directory")
+        cache = getattr(self, "_directory_cache", None)
+        if cache is None:
+            cache = self._directory_cache = {}
+        cached = cache.get(inode.number)
+        if cached is not None:
+            return list(cached)
         if inode.size % self.block_size:
             raise Ext2ReadError("directory size is not block aligned")
         if inode.size > _MAX_DIRECTORY_BYTES:
@@ -505,10 +718,9 @@ class NativeExt2Image:
             if physical == 0:
                 raise Ext2ReadError("directory contains a sparse block")
             block = self._read_block(physical)
-            data_end = self._directory_block_data_end(inode, logical, block)
             position = 0
-            while position < data_end:
-                if position + 8 > data_end:
+            while position < self.block_size:
+                if position + 8 > self.block_size:
                     raise Ext2ReadError("truncated directory entry header")
                 entry_inode, record_length = struct.unpack_from("<IH", block, position)
                 if self.has_filetype:
@@ -520,7 +732,7 @@ class NativeExt2Image:
                 if (
                     record_length < 8
                     or record_length % 4
-                    or position + record_length > data_end
+                    or position + record_length > self.block_size
                 ):
                     raise Ext2ReadError("invalid directory record length")
                 if name_length > 255 or name_length > record_length - 8:
@@ -549,14 +761,12 @@ class NativeExt2Image:
                                 "directory exceeds the entry-count limit"
                             )
                 position += record_length
-            if position != data_end:
+            if position != self.block_size:
                 raise Ext2ReadError("directory records do not fill their data block")
+        if len(cache) >= _MAX_CACHE_ITEMS:
+            cache.clear()
+        cache[inode.number] = tuple(result)
         return result
-
-    def _directory_block_data_end(
-        self, inode: _Inode, logical: int, block: bytes
-    ) -> int:
-        return self.block_size
 
     def _resolve(self, path: str) -> _Inode:
         inode = self._read_inode(2)
@@ -585,12 +795,79 @@ class NativeExt2Image:
             return ""
 
     @staticmethod
+    def _format_ext_timestamp(seconds: int | None, extra: int | None = None) -> str:
+        if seconds is None:
+            return ""
+        nanoseconds = 0
+        if extra is not None:
+            epoch = (extra >> 30) & 0x03
+            nanoseconds = extra & 0x3FFFFFFF
+            if nanoseconds >= 1_000_000_000:
+                raise Ext2ReadError("ext4 inode timestamp nanoseconds are invalid")
+            seconds |= epoch << 32
+        try:
+            value = _dt.datetime.fromtimestamp(seconds, _dt.timezone.utc)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise Ext2ReadError(
+                "ext inode timestamp is outside supported range"
+            ) from exc
+        result = value.strftime("%Y-%m-%dT%H:%M:%S")
+        if extra is not None and nanoseconds:
+            result += f".{nanoseconds:09d}"
+        return result + "+00:00"
+
+    def _inode_timestamp_extras(self, raw: bytes):
+        """Decode only timestamp extensions covered by ext4 extra_isize."""
+        if (
+            self.profile.fs_type != "ext4"
+            or not self.feature_ro_compat & 0x0040
+            or len(raw) < 130
+        ):
+            return {}
+        extra_size = struct.unpack_from("<H", raw, 128)[0]
+        if extra_size % 4 or extra_size > len(raw) - 128:
+            raise Ext2ReadError("ext4 inode extra_isize exceeds inode bounds")
+        fields = {}
+        for name, offset, required_size in (
+            ("ctime_extra", 132, 8),
+            ("mtime_extra", 136, 12),
+            ("atime_extra", 140, 16),
+            ("crtime", 144, 20),
+            ("crtime_extra", 148, 24),
+        ):
+            if extra_size >= required_size and offset + 4 <= len(raw):
+                value = struct.unpack_from("<I", raw, offset)[0]
+                if name.endswith("_extra") and (value & 0x3FFFFFFF) >= 1_000_000_000:
+                    raise Ext2ReadError("ext4 inode timestamp nanoseconds are invalid")
+                fields[name] = value
+        return fields
+
+    @staticmethod
     def _mode_type_name(mode: int) -> str:
         return {
             _S_IFREG: "file",
             _S_IFDIR: "dir",
             _S_IFLNK: "symlink",
         }.get(mode & _S_IFMT, "special")
+
+    def _inode_stat_fields(self, inode: _Inode) -> dict:
+        return {
+            "mode": inode.mode,
+            "permissions": inode.mode & 0o7777,
+            "links": inode.links_count,
+            "accessed": self._format_ext_timestamp(inode.atime, inode.atime_extra),
+            "ctime": self._format_ext_timestamp(inode.ctime, inode.ctime_extra),
+            "modified": self._format_ext_timestamp(inode.mtime, inode.mtime_extra),
+            "created": self._format_ext_timestamp(inode.crtime, inode.crtime_extra),
+            "uid": inode.uid,
+            "gid": inode.gid,
+        }
+
+    def stat(self, path: str) -> dict:
+        result = super().stat(path)
+        if result.get("path") == "/":
+            result.update(self._inode_stat_fields(self._resolve("/")))
+        return result
 
     def list_dir(self, path="/"):
         inode = self._resolve(path)
@@ -619,6 +896,7 @@ class NativeExt2Image:
                     "date": "" if is_dir else self._format_mtime(child.mtime),
                     "kind": actual_type,
                     "inode": child.number,
+                    **self._inode_stat_fields(child),
                 }
             )
         result.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))
@@ -644,19 +922,61 @@ class NativeExt2Image:
             )
         position = offset
         output = bytearray()
+        indirect_cache: dict[int, bytes] = {}
         while remaining:
             logical = position // self.block_size
             in_block = position % self.block_size
-            amount = min(remaining, self.block_size - in_block)
-            block = self._logical_block(inode, logical)
-            if block == 0:
+            blocks_needed = math.ceil((in_block + remaining) / self.block_size)
+            block_numbers = self._logical_block_run(
+                inode, logical, blocks_needed, indirect_cache
+            )
+            first_block = block_numbers[0]
+            if first_block == 0:
+                zero_blocks = 1
+                while (
+                    zero_blocks < len(block_numbers) and block_numbers[zero_blocks] == 0
+                ):
+                    zero_blocks += 1
+                amount = min(remaining, zero_blocks * self.block_size - in_block)
                 output.extend(b"\x00" * amount)
-            else:
-                data = self._read_block(block)
-                output.extend(data[in_block : in_block + amount])
+                position += amount
+                remaining -= amount
+                continue
+
+            run_blocks = 1
+            while run_blocks < len(block_numbers):
+                if block_numbers[run_blocks] != first_block + run_blocks:
+                    break
+                run_blocks += 1
+
+            self._validate_data_block_run(first_block, run_blocks)
+            amount = min(remaining, run_blocks * self.block_size - in_block)
+            data = self._read_at(
+                first_block * self.block_size + in_block,
+                amount,
+            )
+            if not output and amount == remaining:
+                return data
+            output.extend(data)
             position += amount
             remaining -= amount
         return bytes(output)
 
     def read_file(self, path) -> bytes:
-        return self.read_file_range(path, 0, self.file_size(path))
+        """Read a complete regular file using bounded native range requests.
+
+        ``read_file_range`` deliberately caps one request at 16 MiB.  The
+        public whole-file operation must not inherit that transport limit, so
+        large files are assembled from bounded chunks instead of being
+        rejected merely because their logical size exceeds the range ceiling.
+        """
+        size = self.file_size(path)
+        if size == 0:
+            return b""
+        output = bytearray()
+        offset = 0
+        while offset < size:
+            length = min(_MAX_READ_RANGE_BYTES, size - offset)
+            output.extend(self.read_file_range(path, offset, length))
+            offset += length
+        return bytes(output)

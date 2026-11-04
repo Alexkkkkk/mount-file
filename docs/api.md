@@ -31,3 +31,170 @@ file carving. SQLite хранит SHA-256, дедуплицированные ch
 ::: mountfile.android.parse_sparse_header
 
 ::: mountfile.android.parse_boot_image_header
+
+## Read-only image VFS
+
+`open_image_provider` открывает выбранный bounded filesystem profile. Providers
+поддерживают `list_dir`, `stat`, `read_file_range` и `read_file`; extraction
+использует тот же bounded range API. `stat` возвращает metadata выбранной записи
+и фактический регистр имени из образа. FAT поддерживает предусмотренный reader-ом
+case-insensitive lookup. NTFS использует проверенную таблицу `$UpCase` для
+Unicode-сравнения, если её bounded stream доступен; иначе Unicode-имена требуют
+точного регистра. Для ext namespace lookup остаётся case-sensitive.
+В capability matrix токен `read-file` означает чтение всего файла методом
+`read_file`, а `read-range` — отдельный bounded вызов `read_file_range`; ни один
+из них не подразумевается наличием другого. Добавление этих операций в
+сериализуемую матрицу повышает её schema version до 5. Schema v5 сохраняет
+прежние `read_capabilities` и `write_capabilities`, а также публикует общий
+словарь `operations`: у каждой canonical операции есть `state`, точное
+`api_operation` для данного интерфейса либо structured `refusal` с code и
+category. `constraint_ids` и `gates` описывают подтверждённые image-state и
+feature gates профиля; они не заменяют фактическую validation конкретного образа.
+Внутренний `mountfile.image_source.ImageSource` задаёт read-only positioned
+контракт без метода записи. `FileImageSource` выполняет точные чтения без общего
+курсорного состояния, а `BoundedImageSource` отказывает при любом чтении за
+выбранным диапазоном. NTFS boot/MFT validation и чтение run-ов используют этот
+контракт; короткое чтение после открытия образа возвращает typed refusal, а не
+частичный результат. Источник выявляет усечение, но не блокирует постороннюю
+процессную запись и не обещает snapshot-изоляцию.
+Каждый native provider также публикует `backend_status`: сериализуемый словарь
+с backend name, read/write capabilities, режимом и явной причиной отказа от
+записи. Пустой `write_capabilities` означает именно read-only native profile,
+а не скрытый переход на `debugfs`, `ntfs-3g` или системный mount. В фасаде
+`UniversalFSRW.capability_status()` и `FSInfo.to_dict()` поле
+`write_rejection_code` содержит стабильный refusal code для profile-level отказа
+или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
+`write_rejection_reason` не следует разбирать приложениям.
+В schema v5 status также содержит `write_rejection` и полную карту `operations`;
+клиенты должны использовать их, а не выводить доступность записи из одного
+булевого `writable`.
+Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
+другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
+проверенного classic JBD2 существует только явный `open_native_ext3(...,
+replay_journal=True)`: он строит bounded in-memory overlay из committed
+descriptor/data/revoke/commit records, не изменяет исходный образ и отклоняет
+checksum, неизвестные feature flags, повреждённые или неполные транзакции.
+Revoke targets проверяются на границы образа, дубликаты, пересечение с journal
+data и конфликт с записями той же транзакции.
+
+NTFS reader разрешает resident `$ATTRIBUTE_LIST` и extension FILE records для
+обычных файлов и каталогов только после проверки sequence-bearing MFT reference,
+ссылки extension record на базовую запись и точного совпадения атрибута. Он
+объединяет только непрерывные VCN extents и возвращает нули за `ValidDataLength`.
+Nonresident `$ATTRIBUTE_LIST` и `$MFT`, которому нужны extension records для
+bootstrap, отвергаются; NTFS остаётся read-only и `$LogFile` не проигрывается.
+
+### Метаданные NTFS
+
+NTFS `list_dir` и `stat` предоставляют `created`, `modified`, `ctime`,
+`accessed` и сырую маску `attributes` из единственного unnamed resident
+`$STANDARD_INFORMATION`. Времена сериализуются в UTC с сохранением 100-ns
+точности FILETIME; legacy поле `date` остаётся пустым. Отсутствующий,
+дублированный, named или nonresident `$STANDARD_INFORMATION` приводит к отказу,
+а не к неподтверждённой metadata-записи.
+
+### Семантика метаданных bounded providers
+
+Общие поля `stat` — `path`, `name`, `is_dir`, `size` и `date`; отдельные
+providers могут добавлять поля вроде `kind` или `inode`. Это parser view, а не
+полная POSIX metadata model. Наличие `kind`/`inode` не означает поддержки
+восстановления владельца, режима доступа или link graph.
+
+`date` остаётся строкой, предоставленной конкретным reader-ом, и может быть
+пустой. ext2 выводит mtime обычного файла; FAT выводит доступную ему дату;
+exFAT выводит время последнего изменения и отдельно create/modified/accessed
+timestamps вместе с сырым DOS attribute mask; NTFS в текущем VFS listing
+возвращает пустое значение. exFAT сохраняет timezone offset только если он
+помечен valid на носителе; без valid bit значение остаётся local/naive.
+Формат, точность и timezone не нормализуются между форматами, поэтому `date`
+нельзя использовать как нормализованный UTC timeline timestamp.
+
+Общий VFS contract не предоставляет owner/group, POSIX permissions/ACL,
+xattrs, число или семантику hard links и все timestamps. NTFS reader открывает
+только unnamed `$DATA`; alternate data streams не перечисляются и не извлекаются
+через этот API. ext2 может обозначить тип записи как `symlink`, но это не
+обещание следования по ссылке: callers не должны трактовать имя/`kind` как
+разрешённый host path. Неподдержанное чтение или изменение такого объекта должно
+завершаться явным отказом.
+
+### Метаданные inode ext2/ext3/ext4
+
+Ext providers дополнительно отдают `accessed`, `ctime`, `modified`, `created`,
+полный `mode`, маску POSIX `permissions` и число ссылок `links`. Время ext2/ext3
+выводится с секундной точностью; ext4 использует epoch и nanoseconds из inode
+extra fields только если они полностью покрыты `extra_isize`. Некорректный
+`extra_isize` или nanoseconds приводят к отказу чтения. Эти timestamp strings
+сериализуются в UTC; `created` пусто, если inode не содержит доступного
+creation-time поля. Поля специфичны для ext providers и не означают, что общий
+VFS contract предоставляет владельца, ACL или разрешение link graph.
+
+Текущий операционный контракт bounded native profiles можно получить как
+detached JSON-compatible snapshot:
+
+```python
+from mountfile.capabilities import get_native_capability_matrix
+
+matrix = get_native_capability_matrix()
+schema_version = matrix["version"]
+profiles = matrix["profiles"]
+```
+
+Ту же versioned matrix можно получить из package CLI без открытия образа:
+
+```bash
+python -m mountfile capabilities
+```
+
+Матрица задаёт vocab интерфейсов VFS и `UniversalFSRW` и сверяется тестами с
+provider status. Она не классифицирует произвольное состояние image и не
+заменяет profile validators: malformed, dirty или unsupported volume всё равно
+отвергается при open.
+
+Опциональный authenticated HTTP API отдаёт тот же static catalog на
+`GET /capabilities`. Если injected registry реализует `filesystem_status(image,
+offset=0)`, `GET /filesystem/status` и compatibility aliases `/fs/status` и
+`/fs/{image_id}/status` возвращают выбранный runtime status. Это read-only
+reporting endpoint: он не добавляет HTTP routes для mutation. Typed refusal
+ответы передаются в JSON как `code`, `category` и `message`.
+
+`pytsk3` остаётся optional compatibility fallback только для форматов, которые
+native routing не распознал, и теперь отключён по умолчанию. Для его явного
+включения используйте `MOUNTFILE_ALLOW_LEGACY_TSK=1` или передайте
+`allow_legacy_fallback=True` в `open_image_provider`. Установка базового
+MountFile не требует `pytsk3`; native routing не запускает сеть, subprocess или
+системный mount. Так как `pytsk3.Img_Info` открывает весь файл и текущий адаптер
+не может ограничить чтение размером раздела, legacy fallback разрешён только
+для файловой системы, занимающей весь файл-образ. Для раздела внутри disk image
+fallback fail-closed откажет; используйте native provider либо отдельный
+адаптер, который умеет ограничивать каждый read выбранным extent.
+
+### macOS APFS adapter
+
+`APFSFuseAdapter` требует явного `mount(existing_directory)` и не монтирует образ
+в конструкторе. Его `status` — read-only snapshot полей `mounted`, `mountpoint`,
+`process_owned`, `process_running`, `writable` и `write_capabilities`. Значения
+`writable=False` и пустой `write_capabilities` постоянны: наличие FUSE не включает
+запись. `mounted=True` означает только, что adapter владеет foreground-процессом,
+который ещё отвечает как работающий; это не проверка mount table или здоровья
+APFS. `close()` останавливает только запущенный этим adapter процесс. Адаптер
+принимает только whole-image input и явно отказывает для ненулевого partition
+offset.
+
+Отклонение mutation на фасадном capability gate выбрасывает
+`RefusalRuntimeError`, совместимый с прежним `RuntimeError` контрактом. У него
+есть стабильные поля `code` и `category`, а `to_dict()` возвращает JSON-совместимые
+`code`, `category` и исходное human-readable `message`. Такой gate выполняется
+до создания backup, записи audit journal и вызова backend; это правило относится
+только к отказу capability gate, а не заменяет транзакционные гарантии writer-а.
+
+::: mountfile.vfs.open_image_provider
+
+::: mountfile.vfs.ReadOnlyVFSStatMixin
+
+### Владелец inode в ext providers
+
+ext2/ext3/ext4 listing и `stat` включают raw on-disk `uid` и `gid` для
+superblock `creator_os == Linux`; low и high 16-bit inode words объединяются в
+32-bit значения. Для других `creator_os` поля остаются `null`: OS-dependent
+bytes не интерпретируются как Linux ownership. Значения не преобразуются через
+host UID/GID namespace и не означают поддержку ACL или ownership changes.

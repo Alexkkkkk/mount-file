@@ -1,0 +1,712 @@
+{
+  "backend_execution_order": [
+    {
+      "backend": "native",
+      "discarded_warmup": true,
+      "pair_index": 0,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": true,
+      "pair_index": 0,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": true,
+      "pair_index": 1,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": true,
+      "pair_index": 1,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 2,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 2,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 3,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 3,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 4,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 4,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 5,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 5,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 6,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 6,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 7,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 7,
+      "status": "ok"
+    },
+    {
+      "backend": "native",
+      "discarded_warmup": false,
+      "pair_index": 8,
+      "status": "ok"
+    },
+    {
+      "backend": "pytsk3",
+      "discarded_warmup": false,
+      "pair_index": 8,
+      "status": "ok"
+    }
+  ],
+  "backends": {
+    "native": {
+      "backend": "native-ext2",
+      "block_size": 4096,
+      "blocks_count": 16384,
+      "fs_type": "ext2",
+      "inodes_count": 16384,
+      "iterations": [
+        {
+          "elapsed_seconds": 0.02338955999994141,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.012326518000008946
+            ],
+            "list_dir": [
+              0.00015011499999673106
+            ],
+            "read_range": [
+              0.000478652999845508
+            ],
+            "stat": [
+              0.00010707000001275446
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.023809504000155357,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.012885161999975026
+            ],
+            "list_dir": [
+              0.00015565300009257044
+            ],
+            "read_range": [
+              0.0004978029999165301
+            ],
+            "stat": [
+              0.00010996600008184032
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.023444675000064308,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.01254300499999772
+            ],
+            "list_dir": [
+              0.00015274900010808778
+            ],
+            "read_range": [
+              0.000484978999793384
+            ],
+            "stat": [
+              0.00010446900000715686
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.0234242510000513,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.01259158000016214
+            ],
+            "list_dir": [
+              0.000151854000023377
+            ],
+            "read_range": [
+              0.0004918790000374429
+            ],
+            "stat": [
+              0.00010286099995937548
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.023797162999926513,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.012849215999949593
+            ],
+            "list_dir": [
+              0.00015373299993370892
+            ],
+            "read_range": [
+              0.0005077890000393381
+            ],
+            "stat": [
+              0.00010397699998065946
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.024264131000109046,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.012832623999884163
+            ],
+            "list_dir": [
+              0.0001582879999659781
+            ],
+            "read_range": [
+              0.0007757149999179092
+            ],
+            "stat": [
+              0.00011447899987615529
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.02276486300002034,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.011808932000121786
+            ],
+            "list_dir": [
+              0.00016372699997191376
+            ],
+            "read_range": [
+              0.00048564300004727556
+            ],
+            "stat": [
+              0.00010216400005447213
+            ]
+          },
+          "range_read_bytes": 1048576
+        }
+      ],
+      "median_iteration_seconds": 0.023444675000064308,
+      "open_seconds": {
+        "max_seconds": 0.00024012699986997177,
+        "median_seconds": 0.00023576100011268863,
+        "min_seconds": 0.00022951699997975084,
+        "p95_seconds": 0.00024012699986997177,
+        "samples": 7
+      },
+      "operations": {
+        "extract": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.012885161999975026,
+          "median_iteration_total_seconds": 0.01259158000016214,
+          "median_seconds": 0.01259158000016214,
+          "min_seconds": 0.011808932000121786,
+          "p95_seconds": 0.012885161999975026,
+          "samples": 7
+        },
+        "list_dir": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.00016372699997191376,
+          "median_iteration_total_seconds": 0.00015373299993370892,
+          "median_seconds": 0.00015373299993370892,
+          "min_seconds": 0.00015011499999673106,
+          "p95_seconds": 0.00016372699997191376,
+          "samples": 7
+        },
+        "read_range": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.0007757149999179092,
+          "median_iteration_total_seconds": 0.0004918790000374429,
+          "median_seconds": 0.0004918790000374429,
+          "min_seconds": 0.000478652999845508,
+          "p95_seconds": 0.0007757149999179092,
+          "samples": 7
+        },
+        "stat": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.00011447899987615529,
+          "median_iteration_total_seconds": 0.00010446900000715686,
+          "median_seconds": 0.00010446900000715686,
+          "min_seconds": 0.00010216400005447213,
+          "p95_seconds": 0.00011447899987615529,
+          "samples": 7
+        }
+      }
+    },
+    "pytsk3": {
+      "backend": "pytsk3",
+      "iterations": [
+        {
+          "elapsed_seconds": 0.12905759400018724,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09469045599985293
+            ],
+            "list_dir": [
+              0.007907317999979568
+            ],
+            "read_range": [
+              0.008138500999848475
+            ],
+            "stat": [
+              0.007796030999998038
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.12862519400005112,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09438702599982207
+            ],
+            "list_dir": [
+              0.007881028999918271
+            ],
+            "read_range": [
+              0.00810508899985507
+            ],
+            "stat": [
+              0.007822163999890108
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.1286334399999305,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09435994199998277
+            ],
+            "list_dir": [
+              0.007867728000064744
+            ],
+            "read_range": [
+              0.00810362799984432
+            ],
+            "stat": [
+              0.007831312999996953
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.12875139000016134,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09443469100006041
+            ],
+            "list_dir": [
+              0.00785140799985129
+            ],
+            "read_range": [
+              0.00811242399981893
+            ],
+            "stat": [
+              0.007826110999985758
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.12910552100015593,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09489928800007874
+            ],
+            "list_dir": [
+              0.007883481999897413
+            ],
+            "read_range": [
+              0.008100125000055414
+            ],
+            "stat": [
+              0.007901181000079305
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.12930114899995715,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09485733499991511
+            ],
+            "list_dir": [
+              0.007877870000129406
+            ],
+            "read_range": [
+              0.008116404000020339
+            ],
+            "stat": [
+              0.007874776000107886
+            ]
+          },
+          "range_read_bytes": 1048576
+        },
+        {
+          "elapsed_seconds": 0.12913242500007982,
+          "extracted_bytes": 10485760,
+          "file_sha256": {
+            "/bench/payload.bin": "0515d2a6f18166970e8471b6ebd23fcfd914b10b768b50e349578f9f8731a597"
+          },
+          "file_sizes_bytes": {
+            "/bench/payload.bin": 10485760
+          },
+          "listed_entries": 1,
+          "operation_counts": {
+            "extract": 1,
+            "list_dir": 1,
+            "read_range": 1,
+            "stat": 1
+          },
+          "operation_seconds": {
+            "extract": [
+              0.09473067800013268
+            ],
+            "list_dir": [
+              0.007919486999981018
+            ],
+            "read_range": [
+              0.008107747999929416
+            ],
+            "stat": [
+              0.00787881299993387
+            ]
+          },
+          "range_read_bytes": 1048576
+        }
+      ],
+      "median_iteration_seconds": 0.12905759400018724,
+      "open_seconds": {
+        "max_seconds": 0.000781425000013769,
+        "median_seconds": 0.000743566999972245,
+        "min_seconds": 0.0007196079998266214,
+        "p95_seconds": 0.000781425000013769,
+        "samples": 7
+      },
+      "operations": {
+        "extract": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.09489928800007874,
+          "median_iteration_total_seconds": 0.09469045599985293,
+          "median_seconds": 0.09469045599985293,
+          "min_seconds": 0.09435994199998277,
+          "p95_seconds": 0.09489928800007874,
+          "samples": 7
+        },
+        "list_dir": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.007919486999981018,
+          "median_iteration_total_seconds": 0.007881028999918271,
+          "median_seconds": 0.007881028999918271,
+          "min_seconds": 0.00785140799985129,
+          "p95_seconds": 0.007919486999981018,
+          "samples": 7
+        },
+        "read_range": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.008138500999848475,
+          "median_iteration_total_seconds": 0.008107747999929416,
+          "median_seconds": 0.008107747999929416,
+          "min_seconds": 0.008100125000055414,
+          "p95_seconds": 0.008138500999848475,
+          "samples": 7
+        },
+        "stat": {
+          "calls_per_iteration": 1,
+          "max_seconds": 0.007901181000079305,
+          "median_iteration_total_seconds": 0.007831312999996953,
+          "median_seconds": 0.007831312999996953,
+          "min_seconds": 0.007796030999998038,
+          "p95_seconds": 0.007901181000079305,
+          "samples": 7
+        }
+      }
+    }
+  },
+  "cache_state": {
+    "label": "warm",
+    "managed_by_harness": false,
+    "note": "The harness does not flush or control the operating-system page cache; paired backends alternate order to reduce systematic order bias."
+  },
+  "comparison": {
+    "baseline": "pytsk3",
+    "content_equivalent": true,
+    "content_mismatches": [],
+    "metric": "median full-iteration wall time; provider open excluded",
+    "native_to_baseline_ratio": 0.18166056156315988,
+    "note": "This comparison is descriptive; publish repeated results and cache methodology before claiming benchmark acceptance.",
+    "relative_change_percent": -81.83394384368401,
+    "target_max_regression_percent": 20,
+    "within_target_for_this_run": true
+  },
+  "environment": {
+    "implementation": "CPython",
+    "platform": "Linux-6.18.38+-aarch64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "extent": {
+    "offset_bytes": 0,
+    "volume_size_bytes": 67108864
+  },
+  "image": {
+    "path": "/tmp/tmp.zJloZQl2LU/bench.img",
+    "sha256": "31b20d92ee20799de7ca5feedb4d75199cd16af5e0e732901e22c521e7656d4f",
+    "size_bytes": 67108864
+  },
+  "schema_version": 2,
+  "workload": {
+    "directories": [
+      "/bench"
+    ],
+    "extraction": "complete file, temporary destination, size verified",
+    "paths": [
+      "/bench/payload.bin"
+    ],
+    "range_read_limit_bytes_per_file": 1048576,
+    "repeats": 7,
+    "stat_implementation": "provider.stat; shared adapter may traverse list_dir components",
+    "warmups": 2
+  }
+}
