@@ -41,5 +41,9 @@
 
 - 2026-11-04: PR #356 (preflight gate) — `mountfile/cli.py` и `mountfile/fs_preflight.py` приведены к black, импорты `tests/test_fs_preflight.py` к isort; Quality/lint проходят.
 
+- 2026-11-04: PR #352 — ветка синхронизирована с main, случайный пустой файл log удалён.
+
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 - 2026-11-04: ветка синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.
+
+- 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.

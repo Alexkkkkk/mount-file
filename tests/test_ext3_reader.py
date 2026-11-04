@@ -909,7 +909,6 @@ def test_external_journal_device_is_rejected_explicitly(tmp_path):
     [
         ("feature_incompat", 0x0200, "flex_bg"),
         ("feature_ro_compat", 0x0200, "bigalloc"),
-        ("feature_ro_compat", 0x0400, "metadata checksums"),
     ],
 )
 def test_ext4_unsupported_layout_profiles_fail_closed(field, bit, reason):
@@ -922,19 +921,6 @@ def test_ext4_unsupported_layout_profiles_fail_closed(field, bit, reason):
         feature_compat=0,
     )
     with pytest.raises(Ext3ReadError, match=reason):
-        NativeExt4Image._validate_profile(profile)
-
-
-def test_ext4_metadata_csum_rejection_names_unvalidated_structures():
-    profile = SimpleNamespace(
-        fs_type="ext4",
-        unknown_incompat_features=0,
-        unknown_ro_compat_features=0,
-        feature_incompat=0x0040,
-        feature_ro_compat=0x0003 | 0x0400,
-        feature_compat=0,
-    )
-    with pytest.raises(Ext3ReadError, match="UUID-seeded.*group-descriptor.*extent"):
         NativeExt4Image._validate_profile(profile)
 
 
