@@ -37,3 +37,5 @@
 <!-- issue-182 validation checkpoint merge -->
 
 - 2026-11-04: PR #355 (exFAT probe/writer audit gaps) — `mountfile/exfat_writer.py` приведён к black, чтобы Quality/lint проходили.
+
+- 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
