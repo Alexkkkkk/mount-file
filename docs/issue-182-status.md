@@ -36,4 +36,8 @@
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
 <!-- issue-182 validation checkpoint merge -->
 
+<<<<<<< HEAD
 - 2026-11-04: PR #347 — ветка синхронизирована с main, CLI status follow-up зафиксирован в статусе.
+=======
+- 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
+>>>>>>> origin/main
