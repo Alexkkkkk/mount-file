@@ -45,7 +45,7 @@ def test_real_ext4_metadata_checksums_support_bounded_directory_reads(tmp_path):
             "-b",
             "1024",
             "-O",
-            "extent,^has_journal,^64bit,metadata_csum,^dir_index,^flex_bg,^huge_file",
+            "extent,^has_journal,^64bit,metadata_csum,^metadata_csum_seed,^dir_index,^flex_bg,^huge_file",
             str(image_path),
         ],
         check=True,
