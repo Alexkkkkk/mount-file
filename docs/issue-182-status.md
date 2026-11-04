@@ -34,3 +34,4 @@
 - 2026-11-04: PR #349 native VFS tree synchronized with main and local suite verified (1812 passed).
 <!-- issue-182 validation checkpoint -->
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
+<!-- issue-182 validation checkpoint merge -->
