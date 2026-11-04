@@ -750,9 +750,7 @@ class NativeExt4Image(NativeExt3Image):
             expected_high = struct.unpack_from("<H", raw, 0x82)[0]
             struct.pack_into("<H", candidate, 0x82, 0)
         generation = struct.unpack_from("<I", raw, 100)[0]
-        seed = crc32c_raw(
-            struct.pack("<II", number, generation), self._checksum_seed()
-        )
+        seed = crc32c_raw(struct.pack("<II", number, generation), self._checksum_seed())
         actual = crc32c_raw(bytes(candidate), seed)
         if (actual & 0xFFFF) != expected or (
             expected_high is not None and actual >> 16 != expected_high
