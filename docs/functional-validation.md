@@ -92,8 +92,11 @@ scripts/smoke-real-images.sh /tmp/mountfile-smoke
 `slack-extract`, `evidence-manifest`, `live-diff`), декодирование и разбиение
 дампов RT809H и offscreen-запуск GUI с проверкой, что том открылся на запись.
 
-Полный набор тестов и smoke на этом коммите: см. итоговую строку CI-прогона
-ветки и `docs/functional-validation.md` в `main`.
+Результат на этом коммите: полный набор **2351 passed, 2 skipped, 0 failed**
+(пропуски — отсутствующие `PIL` и PowerShell в Linux-окружении), сквозной smoke
+**70 passed, 0 failed, 0 skipped**, `ruff` correctness-гейты, `black --check` и
+`isort --check-only` чистые, проверка согласованности версий
+`python tools/mfsync.py check --strict` проходит.
 
 ## Оставшиеся ограничения
 
