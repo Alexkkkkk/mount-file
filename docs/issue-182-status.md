@@ -51,6 +51,8 @@
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 - 2026-11-04: ветка синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.
 
+- 2026-11-05: независимый ext2 `e2fsck -f -n` oracle теперь также проверяет файл 300 KiB+ через disposable copy, проходящий границу 12 direct + 256 single-indirect блоков при 1 KiB block size. Checker suite: 8 passed, 2 skipped (локально отсутствуют exFAT/NTFS tools); V1 остаётся частично закрытым.
+
 - 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
 - 2026-11-04: ветка preflight повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.
 - 2026-11-04: ветка CLI status повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.
