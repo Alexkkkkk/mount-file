@@ -103,6 +103,49 @@ def test_real_fat1216_mutations_pass_fsck_on_disposable_copy(
     assert result.copy_unchanged
 
 
+@pytest.mark.parametrize(
+    ("fat_type", "image_size"),
+    [(12, 1440 * 1024), (16, 32 * 1024 * 1024)],
+)
+def test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean(
+    tmp_path, monkeypatch, fat_type, image_size
+):
+    mkfs = shutil.which("mkfs.fat")
+    fsck = shutil.which("fsck.fat")
+    if not mkfs or not fsck:
+        pytest.skip("dosfstools mkfs.fat and fsck.fat are required")
+
+    image = tmp_path / f"fat{fat_type}-rollback.img"
+    with image.open("wb") as stream:
+        stream.truncate(image_size)
+    subprocess.run(
+        [mkfs, "-F", str(fat_type), "-I", str(image)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    before = image.read_bytes()
+    writer = Fat1216RW(image, volume_size=image_size)
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("injected real-image FAT write failure")
+
+    monkeypatch.setattr(writer, "_write_cluster", fail_write)
+    try:
+        with pytest.raises(OSError, match="injected real-image FAT write failure"):
+            writer.write_file("/NOT-PUBLISHED.BIN", b"must roll back")
+    finally:
+        writer.close()
+
+    assert image.read_bytes() == before
+    result = check_fat_image(image, timeout=60)
+    assert result.available
+    assert result.verdict is CheckerVerdict.CLEAN, result.diagnostics()
+    assert result.source_unchanged
+    assert result.copy_unchanged
+
+
 def test_fat1216_mirrors_packed_fat_updates(tmp_path):
     image = tmp_path / "fat16.img"
     _make_fat1216_image(image, 16)
