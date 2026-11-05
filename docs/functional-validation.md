@@ -26,7 +26,7 @@
 - собраны в изолированной копии оба настоящих Linux one-file binary: обычный GUI/CLI и standalone helper. Проверены `--version`, `--diag`, `--help`.
 - проверен чистый Python native-CLI runtime без Qt и `pytsk3`.
 
-Финальный полный прогон точно опубликованного HEAD: **2342 passed, 1 skipped, 0 failed**. Единственный пропуск — `tests/test_windows_installation_scripts.py`, поскольку PowerShell отсутствовал. Ранее выявленные 18 интеграционных отказов были исправлены; один старый тест ожидал неверную длину slack для fragmented extent, его ожидание обновлено согласно логическому EOF, затем полный suite прошёл.
+Финальный полный прогон кода на синхронизированном с актуальным `main` коммите `edc77e3`: **2347 passed, 1 skipped, 0 failed**. Единственный пропуск — `tests/test_windows_installation_scripts.py`, поскольку PowerShell отсутствовал. Ранее выявленные 18 интеграционных отказов были исправлены; один старый тест ожидал неверную длину slack для fragmented extent, его ожидание обновлено согласно логическому EOF, затем полный suite прошёл.
 
 Docker image не собирался, поскольку Docker Engine/CLI отсутствовал. Windows-specific installer execution и Windows/macOS binaries в данной Linux-среде не подтверждались. Настоящие устройства/образы пользователя не подключались.
 
