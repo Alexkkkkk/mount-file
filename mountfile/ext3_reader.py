@@ -102,21 +102,34 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("reader supports only 1, 2 or 4 KiB blocks")
         if profile.first_data_block != (1 if profile.block_size == 1024 else 0):
             raise Ext3ReadError("invalid first-data-block value")
-        compat_allowed = _COMPAT_EXT_ATTR | _COMPAT_RESIZE_INODE | _COMPAT_HAS_JOURNAL
+        compat_allowed = (
+            _COMPAT_EXT_ATTR
+            | _COMPAT_RESIZE_INODE
+            | _COMPAT_HAS_JOURNAL
+            | 0x0020  # DIR_INDEX: htree directories stay linear-scannable
+        )
+        if profile.fs_type == "ext4":
+            compat_allowed |= _COMPAT_SPARSE_SUPER2
         if profile.feature_compat & ~compat_allowed:
             raise Ext3ReadError("unsupported compatible ext feature")
         if profile.feature_incompat & 0x0008:  # JOURNAL_DEV
             raise Ext3ReadError("external JBD2 journal devices are not supported")
         incompat_allowed = _INCOMPAT_FILETYPE
         if profile.fs_type == "ext4":
-            incompat_allowed |= 0x00C0  # EXTENTS | 64BIT
+            # EXTENTS | 64BIT | FLEX_BG: flex_bg only relocates group metadata
+            # inside the filesystem, which the descriptor reader bounds-checks.
+            incompat_allowed |= 0x02C0
         if profile.feature_incompat & ~incompat_allowed:
             raise Ext3ReadError("unsupported incompatible ext feature")
         ro_allowed = (
             _RO_COMPAT_SPARSE_SUPER | _RO_COMPAT_LARGE_FILE | _RO_COMPAT_METADATA_CSUM
         )
         if profile.fs_type == "ext4":
-            ro_allowed |= _RO_COMPAT_EXTRA_ISIZE | 0x0020  # DIR_NLINK
+            ro_allowed |= (
+                _RO_COMPAT_EXTRA_ISIZE
+                | 0x0020  # DIR_NLINK
+                | 0x0008  # HUGE_FILE: i_size may exceed 2 TiB, still bounded
+            )
         if profile.feature_ro_compat & ~ro_allowed:
             raise Ext3ReadError("unsupported read-only-compatible ext feature")
         if profile.fs_type == "ext3" and not profile.has_journal:
@@ -635,8 +648,6 @@ class NativeExt4Image(NativeExt3Image):
                 "unknown read-only-compatible ext4 feature flags "
                 f"0x{profile.unknown_ro_compat_features:08x}"
             )
-        if profile.feature_incompat & _INCOMPAT_FLEX_BG:
-            raise Ext3ReadError("ext4 flex_bg group layout is not supported")
         if profile.feature_ro_compat & _RO_COMPAT_BIGALLOC:
             raise Ext3ReadError("ext4 bigalloc cluster layout is not supported")
         if (
@@ -826,7 +837,14 @@ class NativeExt4Image(NativeExt3Image):
             (inode_bitmap, inode_bitmap + 1),
             (inode_table, inode_table + inode_table_blocks),
         )
-        if any(start < first_block or stop > end_block for start, stop in ranges):
+        if self.feature_incompat & _INCOMPAT_FLEX_BG:
+            lower = self.first_data_block
+            upper = self.blocks_count
+            if any(start < lower or stop > upper for start, stop in ranges):
+                raise Ext3ReadError(
+                    "flex_bg group descriptor metadata points outside the filesystem"
+                )
+        elif any(start < first_block or stop > end_block for start, stop in ranges):
             raise Ext3ReadError("64-bit group descriptor points outside its group")
         if any(stop <= start for start, stop in ranges):
             raise Ext3ReadError("64-bit group descriptor metadata range overflows")
@@ -836,6 +854,21 @@ class NativeExt4Image(NativeExt3Image):
                     raise Ext3ReadError(
                         "64-bit group descriptor metadata ranges overlap"
                     )
+        if self.feature_incompat & _INCOMPAT_FLEX_BG:
+            # With flex_bg the group metadata is deliberately relocated, so the
+            # filesystem-wide bounds check above is the applicable guard.
+            result = _GroupDescriptor(
+                block_bitmap,
+                inode_bitmap,
+                inode_table,
+                first_block,
+                end_block,
+                inode_table_blocks,
+            )
+            if len(self._group_cache) >= 4096:
+                self._group_cache.clear()
+            self._group_cache[group] = result
+            return result
         sparse = bool(self.feature_ro_compat & _RO_COMPAT_SPARSE_SUPER)
         if self._has_super_backup(group, sparse):
             backup_end = min(end_block, first_block + 1 + self._gdt_blocks)

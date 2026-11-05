@@ -459,11 +459,9 @@ def cmd_put(args):
             with open(src, "rb") as f:
                 data = f.read()
             name = os.path.basename(src)
-            fs.write_file(posixpath.join(dest, name), data)
-            print(
-                "Wrote %s (%d bytes) -> %s%s"
-                % (src, len(data), dest if dest != "/" else "/", name)
-            )
+            target = posixpath.join(dest, name)
+            fs.write_file(target, data)
+            print("Wrote %s (%d bytes) -> %s" % (src, len(data), target))
     finally:
         fs.close()
     return OK
@@ -490,7 +488,10 @@ def cmd_mv(args):
     offset, _, _ = _select(args.image, args)
     source = _abs_path(args.path)
     if not args.new_name or args.new_name in (".", "..") or "/" in args.new_name:
-        raise Fat32Error("new name must be one filename component")
+        raise Fat32Error(
+            "new_name must be a single file name without '/': %r "
+            "(use: mv IMAGE /old/path NEW_NAME)" % args.new_name
+        )
     destination = posixpath.join(posixpath.dirname(source), args.new_name)
     fs = _open_write(args.image, offset, backup=args.backup)
     try:
@@ -508,7 +509,10 @@ def cmd_rm(args):
     offset, _, _ = _select(args.image, args)
     fs = _open_write(args.image, offset, backup=args.backup)
     try:
-        fs.delete(_abs_path(args.path), recursive=args.recursive)
+        try:
+            fs.delete(_abs_path(args.path), recursive=args.recursive)
+        except FileNotFoundError:
+            raise Fat32Error("no such entry in the image: %s" % _abs_path(args.path))
         print(
             "Deleted %s%s"
             % (

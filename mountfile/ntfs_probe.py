@@ -152,7 +152,10 @@ def parse_ntfs_boot_sector(boot_sector, *, volume_size: int) -> NtfsBootProfile:
         index_record_size=index_record_size,
         volume_serial=struct.unpack_from("<Q", sector, 0x48)[0],
         boot_checksum=struct.unpack_from("<I", sector, 0x50)[0],
-        backup_boot_sector_offset=filesystem_size - bytes_per_sector,
+        # The NTFS backup boot sector is a copy of the primary one stored in
+        # the last sector of the *containing volume*, which is one sector
+        # longer than the filesystem's declared total_sectors.
+        backup_boot_sector_offset=volume_size - bytes_per_sector,
     )
 
 

@@ -716,7 +716,7 @@ def test_mkdir_writes_valid_dot_entries(tmp_path):
         fs.close()
 
 
-def test_long_filename_rename_fails_closed_without_mutation(tmp_path):
+def test_long_filename_rename_rewrites_lfn_group_in_place(tmp_path):
     _, fs = _open_fat_rw(tmp_path)
     try:
         payload = b"evidence that must remain reachable"
@@ -724,11 +724,13 @@ def test_long_filename_rename_fails_closed_without_mutation(tmp_path):
         destination = "/A LONG DESTINATION NAME.BIN"
         fs.write_file(source, payload)
 
-        with pytest.raises(NotImplementedError, match="only same-directory 8.3"):
-            fs.rename(source, destination)
+        fs.rename(source, destination)
 
-        assert fs.read(source) == payload
-        assert fs.stat(destination) is None
+        assert fs.read(destination) == payload
+        assert fs.stat(source) is None
+        assert [entry.name for entry in fs.list("/")] == [
+            "A LONG DESTINATION NAME.BIN"
+        ]
     finally:
         fs.close()
 

@@ -36,6 +36,10 @@ DEFAULT_SCAN_LIMIT = 0  # 0 = "до конца файла"
 _CHUNK = 1 << 20
 
 # (magic, bytes before the magic, required alignment, filesystem name)
+# A copy of a boot sector found this close to an already accepted volume
+# start is a shadow (backup/FSInfo copy), not a separate filesystem.
+_BOOT_SHADOW_WINDOW = 32 * 1024
+
 _MAGIC = (
     # FAT32's extended BPB puts the filesystem label at 82, not the
     # FAT12/16 offset 54. Retain the legacy location for existing dumps.
@@ -254,6 +258,16 @@ def detect_volumes(path, scan_limit=DEFAULT_SCAN_LIMIT):
         if not found:
             for offset, fstype in _scan_signatures(f, scan_limit):
                 if offset in covered:
+                    continue
+                # Formatters keep copies of the boot sector inside the volume
+                # (FAT32 puts one at sector 6, NTFS at the last sector). Those
+                # copies must not be reported as independent volumes.
+                shadow = any(
+                    volume.offset < offset
+                    and offset - volume.offset < _BOOT_SHADOW_WINDOW
+                    for volume in volumes
+                )
+                if shadow:
                     continue
                 covered.add(offset)
                 volumes.append(FoundVolume(offset, fstype, source="signature"))

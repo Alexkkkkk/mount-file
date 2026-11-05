@@ -56,6 +56,10 @@ class NtfsMetadataError(RefusalError):
         super().__init__(message, code)
 
 
+class NtfsLogFileUnused(NtfsMetadataError):
+    """The $LogFile stream has never been written (no restart page yet)."""
+
+
 @dataclass(frozen=True)
 class NtfsRun:
     """One validated nonresident NTFS run; ``lcn`` is None for sparse data."""
@@ -166,6 +170,12 @@ class NtfsLogFileRestartArea:
 def _fixup_logfile_page(raw_page: bytes, *, page_size: int) -> bytes:
     if len(raw_page) != page_size or page_size < 512 or page_size % 512:
         raise NtfsMetadataError("NTFS $LogFile restart page is truncated or mis-sized")
+    if raw_page[:4] == b"\xff\xff\xff\xff" and not raw_page.strip(b"\xff"):
+        # A volume whose log was never used after formatting carries no
+        # restart page at all: the whole page stays erased (0xFF).
+        raise NtfsLogFileUnused(
+            "NTFS $LogFile restart pages were never written"
+        )
     if raw_page[:4] != b"RSTR":
         raise NtfsMetadataError("NTFS $LogFile restart page signature is invalid")
     usa_offset, usa_count = struct.unpack_from("<HH", raw_page, 4)
@@ -487,6 +497,7 @@ def parse_ntfs_attribute_stream(
     cluster_count: int | None = None,
     upcase_table: tuple[int, ...] | None = None,
     allow_attribute_list: bool = False,
+    allow_end_marker_padding: bool = False,
 ) -> tuple[NtfsAttributeSummary, ...]:
     """Validate all attributes in one USA-restored FILE record.
 
@@ -507,7 +518,14 @@ def parse_ntfs_attribute_stream(
     while pos + 4 <= limit:
         type_code = struct.unpack_from("<I", raw, pos)[0]
         if type_code == _ATTRIBUTE_END:
-            if pos + 4 != limit:
+            # NTFS pads the attribute list to an 8-byte boundary, so the end
+            # marker is followed by up to 8 alignment bytes of padding.
+            padding = bytes(raw[pos + 4 : limit])
+            if padding and not allow_end_marker_padding:
+                raise NtfsMetadataError(
+                    "NTFS attribute end marker is not terminal within bytes_in_use"
+                )
+            if len(padding) > 8 or padding.strip(b"\x00"):
                 raise NtfsMetadataError(
                     "NTFS attribute end marker is not terminal within bytes_in_use"
                 )
@@ -985,7 +1003,9 @@ def probe_ntfs_metadata(
                 volume.read_at(0, 512), volume_size=volume_size
             )
             boot = replace(boot, partition_offset=offset)
-            filesystem = BoundedImageSource(volume, 0, boot.filesystem_size)
+            # The volume window (not the declared filesystem size) is the
+            # correct bound: the backup boot sector sits at its last sector.
+            filesystem = volume
             backup_boot = filesystem.read_at(boot.backup_boot_sector_offset, 512)
             backup = parse_ntfs_boot_sector(
                 backup_boot, volume_size=boot.filesystem_size
@@ -1037,7 +1057,9 @@ def probe_ntfs_metadata(
                 "NTFS MFT mirror record does not match primary record"
             )
         attributes = parse_ntfs_attribute_stream(
-            mft_record, cluster_count=boot.cluster_count
+            mft_record,
+            cluster_count=boot.cluster_count,
+            allow_end_marker_padding=True,
         )
         return NtfsMetadataProfile(boot, mft_record, mirror_record, attributes)
     except ImageSourceError as exc:
@@ -1124,10 +1146,20 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 raise NtfsMetadataError(
                     "NTFS $LogFile DATA stream is shorter than two restart pages"
                 )
-            self.logfile_restart = validate_ntfs_logfile_restart_pages(
-                self._read_nonresident_range(logfile_data, 0, 2 * _LOGFILE_PAGE_SIZE)
-            )
-            self.profile = replace(self.profile, logfile_restart=self.logfile_restart)
+            try:
+                self.logfile_restart = validate_ntfs_logfile_restart_pages(
+                    self._read_nonresident_range(
+                        logfile_data, 0, 2 * _LOGFILE_PAGE_SIZE
+                    )
+                )
+            except NtfsLogFileUnused:
+                # Freshly formatted volume: the log was never used, and
+                # $Volume already reported a clean state, so nothing to replay.
+                self.logfile_restart = None
+            if self.logfile_restart is not None:
+                self.profile = replace(
+                    self.profile, logfile_restart=self.logfile_restart
+                )
             self._upcase_table = self._load_upcase_table()
         except Exception:
             self.close()

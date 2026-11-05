@@ -1711,6 +1711,15 @@ class Fat32RW(RWBackend):
             self._write_dir_raw(parent_cluster, self._tombstone_entry_slots(raw, idx))
         self.sync_fsinfo()
 
+    def _has_lfn_group(self, raw: bytes, short_entry_index: int) -> bool:
+        """Return whether the entry at `short_entry_index` has long-name slots."""
+        index = short_entry_index - 32
+        while index >= 0:
+            if raw[index] in (0x00, 0xE5) or raw[index + 11] != self.ATTR_LFN:
+                return False
+            return True
+        return False
+
     def _tombstone_entry_slots(self, raw: bytes, short_entry_index: int) -> bytes:
         start = short_entry_index
         while start >= 32:
@@ -1902,12 +1911,6 @@ class Fat32RW(RWBackend):
             raise RuntimeError(f"directory entry not found while renaming {src}")
 
         if source_parent_cluster == destination_parent_cluster:
-            if not self.ALLOW_FAT1216 and (
-                not self._is_83_name(src_name) or not self._is_83_name(dst_name)
-            ):
-                raise NotImplementedError(
-                    "FAT rename currently supports only same-directory 8.3 names"
-                )
             self._validate_fat_move_name(dst_name)
             self._validate_lfn_group(source_raw, source_index, entry.name)
             short_raw = self._short_name_for_dir(dst_name, source_raw)
@@ -1919,7 +1922,12 @@ class Fat32RW(RWBackend):
                     continue
                 if source_raw[other_idx : other_idx + 11] == short_raw:
                     raise FileExistsError(dst)
-            if not self.ALLOW_FAT1216:
+            # A pure 8.3 rename of an entry that carries no long name can be
+            # done in place. Anything else (LFN source or LFN destination)
+            # tombstones the old entry group and inserts a fresh one below.
+            if self._is_83_name(dst_name) and not self._has_lfn_group(
+                source_raw, source_index
+            ):
                 updated = bytearray(source_raw)
                 updated[source_index : source_index + 11] = short_raw
                 self._write_dir_raw(source_parent_cluster, bytes(updated))
