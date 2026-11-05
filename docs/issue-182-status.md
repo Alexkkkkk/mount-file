@@ -51,6 +51,8 @@
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 - 2026-11-04: ветка синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.
 
-- 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
+- 2026-11-05: добавлены real-image acceptance tests для FAT12/16 writer: `mkfs.fat` создаёт fixture, а `fsck.fat -n` проверяет disposable copy после create/mkdir/write/rename/delete/read-back; focused writer suite — 6 passed. Это закрывает только часть V1, full profile × operation matrix остаётся незавершённой.
+
+- 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.
 - 2026-11-04: ветка preflight повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.
 - 2026-11-04: ветка CLI status повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.
