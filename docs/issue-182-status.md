@@ -36,7 +36,13 @@
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
 <!-- issue-182 validation checkpoint merge -->
 
+- 2026-11-04: PR #347 — ветка синхронизирована с main, CLI status follow-up зафиксирован в статусе.
+
+- 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
+- 2026-11-04: ветка CLI status синхронизирована с `main` (merge): конфликт status sheet разрешён, CLI-команда status не изменилась.
+
 - 2026-11-04: PR #352 — ветка синхронизирована с main, случайный пустой файл log удалён.
 
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 - 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
+- 2026-11-04: ветка CLI status повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.

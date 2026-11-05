@@ -470,6 +470,7 @@ def print_cheatsheet() -> None:
     python main.py volumes <img>         # список разделов
     python main.py info <img>            # сводка по образу
     python -m mountfile capabilities     # JSON матрица профилей чтения/записи
+    python main.py status <img>           # read/write profile и typed refusal
     python main.py ls <img> /            # листинг каталога
     python main.py stat <img> /path      # метаданные пути
     python main.py read-range <img> /file --file-offset 0 --length 4096

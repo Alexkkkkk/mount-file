@@ -41,6 +41,7 @@ from .fat32 import Fat32Error, Fat32Provider
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
+from .safety import RefusalError, code_for_message
 from .search_content import SearchError, search_files, search_image
 from .slack import SlackError, extract_slack
 from .timeline import (
@@ -71,12 +72,89 @@ def cmd_capabilities(args):
     return OK
 
 
+def cmd_status(args):
+    """Print the selected image backend status without attempting a mutation."""
+    offset, fstype, description = _select(args.image, args)
+    volume_size = volume_size_for_offset(args.image, offset)
+    try:
+        provider, backend = _provider(args.image, offset, volume_size)
+    except TskError as exc:
+        payload = {
+            "image": str(args.image),
+            "offset": offset,
+            "volume_size": volume_size,
+            "filesystem": fstype,
+            "description": description,
+            "backend": "unavailable",
+            "mode": "refused",
+            "read_capabilities": [],
+            "write_capabilities": [],
+            "write_enabled": False,
+            "refusal": exc.to_dict(),
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return ERROR
+
+    try:
+        status = getattr(provider, "backend_status", None)
+        if callable(status):
+            status = status()
+        if not isinstance(status, dict):
+            status = {
+                "backend": backend,
+                "mode": "read-only",
+                "read_capabilities": list(getattr(provider, "read_capabilities", ())),
+                "write_capabilities": list(getattr(provider, "write_capabilities", ())),
+                "write_enabled": False,
+            }
+        payload = dict(status)
+        writer = None
+        try:
+            writer = UniversalFSRW(
+                args.image,
+                offset=offset,
+                volume_size=volume_size,
+                auto_backup=False,
+                allow_legacy_mount=False,
+            )
+            writer_status = UniversalFSRW.backend_status(writer.info())
+            payload["write_status"] = writer_status
+        except (OSError, RuntimeError, ValueError) as exc:
+            refusal_code = code_for_message(str(exc))
+            payload["write_status"] = {
+                "mode": "refused",
+                "write_capabilities": [],
+                "write_enabled": False,
+                "write_rejection_reason": str(exc),
+                "write_rejection_code": refusal_code.value,
+                "write_rejection": RefusalError(str(exc), refusal_code).to_dict(),
+            }
+        finally:
+            if writer is not None:
+                writer.close()
+        payload.update(
+            {
+                "image": str(args.image),
+                "offset": offset,
+                "volume_size": volume_size,
+                "filesystem": fstype,
+                "description": description,
+            }
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return OK
+    finally:
+        if hasattr(provider, "close"):
+            provider.close()
+
+
 #: Subcommand names; main.py routes to this module when the executable is
 #: called with one of them (works in the packaged binary too).
 COMMANDS = (
     "volumes",
     "info",
     "capabilities",
+    "status",
     "ls",
     "stat",
     "read-range",
@@ -872,6 +950,13 @@ def build_parser():
         "capabilities", help="print the versioned native read/write profile matrix"
     )
     sp.set_defaults(func=cmd_capabilities)
+
+    sp = sub.add_parser(
+        "status",
+        help="print selected filesystem backend, capabilities, and refusal status",
+    )
+    _add_target(sp)
+    sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("ls", help="list a directory inside the image")
     _add_target(sp)

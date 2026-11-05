@@ -49,7 +49,7 @@ filesystem backend (обычно `pytsk3`/`libtsk`), а для YARA дополн
 chain: это должен сделать вызывающий код.
 
 GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`) использует реестр этих
-подкоманд напрямую. Все 27 команд имеют в интерфейсе контекстную справку из
+подкоманд напрямую. Все 28 команд имеют в интерфейсе контекстную справку из
 того же CLI parser; аргументы передаются по одному на строку, без shell.
 
 | Команда | Назначение | Запись в образ |
@@ -57,6 +57,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 | `volumes` | найденные тома и смещения | нет |
 | `info` | размер, сигнатура и сводка томов | нет |
 | `capabilities` | versioned native profile matrix без открытия образа | нет |
+| `status` | выбранный backend, profile, capabilities и typed refusal для extent | нет |
 | `ls` | список каталога | нет |
 | `get` | извлечение файла или каталога | нет |
 | `put` | записать локальные файлы | **да, FAT32** |
@@ -81,7 +82,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 | `live-diff` | сравнить два образа и сформировать Markdown-отчёт | создаёт отчёт при `-o` |
 | `slack` | slack последнего кластера по явно заданному extent | нет; файл только через `--output`, без перезаписи |
 
-Общие аргументы целевых команд (`volumes`, `info`, `ls`, `get`, `put`, `mkdir`,
+Общие аргументы целевых команд (`volumes`, `info`, `status`, `ls`, `get`, `put`, `mkdir`,
 `mv`, `rm`, `autopick`):
 
 - `-V N`, `--volume N` — номер тома из `volumes`, начиная с 1;
@@ -99,6 +100,14 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 `operations` публикует полный canonical набор с `available`/`refused`, точным
 именем API method и structured refusal code. `constraint_ids` и `gates`
 описывают accepted bounded profile; они не обходят validation выбранного image.
+
+`python -m mountfile status IMAGE` открывает выбранный bounded read provider и
+без mutation проверяет отдельный native writer profile с отключённым backup.
+Результат содержит фактический read backend и его capabilities, отдельный
+`write_status` с native writer capabilities, offset и размер filesystem extent.
+Если распознанный профиль отвергнут,
+команда сохраняет machine-readable refusal и не выбирает другой parser или
+legacy fallback.
 
 ## Примеры чтения
 
