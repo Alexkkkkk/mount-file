@@ -101,6 +101,12 @@ def test_overlapping_ranges_are_coalesced_without_duplicate_hits():
     assert [(hit.offset, hit.signature) for hit in hits] == [(10, "gif")]
 
 
+def test_adjacent_ranges_do_not_allow_signature_to_cross_range_boundary():
+    png_magic = b"\x89PNG\r\n\x1a\n"
+
+    assert list(scan_unallocated(png_magic, [(0, 4), (4, 4)])) == []
+
+
 def test_rejects_ranges_outside_image_before_reading():
     source = BytesIO(b"0123456789")
 

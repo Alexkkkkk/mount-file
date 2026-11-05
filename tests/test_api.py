@@ -113,9 +113,13 @@ def test_loopback_endpoints_and_registry_injection(tmp_path):
     assert filesystem_status.json()["profile_id"] == "ext3-native-ro"
     assert filesystem_status.json()["operations"]["write-file"]["state"] == "refused"
 
-    timeline = client.get("/timeline", params={"image": "disk.img", "limit": 10})
+    timeline = client.get(
+        "/timeline",
+        params={"image": "disk.img", "limit": 10, "offset": 37},
+    )
     assert timeline.status_code == 200
     assert timeline.json()[0]["path"] == "/note.txt"
+    assert registry.calls[-1] == ("timeline", str(image.resolve()), 10, None, 37)
 
     path_listed = client.get("/fs/disk.img/ls", params={"path": "/"})
     assert path_listed.status_code == 200
@@ -306,3 +310,24 @@ def test_filesystem_status_preserves_typed_refusal_and_requires_registry_method(
         "/filesystem/status"
     )
     assert unavailable.status_code == 501
+
+
+@needs_fastapi
+def test_timeline_legacy_registry_keeps_default_offset_and_rejects_paging(
+    tmp_path,
+):
+    class LegacyTimelineRegistry:
+        def timeline(self, image=None, limit=100, path=None):
+            return [{"offset": 0}]
+
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+    client = _client_or_skip(create_app(LegacyTimelineRegistry(), image_roots=image))
+
+    default_page = client.get("/timeline")
+    assert default_page.status_code == 200
+    assert default_page.json() == [{"offset": 0}]
+
+    unsupported_page = client.get("/timeline", params={"offset": 10})
+    assert unsupported_page.status_code == 501
+    assert unsupported_page.json()["detail"] == "service operation unavailable"

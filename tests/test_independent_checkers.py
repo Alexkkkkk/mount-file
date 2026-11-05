@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from mountfile.ext2_native import NativeExt2ImageWriter
+from mountfile.universal_fs_rw import Fat32RW
 from tests import _independent_checkers as checkers
 
 
@@ -247,6 +248,33 @@ def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy(tmp_path):
     before = _digest(image)
 
     result = checkers.check_ext_image(image, timeout=60)
+
+    assert result.verdict is checkers.CheckerVerdict.CLEAN, result.diagnostics()
+    assert result.source_unchanged
+    assert result.copy_unchanged
+    assert _digest(image) == before
+
+
+def test_native_fat32_mutation_passes_fsck_on_disposable_copy(tmp_path):
+    _require_tools("mkfs.fat", "fsck.fat")
+    image = tmp_path / "native-write.fat32"
+    _blank_image(image, size=64 * 1024 * 1024)
+    _format_fat32(image)
+
+    payload = bytes(range(256)) * 31 + b"FAT32 native writer"
+    writer = Fat32RW(image, volume_size=image.stat().st_size)
+    try:
+        writer.write_file("/EVIDENCE.BIN", payload)
+        writer.mkdir("/EVIDENCE")
+        writer.write_file("/EVIDENCE/RECORD.BIN", b"nested FAT32 record")
+        writer.rename("/EVIDENCE.BIN", "/RENAMED.BIN")
+        writer.delete("/EVIDENCE/RECORD.BIN")
+        assert writer.read("/RENAMED.BIN") == payload
+    finally:
+        writer.close()
+
+    before = _digest(image)
+    result = checkers.check_fat_image(image, timeout=60)
 
     assert result.verdict is checkers.CheckerVerdict.CLEAN, result.diagnostics()
     assert result.source_unchanged

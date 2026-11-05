@@ -99,3 +99,53 @@ def test_root_inspect_returns_nonzero_when_partitions_are_unreadable(
     output = capsys.readouterr().out
     assert "(unreadable: no volume table)" in output
     assert "try: python mountfile_ai.py agent --image" in output
+
+
+def _make_encrypted_mtk_dump(path):
+    from mountfile import rt809
+
+    data = bytearray(rt809.BLOCK)
+    data[0x100:0x114] = rt809.MARKER_MTK
+    data[rt809.MTK_FLAG_ADDR : rt809.MTK_FLAG_ADDR + 2] = rt809.FLAG_ENCODE
+    data[rt809.MTK_PLAIN_CHECK[0] : rt809.MTK_PLAIN_CHECK[0] + 5] = b"Start"
+    path.write_bytes(data)
+
+
+def test_legacy_try_xor_decrypt_uses_rt809_and_refuses_fake_keys(monkeypatch, tmp_path):
+    from mountfile import rt809
+
+    image = tmp_path / "mtk.bin"
+    output = tmp_path / "decoded.bin"
+    _make_encrypted_mtk_dump(image)
+    monkeypatch.setattr(root_cli.CONFIG, "read_only", False)
+    monkeypatch.setattr(root_cli.AUDIT, "write", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rt809, "load_table", lambda kind, table_dir=None: b"\x00")
+
+    result = root_cli.try_xor_decrypt(image, "mtk", output)
+
+    assert result["key"] == "MTK"
+    assert result["output"] == str(output)
+    decoded = output.read_bytes()
+    assert decoded[rt809.MTK_FLAG_ADDR : rt809.MTK_FLAG_ADDR + 4] == b"\x00" * 4
+    assert decoded[rt809.MTK_PLAIN_CHECK[0] : rt809.MTK_PLAIN_CHECK[0] + 5] == b"Start"
+    assert not hasattr(root_cli, "XOR_KEYS")
+    with pytest.raises(ValueError, match="supported RT809 dump kinds are MTK and MST"):
+        root_cli.try_xor_decrypt(image, "mstar_a", tmp_path / "fake-key.bin")
+    assert not (tmp_path / "fake-key.bin").exists()
+
+
+def test_legacy_auto_decrypt_uses_rt809_detection(monkeypatch, tmp_path):
+    from mountfile import rt809
+
+    image = tmp_path / "mtk-auto.bin"
+    _make_encrypted_mtk_dump(image)
+    monkeypatch.setattr(root_cli.CONFIG, "read_only", False)
+    monkeypatch.setattr(root_cli.CONFIG, "workspace", tmp_path)
+    monkeypatch.setattr(root_cli.AUDIT, "write", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rt809, "load_table", lambda kind, table_dir=None: b"\x00")
+
+    result = root_cli.auto_decrypt(image)
+
+    assert result["key"] == "MTK"
+    assert Path(result["output"]) == tmp_path / "mtk-auto.decoded.bin"
+    assert Path(result["output"]).is_file()

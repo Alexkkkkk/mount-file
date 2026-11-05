@@ -8,7 +8,7 @@ Integration layer for https://github.com/Alexkkkkk/mount-file that adds:
   • neuro-symbolic gates that reject unverifiable LLM claims
   • 4-role orchestration (Planner → Executor → Analyst → Skeptic)
   • append-only hash-chained audit log (chain of custody)
-  • XOR auto-decrypt for MStar/MediaTek dumps
+  • RT809 MTK/MST dump decoding through the supported mountfile decoder
   • optional MCP server for Claude Desktop / Cursor / Open WebUI
 
 Install
@@ -241,7 +241,7 @@ class InvestigationReport(BaseModel):
 
 
 # =============================================================================
-# 3. CORE: pytsk3 wrappers, signatures, XOR, recovery
+# 3. CORE: pytsk3 wrappers, signatures, RT809 decoding, recovery
 # =============================================================================
 def _require_tsk() -> None:
     if pytsk3 is None:
@@ -427,58 +427,53 @@ def hash_file(path: Path) -> str:
     return Audit.sha256_file(path)
 
 
-# !!! REPLACE with real keys from mount-file resources/XOR_MST_*.bin !!!
-XOR_KEYS: dict[str, bytes] = {
-    "identity": b"\x00" * 16,
-    "mstar_a": b"\xa5" * 16,
-    "mtk_a": b"\x5a" * 16,
-}
-
-
-def _xor(data: bytes, key: bytes) -> bytes:
-    if not key:
-        return data
-    k = (key * (len(data) // len(key) + 1))[: len(data)]
-    return bytes(a ^ b for a, b in zip(data, k))
+def _record_rt809_decode(image: Path, kind: str, output: Path) -> dict:
+    hits = detect_signatures(output)
+    serialized_hits = [h.model_dump() for h in hits]
+    AUDIT.write(
+        "rt809_decode",
+        image=str(image),
+        kind=kind,
+        output=str(output),
+        hits=serialized_hits,
+    )
+    return {"output": str(output), "key": kind, "signatures": serialized_hits}
 
 
 def try_xor_decrypt(image: Path, key_name: str, output: Path) -> dict:
+    """Decode a marked RT809 dump of the explicitly requested MTK/MST kind.
+
+    Kept under its historical tool name for compatibility; this no longer
+    performs generic XOR or uses the former placeholder keys.
+    """
+
     if CONFIG.read_only:
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
-    if key_name not in XOR_KEYS:
-        raise KeyError(f"unknown key {key_name}; known={list(XOR_KEYS)}")
-    key = XOR_KEYS[key_name]
-    with image.open("rb") as src, output.open("wb") as dst:
-        while chunk := src.read(1 << 20):
-            dst.write(_xor(chunk, key))
-    hits = detect_signatures(output)
-    AUDIT.write(
-        "xor",
-        image=str(image),
-        key=key_name,
-        output=str(output),
-        hits=[h.model_dump() for h in hits],
-    )
-    return {
-        "output": str(output),
-        "key": key_name,
-        "signatures": [h.model_dump() for h in hits],
-    }
+    if not isinstance(key_name, str) or key_name.upper() not in ("MTK", "MST"):
+        raise ValueError(
+            "unsupported decoder %r; supported RT809 dump kinds are MTK and MST"
+            % (key_name,)
+        )
+    kind = key_name.upper()
+    from mountfile.rt809 import decode_dump
+
+    result = decode_dump(str(image), out_path=str(output), kind=kind)
+    if result is None:
+        raise RuntimeError("the RT809 image is recognised but is not encrypted")
+    return _record_rt809_decode(image, kind, Path(result))
 
 
 def auto_decrypt(image: Path) -> dict | None:
     if CONFIG.read_only:
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
-    for name in XOR_KEYS:
-        out = CONFIG.workspace / f"{image.stem}.{name}.bin"
-        try:
-            res = try_xor_decrypt(image, name, out)
-        except Exception as exc:
-            log.debug("XOR key %s failed for %s", name, image, exc_info=exc)
-            continue
-        if any(h["kind"] != "mbr" for h in res["signatures"]):
-            return res
-    return None
+    from mountfile.rt809 import decode_dump, detect
+
+    kind, _encrypted = detect(str(image))
+    output = CONFIG.workspace / f"{image.stem}.decoded.bin"
+    result = decode_dump(str(image), out_path=str(output))
+    if result is None:
+        return None
+    return _record_rt809_decode(image, kind, Path(result))
 
 
 # =============================================================================
@@ -742,7 +737,7 @@ def _t_detect_signatures(image_path: str) -> list[dict]:
 
 @register_tool(
     "try_xor_decrypt",
-    "Decrypt with a named XOR key; reports signatures on output.",
+    "Decode an RT809 MTK or MST dump with the supported decoder; reports output signatures.",
     {
         "type": "object",
         "properties": {
@@ -760,7 +755,7 @@ def _t_try_xor(image_path: str, key_name: str, output: str) -> dict:
 
 @register_tool(
     "auto_decrypt",
-    "Iterate XOR keys; return first producing a valid FS signature.",
+    "Auto-detect and decode an encrypted RT809 MTK or MST dump.",
     {
         "type": "object",
         "properties": {"image_path": {"type": "string"}},
