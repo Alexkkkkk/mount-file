@@ -35,6 +35,8 @@
 
 - 2026-11-05: NTFS dirty `$Volume` и recovery-required `$LogFile` получают стабильный `DIRTY_OR_RECOVERY_REQUIRED` code; добавлены regression assertions. API, capability registry и audit docs уточняют bounded resident/nonresident `$ATTRIBUTE_LIST` support; это follow-up hardening, не закрытие полной profile × operation/crash-safety acceptance matrix.
 
+- 2026-11-05: exFAT rename выполняет полный allocation-owner scan перед изменением stage и отказывается от cross-linked file/directory clusters без изменения исходного образа. Writer также очищает stage после partial-write или interrupted-copy exception, включая `KeyboardInterrupt`; regression проверяет byte-identical source и отсутствие временных файлов. Это не гарантия cleanup/recovery после process kill или power loss.
+
 - 2026-11-04: PR #349 native VFS tree synchronized with main and local suite verified (1812 passed).
 <!-- issue-182 validation checkpoint -->
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->

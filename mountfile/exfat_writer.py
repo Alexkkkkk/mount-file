@@ -219,7 +219,7 @@ class NativeExfatWriter:
         try:
             shutil.copy2(self.image, stage)
             return stage
-        except Exception:
+        except BaseException:
             stage.unlink(missing_ok=True)
             raise
 
@@ -724,7 +724,7 @@ class NativeExfatWriter:
             with _image_lock(self.image):
                 self._commit_stage(stage)
                 stage = None
-        except Exception:
+        except BaseException:
             if stage is not None:
                 stage.unlink(missing_ok=True)
             raise
@@ -917,6 +917,7 @@ class NativeExfatWriter:
             meta = self._metadata(reader)
             if src_path == dst_path:
                 return
+            self._allocation_owners(reader, meta)
             directory, record = self._locate(reader, src_path)
             destination = reader._find(dst_parent_path)
             if not destination.is_dir:
