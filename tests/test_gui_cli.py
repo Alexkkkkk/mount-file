@@ -120,6 +120,42 @@ def test_worker_runs_cli_without_shell_and_returns_captured_help(app):
     assert "image" in text.lower()
 
 
+def test_worker_captures_read_range_without_binary_stdout_buffer(app, monkeypatch):
+    class Reader:
+        closed = False
+
+        def read_file_range(self, path, offset, length):
+            assert (path, offset, length) == ("/payload.bin", 2, 6)
+            return "café!".encode("utf-8")
+
+        def close(self):
+            self.closed = True
+
+    reader = Reader()
+    monkeypatch.setattr(cli, "_select", lambda *_args: (512, "ext4", "volume"))
+    monkeypatch.setattr(cli, "_provider", lambda *_args: (reader, "native-test-ro"))
+
+    worker = CLIWorker(
+        [
+            "read-range",
+            "disk.img",
+            "/payload.bin",
+            "--file-offset",
+            "2",
+            "--length",
+            "6",
+        ]
+    )
+    results = []
+    worker.completed.connect(lambda code, text: results.append((code, text)))
+    worker.start()
+    assert worker.wait(5000)
+    app.processEvents()
+
+    assert results == [(cli.OK, "café!")]
+    assert reader.closed
+
+
 def test_output_capture_has_a_hard_memory_bound():
     output = _BoundedOutput(limit=5)
     output.write("hello world")

@@ -3660,18 +3660,30 @@ class MainWindow(QMainWindow):
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Открыть образ", "Файл не найден:\n%s" % path)
             return False
+        page = getattr(self, "workspace_stack", None)
+        page = page.currentWidget() if page is not None else None
+        if isinstance(page, HexEditorPage):
+            page.request_close()
+            if self.workspace_stack.currentWidget() is page:
+                return False
         self.image_path = path
         for panel in self.panels.values():
             panel._clear_navigation_state()
         self.release_volume(self.panelL)
         self.release_volume(self.panelR)
+        if self.panelR.mode == "img":
+            self.panelR.mode = "local"
+            self.panelR.path = os.path.expanduser("~")
+            self.panelR.tabs = [self.panelR.path]
+            self.panelR.tab_index = 0
+            self.panelR.marked.clear()
+            self.panelR._rebuild_tabs()
+            self.panelR.refresh()
         # The volume list is only a convenience: a broken partition table
         # must not stop the image itself from opening.
         self.volumes = self.scan_volumes(path)
         self.panelL.populate_drives()
         self.panelR.populate_drives()
-        if self.panelR.mode == "img":
-            self.panelR.mode = "local"
         # Mount the first partition when the image has a partition table,
         # otherwise treat the whole file as one volume (offset 0).
         offset = self.volumes[0].offset if self.volumes else 0
@@ -4262,6 +4274,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Просмотр", str(e))
             return
 
+        source_mode = p.mode
+        source_provider = p.provider if source_mode == "img" else None
+        source_writer = p.writer if source_mode == "img" else None
+        source_image_path = self.image_path if source_mode == "img" else None
+
         def save_edited(updated):
             nonlocal data, local_identity
             answer = QMessageBox.warning(
@@ -4274,14 +4291,25 @@ class MainWindow(QMainWindow):
             )
             if answer != MB_Yes:
                 return False
-            if p.mode == "img":
-                if p.writer is None:
+            if source_mode == "img":
+                if (
+                    p.mode != "img"
+                    or p.provider is not source_provider
+                    or p.writer is not source_writer
+                    or self.image_path != source_image_path
+                ):
+                    raise RuntimeError("образ изменился после открытия HEX-редактора")
+                if source_writer is None:
                     raise RuntimeError("том открыт только для чтения")
                 if not self._backup_before_write(p):
                     return False
                 parent = str(PurePosixPath(full).parent)
-                p.writer.write_file(parent, entry["name"], updated)
+                source_writer.write_file(parent, entry["name"], updated)
             else:
+                if p.mode != source_mode:
+                    raise RuntimeError(
+                        "источник изменился после открытия HEX-редактора"
+                    )
                 _atomic_write_local(
                     full,
                     updated,
@@ -4296,7 +4324,9 @@ class MainWindow(QMainWindow):
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
 
-        save_callback = save_edited if p.mode != "img" or p.writer is not None else None
+        save_callback = (
+            save_edited if source_mode != "img" or source_writer is not None else None
+        )
         page = HexEditorPage(
             self,
             entry["name"],
@@ -4478,7 +4508,9 @@ class MainWindow(QMainWindow):
         files, dirs = [], 0
         for e in entries:
             if e["is_dir"]:
-                tree = self._image_tree(panel, panel.join(e["name"]), e["name"])
+                tree = self._image_tree(
+                    panel.provider, panel.join(e["name"]), e["name"]
+                )
                 for _src, rel, is_dir in tree:
                     if is_dir:
                         dirs += 1
@@ -4846,7 +4878,8 @@ class MainWindow(QMainWindow):
             e.ignore()
             return
         self._closing = True
-        self._close_writer()
+        for panel in self.panels.values():
+            self.release_volume(panel)
         self._cleanup_text_temp()
         tc_style.save_settings()
         self._detach_updater()

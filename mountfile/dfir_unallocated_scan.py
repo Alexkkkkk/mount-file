@@ -262,12 +262,12 @@ def _normalise_ranges(ranges: Any, image_size: int) -> tuple[ByteRange, ...]:
             raise InvalidRange("range extends beyond the image")
         found.append(current)
 
-    # Union overlaps and adjacency.  This prevents duplicate hits while still
-    # never inventing bytes outside ranges supplied by the caller.
+    # Union overlapping ranges to prevent duplicate hits, but preserve
+    # adjacency: a signature must fit within one caller-supplied range.
     found.sort(key=lambda item: (item.offset, item.end))
     merged: list[ByteRange] = []
     for current in found:
-        if not merged or current.offset > merged[-1].end:
+        if not merged or current.offset >= merged[-1].end:
             merged.append(current)
             continue
         previous = merged[-1]
