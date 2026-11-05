@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import posixpath
 
-from .extract import extract_path
+from .extract import extract_file, extract_path
 from .firmware import detect_volumes
 from .hexview import HexView
 from .qt_compat import (
@@ -92,10 +92,12 @@ class ImageModel(QAbstractItemModel):
         # phantom item, so this must stay the invalid root index.
         if node.parent is None or node.parent is self.root:
             return QModelIndex()
-        row = node.parent.children.index(node)
+        row = node.parent.parent.children.index(node.parent)
         return self.createIndex(row, 0, node.parent)
 
     def rowCount(self, parent=QModelIndex()):
+        if parent.isValid() and parent.column() != 0:
+            return 0
         node = parent.internalPointer() if parent.isValid() else self.root
         return len(node.children)
 
@@ -103,15 +105,21 @@ class ImageModel(QAbstractItemModel):
         return 2
 
     def hasChildren(self, parent=QModelIndex()):
+        if parent.isValid() and parent.column() != 0:
+            return False
         node = parent.internalPointer() if parent.isValid() else self.root
         return node.is_dir
 
     # -- lazy loading ----------------------------------------------------
     def canFetchMore(self, parent=QModelIndex()):
+        if parent.isValid() and parent.column() != 0:
+            return False
         node = parent.internalPointer() if parent.isValid() else self.root
         return node.is_dir and not node.loaded
 
     def fetchMore(self, parent=QModelIndex()):
+        if not self.canFetchMore(parent):
+            return
         node = parent.internalPointer() if parent.isValid() else self.root
         if node.loaded:
             return
@@ -223,6 +231,9 @@ class MainWindow(QMainWindow):
         self.writer = None
         self.writer_fh = None
         self.model = None
+        self._hex_path = None
+        self._hex_original = b""
+        self._mounted_offset = 0
 
         self._build_ui()
         self._set_loaded(False)
@@ -350,6 +361,11 @@ class MainWindow(QMainWindow):
             )
         if not path:
             return
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "Open disk image", "File not found: %s" % path)
+            return
+        if not self._confirm_discard_hex():
+            return
         self.image_path = path
         self._unmount()
         self.cmb_parts.blockSignals(True)
@@ -362,28 +378,36 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.volumes = []
             self.log_msg("Volume scan failed: %s" % e)
-        self.cmb_parts.blockSignals(False)
         # Auto-select the first real volume when the image has a partition
         # table; otherwise stay on offset 0.
         idx = 1 if self.cmb_parts.count() > 1 else 0
         self.cmb_parts.setCurrentIndex(idx)
+        self.cmb_parts.blockSignals(False)
         self._set_loaded(True)
         self._mount_volume(self.cmb_parts.itemData(idx))
         self.log_msg("Opened image: %s" % path)
 
     def volume_changed(self, idx):
         if self.image_path:
+            if not self._confirm_discard_hex():
+                self.cmb_parts.blockSignals(True)
+                self.cmb_parts.setCurrentIndex(
+                    self.cmb_parts.findData(self._mounted_offset)
+                )
+                self.cmb_parts.blockSignals(False)
+                return
             self._mount_volume(self.cmb_parts.itemData(idx))
 
     def _mount_volume(self, offset):
         if offset is None:
             offset = 0
         self._unmount()
+        self._mounted_offset = offset
         # Nothing is writable until a volume is actually mounted and its FAT32
         # header parsed - a failed mount must not leave live buttons behind.
         self._set_write_enabled(False)
-        volume_size = volume_size_for_offset(self.image_path, offset)
         try:
+            volume_size = volume_size_for_offset(self.image_path, offset)
             self.provider = open_image_provider(
                 self.image_path, offset=offset, volume_size=volume_size
             )
@@ -442,7 +466,7 @@ class MainWindow(QMainWindow):
                 % native_err,
             )
             return
-        except TskError as tsk_err:
+        except (TskError, OSError, ValueError) as tsk_err:
             self.provider = None
             QMessageBox.warning(
                 self,
@@ -500,8 +524,8 @@ class MainWindow(QMainWindow):
         if self.writer is not None:
             try:
                 self.writer.close()
-            except (OSError, RuntimeError):
-                pass
+            except Exception as exc:
+                self.log_msg("Could not close image writer: %s" % exc)
         self.writer_fh = None
         self.writer = None
 
@@ -514,21 +538,42 @@ class MainWindow(QMainWindow):
         if provider is not None and hasattr(provider, "close"):
             try:
                 provider.close()
-            except OSError:
-                pass
+            except Exception as exc:
+                self.log_msg("Could not close image reader: %s" % exc)
         self.tree.setModel(None)
+        self._hex_path = None
+        self._hex_original = b""
         self.hex_view.clear()
+        self.btn_save_hex.setEnabled(False)
+        self.act_save_hex.setEnabled(False)
         self.info.setPlainText("")
 
     # -------------------------------------------------------- selection
     def on_selection(self, current, previous):
         node = self.model.node_for(current) if self.model else None
+        if (
+            node is not None
+            and node.path == self._hex_path
+            and self.hex_view.isModified()
+        ):
+            self._hex_changed()
+            return
+        if self.hex_view.isModified() and not self._confirm_discard_hex():
+            selection = self.tree.selectionModel()
+            selection.blockSignals(True)
+            self.tree.setCurrentIndex(previous)
+            selection.blockSignals(False)
+            return
+        self._hex_path = None
+        self._hex_original = b""
         if node is None or node.is_dir or self.provider is None:
             self.hex_view.clear()
             self.info.setPlainText("")
             return
         try:
             data = self.provider.read_file(node.path)
+            self._hex_path = node.path
+            self._hex_original = data
             self.hex_view.setData(data)
             self.info.setPlainText(
                 "Path: %s\nSize: %d bytes\nLoaded: %d bytes"
@@ -550,13 +595,28 @@ class MainWindow(QMainWindow):
                 )
             except (AttributeError, RuntimeError, ValueError):
                 write_file_supported = False
-        self.btn_save_hex.setEnabled(
-            bool(
-                node
-                and not node.is_dir
-                and write_file_supported
-                and self.hex_view.isModified()
+        enabled = bool(
+            node
+            and not node.is_dir
+            and node.path == self._hex_path
+            and write_file_supported
+            and self.hex_view.isModified()
+        )
+        self.btn_save_hex.setEnabled(enabled)
+        self.act_save_hex.setEnabled(enabled)
+
+    def _confirm_discard_hex(self):
+        if not self.hex_view.isModified():
+            return True
+        return (
+            QMessageBox.warning(
+                self,
+                "Unsaved HEX changes",
+                "Discard the unsaved HEX changes?",
+                MB_Yes | MB_No,
+                MB_No,
             )
+            == MB_Yes
         )
 
     def _perform_write(self, refresh_path, operation):
@@ -577,12 +637,43 @@ class MainWindow(QMainWindow):
         try:
             return operation()
         finally:
-            self._refresh_dir(refresh_path)
+            selection = self.tree.selectionModel()
+            if selection is not None:
+                selection.blockSignals(True)
+            try:
+                self._refresh_dir(refresh_path)
+            finally:
+                if selection is not None:
+                    selection.blockSignals(False)
+
+    def _restore_hex_selection(self):
+        if self.model is None or self._hex_path is None:
+            return
+        parent = QModelIndex()
+        node = self.model.root
+        for part in self._hex_path.strip("/").split("/"):
+            if self.model.canFetchMore(parent):
+                self.model.fetchMore(parent)
+            node = next((child for child in node.children if child.name == part), None)
+            if node is None:
+                return
+            parent = self.model.index_for(node)
+        selection = self.tree.selectionModel()
+        selection.blockSignals(True)
+        self.tree.setCurrentIndex(parent)
+        selection.blockSignals(False)
+        self._hex_changed()
 
     def save_hex(self):
         """Replace the selected file through the mounted native writer."""
         node = self._current_node()
-        if node is None or node.is_dir or self.writer is None:
+        if (
+            node is None
+            or node.is_dir
+            or self.writer is None
+            or node.path != self._hex_path
+            or not self.hex_view.isModified()
+        ):
             QMessageBox.information(
                 self, "Save HEX", "Выберите файл на доступном для записи томе."
             )
@@ -599,11 +690,21 @@ class MainWindow(QMainWindow):
         if ret != MB_Yes:
             return
         try:
+            if (
+                self.provider is None
+                or self.provider.read_file(node.path) != self._hex_original
+            ):
+                raise RuntimeError(
+                    "File changed since it was opened; reload before saving"
+                )
             parent = posixpath.dirname(node.path) or "/"
             self._perform_write(parent, lambda: self.writer.write_file(node.path, data))
+            self._hex_original = data
             self.hex_view.setData(data)
+            self._restore_hex_selection()
             self.log_msg("HEX changes saved: %s (%d bytes)" % (node.path, len(data)))
         except Exception as e:
+            self._restore_hex_selection()
             QMessageBox.critical(self, "HEX save failed", str(e))
 
     def find_hex(self):
@@ -672,10 +773,8 @@ class MainWindow(QMainWindow):
         if not dst:
             return
         try:
-            data = self.provider.read_file(node.path)
-            with open(dst, "wb") as f:
-                f.write(data)
-            self.log_msg("Extracted %s (%d bytes) -> %s" % (node.path, len(data), dst))
+            size = extract_file(self.provider, node.path, dst)
+            self.log_msg("Extracted %s (%d bytes) -> %s" % (node.path, size, dst))
         except Exception as e:
             QMessageBox.critical(self, "Extract failed", str(e))
 
@@ -791,6 +890,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 message = "Image changed, but the reader could not be reopened: %s" % e
                 self.log_msg(message)
+                self._close_writer()
+                self._set_write_enabled(False)
                 QMessageBox.warning(self, "Refresh failed", message)
                 return False
 
@@ -818,5 +919,8 @@ class MainWindow(QMainWindow):
         return True
 
     def closeEvent(self, e):
+        if not self._confirm_discard_hex():
+            e.ignore()
+            return
         self._unmount()
         super().closeEvent(e)
