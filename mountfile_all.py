@@ -458,8 +458,7 @@ def check_updates() -> int:
 # ============================================================
 def print_cheatsheet() -> None:
     hr("Карта команд Mount File")
-    print(
-        """
+    print("""
   GUI:
     python main.py                       # открыть интерфейс
     python main.py dump.img              # открыть образ сразу
@@ -471,6 +470,7 @@ def print_cheatsheet() -> None:
     python main.py info <img>            # сводка по образу
     python -m mountfile capabilities     # JSON матрица профилей чтения/записи
     python -m mountfile preflight <img>  # read-only допуск ФС: профиль, гейты, причины отказа
+    python main.py status <img>           # read/write profile и typed refusal
     python main.py ls <img> /            # листинг каталога
     python main.py stat <img> /path      # метаданные пути
     python main.py read-range <img> /file --file-offset 0 --length 4096
@@ -545,8 +545,7 @@ def print_cheatsheet() -> None:
     Linux:     ./build_exe.sh   → dist/MountFile-linux-x86-64
     Win10/11:  build_exe.bat    → dist\\MountFile.exe
     Win7:      py -3.8 … build_exe.bat (requirements-win7.txt)
-"""
-    )
+""")
 
 
 # ============================================================
