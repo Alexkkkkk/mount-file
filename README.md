@@ -379,6 +379,12 @@ If Mount File is useful, a GitHub star, reproducible bug report, documentation
 fix or code contribution is welcome. Optional donation information is maintained
 in [`docs/donations.md`](docs/donations.md).
 
+The project donation wallet is **TON**: `UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv`.
+Verify the same address in [TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
+or use [the TON transfer link](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation).
+Never share a seed phrase or private key; see [`docs/donations.md`](docs/donations.md)
+for the full safety note.
+
 ## License
 
 Mount File is distributed under the [MIT License](LICENSE).
