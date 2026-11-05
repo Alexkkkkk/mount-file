@@ -907,7 +907,6 @@ def test_external_journal_device_is_rejected_explicitly(tmp_path):
 @pytest.mark.parametrize(
     ("field", "bit", "reason"),
     [
-        ("feature_incompat", 0x0200, "flex_bg"),
         ("feature_ro_compat", 0x0200, "bigalloc"),
     ],
 )
@@ -922,6 +921,31 @@ def test_ext4_unsupported_layout_profiles_fail_closed(field, bit, reason):
     )
     with pytest.raises(Ext3ReadError, match=reason):
         NativeExt4Image._validate_profile(profile)
+
+
+def test_ext4_flex_bg_profile_is_accepted():
+    """flex_bg only relocates group metadata; the reader bounds-checks it."""
+    profile = SimpleNamespace(
+        fs_type="ext4",
+        unknown_incompat_features=0,
+        unknown_ro_compat_features=0,
+        feature_incompat=0x0240,  # EXTENTS | FLEX_BG
+        feature_ro_compat=0x0003,
+        feature_compat=0,
+        clean_unmounted=True,
+        state=0x0001,
+        journal_recovery_needed=False,
+        revision=1,
+        block_size=4096,
+        first_data_block=0,
+        has_journal=False,
+        inode_size=256,
+        feature_incompat_extra=0,
+    )
+    profile.feature_incompat = 0x0240
+    # The shared ext3/ext4 gate must accept the profile; only the deeper
+    # per-inode checks run later, and none of them are triggered here.
+    NativeExt4Image._validate_profile(profile)
 
 
 def test_ext4_extra_isize_feature_requires_extended_inode_size():

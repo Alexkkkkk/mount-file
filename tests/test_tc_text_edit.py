@@ -321,8 +321,11 @@ def test_mount_ext_does_not_use_debugfs_fallback_without_pytsk3(monkeypatch, tmp
             return False
 
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: MB_Yes)
-    assert not tc_window.MainWindow.mount_volume(Window(), panel, offset)
-    assert panel.provider is None
+    # ext4 has a native read-only reader now, so mounting succeeds without
+    # pytsk3; the important guarantee is that no debugfs write path is opened.
+    assert tc_window.MainWindow.mount_volume(Window(), panel, offset)
+    assert panel.provider is not None
+    assert getattr(panel.provider, "backend_name", "") == "native-ext4-ro"
     assert panel.writer is None
 
 
