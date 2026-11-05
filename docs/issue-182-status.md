@@ -4,6 +4,8 @@
 
 Статус относится к commit/ветке, указанным в автоматически обновляемом комментарии. Пока изменение не влито в `main`, оно не считается готовым в `main`.
 
+**Последняя заметка (preflight):** добавлен read-only слой `mountfile/fs_preflight.py` и CLI-команда `preflight`: он не открывает writer, а публикует выбранное семейство ФС, профиль из capability matrix, трёхзначные гейты (pass/fail/unknown), typed refusal и явный отказ на любую мутацию. Неизвестный формат не маршрутизируется в pytsk3-fallback. Полное завершение issue не заявляется.
+
 **Последняя заметка:** bounded classic JBD2 serializer и wrap-safe planner остаются отдельным экспериментом: escaping не поддерживается, serializer отказывает на требующем escape payload, а кодировщик и planner не записывают образ или journal superblock. ext3/ext4 writer API остаётся отключённым до ordering/checkpoint/recovery gates. Progress publisher валидирует issue-ветки read-only и публикует один комментарий только с актуального `main`; tracker не сканирует исходники. Native ext2/ext3/ext4 readers теперь используют консервативную allowlist inode flags и отвергают неизвестные, зарезервированные и неподдержанные биты при обращении к inode, не меняя образ. Native exFAT теперь ограничен one-FAT профилем: двух-FAT TexFAT отказывается до чтения metadata или записи, без legacy fallback; геометрический probe не является разрешением доступа. Capability/refusal status, bounded benchmark provenance, FAT12/FAT16 identity и повторное открытие VFS также усилены. Для quality milestone #182 scoped correctness gate (`S110`, `S112`, `F841`, `B006`, `E722`) теперь проходит с 0 findings; полный Ruff modernization backlog и coverage >80% остаются отдельными задачами. Полное завершение issue не заявляется.
 
 | ID | Задача | Статус | Что подтверждено / что осталось |
@@ -35,6 +37,9 @@
 <!-- issue-182 validation checkpoint -->
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
 <!-- issue-182 validation checkpoint merge -->
+- 2026-11-04: read-only per-filesystem preflight (профили, гейты, отказы) + CLI `preflight`.
+
+- 2026-11-04: PR #356 (preflight gate) — `mountfile/cli.py` и `mountfile/fs_preflight.py` приведены к black, импорты `tests/test_fs_preflight.py` к isort; Quality/lint проходят.
 
 - 2026-11-04: PR #347 — ветка синхронизирована с main, CLI status follow-up зафиксирован в статусе.
 
@@ -44,5 +49,8 @@
 - 2026-11-04: PR #352 — ветка синхронизирована с main, случайный пустой файл log удалён.
 
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
+- 2026-11-04: ветка синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.
+
 - 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
+- 2026-11-04: ветка preflight повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.
 - 2026-11-04: ветка CLI status повторно синхронизирована с `main` после вливания PR #352; конфликт status sheet разрешён.
