@@ -256,3 +256,39 @@ def test_default_search_stops_when_regex_engine_times_out(tmp_path, monkeypatch)
 
     with pytest.raises(ValueError, match="regex time limit"):
         backend.search_files(image, 0, "needle", "/", False)
+
+
+def test_stdlib_regex_fallback_keeps_simple_patterns_working(tmp_path, monkeypatch):
+    import mountfile.ai.mcp_server as mcp_server
+
+    backend = DefaultBackend(tmp_path)
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"x")
+    monkeypatch.setattr(mcp_server, "_timeout_regex", None)
+    monkeypatch.setattr(
+        backend,
+        "list_directory",
+        lambda *args: [{"name": "report.txt", "path": "/report.txt", "is_dir": False}],
+    )
+
+    assert backend.search_files(image, 0, r"\.txt$", "/", False) == [
+        {"name": "report.txt", "path": "/report.txt", "is_dir": False}
+    ]
+
+
+def test_stdlib_regex_fallback_rejects_unbounded_pattern_before_search(
+    tmp_path, monkeypatch
+):
+    import mountfile.ai.mcp_server as mcp_server
+
+    backend = DefaultBackend(tmp_path)
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"x")
+    monkeypatch.setattr(mcp_server, "_timeout_regex", None)
+    calls = []
+    monkeypatch.setattr(backend, "list_directory", lambda *args: calls.append(args))
+    ambiguous_alternations = "(?:a|aa)" * 20 + "z"
+
+    with pytest.raises(ValueError, match="cannot be safely evaluated.*install regex"):
+        backend.search_files(image, 0, ambiguous_alternations, "/", False)
+    assert calls == []

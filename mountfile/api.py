@@ -88,7 +88,11 @@ class ServiceRegistry(Protocol):
     def filesystem_status(self, image: str, offset: int = 0) -> Any: ...
 
     def timeline(
-        self, image: Optional[str] = None, limit: int = 100, path: Optional[str] = None
+        self,
+        image: Optional[str] = None,
+        limit: int = 100,
+        path: Optional[str] = None,
+        offset: int = 0,
     ) -> Any: ...
 
 
@@ -272,7 +276,12 @@ def _canonical_parameter(name: str) -> Optional[str]:
     return None
 
 
-def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> Any:
+def _invoke(
+    operation: Any,
+    values: Mapping[str, Any],
+    operation_name: str,
+    required_parameters: Sequence[str] = (),
+) -> Any:
     """Call a registry operation using its declared parameter names.
 
     This avoids a broad TypeError retry, which could accidentally execute a
@@ -301,6 +310,17 @@ def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> A
     accepts_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters
     )
+    supported_parameters = {
+        canonical
+        for parameter in parameters
+        if (canonical := _canonical_parameter(parameter.name)) is not None
+    }
+    unsupported_required = set(required_parameters) - supported_parameters
+    if unsupported_required and not accepts_kwargs:
+        raise ServiceUnavailableError(
+            "service operation %r does not support required parameter(s): %s"
+            % (operation_name, ", ".join(sorted(unsupported_required)))
+        )
     kwargs: dict[str, Any] = {}
     positional: list[Any] = []
     positional_index = 0
@@ -815,7 +835,14 @@ def create_app(
             "offset": offset,
         }
         try:
-            return _json_value(_invoke(operation, values, "timeline"))
+            return _json_value(
+                _invoke(
+                    operation,
+                    values,
+                    "timeline",
+                    required_parameters=("offset",) if offset else (),
+                )
+            )
         except Exception as exc:
             raise _http_error(exc)
 

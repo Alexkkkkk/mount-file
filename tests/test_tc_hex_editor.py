@@ -135,3 +135,66 @@ def test_local_hex_save_refuses_external_file_change(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="changed since it was opened"):
         window.page.save_callback(b"stale editor contents")
     assert target.read_bytes() == b"external edit"
+
+
+def test_image_hex_save_refuses_rebound_provider_and_writer(monkeypatch):
+    original_provider = object()
+    original_writer = object()
+    replacement_writer = object()
+
+    class Panel:
+        mode = "img"
+        provider = original_provider
+        writer = original_writer
+
+        def selected_entry(self):
+            return {"name": "sample.bin", "size": 3}
+
+        def join(self, _name):
+            return "/sample.bin"
+
+        def refresh(self):
+            pass
+
+    class Window:
+        image_path = "/first.img"
+
+        def active_panel(self):
+            return panel
+
+        def _show_hex_page(self, page):
+            self.page = page
+
+        def _show_panels(self):
+            pass
+
+        def _maybe_advise(self, *_args, **_kwargs):
+            pass
+
+        def log_msg(self, _message):
+            pass
+
+        def _backup_before_write(self, _panel):
+            raise AssertionError("stale editor must not request a write backup")
+
+    class Provider:
+        def read_file(self, _path):
+            return b"abc"
+
+    class CapturedPage:
+        def __init__(self, *args, **kwargs):
+            self.save_callback = kwargs["save_callback"]
+
+    panel = Panel()
+    panel.provider = Provider()
+    original_provider = panel.provider
+    monkeypatch.setattr(tc_window, "HexEditorPage", CapturedPage)
+    monkeypatch.setattr(tc_window.QMessageBox, "warning", lambda *_args: MB_Yes)
+    window = Window()
+    tc_window.MainWindow.f3_hex_view(window)
+
+    panel.provider = Provider()
+    panel.writer = replacement_writer
+    window.image_path = "/second.img"
+    with pytest.raises(RuntimeError, match="образ изменился"):
+        window.page.save_callback(b"old image edits")

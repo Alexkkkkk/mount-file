@@ -425,8 +425,16 @@ def cmd_read_range(args):
             output.write(data)
         print("Wrote %d bytes to %s" % (len(data), args.output), file=sys.stderr)
     else:
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        binary_stdout = getattr(sys.stdout, "buffer", None)
+        if binary_stdout is None:
+            # GUI command capture is a bounded text stream. Preserve the
+            # bytes for ordinary CLI stdout, but render captured data safely.
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            sys.stdout.write(data.decode(encoding, errors="replace"))
+            sys.stdout.flush()
+        else:
+            binary_stdout.write(data)
+            binary_stdout.flush()
     return OK
 
 
