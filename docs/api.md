@@ -77,12 +77,13 @@ checksum, неизвестные feature flags, повреждённые или 
 Revoke targets проверяются на границы образа, дубликаты, пересечение с journal
 data и конфликт с записями той же транзакции.
 
-NTFS reader разрешает resident `$ATTRIBUTE_LIST` и extension FILE records для
-обычных файлов и каталогов только после проверки sequence-bearing MFT reference,
-ссылки extension record на базовую запись и точного совпадения атрибута. Он
-объединяет только непрерывные VCN extents и возвращает нули за `ValidDataLength`.
-Nonresident `$ATTRIBUTE_LIST` и `$MFT`, которому нужны extension records для
-bootstrap, отвергаются; NTFS остаётся read-only и `$LogFile` не проигрывается.
+NTFS reader разрешает bounded resident и nonresident `$ATTRIBUTE_LIST` и
+extension FILE records для обычных файлов и каталогов только после проверки
+sequence-bearing MFT reference, ссылки extension record на базовую запись и
+точного совпадения атрибута. Nonresident list ограничен 1 MiB. Reader объединяет
+только непрерывные VCN extents и возвращает нули за `ValidDataLength`. `$MFT`,
+которому нужны extension records для bootstrap, отвергается; NTFS остаётся
+read-only и `$LogFile` не проигрывается.
 
 ### Метаданные NTFS
 

@@ -266,7 +266,10 @@ def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestar
     if first.flags != second.flags:
         raise NtfsMetadataError("NTFS $LogFile restart pages disagree on clean state")
     if not first.clean_dismount:
-        raise NtfsMetadataError("NTFS $LogFile requires recovery or has unknown state")
+        raise NtfsMetadataError(
+            "NTFS $LogFile requires recovery or has unknown state",
+            RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+        )
     return max((first, second), key=lambda item: (item.revision, item.current_lsn))
 
 
@@ -1125,7 +1128,10 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         )
         if not volume_state.clean:
             self.close()
-            raise NtfsMetadataError("NTFS volume is dirty or requires repair")
+            raise NtfsMetadataError(
+                "NTFS volume is dirty or requires repair",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+            )
         try:
             logfile_record = self.read_mft_record(2)
             logfile_attrs = self._attributes_for_record(2, logfile_record)

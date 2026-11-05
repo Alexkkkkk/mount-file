@@ -33,6 +33,8 @@
 
 В PR #344 проверка пяти правил correctness-lint распространена на весь репозиторий, а не только на `mountfile/` и `tests/`. В базе `main` было 51 нарушение; все оставшиеся нарушения в приложении и maintenance tools исправлены, расширенная проверка проходит с 0 findings. Это обновление включено в тот же commit, чтобы пройти проверку issue-182 ветки.
 
+- 2026-11-05: NTFS dirty `$Volume` и recovery-required `$LogFile` получают стабильный `DIRTY_OR_RECOVERY_REQUIRED` code; добавлены regression assertions. API, capability registry и audit docs уточняют bounded resident/nonresident `$ATTRIBUTE_LIST` support; это follow-up hardening, не закрытие полной profile × operation/crash-safety acceptance matrix.
+
 - 2026-11-04: PR #349 native VFS tree synchronized with main and local suite verified (1812 passed).
 <!-- issue-182 validation checkpoint -->
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
