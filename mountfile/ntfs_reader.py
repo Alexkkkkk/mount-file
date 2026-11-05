@@ -940,7 +940,10 @@ def parse_ntfs_file_name(value: bytes) -> NtfsFileName:
         name = value[66:end].decode("utf-16le")
     except UnicodeDecodeError as exc:
         raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-    if name in (".", "..") or any(c in name for c in ("/", "\\", "\x00")):
+    # "." is a legal self-reference entry inside a directory index, so it must
+    # not be treated as a malformed path component. ".." and separators remain
+    # fail-closed because they cannot address a real child of the directory.
+    if name == ".." or any(c in name for c in ("/", "\\", "\x00")):
         raise NtfsMetadataError("NTFS FILE_NAME contains an invalid path component")
     return NtfsFileName(
         parent_reference,

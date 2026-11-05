@@ -219,7 +219,7 @@ class NativeExfatWriter:
         try:
             shutil.copy2(self.image, stage)
             return stage
-        except Exception:
+        except BaseException:
             stage.unlink(missing_ok=True)
             raise
 
@@ -737,7 +737,7 @@ class NativeExfatWriter:
             with _image_lock(self.image):
                 self._commit_stage(stage)
                 stage = None
-        except Exception:
+        except BaseException:
             if stage is not None:
                 stage.unlink(missing_ok=True)
             raise

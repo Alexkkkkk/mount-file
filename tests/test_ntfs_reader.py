@@ -307,9 +307,22 @@ def test_decodes_bounded_signed_ntfs_runs():
     ]
 
 
-def test_decodes_bounded_sparse_ntfs_run_without_physical_location():
+def test_decodes_sparse_ntfs_run_as_unbacked_extent():
+    """A zero-length offset field is a sparse extent, not a malformed run.
+
+    $BadClus allocates its whole data stream this way on every mkfs.ntfs
+    volume, so refusing the run made real NTFS images unreadable.
+    """
     runs = _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
     assert [(run.vcn, run.lcn, run.length) for run in runs] == [(0, None, 3)]
+
+
+def test_sparse_run_keeps_following_real_extents():
+    runs = _parse_runlist(bytes([0x01, 0x02, 0x11, 0x03, 0x07, 0x00]), 32)
+    assert [(run.vcn, run.lcn, run.length) for run in runs] == [
+        (0, None, 2),
+        (2, 7, 3),
+    ]
 
 
 def test_parses_bounded_attribute_list_entries_and_extension_references():
