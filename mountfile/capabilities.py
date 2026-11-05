@@ -309,8 +309,9 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "flex_bg, bigalloc, and metadata_csum profiles fail closed.",
         ),
         "ntfs-native-ro": (
-            "Bounded metadata/tree profile only; ATTRIBUTE_LIST and unsupported streams "
-            "are refused.",
+            "Bounded metadata/tree profile only; resident and bounded nonresident "
+            "ATTRIBUTE_LIST resolution is supported for files and directories, while "
+            "$MFT bootstrap extension records and unsupported streams are refused.",
             "No $LogFile replay, sparse, compressed, or encrypted stream support.",
         ),
         "exfat-native-ro": (
