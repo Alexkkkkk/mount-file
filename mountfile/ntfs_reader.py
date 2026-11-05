@@ -173,9 +173,7 @@ def _fixup_logfile_page(raw_page: bytes, *, page_size: int) -> bytes:
     if raw_page[:4] == b"\xff\xff\xff\xff" and not raw_page.strip(b"\xff"):
         # A volume whose log was never used after formatting carries no
         # restart page at all: the whole page stays erased (0xFF).
-        raise NtfsLogFileUnused(
-            "NTFS $LogFile restart pages were never written"
-        )
+        raise NtfsLogFileUnused("NTFS $LogFile restart pages were never written")
     if raw_page[:4] != b"RSTR":
         raise NtfsMetadataError("NTFS $LogFile restart page signature is invalid")
     usa_offset, usa_count = struct.unpack_from("<HH", raw_page, 4)

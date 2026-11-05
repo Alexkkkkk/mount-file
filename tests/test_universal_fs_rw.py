@@ -728,9 +728,7 @@ def test_long_filename_rename_rewrites_lfn_group_in_place(tmp_path):
 
         assert fs.read(destination) == payload
         assert fs.stat(source) is None
-        assert [entry.name for entry in fs.list("/")] == [
-            "A LONG DESTINATION NAME.BIN"
-        ]
+        assert [entry.name for entry in fs.list("/")] == ["A LONG DESTINATION NAME.BIN"]
     finally:
         fs.close()
 
