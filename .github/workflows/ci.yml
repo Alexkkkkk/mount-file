@@ -20,7 +20,12 @@ jobs:
   tests:
     if: ${{ github.event_name != 'schedule' }}
     name: ${{ matrix.check_name }}
-    timeout-minutes: 30
+    # Per-leg budget. macOS runners are markedly slower than Linux and a
+    # cancelled leg used to poison the whole matrix (a cancelled matrix leg
+    # makes the fail-closed "Tests (ubuntu-latest, py3.12)" gate exit 1, which
+    # in turn fails CI-Gate) so the whole branch went BLOCKED for infra
+    # reasons, not for a real test failure.
+    timeout-minutes: ${{ matrix.timeout }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,30 +36,39 @@ jobs:
           - os: ubuntu-latest
             python: "3.10"
             check_name: "test (3.10)"
+            timeout: 40
           - os: ubuntu-latest
             python: "3.11"
             check_name: "test (3.11)"
+            timeout: 40
           - os: ubuntu-latest
             python: "3.12"
             check_name: "test (3.12)"
+            timeout: 40
           - os: windows-latest
             python: "3.10"
             check_name: "Tests (windows-latest, py3.10)"
+            timeout: 40
           - os: windows-latest
             python: "3.11"
             check_name: "Tests (windows-latest, py3.11)"
+            timeout: 40
           - os: windows-latest
             python: "3.12"
             check_name: "Tests (windows-latest, py3.12)"
+            timeout: 40
           - os: macos-latest
             python: "3.10"
             check_name: "Tests (macos-latest, py3.10)"
+            timeout: 75
           - os: macos-latest
             python: "3.11"
             check_name: "Tests (macos-latest, py3.11)"
+            timeout: 75
           - os: macos-latest
             python: "3.12"
             check_name: "Tests (macos-latest, py3.12)"
+            timeout: 75
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -112,6 +126,7 @@ jobs:
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -v
+          --timeout=600 --timeout-method=thread
           --cov=mountfile --cov-report=term --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
           --cov-fail-under=20
