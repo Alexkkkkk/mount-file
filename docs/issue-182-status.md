@@ -36,15 +36,8 @@
 <!-- issue-182 validation checkpoint f5547524c074f406c5756509c1f5b61761f35ab0 -->
 <!-- issue-182 validation checkpoint merge -->
 
-<<<<<<< ours
-- 2026-11-04: PR #355 (exFAT probe/writer audit gaps) — `mountfile/exfat_writer.py` приведён к black, чтобы Quality/lint проходили.
-
-- 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
-- 2026-11-04: ветка синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты exFAT probe/writer не изменились.
-=======
 - 2026-11-04: PR #352 — ветка синхронизирована с main, случайный пустой файл log удалён.
 
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 - 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
->>>>>>> theirs
 - 2026-11-04: ветка audit gaps повторно синхронизирована с `main` после вливания PR #352; конфликт в exFAT-файлах разрешён в пользу объединённого кода main, статус-лист дополнен.
