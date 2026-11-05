@@ -1089,6 +1089,30 @@ def test_native_exfat_delete_refuses_cross_linked_cluster(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_native_exfat_rename_refuses_cross_linked_directory_cluster(tmp_path):
+    path = tmp_path / "exfat-cross-linked-rename.img"
+    _tree_image(path)
+    raw = bytearray(path.read_bytes())
+    root = bytearray(raw[32 * 512 : 33 * 512])
+    # The fixture's file stream starts at cluster 3. Point it at cluster 2,
+    # which is also the root directory, then restore the valid entry checksum.
+    struct.pack_into("<I", root, 116, 2)
+    entry_set = bytearray(root[64:160])
+    struct.pack_into("<H", entry_set, 2, 0)
+    struct.pack_into("<H", entry_set, 2, _entry_set_checksum(entry_set))
+    root[64:160] = entry_set
+    raw[32 * 512 : 33 * 512] = root
+    path.write_bytes(raw)
+    before = path.read_bytes()
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+
+    with pytest.raises(ExfatWriteError, match="shared by"):
+        writer.rename("/HELLO.TXT", "/RENAMED.TXT")
+
+    assert path.read_bytes() == before
+    assert list(tmp_path.glob(f".{path.name}.exfat-*.stage")) == []
+
+
 def test_native_exfat_writer_creates_mkdirs_and_deletes_empty_entries(tmp_path):
     path = tmp_path / "exfat-writer-allocation.img"
     _tree_image(path)
@@ -1254,6 +1278,55 @@ def test_exfat_writer_fails_closed_without_system_metadata(tmp_path):
     writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
     with pytest.raises(ExfatWriteError, match="allocation bitmap entry is missing"):
         writer.write_file("/HELLO.TXT", b"blocked")
+
+
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_exfat_writer_cleans_staging_after_partial_write_failure(
+    tmp_path, monkeypatch, failure
+):
+    path = tmp_path / "exfat-stage-failure.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    original_image = path.read_bytes()
+    write_rel = writer._write_rel
+    staged_write_completed = False
+
+    def write_then_fail(stream, relative, data):
+        nonlocal staged_write_completed
+        write_rel(stream, relative, data)
+        staged_write_completed = True
+        raise failure("injected failure after a staged exFAT write")
+
+    monkeypatch.setattr(writer, "_write_rel", write_then_fail)
+    with pytest.raises(failure, match="injected failure"):
+        writer.write_file("/HELLO.TXT", b"partially written staged content")
+
+    assert staged_write_completed
+    assert path.read_bytes() == original_image
+    assert list(tmp_path.glob(f".{path.name}.exfat-*.stage")) == []
+
+
+def test_exfat_writer_cleans_partial_stage_when_copy_is_interrupted(
+    tmp_path, monkeypatch
+):
+    import mountfile.exfat_writer as exfat_writer
+
+    path = tmp_path / "exfat-copy-interruption.img"
+    _tree_image(path)
+    writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
+    original_image = path.read_bytes()
+    original_copy = exfat_writer.shutil.copy2
+
+    def copy_then_interrupt(source, destination):
+        original_copy(source, destination)
+        raise KeyboardInterrupt("injected stage copy interruption")
+
+    monkeypatch.setattr(exfat_writer.shutil, "copy2", copy_then_interrupt)
+    with pytest.raises(KeyboardInterrupt, match="stage copy interruption"):
+        writer.write_file("/HELLO.TXT", b"must not commit")
+
+    assert list(tmp_path.glob(f".{path.name}.exfat-*.stage")) == []
+    assert path.read_bytes() == original_image
 
 
 def test_native_exfat_reader_rejects_entry_set_checksum_corruption(tmp_path):
