@@ -168,7 +168,13 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         total32 = struct.unpack_from("<I", raw, 32)[0]
         fat32 = struct.unpack_from("<I", raw, 36)[0]
         total_sectors = total16 or total32
-        fat_sectors = fat16 or fat32
+        # A FAT12/16 volume may legitimately keep its sector count in the 32-bit
+        # field (mkfs.fat does this once the volume exceeds 65535 sectors), and
+        # the FAT32 FAT-size field then holds unrelated bytes. Pick the geometry
+        # that actually belongs to this volume instead of trusting field order,
+        # otherwise valid FAT16 images are rejected as FAT32-shaped.
+        fat16_layout = fat16 != 0 or root_entries != 0
+        fat_sectors = fat16 if fat16_layout else fat32
         if bps not in (512, 1024, 2048, 4096):
             raise FatReadError("unsupported FAT sector size")
         if spc == 0 or spc > 128 or spc & (spc - 1):
@@ -208,8 +214,10 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             if not 2 <= root_cluster <= cluster_count + 1:
                 raise FatReadError("FAT32 root cluster is outside the data area")
         else:
-            if root_entries == 0 or fat32:
+            if root_entries == 0:
                 raise FatReadError("FAT12/16 BPB contains FAT32 root geometry")
+            if fat16 == 0:
+                raise FatReadError("invalid FAT volume geometry")
             root_cluster = None
         volume_bytes = total_sectors * bps
         if volume_bytes < 512 or volume_bytes > self._image_size - self.offset:

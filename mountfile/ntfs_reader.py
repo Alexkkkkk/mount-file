@@ -354,7 +354,21 @@ def _parse_runlist(
         encoded = raw[pos : pos + offset_size]
         pos += offset_size
         if offset_size == 0:
-            raise NtfsMetadataError("sparse NTFS run is unsupported")
+            # A zero-length offset field marks a sparse extent: the run occupies
+            # VCNs but has no backing LCN. $BadClus and other system files use
+            # this for their whole (or tail) allocation, so it must be modelled
+            # rather than refused; readers must treat lcn=None as zero-filled.
+            lcn = None
+            if vcn + run_length < vcn or (
+                highest_vcn is not None and vcn + run_length > highest_vcn + 1
+            ):
+                raise NtfsMetadataError("NTFS runlist VCN range overflows")
+            result.append(NtfsRun(vcn, None, run_length))
+            vcn += run_length
+            count += 1
+            if count > _MAX_ATTRIBUTES:
+                raise NtfsMetadataError("NTFS runlist has too many extents")
+            continue
         if encoded[-1] & 0x80:
             delta = int.from_bytes(encoded, "little", signed=False) - (
                 1 << (8 * offset_size)
@@ -712,7 +726,10 @@ def _parse_ntfs_index_entries(
             name = key[0x42:name_end].decode("utf-16le")
         except UnicodeDecodeError as exc:
             raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-        if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        # A directory index legitimately stores a "." entry pointing at the
+        # directory itself (NTFS self-reference), so only the truly unusable
+        # components are refused here. ".." and separators stay fail-closed.
+        if name == ".." or "/" in name or "\\" in name or "\x00" in name:
             raise NtfsMetadataError(
                 "NTFS index name contains an invalid path component"
             )
@@ -732,7 +749,12 @@ def _parse_ntfs_index_entries(
             raise NtfsMetadataError("NTFS index names are duplicate or unsorted")
         names.add(folded)
         previous_name = name
-        result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
+        # FILE_NAME.FileAttributes is a 4-byte field at 0x38; the directory
+        # bit (0x10000000) lives in its high byte, so read it wide.
+        file_attributes = struct.unpack_from("<I", key, 0x38)[0]
+        result.append(
+            NtfsIndexEntry(reference, name, bool(file_attributes & 0x10000000))
+        )
         if flags & 1:
             if not allow_children or entry_length < 24 + key_length:
                 raise NtfsMetadataError(
@@ -906,7 +928,10 @@ def parse_ntfs_file_name(value: bytes) -> NtfsFileName:
         name = value[66:end].decode("utf-16le")
     except UnicodeDecodeError as exc:
         raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-    if name in (".", "..") or any(c in name for c in ("/", "\\", "\x00")):
+    # "." is a legal self-reference entry inside a directory index, so it must
+    # not be treated as a malformed path component. ".." and separators remain
+    # fail-closed because they cannot address a real child of the directory.
+    if name == ".." or any(c in name for c in ("/", "\\", "\x00")):
         raise NtfsMetadataError("NTFS FILE_NAME contains an invalid path component")
     return NtfsFileName(
         parent_reference,
@@ -1280,6 +1305,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             cluster_count=cluster_count,
             upcase_table=upcase_table,
             allow_attribute_list=True,
+            allow_end_marker_padding=True,
         )
         list_attributes = [
             attribute
@@ -1345,6 +1371,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     cluster_count=cluster_count,
                     upcase_table=upcase_table,
                     allow_attribute_list=True,
+                    allow_end_marker_padding=True,
                 )
                 if any(
                     attribute.type_code == _ATTRIBUTE_LIST
