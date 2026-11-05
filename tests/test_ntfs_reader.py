@@ -307,9 +307,9 @@ def test_decodes_bounded_signed_ntfs_runs():
     ]
 
 
-def test_rejects_sparse_ntfs_run():
-    with pytest.raises(NtfsMetadataError, match="sparse"):
-        _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+def test_decodes_bounded_sparse_ntfs_run_without_physical_location():
+    runs = _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+    assert [(run.vcn, run.lcn, run.length) for run in runs] == [(0, None, 3)]
 
 
 def test_parses_bounded_attribute_list_entries_and_extension_references():

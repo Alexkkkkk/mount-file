@@ -240,13 +240,15 @@ def test_real_ntfs_cluster_vcns_and_mft_padding(tmp_path):
         assert next(x for x in entries if x.name == "$Extend").is_directory
         assert reader.read_file("/file-47.bin") == payload
         assert reader.read_file_range("/FILE-47.BIN", 509, 1111) == payload[509:1620]
-        # The native content profile deliberately still refuses sparse $BadClus.
+        # System metadata is visible, but the sparse stream stays unreadable.
+        badclus = next(
+            item for item in reader.list_dir("/") if item["name"] == "$BadClus"
+        )
+        assert badclus["content_supported"] is False
+        assert badclus["unsupported_streams"] == ["$Bad"]
+        assert reader.stat("/$BadClus")["content_supported"] is False
         with pytest.raises(NtfsMetadataError, match="sparse"):
-            (
-                reader.read_file("/$BadClus")
-                if reader.file_size("/$BadClus")
-                else reader.list_dir("/")
-            )
+            reader.read_file("/$BadClus")
     finally:
         reader.close()
     assert hashlib.sha256(image.read_bytes()).digest() == before
