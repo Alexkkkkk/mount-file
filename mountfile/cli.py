@@ -37,7 +37,7 @@ from .dfir_unallocated_scan import scan_unallocated
 from .dfir_yara import YaraUnavailableError, scan_yara
 from .evidence import EvidenceManifestError, create_evidence_manifest
 from .extract import ExtractError, extract_path
-from .fat32 import Fat32Error, Fat32Provider
+from .fat32 import Fat32Error
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .fs_preflight import preflight_image
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
@@ -54,13 +54,7 @@ from .timeline import (
 )
 from .timestomp import DEFAULT_SKEW, TimestompError, collect_timestomp
 from .universal_fs_rw import UniversalFSRW
-from .vfs import (
-    Ext2ReadError,
-    RecognizedFilesystemError,
-    TskError,
-    open_image_provider,
-    volume_size_for_offset,
-)
+from .vfs import Ext2ReadError, TskError, open_image_provider, volume_size_for_offset
 from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
@@ -82,6 +76,8 @@ def cmd_preflight(args):
     offset = None
     if args.offset is not None:
         offset = args.offset
+    elif getattr(args, "auto", False):
+        offset, _, _ = _select(args.image, args)
     elif args.volume is not None:
         volumes = detect_volumes(args.image, scan_limit=args.scan_limit)
         if not 1 <= args.volume <= len(volumes):
@@ -89,7 +85,11 @@ def cmd_preflight(args):
                 "no volume %d (image has %d)" % (args.volume, len(volumes))
             )
         offset = volumes[args.volume - 1].offset
-    payload = preflight_image(args.image, offset=offset)
+    extent = getattr(args, "_selected_volume_size", None)
+    if extent is None:
+        payload = preflight_image(args.image, offset=offset)
+    else:
+        payload = preflight_image(args.image, offset=offset, volume_size=extent)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     reports = payload["volumes"]
     return (
@@ -100,7 +100,9 @@ def cmd_preflight(args):
 def cmd_status(args):
     """Print the selected image backend status without attempting a mutation."""
     offset, fstype, description = _select(args.image, args)
-    volume_size = volume_size_for_offset(args.image, offset)
+    volume_size = getattr(args, "_selected_volume_size", None)
+    if volume_size is None:
+        volume_size = volume_size_for_offset(args.image, offset)
     try:
         provider, backend = _provider(args.image, offset, volume_size)
     except TskError as exc:
@@ -253,7 +255,19 @@ def _split_dir(path):
 
 def _select(image, args):
     """Resolve --offset / --volume / automatic choice to one volume."""
+    selectors = (
+        args.offset is not None,
+        args.volume is not None,
+        getattr(args, "auto", False),
+    )
+    if sum(bool(value) for value in selectors) > 1:
+        raise ValueError("--offset, --volume and --auto are mutually exclusive")
+    if args.scan_limit < 0:
+        raise ValueError("scan limit must be non-negative")
+    args._selected_volume_size = None
     if args.offset is not None:
+        if args.offset < 0:
+            raise ValueError("filesystem offset must be non-negative")
         return (
             args.offset,
             probe_filesystem(image, args.offset) or "unknown",
@@ -263,14 +277,19 @@ def _select(image, args):
         # Automatic choice: partition table, udev offsets and filesystem
         # signatures are all tried, and the winner is confirmed by a real
         # mount, so a broken table cannot produce the TSK FS_Info_Con error.
-        best, _candidates = auto_select(image, udev=getattr(args, "udev", None))
+        best, _candidates = auto_select(
+            image,
+            udev=getattr(args, "udev", None),
+            scan_limit=args.scan_limit,
+        )
         if best is None:
             raise Fat32Error("no mountable volume found in %s (--auto)" % image)
+        args._selected_volume_size = best.extent_size
         return best.offset, best.fstype, best.desc
     try:
         vols = detect_volumes(image, scan_limit=args.scan_limit)
     except OSError as e:
-        raise Fat32Error(str(e))
+        raise Fat32Error(str(e)) from e
     if args.volume is not None:
         if not 1 <= args.volume <= len(vols):
             raise Fat32Error("no volume %d (image has %d)" % (args.volume, len(vols)))
@@ -288,23 +307,45 @@ def _provider(image, offset, volume_size=None):
     """Open the best available bounded read-only provider for a volume."""
     if volume_size is None:
         volume_size = volume_size_for_offset(image, offset)
-    try:
-        provider = open_image_provider(image, offset=offset, volume_size=volume_size)
-        return provider, getattr(provider, "backend_name", "read-only")
-    except RecognizedFilesystemError:
-        raise
-    except TskError:
-        return Fat32Provider(image, offset=offset), "fat32"
+    provider = open_image_provider(image, offset=offset, volume_size=volume_size)
+    return provider, getattr(provider, "backend_name", "read-only")
 
 
-def _open_write(image, offset, backup=False):
+def _selected_provider(image, offset, args):
+    extent = getattr(args, "_selected_volume_size", None)
+    if extent is None:
+        return _provider(image, offset)
+    return _provider(image, offset, volume_size=extent)
+
+
+def _selected_writer(image, offset, args):
+    extent = getattr(args, "_selected_volume_size", None)
+    if extent is None:
+        return _open_write(image, offset, backup=args.backup)
+    return _open_write(image, offset, backup=args.backup, volume_size=extent)
+
+
+def _open_write(image, offset, backup=False, volume_size=None):
     """Open the explicitly bounded native writer selected for this volume."""
     if backup:
+        image = os.fspath(image)
         bak = image + ".bak"
-        shutil.copy2(image, bak)
+        created = False
+        try:
+            with open(image, "rb") as source, open(bak, "xb") as target:
+                created = True
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+            shutil.copystat(image, bak)
+        except BaseException:
+            if created:
+                os.unlink(bak)
+            raise
         print("Backup written: %s" % bak)
     try:
-        volume_size = volume_size_for_offset(image, offset)
+        if volume_size is None:
+            volume_size = volume_size_for_offset(image, offset)
         return UniversalFSRW(
             image,
             offset=offset,
@@ -357,7 +398,7 @@ def cmd_info(args):
 
 def cmd_ls(args):
     offset, fstype, desc = _select(args.image, args)
-    provider, backend = _provider(args.image, offset)
+    provider, backend = _selected_provider(args.image, offset, args)
     try:
         items = provider.list_dir(_abs_path(args.path))
     except (Fat32Error, TskError, Ext2ReadError) as e:
@@ -382,7 +423,7 @@ def cmd_ls(args):
 def cmd_stat(args):
     """Print native VFS metadata for one filesystem path as JSON."""
     offset, fstype, desc = _select(args.image, args)
-    provider, backend = _provider(args.image, offset)
+    provider, backend = _selected_provider(args.image, offset, args)
     try:
         metadata = provider.stat(_abs_path(args.path))
         result = {
@@ -412,7 +453,7 @@ def cmd_read_range(args):
             "read length must be between 0 and %d bytes" % _MAX_CLI_READ_RANGE_BYTES
         )
     offset, _fstype, _desc = _select(args.image, args)
-    provider, _backend = _provider(args.image, offset)
+    provider, _backend = _selected_provider(args.image, offset, args)
     try:
         data = provider.read_file_range(
             _abs_path(args.path), offset=args.file_offset, length=args.length
@@ -440,7 +481,7 @@ def cmd_read_range(args):
 
 def cmd_get(args):
     offset, fstype, desc = _select(args.image, args)
-    provider, backend = _provider(args.image, offset)
+    provider, backend = _selected_provider(args.image, offset, args)
     out = args.output or "."
     try:
         src = _abs_path(args.path)
@@ -461,7 +502,7 @@ def cmd_put(args):
     for src in args.local:
         if not os.path.isfile(src):
             raise Fat32Error("no such local file: %s" % src)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _selected_writer(args.image, offset, args)
     try:
         for src in args.local:
             with open(src, "rb") as f:
@@ -480,7 +521,7 @@ def cmd_mkdir(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _selected_writer(args.image, offset, args)
     try:
         fs.mkdir(_abs_path(args.path))
         print("Created directory %s" % _abs_path(args.path))
@@ -501,7 +542,7 @@ def cmd_mv(args):
             "(use: mv IMAGE /old/path NEW_NAME)" % args.new_name
         )
     destination = posixpath.join(posixpath.dirname(source), args.new_name)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _selected_writer(args.image, offset, args)
     try:
         fs.rename(source, destination)
         print("Renamed %s -> %s" % (source, destination))
@@ -515,12 +556,14 @@ def cmd_rm(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _selected_writer(args.image, offset, args)
     try:
         try:
             fs.delete(_abs_path(args.path), recursive=args.recursive)
-        except FileNotFoundError:
-            raise Fat32Error("no such entry in the image: %s" % _abs_path(args.path))
+        except FileNotFoundError as exc:
+            raise Fat32Error(
+                "no such entry in the image: %s" % _abs_path(args.path)
+            ) from exc
         print(
             "Deleted %s%s"
             % (
@@ -805,6 +848,12 @@ def _add_target(sp):
         "--auto",
         action="store_true",
         help="pick the working volume automatically (same as the `autopick` command)",
+    )
+    sp.add_argument(
+        "-u",
+        "--udev",
+        default=None,
+        help="partition layout file to supply authoritative extents with --auto",
     )
     sp.add_argument(
         "--backup",
@@ -1106,12 +1155,6 @@ def build_parser():
         help="pick the working volume (offset + filesystem) automatically",
     )
     _add_target(sp)
-    sp.add_argument(
-        "-u",
-        "--udev",
-        default=None,
-        help="udev file with a [PARTITIONS] section, if one is available",
-    )
     sp.add_argument(
         "--hint",
         default=None,

@@ -6,6 +6,7 @@ param(
     [switch]$Minimal,
     [switch]$NoSys,
     [switch]$DryRun,
+    [switch]$LegacyTsk,
     [switch]$SkipExt,
     [switch]$SkipImDisk
 )
@@ -72,6 +73,7 @@ try {
     $arguments = @($python.Args) + @((Join-Path $root 'install_mountfile.py'))
     if ($Minimal) { $arguments += '--minimal' }
     if ($NoSys) { $arguments += '--no-sys' }
+    if ($LegacyTsk) { $arguments += '--legacy-tsk' }
     if ($SkipExt) { $arguments += '--skip-ext' }
     if ($SkipImDisk) { $arguments += '--skip-imdisk' }
     & $python.Exe @arguments

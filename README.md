@@ -342,6 +342,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md),
 [`docs/quality.md`](docs/quality.md) and [`docs/sync.md`](docs/sync.md) before
 opening a pull request.
 
+Проверка исправленных пользовательских сценариев, команды повторного тестирования
+и оставшиеся ограничения описаны в
+[`docs/functional-validation.md`](docs/functional-validation.md).
+
 ## Repository map
 
 ```text

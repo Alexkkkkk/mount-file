@@ -130,40 +130,64 @@ def _entry_name(entry: Any) -> str:
 
 
 def _entry_is_dir(entry: Any) -> bool:
-    return getattr(entry.info.meta, "type", None) == 2
+    return getattr(getattr(entry.info, "meta", None), "type", None) == 2
 
 
 def _entry_is_file(entry: Any) -> bool:
-    return getattr(entry.info.meta, "type", None) == 1
+    return getattr(getattr(entry.info, "meta", None), "type", None) == 1
 
 
 def _hash_entry(entry: Any, hash_limit: Optional[int]) -> Optional[str]:
     size = int(getattr(entry.info.meta, "size", 0) or 0)
+    if size < 0:
+        return None
     if hash_limit is not None and size > hash_limit:
         return None
+    digest = hashlib.sha256()
     try:
-        data = entry.read_random(0, size)
+        cursor = 0
+        while cursor < size:
+            want = min(1 << 20, size - cursor)
+            data = entry.read_random(cursor, want)
+            if not data or len(data) > want:
+                return None
+            digest.update(data)
+            cursor += len(data)
     except Exception:  # pragma: no cover - unreadable file inside a damaged image
         return None
-    if data is None:
-        return None
-    return hashlib.sha256(bytes(data)).hexdigest()
+    return digest.hexdigest()
 
 
 def iter_file_entries(fs: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
     """Yield ``(path, entry)`` for every regular file reachable from ``/``."""
 
-    def walk(directory: Any, base: str) -> Iterator[tuple[str, Any]]:
+    stack = [(fs.open_dir("/"), prefix, 0)]
+    seen = set()
+    root_inode = getattr(getattr(fs, "info", None), "root_inum", None)
+    if root_inode is not None:
+        seen.add(root_inode)
+    while stack:
+        directory, base, depth = stack.pop()
         try:
             entries = list(directory)
-        except Exception:
-            return
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Unable to enumerate timeline directory %s", base or "/", exc_info=exc
+            )
+            continue
         for entry in entries:
             name = _entry_name(entry)
-            if name in (".", ".."):
+            if not name or name in (".", ".."):
                 continue
             path = "%s/%s" % (base, name)
             if _entry_is_dir(entry):
+                inode = getattr(entry.info.meta, "addr", None)
+                if inode is not None and inode in seen:
+                    continue
+                if depth >= 256:
+                    raise TimelineError("filesystem directory depth exceeds 256")
+                if inode is not None:
+                    seen.add(inode)
                 try:
                     child = entry.as_directory()
                 except Exception as exc:
@@ -171,11 +195,9 @@ def iter_file_entries(fs: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
                         "best-effort operation failed", exc_info=exc
                     )
                     continue
-                yield from walk(child, path)
+                stack.append((child, path, depth + 1))
             elif _entry_is_file(entry):
                 yield path, entry
-
-    yield from walk(fs.open_dir("/"), prefix)
 
 
 # ------------------------------------------------------------------ collection
@@ -230,9 +252,11 @@ def collect_events_from_fs(
             )
 
 
-def open_tsk_fs(image_path: os.PathLike | str) -> Any:
+def open_tsk_fs(image_path: os.PathLike | str, *, offset: int = 0) -> Any:
     """Open ``image_path`` read-only through pytsk3."""
 
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise TimelineError("offset must be a non-negative integer")
     path = Path(image_path)
     if not path.exists():
         raise TimelineError("image not found: %s" % path)
@@ -244,17 +268,17 @@ def open_tsk_fs(image_path: os.PathLike | str) -> Any:
             "install it with 'python -m pip install pytsk3'"
         ) from exc
     try:
-        return pytsk3.FS_Info(pytsk3.Img_Info(str(path)))
+        return pytsk3.FS_Info(pytsk3.Img_Info(str(path)), offset=offset)
     except Exception as exc:
         raise TimelineError("cannot open %s: %s" % (path, exc)) from exc
 
 
 def collect_timeline(
-    image_path: os.PathLike | str, **kwargs: Any
+    image_path: os.PathLike | str, *, offset: int = 0, **kwargs: Any
 ) -> list[TimelineEvent]:
     """Collect the full timeline of ``image_path`` into a list of events."""
 
-    fs = open_tsk_fs(image_path)
+    fs = open_tsk_fs(image_path, offset=offset)
     return list(collect_events_from_fs(fs, **kwargs))
 
 

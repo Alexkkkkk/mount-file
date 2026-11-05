@@ -65,6 +65,12 @@ IS_MAC = sys.platform == "darwin"
 RC_UPDATE_AVAILABLE = 10
 RC_OK = 0
 
+_RUN_FAILURES: list[int] = []
+
+
+def _exit_status() -> int:
+    return 130 if 130 in _RUN_FAILURES else int(bool(_RUN_FAILURES))
+
 
 # ============================================================
 # УТИЛИТЫ ВЫВОДА
@@ -164,11 +170,16 @@ def run_cli(cmd: list[str], check: bool = False) -> int:
     info("$ " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, check=check)
+        if res.returncode:
+            _RUN_FAILURES.append(res.returncode)
+            err(f"Команда завершилась с кодом {res.returncode}")
         return res.returncode
     except subprocess.CalledProcessError as exc:
+        _RUN_FAILURES.append(exc.returncode)
         err(f"Команда завершилась с кодом {exc.returncode}")
         return exc.returncode
     except FileNotFoundError:
+        _RUN_FAILURES.append(127)
         err("Python не найден?")
         return 127
 
@@ -618,6 +629,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     _setup_console()
+    _RUN_FAILURES.clear()
     args = parse_args()
 
     if args.cheatsheet:
@@ -629,20 +641,20 @@ def main() -> int:
 
     if args.diag:
         run_diag()
-        return 0
+        return _exit_status()
 
     if args.cli_only:
         cli_only(args.img, args.dump, args.udev, allow_write=args.allow_write)
         print_cheatsheet()
-        return 0
+        return _exit_status()
 
     if args.api_only:
         api_only(args.img, args.dump, args.udev, allow_write=args.allow_write)
-        return 0
+        return _exit_status()
 
     if args.tests_only:
         tests_only()
-        return 0
+        return _exit_status()
 
     # Полный прогон
     show_environment()
@@ -663,7 +675,7 @@ def main() -> int:
         launch_gui(args.img)
 
     print_cheatsheet()
-    return 0
+    return _exit_status()
 
 
 if __name__ == "__main__":

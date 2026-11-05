@@ -146,17 +146,22 @@ def volume_size_for_offset(image_path, offset):
     try:
         from mountfile.partition import list_partitions
 
+        image_size = os.path.getsize(image_path)
         partitions = list_partitions(image_path)
     except Exception:
         return None
-    for partition in partitions:
-        if partition.offset == offset:
-            return partition.size_bytes
+    extents = {
+        partition.size_bytes
+        for partition in partitions
+        if partition.offset == offset
+        and partition.type not in (0x05, 0x0F, 0x85, 0xEE)
+        and 0 <= offset < image_size
+        and 0 < partition.size_bytes <= image_size - offset
+    }
+    if len(extents) == 1:
+        return extents.pop()
     if offset == 0 and not partitions:
-        try:
-            return os.path.getsize(image_path)
-        except OSError:
-            return None
+        return image_size
     return None
 
 

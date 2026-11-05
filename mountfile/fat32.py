@@ -130,18 +130,24 @@ class Fat32:
             raise Fat32Error("invalid bytes-per-sector (not a FAT BPB?)")
         self.bps = bps
         self.spc = bpb[13]
-        if self.spc == 0 or (self.spc & (self.spc - 1)):
+        if self.spc == 0 or self.spc > 128 or (self.spc & (self.spc - 1)):
             raise Fat32Error("invalid sectors-per-cluster")
         self.reserved = struct.unpack_from("<H", bpb, 14)[0]
         self.nfats = bpb[16]
         self.ext_flags = struct.unpack_from("<H", bpb, 40)[0]
+        if self.ext_flags & 0xFF70:
+            raise Fat32Error("FAT32 extended flags contain reserved bits")
         if self.ext_flags & 0x0080:
             raise Fat32Error("non-mirrored FAT32 mode is unsupported")
         spf32 = struct.unpack_from("<I", bpb, 36)[0]
         if spf32 == 0:
             raise Fat32Error("FAT12/16 not supported by this module")
-        if self.reserved == 0 or self.nfats == 0:
+        if self.reserved == 0 or self.nfats not in (1, 2):
             raise Fat32Error("invalid FAT32 reserved-sector/FAT count")
+        if struct.unpack_from("<H", bpb, 17)[0] or struct.unpack_from("<H", bpb, 22)[0]:
+            raise Fat32Error("FAT32 BPB contains FAT12/16 root geometry")
+        if struct.unpack_from("<H", bpb, 42)[0]:
+            raise Fat32Error("unsupported FAT32 filesystem version")
         self.spf = spf32
         self.root_cluster = struct.unpack_from("<I", bpb, 44)[0]
         # FSINFO is only a cache of the allocator state; the FAT stays the
@@ -178,6 +184,8 @@ class Fat32:
         if self.offset + total_sectors * self.bps > physical_size:
             raise Fat32Error("FAT32 BPB volume extends beyond image EOF")
         self.volume_end = self.offset + total_sectors * self.bps
+        if self._read(self.offset, 512)[510:512] != b"\x55\xaa":
+            raise Fat32Error("invalid FAT32 boot-sector signature")
         self._validate_backup_boot_sector()
         self._validate_fat_copies()
         cluster_count = data_sectors // self.spc
@@ -205,8 +213,10 @@ class Fat32:
 
     def _validate_backup_boot_sector(self):
         """Require a declared FAT32 backup boot sector to match the primary."""
-        if not self.backup_boot_sector:
+        if self.backup_boot_sector in (0, 0xFFFF):
             return
+        if self.backup_boot_sector >= self.reserved:
+            raise Fat32Error("FAT32 backup boot sector is outside reserved region")
         backup_offset = self.offset + self.backup_boot_sector * self.bps
         primary = self._read(self.offset, self.bps)
         backup = self._read(backup_offset, self.bps)
@@ -273,16 +283,26 @@ class Fat32:
             raise Fat32Error("short write at 0x%X" % pos)
 
     def _fat_get(self, n):
-        return struct.unpack_from("<I", self._read(self.fat_start + n * 4, 4))[0]
+        if not 0 <= n < self.fat_size // 4:
+            raise Fat32Error("FAT entry index is outside the FAT table")
+        return (
+            struct.unpack_from("<I", self._read(self.fat_start + n * 4, 4))[0]
+            & 0x0FFFFFFF
+        )
 
     def _fat_set(self, n, val):
+        if not 2 <= n < self.cluster_count + 2:
+            raise Fat32Error("FAT entry index is outside the data area")
         val &= 0x0FFFFFFF
-        for i in range(self.nfats):
-            self._write(
-                self.fat_start + i * self.fat_size + n * 4, struct.pack("<I", val)
-            )
+        with self._atomic_metadata():
+            for i in range(self.nfats):
+                pos = self.fat_start + i * self.fat_size + n * 4
+                reserved = struct.unpack_from("<I", self._read(pos, 4))[0] & 0xF0000000
+                self._write(pos, struct.pack("<I", reserved | val))
 
     def cluster_offset(self, n):
+        if not 2 <= n < self.cluster_count + 2:
+            raise Fat32Error("cluster is outside the FAT32 data area")
         return self.data_start + (n - 2) * self.cluster_size
 
     # ----------------------------------------------------------- chains
@@ -290,8 +310,10 @@ class Fat32:
         chain = []
         n = start
         seen = set()
-        while FREE < n < BAD:
-            if n >= self.cluster_count + 2 or n >= self.fat_size // 4:
+        if n == 0:
+            return chain
+        while True:
+            if not 2 <= n < min(self.cluster_count + 2, 0x0FFFFFF0):
                 raise Fat32Error("FAT chain references out-of-range cluster %d" % n)
             if n in seen or len(chain) > MAX_CHAIN:
                 raise Fat32Error("FAT chain loop detected at cluster %d" % n)
@@ -300,6 +322,8 @@ class Fat32:
             nxt = self._fat_get(n)
             if nxt >= EOC:
                 break
+            if nxt in (FREE, 1, BAD) or 0x0FFFFFF0 <= nxt < EOC:
+                raise Fat32Error("FAT chain contains a free, bad or reserved link")
             n = nxt
         return chain
 
@@ -319,8 +343,8 @@ class Fat32:
             return None
         data = self._read(self.fat_start, self.fat_size)
         free = 0
-        for n in range(2, self.fat_size // 4):
-            if struct.unpack_from("<I", data, n * 4)[0] == 0:
+        for n in range(2, self.cluster_count + 2):
+            if struct.unpack_from("<I", data, n * 4)[0] & 0x0FFFFFFF == 0:
                 free += 1
         return free * self.cluster_size
 
@@ -333,6 +357,8 @@ class Fat32:
                 raise Fat32Error("non-empty file has invalid start cluster")
             return b""
         data = b"".join(self.read_cluster(c) for c in self.cluster_chain(start))
+        if size is not None and len(data) < size:
+            raise Fat32Error("FAT chain is shorter than the file size")
         return data if size is None else data[:size]
 
     def _alloc_cluster(self):
@@ -446,7 +472,7 @@ class Fat32:
         free = 0
         first = 0xFFFFFFFF
         for n in range(2, total):
-            if struct.unpack_from("<I", fat, n * 4)[0] == 0:
+            if struct.unpack_from("<I", fat, n * 4)[0] & 0x0FFFFFFF == 0:
                 free += 1
                 if first == 0xFFFFFFFF:
                     first = n
@@ -479,8 +505,10 @@ class Fat32:
 
     @staticmethod
     def _short_to_name(short11):
-        base = short11[0:8].decode("ascii", "replace").rstrip()
-        ext = short11[8:11].decode("ascii", "replace").rstrip()
+        if short11[0] == 0x05:
+            short11 = b"\xe5" + short11[1:]
+        base = short11[0:8].decode("cp437", "replace").rstrip()
+        ext = short11[8:11].decode("cp437", "replace").rstrip()
         return "%s.%s" % (base, ext) if ext else base
 
     @staticmethod
@@ -501,6 +529,9 @@ class Fat32:
             base, ext = name, ""
         base = base.upper()
         ext = ext.upper()
+        legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'()-@^_`{}~"
+        base = "".join(c if c in legal else "_" for c in base)
+        ext = "".join(c if c in legal else "_" for c in ext)
         if len(base) <= 8 and len(ext) <= 3 and " " not in base + ext:
             candidate = base.ljust(8) + ext.ljust(3)
             enc = candidate.encode("ascii", "replace")
@@ -519,8 +550,10 @@ class Fat32:
 
     @staticmethod
     def _lfn_chunks(name):
-        chars = [ord(c) for c in name]
-        chars.append(0x0000)
+        encoded = name.encode("utf-16le")
+        chars = list(struct.unpack(f"<{len(encoded) // 2}H", encoded))
+        if len(chars) % 13:
+            chars.append(0x0000)
         while len(chars) % 13:
             chars.append(0xFFFF)
         return [chars[i : i + 13] for i in range(0, len(chars), 13)]
@@ -539,7 +572,7 @@ class Fat32:
 
     @staticmethod
     def _needs_lfn(name):
-        if name != name.upper():
+        if name != name.upper() or not name.isascii():
             return True
         base, dot, ext = name.partition(".")
         if not dot:
@@ -551,9 +584,14 @@ class Fat32:
         return False
 
     def _build_entries(self, long_name, short11, first_cluster, size, attr=0x20):
+        self._validate_name(long_name)
         entries = []
         chk = self._short_checksum(short11)
-        chunks = self._lfn_chunks(long_name) if self._needs_lfn(long_name) else []
+        chunks = (
+            self._lfn_chunks(long_name)
+            if self._needs_lfn(long_name) or self._short_to_name(short11) != long_name
+            else []
+        )
         n = len(chunks)
         for i in range(n - 1, -1, -1):
             seq = i + 1
@@ -577,7 +615,7 @@ class Fat32:
         return entries
 
     # ------------------------------------------------------ directories
-    def _parse_dir_data(self, data, base_offset):
+    def _parse_dir_data(self, data, base_offset, chain=None):
         entries = []
         pending = []
         i = 0
@@ -588,6 +626,9 @@ class Fat32:
             if b0 == 0x00:
                 break
             off = base_offset + i
+            if chain is not None:
+                cluster_index, in_cluster = divmod(i, self.cluster_size)
+                off = self.cluster_offset(chain[cluster_index]) + in_cluster
             i += 32
             if attr == 0x0F and b0 != 0xE5:
                 seq = b0 & 0x1F
@@ -596,8 +637,9 @@ class Fat32:
                 for start, count in ((1, 5), (14, 6), (28, 2)):
                     for k in range(count):
                         chars.append(struct.unpack_from("<H", e, start + 2 * k)[0])
-                part = "".join(chr(c) for c in chars if c not in (0x0000, 0xFFFF))
-                pending.append((seq, chk, part))
+                if b0 & 0x40:
+                    pending.clear()
+                pending.append((seq, chk, chars))
                 continue
             if b0 == 0xE5:
                 pending.clear()
@@ -611,18 +653,34 @@ class Fat32:
             )[0]
             size = struct.unpack_from("<I", e, 28)[0]
             is_dir = bool(attr & 0x10)
-            if is_dir and short[0:1] == b".":
+            if is_dir and short in (b".".ljust(11), b"..".ljust(11)):
                 pending.clear()
                 continue
             name = None
             if pending:
+                from mountfile.fat_reader import NativeFatImage
+
                 chk = self._short_checksum(short)
-                parts = [p for s, c, p in sorted(pending) if c == chk]
-                if parts:
-                    name = "".join(parts)
+                parts = sorted(pending)
+                if (
+                    len(parts) <= 20
+                    and [s for s, _, _ in parts] == list(range(1, len(parts) + 1))
+                    and all(c == chk for _, c, _ in parts)
+                ):
+                    name = NativeFatImage._decode_lfn(
+                        [unit for _, _, units in parts for unit in units]
+                    )
                 pending.clear()
             if name is None:
                 name = self._short_to_name(short)
+                base, separator, extension = name.rpartition(".")
+                if not separator:
+                    base, extension = name, ""
+                if e[12] & 0x08:
+                    base = base.lower()
+                if e[12] & 0x10:
+                    extension = extension.lower()
+                name = base + ("." + extension if extension else "")
             entries.append(
                 DirEntry(name, short, attr, cluster, 0 if is_dir else size, off)
             )
@@ -636,12 +694,8 @@ class Fat32:
     def list_dir(self, cluster=None):
         if cluster is None:
             cluster = self.root_cluster
-        entries = []
-        for c in self.cluster_chain(cluster):
-            entries.extend(
-                self._parse_dir_data(self.read_cluster(c), self.cluster_offset(c))
-            )
-        return entries
+        chain, data = self._dir_stream(cluster)
+        return self._parse_dir_data(data, 0, chain)
 
     def find_dir(self, path):
         cluster = self.root_cluster
@@ -692,6 +746,7 @@ class Fat32:
         Directory and FAT metadata are restored if any step fails, so a partial
         recursive delete cannot expose clusters still referenced by live entries.
         """
+        self._validate_allocation_ownership()
         parent, entry = self.entry(path)
         if entry.is_dir:
             if not recursive and not self.dir_is_empty(entry):
@@ -718,7 +773,8 @@ class Fat32:
 
     def rename(self, path, new_name):
         """Rename a file or directory in place (LFN entries are rebuilt)."""
-        new_name = self._sanitize(new_name)
+        self._validate_name(new_name)
+        self._validate_allocation_ownership()
         parent, entry = self.entry(path)
         if entry.name.upper() == new_name.upper():
             return entry
@@ -741,11 +797,68 @@ class Fat32:
         return entry
 
     # -------------------------------------------------------- writing
+    def _validate_allocation_ownership(self):
+        """Never free or overwrite clusters that another live stream owns."""
+        owners = {}
+
+        def claim(start, owner, size=0):
+            chain = self.cluster_chain(start)
+            if len(chain) * self.cluster_size < size:
+                raise Fat32Error("FAT chain is shorter than the file size")
+            for cluster in chain:
+                if cluster in owners:
+                    raise Fat32Error("cross-linked FAT32 cluster allocation")
+                owners[cluster] = owner
+
+        claim(self.root_cluster, "/")
+        pending = [(self.root_cluster, "/", 0)]
+        scanned = 0
+        while pending:
+            cluster, path, depth = pending.pop()
+            if depth > 128:
+                raise Fat32Error("FAT32 directory tree exceeds bounded depth")
+            names = set()
+            for entry in self.list_dir(cluster):
+                scanned += 1
+                if scanned > 100_000:
+                    raise Fat32Error(
+                        "FAT32 allocation scan exceeds bounded entry limit"
+                    )
+                key = entry.name.upper()
+                if key in names:
+                    raise Fat32Error("duplicate FAT32 directory name")
+                names.add(key)
+                owner = path.rstrip("/") + "/" + entry.name
+                if entry.is_dir and entry.cluster < 2:
+                    raise Fat32Error("FAT32 directory has an invalid cluster")
+                claim(entry.cluster, owner, entry.size)
+                if entry.is_dir:
+                    pending.append((entry.cluster, owner, depth + 1))
+
+    @staticmethod
+    def _validate_name(name):
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in (".", "..")
+            or name[-1] in (" ", ".")
+            or any(c in '\\/*?":<>|' or ord(c) < 32 for c in name)
+        ):
+            raise Fat32Error("invalid FAT filename")
+        try:
+            encoded = name.encode("utf-16le")
+        except UnicodeEncodeError as exc:
+            raise Fat32Error("FAT filename is not valid Unicode") from exc
+        if len(encoded) > 510:
+            raise Fat32Error("FAT filename exceeds 255 UTF-16 units")
+
     def _find_slots(self, data, needed):
         free_run = 0
         run_start = None
+        ended = False
         for i in range(len(data) // 32):
-            if data[i * 32] in (0x00, 0xE5):
+            ended = ended or data[i * 32] == 0x00
+            if ended or data[i * 32] == 0xE5:
                 if free_run == 0:
                     run_start = i
                 free_run += 1
@@ -782,8 +895,14 @@ class Fat32:
             add = math.ceil((needed - tail_free) / self.entries_per_cluster)
             for _ in range(max(1, add)):
                 chain = self._append_dir_cluster(chain)
-            idx = len(data) // 32
+            idx = len(data) // 32 - tail_free
+        end = idx + needed
+        consumed_terminator = any(
+            data[i * 32] == 0 for i in range(min(end, len(data) // 32))
+        )
         self._write_slots(chain, idx, b"".join(raw_entries))
+        if consumed_terminator and end < len(chain) * self.entries_per_cluster:
+            self._write_slots(chain, end, b"\0" * 32)
 
     def _delete_entry(self, dir_cluster, abs_offset):
         chain, data = self._dir_stream(dir_cluster)
@@ -819,8 +938,14 @@ class Fat32:
 
     def write_file(self, dir_path, filename, data):
         """Create or overwrite `filename` in directory `dir_path`."""
+        self._validate_name(filename)
+        if len(data) > 0xFFFFFFFF:
+            raise Fat32Error("FAT file size exceeds 32-bit limit")
+        self._validate_allocation_ownership()
         dir_cluster = self.find_dir(dir_path)
         entries_now = self.list_dir(dir_cluster)
+        if any(e.is_dir and e.name.upper() == filename.upper() for e in entries_now):
+            raise Fat32Error("already exists as a directory: %s" % filename)
         target = next(
             (
                 e
@@ -879,9 +1004,11 @@ class Fat32:
             raise
 
     def mkdir(self, dir_path, name):
+        self._validate_name(name)
+        self._validate_allocation_ownership()
         dir_cluster = self.find_dir(dir_path)
         entries_now = self.list_dir(dir_cluster)
-        if any(e.is_dir and e.name.upper() == name.upper() for e in entries_now):
+        if any(e.name.upper() == name.upper() for e in entries_now):
             raise Fat32Error("directory already exists: %s" % name)
         used = {e.short_raw for e in entries_now}
         used |= {self._short_to_name(e.short_raw) for e in entries_now}

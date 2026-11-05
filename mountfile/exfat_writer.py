@@ -282,6 +282,14 @@ class NativeExfatWriter:
             total = (secondary_count + 1) * 32
             if secondary_count < 2 or pos + total > len(raw):
                 raise ExfatWriteError("truncated exFAT directory entry set")
+            if (
+                pos // reader.profile.cluster_size
+                != (pos + total - 1) // reader.profile.cluster_size
+            ):
+                raise ExfatWriteError(
+                    "cross-cluster exFAT entry-set writes are outside the bounded profile",
+                    RefusalCode.UNSUPPORTED_PROFILE,
+                )
             entry_set = raw[pos : pos + total]
             stored_checksum = struct.unpack_from("<H", entry_set, 2)[0]
             if stored_checksum != NativeExfatImage._entry_set_checksum(entry_set):
@@ -443,6 +451,11 @@ class NativeExfatWriter:
                 if valid_data_length > size:
                     raise ExfatWriteError("exFAT ValidDataLength exceeds DataLength")
                 if is_directory:
+                    if no_fat_chain:
+                        raise ExfatWriteError(
+                            "contiguous exFAT directory writes are outside the bounded profile",
+                            RefusalCode.UNSUPPORTED_PROFILE,
+                        )
                     if (
                         not first_cluster
                         or not size
@@ -670,7 +683,7 @@ class NativeExfatWriter:
         result[21] = increment
         result[22:25] = b"\x80\x80\x80"
         result[32] = 0xC0
-        result[33] = 0x02 if no_fat_chain else 0
+        result[33] = 0x03 if no_fat_chain else 0x01
         result[35] = len(encoded) // 2
         struct.pack_into("<Q", result, 40, size)
         struct.pack_into("<H", result, 36, reader._name_hash(name))
@@ -868,7 +881,7 @@ class NativeExfatWriter:
                         )
                     relative = self._entry_offset(reader, directory, record[1]) + 32
                     self._write_rel(
-                        stream, relative + 1, bytes([0x02 if no_fat else 0])
+                        stream, relative + 1, bytes([0x03 if no_fat else 0x01])
                     )
                     self._write_rel(
                         stream, relative + 8, struct.pack("<Q", len(payload))
@@ -915,6 +928,7 @@ class NativeExfatWriter:
 
         def action(reader, stage):
             meta = self._metadata(reader)
+            self._allocation_owners(reader, meta)
             if src_path == dst_path:
                 return
             directory, record = self._locate(reader, src_path)
@@ -949,41 +963,25 @@ class NativeExfatWriter:
             encoded = new_name.encode("utf-16le")
             if len(encoded) > slots * 30:
                 raise ExfatWriteError("rename exceeds allocated name entries")
+            new_slots = (len(encoded) + 29) // 30
+            entry_set = bytearray(record[4][:64])
+            entry_set.extend(bytes(new_slots * 32))
+            entry_set[1] = new_slots + 1
+            entry_set[35] = len(encoded) // 2
+            struct.pack_into("<H", entry_set, 36, reader._name_hash(new_name))
+            padded = encoded.ljust(new_slots * 30, b"\0")
+            for index in range(new_slots):
+                base = 64 + index * 32
+                entry_set[base] = 0xC1
+                entry_set[base + 2 : base + 32] = padded[index * 30 : (index + 1) * 30]
+            struct.pack_into("<H", entry_set, 2, self._entry_checksum(entry_set))
             with stage.open("r+b") as stream:
                 if same_directory:
                     relative = self._entry_offset(reader, directory, record[1])
-                    self._write_rel(
-                        stream, relative + 32 + 3, bytes([len(encoded) // 2])
-                    )
-                    self._write_rel(
-                        stream,
-                        relative + 32 + 4,
-                        struct.pack("<H", reader._name_hash(new_name)),
-                    )
-                    padded = encoded.ljust(slots * 30, b"\0")
-                    for index in range(slots):
-                        self._write_rel(
-                            stream,
-                            relative + 64 + index * 32 + 2,
-                            padded[index * 30 : (index + 1) * 30],
-                        )
-                    self._rewrite_checksum(stream, relative, record[2])
+                    self._write_rel(stream, relative, entry_set)
+                    for offset in range(len(entry_set), record[2], 32):
+                        self._write_rel(stream, relative + offset, b"\x41")
                 else:
-                    entry_set = bytearray(record[4])
-                    entry_set[32 + 3] = len(encoded) // 2
-                    struct.pack_into(
-                        "<H", entry_set, 32 + 4, reader._name_hash(new_name)
-                    )
-                    padded = encoded.ljust(slots * 30, b"\0")
-                    for index in range(slots):
-                        base = 64 + index * 32
-                        entry_set[base + 2 : base + 32] = padded[
-                            index * 30 : (index + 1) * 30
-                        ]
-                    struct.pack_into("<H", entry_set, 2, 0)
-                    struct.pack_into(
-                        "<H", entry_set, 2, self._entry_checksum(entry_set)
-                    )
                     bitmap = self._bitmap(stream, reader, meta)
                     slot_cluster, slot_offset = self._directory_slot(
                         reader,
@@ -1144,7 +1142,10 @@ class NativeExfatWriter:
                         chain = []
 
                     for cluster in chain:
-                        if owners.get(cluster) != target:
+                        owner = owners.get(cluster)
+                        if owner is None or tuple(
+                            reader._upcase_key(p) for p in self._parts(owner)
+                        ) != tuple(reader._upcase_key(p) for p in self._parts(target)):
                             raise ExfatWriteError(
                                 "refusing to free an unowned exFAT cluster"
                             )

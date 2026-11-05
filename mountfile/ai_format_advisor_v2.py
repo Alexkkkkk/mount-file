@@ -30,8 +30,10 @@ import hashlib
 import json
 import math
 import os
+import re
 import urllib.request
 
+from .ai.backend import _open_request
 from .qt_compat import (
     DlgActionRole,
     DlgClose,
@@ -240,7 +242,11 @@ class GitHubReporter:
     def __init__(self, repo, token):
         repo = (repo or "").strip()
         token = (token or "").strip()
-        if "/" not in repo or not token:
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
+            or any(part in {".", ".."} for part in repo.split("/"))
+            or not token
+        ):
             raise ValueError("нужны репозиторий owner/name и токен")
         self.repo = repo
         self.token = token
@@ -255,12 +261,19 @@ class GitHubReporter:
         req.add_header("Content-Type", "application/json")
         req.add_header("Authorization", "Bearer " + self.token)
         try:
-            with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT) as resp:
+            with _open_request(
+                req, timeout=GITHUB_TIMEOUT, allow_redirects=False
+            ) as resp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
-                return True, data.get("html_url", "")
+                issue_url = data.get("html_url") if isinstance(data, dict) else None
+                if not isinstance(issue_url, str) or not issue_url.startswith(
+                    "https://github.com/"
+                ):
+                    return False, "GitHub вернул ответ без URL созданного issue"
+                return True, issue_url
         except Exception as e:
             # Токен в текст ошибки не попадает.
-            return False, str(e)[:200]
+            return False, str(e).replace(self.token, "[REDACTED]")[:200]
 
 
 # ------------------------------------------------------------ dialog
@@ -434,6 +447,8 @@ def advise_and_show(path, backends, github=None, parent=None, head=None, size=No
 
 def maybe_advise(settings, path, parent=None, log=None, head=None):
     """Авто-хук: диалог только для файлов с неуверенными гипотезами."""
+    if not (settings or {}).get("ai_format_autohook", False):
+        return
     log = log or (lambda msg: None)
     fp = build_fingerprint(path, head=head)
     calibration = Calibration()

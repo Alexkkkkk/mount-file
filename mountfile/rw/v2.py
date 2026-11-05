@@ -63,30 +63,27 @@ class VerifiedFat32Adapter(Fat32Adapter):
     """
 
     dry_run: bool = False
+    # The native mutation may commit successfully before an extra verifier
+    # refuses it. Keep a full outer snapshot to roll back that later failure.
+    atomic_mutations = False
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
         # Перекрываем журнал на v2
+        self.journal.close()
         self.journal = JournalV2(image_path)
         self.verifier = VerificationEngine()
 
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
         if self.dry_run:
             return
-        if hasattr(self._fs, "last_touched"):
-            off, length = self._fs.last_touched()
-            self.journal.backup_region(off, length)
-        raw = data.read()
-        self._fs.create_file(path, raw, overwrite=overwrite)
+        super()._create_file(path, data, overwrite)
         self._verify_after("create_file", path)
 
     def _write_file(self, path: str, data: BinaryIO, offset: int) -> None:
         if self.dry_run:
             return
-        if hasattr(self._fs, "last_touched"):
-            off, length = self._fs.last_touched()
-            self.journal.backup_region(off, length)
-        self._fs.write_file(path, data.read(), offset=offset)
+        super()._write_file(path, data, offset)
         self._verify_after("write_file", path)
 
     def _backup_structural_region(self) -> None:
@@ -103,33 +100,31 @@ class VerifiedFat32Adapter(Fat32Adapter):
     def _create_dir(self, path: str) -> None:
         if self.dry_run:
             return
-        self._backup_structural_region()
         super()._create_dir(path)
         self._verify_after("mkdir", path)
 
     def _delete(self, path: str, recursive: bool) -> None:
         if self.dry_run:
             return
-        self._backup_structural_region()
         super()._delete(path, recursive)
         self._verify_after("delete", path)
 
     def _rename(self, src: str, dst: str) -> None:
         if self.dry_run:
             return
-        self._backup_structural_region()
         super()._rename(src, dst)
         self._verify_after("rename", "%s -> %s" % (src, dst))
 
     def _verify_after(self, op: str, path: str) -> None:
         report = self.verifier.verify(self.image_path, FsType.FAT32)
         if not report.ok:
-            self.journal.rollback()
             raise RWError(f"verify провалился после {op}({path}): {report.details}")
 
 
 class VerifiedExt4RW(Ext4RW):
     """Ext4RW + verify после каждой транзакции."""
+
+    atomic_mutations = False
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
@@ -203,93 +198,67 @@ class MountFileBridge:
 
     # --- нативный RO-путь (приоритетный) ------------------------------------
 
+    @contextmanager
     def _native(self):
-        """Открывает нативный движок FAT32 на чтение (RO)."""
-        from mountfile.fat32 import Fat32
+        """Open one bounded provider and release it on every operation."""
+        from mountfile.firmware import detect_volumes
+        from mountfile.vfs import open_image_provider, volume_size_for_offset
 
-        return Fat32(open(self.image_path, "rb"))
+        volumes = detect_volumes(self.image_path)
+        selected = next((volume for volume in volumes if volume.fstype != "raw"), None)
+        offset = selected.offset if selected is not None else 0
+        provider = open_image_provider(
+            self.image_path,
+            offset=offset,
+            volume_size=volume_size_for_offset(self.image_path, offset),
+            allow_legacy_fallback=self.allow_legacy_tsk,
+        )
+        try:
+            yield provider
+        finally:
+            provider.close()
 
     # --- публичные операции -------------------------------------------------
 
     def list_files(self, path: str) -> list[dict]:
         if self._api and hasattr(self._api, "list_files"):
             return self._api.list_files(str(self.image_path), path)
-        try:
-            fs = self._native()
+        with self._native() as fs:
             return [
-                {"name": e.name, "type": "dir" if e.is_dir else "file", "size": e.size}
-                for e in fs.list_dir(fs.find_dir(path))
+                {
+                    "name": entry["name"],
+                    "type": "dir" if entry["is_dir"] else "file",
+                    "size": entry["size"],
+                }
+                for entry in fs.list_dir(path)
             ]
-        except ImportError:
-            if not self.allow_legacy_tsk:
-                raise
-            return self._tsk_list(path)
-        except Exception:
-            if not self.allow_legacy_tsk:
-                raise
-            return self._tsk_list(path)
 
     def extract_file(self, path: str, dst: Path) -> None:
         if self._api and hasattr(self._api, "extract_file"):
             self._api.extract_file(str(self.image_path), path, str(dst))
             return
-        try:
-            Path(dst).write_bytes(self._native().read_file(path))
-            return
-        except ImportError:
-            if not self.allow_legacy_tsk:
-                raise
-            self._tsk_extract(path, dst)
-        except Exception:
-            if not self.allow_legacy_tsk:
-                raise
-            self._tsk_extract(path, dst)
+        from mountfile.extract import extract_file
+
+        with self._native() as fs:
+            extract_file(fs, path, dst)
 
     def stat(self, path: str) -> dict:
         if self._api and hasattr(self._api, "stat"):
             return self._api.stat(str(self.image_path), path)
-        try:
-            _, entry = self._native().entry(path)
-            return {"size": entry.size, "is_dir": entry.is_dir}
-        except ImportError:
-            if not self.allow_legacy_tsk:
-                raise
-            return self._tsk_stat(path)
-        except Exception as exc:
-            raise RWError(f"stat failed: {exc}")
+        with self._native() as fs:
+            entry = fs.stat(path)
+            return {"size": entry["size"], "is_dir": entry["is_dir"]}
 
     # --- pytsk3 fallback ----------------------------------------------------
 
-    def _tsk(self):
-        try:
-            import pytsk3  # type: ignore
-        except ImportError as e:
-            raise StrategyUnavailable(f"pytsk3 не установлен: {e}")
-        img = pytsk3.Img_Info(str(self.image_path))
-        fs = pytsk3.FS_Info(img)
-        return fs
-
     def _tsk_list(self, path: str) -> list[dict]:
-        fs = self._tsk()
-        d = fs.open_dir(path)
-        return [
-            {
-                "name": e.info.name.name.decode("utf-8", "replace"),
-                "type": "dir" if e.info.meta.type == 2 else "file",
-            }
-            for e in d
-        ]
+        return self.list_files(path)
 
     def _tsk_extract(self, path: str, dst: Path) -> None:
-        fs = self._tsk()
-        f = fs.open(path)
-        with open(dst, "wb") as out:
-            out.write(f.read_random(0, f.info.meta.size))
+        self.extract_file(path, dst)
 
     def _tsk_stat(self, path: str) -> dict:
-        fs = self._tsk()
-        f = fs.open(path)
-        return {"size": f.info.meta.size, "is_dir": f.info.meta.type == 2}
+        return self.stat(path)
 
 
 # ===========================================================================
@@ -529,7 +498,7 @@ def build_parser():
     return p
 
 
-def main(argv):
+def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

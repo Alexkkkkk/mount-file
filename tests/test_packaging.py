@@ -23,6 +23,7 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     shutil.copytree(ROOT / "mountfile", source / "mountfile")
     for module in (
         "mountfile_ai.py",
+        "mountfile_dfir_tools.py",
         "mountfile_rw_complete.py",
         "mountfile_rw_v2.py",
         "mountfile_universal_rw.py",
@@ -70,6 +71,7 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
         assert "mountfile-ai = mountfile_ai:main" in entry_points
         assert "mountfile-install" not in entry_points
         assert "mountfile_ai.py" in names
+        assert "mountfile_dfir_tools.py" in names
         assert (
             wheel.read(resource_name)
             == (ROOT / "scripts/install-windows-components.ps1").read_bytes()
@@ -103,6 +105,11 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     smoke_code = """
 import mountfile_ai
 assert callable(mountfile_ai.main)
+from mountfile.dfir_unallocated_scan import UnallocatedExtractor
+from pathlib import Path
+image = Path('wheel-smoke.img')
+image.write_bytes(bytes(4096))
+assert UnallocatedExtractor(image)._implementation() is not None
 from importlib.resources import files
 from mountfile.__main__ import main
 resource = files('mountfile').joinpath('data', 'install-windows-components.ps1')
@@ -128,3 +135,18 @@ else:
     )
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     assert "usage:" in smoke.stdout.lower()
+    if os.name != "nt":
+        for name in ("mountfile", "mountfile-ai", "mountfile-rw", "mountfile-rw-v2"):
+            script = target / "bin" / name
+            assert script.is_file(), f"missing installed console script: {name}"
+            command = subprocess.run(
+                [str(script), "--help"],
+                cwd=tmp_path,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            assert command.returncode == 0, command.stdout + command.stderr
+            assert "usage:" in command.stdout.lower()

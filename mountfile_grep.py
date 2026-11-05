@@ -31,7 +31,9 @@ def _compile_pattern(pattern: str, use_regex: bool, unicode_mode: bool) -> re.Pa
     )  # Для regex регистрозависимость по умолчанию
     if unicode_mode:
         # Для UTF-16LE ищем в декодированном тексте
-        return re.compile(pattern, flags | re.UNICODE)
+        return re.compile(
+            pattern if use_regex else re.escape(pattern), flags | re.UNICODE
+        )
     else:
         # Для байтового поиска используем байтовый шаблон
         if use_regex:
@@ -40,7 +42,9 @@ def _compile_pattern(pattern: str, use_regex: bool, unicode_mode: bool) -> re.Pa
             return re.compile(re.escape(pattern.encode("utf-8")), flags)
 
 
-def _iter_chunks(file_path: Path) -> Iterator[Tuple[int, bytes]]:
+def _iter_chunks(
+    file_path: Path, overlap: int = OVERLAP
+) -> Iterator[Tuple[int, bytes]]:
     """Генерирует блоки байтов с перекрытием."""
     with open(file_path, "rb") as f:
         offset = 0
@@ -52,7 +56,7 @@ def _iter_chunks(file_path: Path) -> Iterator[Tuple[int, bytes]]:
             # Добавляем хвост предыдущего блока для перекрытия
             data = prev_tail + chunk
             yield offset - len(prev_tail), data
-            prev_tail = chunk[-OVERLAP:]
+            prev_tail = data[-overlap:] if overlap else b""
             offset += len(chunk)
 
 
@@ -71,23 +75,52 @@ def search_content(
       match: найденная строка (или байты)
       context: фрагмент вокруг совпадения (для удобства)
     """
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError("pattern must be a non-empty string")
+    if max_results is not None and (
+        isinstance(max_results, bool)
+        or not isinstance(max_results, int)
+        or max_results < 0
+    ):
+        raise ValueError("max_results must be a non-negative integer")
+    if max_results == 0:
+        return
     compiled = _compile_pattern(pattern, use_regex, unicode_mode)
     found = 0
+    seen = set()
+    overlap = OVERLAP
+    if not use_regex:
+        overlap = max(
+            overlap, len(pattern.encode("utf-16-le" if unicode_mode else "utf-8")) - 1
+        )
 
-    for base_offset, data in _iter_chunks(image_path):
+    for base_offset, data in _iter_chunks(image_path, overlap):
         if unicode_mode:
-            # Декодируем в UTF-16LE, игнорируя ошибки
+            # Keep byte alignment and exact offsets through surrogate pairs.
+            if base_offset % 2:
+                data, base_offset = data[1:], base_offset + 1
             try:
-                text = data.decode("utf-16-le", errors="ignore")
+                text = data[: len(data) - len(data) % 2].decode(
+                    "utf-16-le", errors="surrogatepass"
+                )
             except Exception as exc:
                 logging.getLogger(__name__).debug(
                     "UTF-16 decoding failed at offset %d", base_offset, exc_info=exc
                 )
                 continue
+            positions = [0]
+            for character in text:
+                positions.append(
+                    positions[-1] + len(character.encode("utf-16-le", "surrogatepass"))
+                )
             for match in compiled.finditer(text):
                 # Пересчитываем смещение в байтах
                 char_pos = match.start()
-                byte_offset = base_offset + char_pos * 2
+                byte_offset = base_offset + positions[char_pos]
+                key = (byte_offset, positions[match.end()] - positions[char_pos])
+                if key in seen:
+                    continue
+                seen.add(key)
                 context_start = max(0, char_pos - 40)
                 context_end = min(len(text), match.end() + 40)
                 context = text[context_start:context_end].replace("\x00", " ")
@@ -103,6 +136,10 @@ def search_content(
             # Байтовый поиск
             for match in compiled.finditer(data):
                 byte_offset = base_offset + match.start()
+                key = (byte_offset, match.end() - match.start())
+                if key in seen:
+                    continue
+                seen.add(key)
                 # Контекст: 80 байт вокруг
                 ctx_start = max(0, match.start() - 40)
                 ctx_end = min(len(data), match.end() + 40)

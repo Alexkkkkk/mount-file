@@ -26,7 +26,7 @@ help:
 	@echo "make sync-watch - auto-commit + push on every save"
 
 install:
-	$(PY) -m pip install -r requirements.txt
+	$(PY) -m pip install -e ".[api,ai,dfir]"
 
 test:
 	$(PY) -m pytest tests/ -v
@@ -49,13 +49,14 @@ fmt:
 
 exe:
 	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \
+		--specpath build/spec --hidden-import mountfile_dfir_tools \
 		--icon mountfile/data/icon.ico --collect-data mountfile --name MountFile main.py
 
 # Standalone single-file build: GUI + CLI in one binary, no package needed.
 mountfile-exe:
 	$(PY) -m PyInstaller --noconfirm --clean --onefile --windowed \
-		--icon mountfile/data/icon.png --name mountfile mountfile.py
-	@test -f dist/mountfile && echo "Done: dist/mountfile"
+		--specpath build/spec --icon mountfile/data/icon.png --name mountfile mountfile.py
+	@test -f dist/mountfile -o -f dist/mountfile.exe && echo "Done: dist/mountfile[.exe]"
 
 clean:
 	rm -rf build dist

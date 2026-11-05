@@ -219,6 +219,8 @@ def create_rw_full(
         )
         engine.dry_run = dry_run
         return engine
+    if dry_run:
+        raise StrategyUnavailable("dry-run is currently supported only for FAT32")
     return create_rw(image_path, fs, mode)
 
 
@@ -510,13 +512,17 @@ class AuditExporter:
 def _open(image: Path, mode: Mode, dry_run: bool) -> UniversalRW:
     fs = detect_fs(image)
     eng = create_rw_full(image, fs, mode, dry_run=dry_run)
-    eng.open()
-    # Автоматическое восстановление после сбоя (в dry-run образ не трогаем).
-    if mode == Mode.RW and not dry_run:
-        verifier = VerificationEngine()
-        recovered = CrashRecovery(eng.journal, verifier).recover(image, fs)
-        if recovered:
-            print(f"[recovery] откатано транзакций: {recovered}")
+    try:
+        # Restore raw bytes before any backend can mount/cache the image.
+        if mode == Mode.RW and not dry_run:
+            verifier = VerificationEngine()
+            recovered = CrashRecovery(eng.journal, verifier).recover(image, fs)
+            if recovered:
+                print(f"[recovery] откатано транзакций: {recovered}")
+        eng.open()
+    except BaseException:
+        eng.close()
+        raise
     return eng
 
 
@@ -552,19 +558,9 @@ def _native_read(image: Path, path: str) -> bytes:
 
 def cmd_get(args) -> int:
     image = Path(args.image)
-    if detect_fs(image) == FsType.FAT32:
-        Path(args.dst).write_bytes(_native_read(image, args.src))
-    else:
-        # Для остальных ФС чтение остаётся за существующим Mount File CLI.
-        proc = subprocess.run(
-            [sys.executable, "-m", "mountfile", "get", str(image), args.src, args.dst],
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            raise RWError(
-                (proc.stderr or proc.stdout).strip() or "mountfile get failed"
-            )
+    from mountfile.rw.v2 import MountFileBridge
+
+    MountFileBridge(image).extract_file(args.src, Path(args.dst))
     print(f"ok: {args.src} -> {args.dst}")
     return 0
 
@@ -611,7 +607,6 @@ def cmd_recover(args) -> int:
     image = Path(args.image)
     fs = detect_fs(image)
     eng = create_rw_full(image, fs, Mode.RW)
-    eng.open()
     try:
         n = CrashRecovery(eng.journal, VerificationEngine()).recover(image, fs)
         print(f"recovered: {n}")
@@ -755,17 +750,15 @@ def self_test() -> int:
         img.write_bytes(b"\0" * 4096)
         j = Journal(img)
         tx1 = j.begin("create", "/a")
-        j._conn.execute(
-            "UPDATE journal SET sha256=? WHERE tx_id=?",
-            ("a" * 64, tx1),
-        )
-        j._conn.commit()
-        j._last_hash = "a" * 64
+        j.commit()
+        first_hash = j._conn.execute(
+            "SELECT record_hash FROM journal WHERE tx_id=?", (tx1,)
+        ).fetchone()[0]
         tx2 = j.begin("delete", "/a")
         prev = j._conn.execute(
             "SELECT prev_hash FROM journal WHERE tx_id=?", (tx2,)
         ).fetchone()[0]
-        if prev != "a" * 64:
+        if prev != first_hash:
             print("FAIL: hash-chain не связан")
             failures += 1
         else:
@@ -888,7 +881,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 

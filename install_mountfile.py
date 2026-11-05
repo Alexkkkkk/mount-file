@@ -46,11 +46,11 @@ IS_WINDOWS = SYSTEM == "Windows"
 IS_LINUX = SYSTEM == "Linux"
 IS_MAC = SYSTEM == "Darwin"
 
-# Native FAT/ext readers do not require libtsk.  The full profile opts into the
-# legacy fallback explicitly, while --minimal stays usable on platforms where
-# pytsk3 has no wheel.
+# Native readers do not require libtsk. Legacy fallback is a separate explicit
+# opt-in even for full installs; a missing pytsk3 wheel must not prevent the
+# native application from being installed on Windows.
 BASE_DEPS = ["PyQt6>=6.11.0"]
-RUNTIME_EXTRAS = ("api", "ai", "dfir", "legacy-tsk")
+RUNTIME_EXTRAS = ("api", "ai", "dfir")
 
 # Qt runtime libraries are needed for PyQt6 on a stock Debian/Ubuntu desktop.
 # The compiler/Python headers are required when a dependency has no wheel.
@@ -324,7 +324,7 @@ def pip_install(py: str, packages: Sequence[str], *, dry_run: bool = False) -> i
     return code
 
 
-def selected_extras(*, minimal: bool, dev: bool) -> list[str]:
+def selected_extras(*, minimal: bool, dev: bool, legacy_tsk: bool = False) -> list[str]:
     """Return extras for the requested install profile.
 
     Default full installs contain runtime API/AI/DFIR functionality, not the
@@ -334,6 +334,8 @@ def selected_extras(*, minimal: bool, dev: bool) -> list[str]:
     extras = [] if minimal else list(RUNTIME_EXTRAS)
     if dev:
         extras.append("dev")
+    if legacy_tsk:
+        extras.append("legacy-tsk")
     return extras
 
 
@@ -360,31 +362,43 @@ def install_project(py: str, *, extras: Sequence[str], dry_run: bool = False) ->
     return code
 
 
-def checks_for_profile(*, minimal: bool, dev: bool) -> list[tuple[str, str]]:
+def checks_for_profile(
+    *, minimal: bool, dev: bool, legacy_tsk: bool = False
+) -> list[tuple[str, str]]:
     """Return import probes required by the selected installation profile."""
 
     checks = [
-        ("PyQt6", "import PyQt6"),
-        ("mountfile", "import mountfile"),
+        ("PyQt6", "from PyQt6 import QtCore, QtGui, QtWidgets"),
+        ("mountfile", "from mountfile.__main__ import main; assert callable(main)"),
     ]
     if not minimal:
         checks.extend(
             [
-                ("pytsk3", "import pytsk3"),
                 ("fastapi", "import fastapi"),
                 ("mcp", "import mcp"),
                 ("pydantic", "import pydantic"),
                 ("openai", "import openai"),
                 ("yara", "import yara"),
+                ("uvicorn", "import uvicorn"),
+                ("httpx", "import httpx"),
+                ("regex", "import regex"),
+                ("dateutil", "import dateutil"),
             ]
         )
     if dev:
         checks.append(("pytest", "import pytest"))
+    if legacy_tsk:
+        checks.append(("pytsk3", "import pytsk3"))
     return checks
 
 
 def verify_installation(
-    py: str, *, minimal: bool, dev: bool, dry_run: bool = False
+    py: str,
+    *,
+    minimal: bool,
+    dev: bool,
+    dry_run: bool = False,
+    legacy_tsk: bool = False,
 ) -> int:
     """Run ``pip check`` and imports for the actual selected profile."""
 
@@ -397,7 +411,9 @@ def verify_installation(
         return code
     print("  ✅ pip check")
 
-    for name, import_code in checks_for_profile(minimal=minimal, dev=dev):
+    for name, import_code in checks_for_profile(
+        minimal=minimal, dev=dev, legacy_tsk=legacy_tsk
+    ):
         code = run(
             [py, "-c", import_code],
             dry_run=dry_run,
@@ -417,6 +433,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--minimal", action="store_true", help="Только базовый Python-профиль"
     )
     parser.add_argument("--dev", action="store_true", help="Также установить extra dev")
+    parser.add_argument(
+        "--legacy-tsk",
+        action="store_true",
+        help="Установить необязательный pytsk3 fallback (может требовать C++ toolchain)",
+    )
     parser.add_argument(
         "--win7",
         action="store_true",
@@ -446,9 +467,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_header(args: argparse.Namespace) -> None:
-    mode = "Minimal" if args.minimal else "Полный (api, ai, dfir, legacy-tsk)"
+    mode = "Minimal" if args.minimal else "Полный (api, ai, dfir)"
     if args.dev:
         mode += " + dev"
+    if args.legacy_tsk:
+        mode += " + legacy-tsk"
     print("=" * 64)
     print("  MountFile — Автоустановка зависимостей")
     print(f"  ОС: {SYSTEM} {platform.release()}")
@@ -513,13 +536,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if code != 0:
         return code
 
-    extras = selected_extras(minimal=args.minimal, dev=args.dev)
+    extras = selected_extras(
+        minimal=args.minimal, dev=args.dev, legacy_tsk=args.legacy_tsk
+    )
     code = install_project(py, extras=extras, dry_run=args.dry_run)
     if code != 0:
         return code
 
     code = verify_installation(
-        py, minimal=args.minimal, dev=args.dev, dry_run=args.dry_run
+        py,
+        minimal=args.minimal,
+        dev=args.dev,
+        dry_run=args.dry_run,
+        legacy_tsk=args.legacy_tsk,
     )
     if code != 0:
         return code
@@ -533,12 +562,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("\n" + "=" * 64)
     print("  Готово!")
     print("=" * 64)
-    if is_venv_active():
-        print("🚀 Запуск: python main.py")
-    elif IS_WINDOWS:
-        print(r"🚀 Запуск: .venv\Scripts\python.exe main.py")
-    else:
-        print("🚀 Запуск: .venv/bin/python main.py")
+    # The installer supports arbitrary CWDs; the next-step command must too.
+    print(f'🚀 GUI: "{py}" "{PROJECT_DIR / "main.py"}"')
+    print(f'🚀 CLI: "{py}" -m mountfile --help')
     return 0
 
 

@@ -216,6 +216,7 @@ def test_download_detects_truncated_file(tmp_path, monkeypatch):
 
 
 def test_installer_fails_closed_without_valid_sha256(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
     downloads = []
     installs = []
     monkeypatch.setattr(

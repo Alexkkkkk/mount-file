@@ -89,8 +89,16 @@ def _context(data: bytes, start: int, end: int, width: int, encoding: str) -> st
         return ""
     low = max(0, start - width)
     high = min(len(data), end + width)
+    enc = _normalise_encoding(encoding)
+    codec = (
+        "utf-16-le"
+        if enc in _UTF16_LE
+        else "utf-16-be" if enc in _UTF16_BE else encoding
+    )
+    if enc in _UTF16_LE or enc in _UTF16_BE:
+        low -= low % 2
+        high = min(len(data) - len(data) % 2, high + high % 2)
     snippet = bytes(data[low:high])
-    codec = "utf-16-le" if _normalise_encoding(encoding) in _UTF16_LE else encoding
     try:
         text = snippet.decode(codec, "replace")
     except LookupError:
@@ -115,17 +123,27 @@ def _regex_hits(data: bytes, rx: Any, base: int) -> Iterator[tuple[int, int]]:
 def _text_regex_hits(
     data: bytes, rx: Any, base: int, encoding: str, char_size: int
 ) -> Iterator[tuple[int, int, bool]]:
-    """Regex over decoded text; offsets are approximate for multi-byte codecs."""
-
-    codec = "utf-16-le" if _normalise_encoding(encoding) in _UTF16_LE else encoding
-    try:
-        text = data.decode(codec, "ignore")
-    except LookupError:
-        return
+    """Regex over UTF-16 with exact offsets, including surrogate pairs."""
+    enc = _normalise_encoding(encoding)
+    codec = "utf-16-le" if enc in _UTF16_LE else "utf-16-be"
+    text = data[: len(data) - len(data) % 2].decode(codec, "surrogatepass")
+    positions = [0]
+    for character in text:
+        positions.append(positions[-1] + len(character.encode(codec, "surrogatepass")))
     for match in rx.finditer(text):
-        yield base + match.start() * char_size, (
-            match.end() - match.start()
-        ) * char_size, False
+        start, end = positions[match.start()], positions[match.end()]
+        yield base + start, end - start, True
+
+
+def _validate_request(pattern: str, context: int, max_hits: Optional[int]) -> None:
+    if not isinstance(pattern, str) or not pattern:
+        raise SearchError("empty pattern")
+    if isinstance(context, bool) or not isinstance(context, int) or context < 0:
+        raise SearchError("context must be a non-negative integer")
+    if max_hits is not None and (
+        isinstance(max_hits, bool) or not isinstance(max_hits, int) or max_hits < 0
+    ):
+        raise SearchError("max_hits must be a non-negative integer")
 
 
 def search_blob(
@@ -141,8 +159,11 @@ def search_blob(
 ) -> list[ContentHit]:
     """Search one in-memory blob; used directly by the file-content mode."""
 
+    _validate_request(pattern, context, max_hits)
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise SearchError("data must be bytes-like")
+    if max_hits == 0:
+        return []
     blob = bytes(data)
     enc = _normalise_encoding(encoding)
     hits: list[ContentHit] = []
@@ -223,8 +244,16 @@ def search_image(
     path = Path(image_path)
     if not path.exists():
         raise SearchError("image not found: %s" % path)
+    search_blob(
+        b"", pattern, encoding=encoding, regex=regex, context=context, max_hits=max_hits
+    )
+    if max_hits == 0:
+        return []
     if chunk <= 0:
         raise SearchError("chunk must be positive")
+    if regex and _normalise_encoding(encoding) in _UTF16_LE + _UTF16_BE:
+        chunk = max(2, chunk + chunk % 2)
+        overlap += overlap % 2
     overlap = max(0, min(overlap, chunk - 1)) if chunk > 1 else 0
     if not regex:
         overlap = max(overlap, len(encode_pattern(pattern, encoding)) - 1)
@@ -273,6 +302,11 @@ def search_fs(
 ) -> list[ContentHit]:
     """Search the content of every file in an already-open pytsk3 filesystem."""
 
+    search_blob(
+        b"", pattern, encoding=encoding, regex=regex, context=context, max_hits=max_hits
+    )
+    if max_hits == 0:
+        return []
     files = list(iter_file_entries(fs))
 
     def one(item: tuple[str, Any]) -> list[ContentHit]:
@@ -294,6 +328,7 @@ def search_fs(
                 regex=regex,
                 context=context,
                 path=path,
+                max_hits=max_hits,
             )
         except SearchError:
             return []
@@ -309,13 +344,13 @@ def search_fs(
 
 
 def search_files(
-    image_path: os.PathLike | str, pattern: str, **kwargs: Any
+    image_path: os.PathLike | str, pattern: str, *, offset: int = 0, **kwargs: Any
 ) -> list[ContentHit]:
     """Filesystem-aware content search over ``image_path`` (needs pytsk3)."""
 
     from .timeline import open_tsk_fs  # local import keeps pytsk3 optional
 
-    return search_fs(open_tsk_fs(image_path), pattern, **kwargs)
+    return search_fs(open_tsk_fs(image_path, offset=offset), pattern, **kwargs)
 
 
 def _load_ranges(source: Any) -> Sequence[tuple[int, int]]:
@@ -354,6 +389,10 @@ def search_regions(
     path = Path(image_path)
     if not path.exists():
         raise SearchError("image not found: %s" % path)
+    max_hits = kwargs.pop("max_hits", None)
+    search_blob(b"", pattern, max_hits=max_hits, **kwargs)
+    if max_hits == 0:
+        return []
     size = path.stat().st_size
     hits: list[ContentHit] = []
     with open(path, "rb") as stream:
@@ -370,5 +409,12 @@ def search_regions(
                     "short read for range (%d, %d): got %d bytes"
                     % (offset, length, len(data))
                 )
-            hits.extend(search_blob(data, pattern, base_offset=offset, **kwargs))
+            remaining = None if max_hits is None else max_hits - len(hits)
+            hits.extend(
+                search_blob(
+                    data, pattern, base_offset=offset, max_hits=remaining, **kwargs
+                )
+            )
+            if max_hits is not None and len(hits) >= max_hits:
+                break
     return hits
