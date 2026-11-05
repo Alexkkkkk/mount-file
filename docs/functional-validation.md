@@ -81,6 +81,8 @@ ANSI-кодировке Windows); выбор релизной сборки в т
 
 ```bash
 scripts/smoke-real-images.sh /tmp/mountfile-smoke
+# or, equivalently:
+make smoke-images WORK=/tmp/mountfile-smoke
 ```
 
 Скрипт сам создаёт образы (`mkfs.vfat`, `mkfs.exfat`, `mkfs.ext2`, `mkfs.ext4`,

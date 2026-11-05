@@ -4,7 +4,7 @@
 
 PY ?= python3
 
-.PHONY: help install test test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample \
+.PHONY: help install test test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
         sync sync-status sync-check sync-pr sync-watch
 
 help:
@@ -19,6 +19,7 @@ help:
 	@echo "make clean      - remove build artifacts"
 	@echo "make all-in-one - run every feature: CLI + API + tests (no GUI)"
 	@echo "make sample     - build a FAT32 dump.img and an RT809H-style sample"
+	@echo "make smoke-images - end-to-end CLI+GUI checks on freshly built images"
 	@echo "make sync       - pull --rebase + commit + push (tools/mfsync.py)"
 	@echo "make sync-status - branch, ahead/behind, dirty files, version parity"
 	@echo "make sync-check - fail on version mismatch between pyproject/__init__"
@@ -73,6 +74,12 @@ all-in-one:
 # `make all-in-one`.
 sample:
 	bash scripts/make_sample_image.sh
+
+# End-to-end check on real, freshly built images: mkfs builds them, mtools and
+# fsck/e2fsck verify every write made by Mount File. Sections whose system tool
+# is missing are skipped. Work dir:  make smoke-images WORK=/tmp/mf-smoke
+smoke-images:
+	bash scripts/smoke-real-images.sh $(WORK)
 
 # --------------------------------------------------------------- sync targets
 # Requires only git + Python 3.8 (stdlib). Token is read from GH_TOKEN at call
