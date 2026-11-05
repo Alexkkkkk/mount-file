@@ -548,12 +548,28 @@ def test_legacy_extra_requires_explicit_cli_option():
     assert installer.build_parser().parse_args(["--legacy-tsk"]).legacy_tsk
 
 
+def _isolate_data_dir(standalone, monkeypatch, tmp_path):
+    """Point the app data directory at ``tmp_path`` on every platform.
+
+    Setting ``XDG_CONFIG_HOME`` is not enough: macOS resolves
+    ``~/Library/Application Support``, so a test that only sets XDG writes lock
+    files and symlinks into the real user profile and fails on the next run
+    with ``FileExistsError``.
+    """
+
+    data_dir = tmp_path / "appdata"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(data_dir))
+    monkeypatch.setattr(standalone.Paths, "data", classmethod(lambda cls: data_dir))
+    return data_dir
+
+
 def test_posix_instance_lock_does_not_unlink_live_inode(
     standalone, monkeypatch, tmp_path
 ):
     if os.name == "nt":
         pytest.skip("flock is POSIX-only")
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    _isolate_data_dir(standalone, monkeypatch, tmp_path)
     first, second = standalone.SingleInstance(), standalone.SingleInstance()
     try:
         assert first.acquire()
@@ -572,10 +588,10 @@ def test_posix_instance_lock_does_not_unlink_live_inode(
 def test_posix_instance_lock_refuses_symlink(standalone, monkeypatch, tmp_path):
     if os.name == "nt" or not hasattr(os, "O_NOFOLLOW"):
         pytest.skip("requires POSIX O_NOFOLLOW")
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    data_dir = _isolate_data_dir(standalone, monkeypatch, tmp_path)
     original = tmp_path / "must-not-touch.txt"
     original.write_text("original data")
-    standalone.Paths.lock_file().symlink_to(original)
+    (data_dir / standalone.Paths.lock_file().name).symlink_to(original)
     lock = standalone.SingleInstance()
     assert not lock.acquire()
     assert original.read_text() == "original data"
