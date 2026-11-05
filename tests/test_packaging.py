@@ -10,11 +10,19 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     """Build/install a wheel without index access and exercise its real CLI."""
+    # --no-build-isolation builds in this interpreter, so a venv created without
+    # setuptools (Python 3.12 does not install it by default) cannot build.
+    pytest.importorskip(
+        "setuptools",
+        reason="setuptools is required for an offline --no-build-isolation wheel",
+    )
     source = tmp_path / "source"
     source.mkdir()
     shutil.copy2(ROOT / "pyproject.toml", source / "pyproject.toml")

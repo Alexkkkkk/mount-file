@@ -26,6 +26,7 @@ import posixpath
 import shutil
 import sqlite3
 import sys
+from pathlib import Path
 
 from . import __version__
 from .autopick import auto_select, format_candidates, format_choice
@@ -766,8 +767,12 @@ def cmd_timeline_export(args):
 
 
 def cmd_yara(args):
+    # --rules is a path, not rule source: passing the raw string made the
+    # compiler treat the file name as YARA source and fail with a syntax error
+    # on every invocation.
+    rules = Path(args.rules)
     try:
-        hits = scan_yara(args.image, args.rules)
+        hits = scan_yara(args.image, rules)
     except YaraUnavailableError as exc:
         print("error: %s" % exc, file=sys.stderr)
         return ERROR

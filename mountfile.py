@@ -377,10 +377,21 @@ class LinuxBackend(MountBackend):
 
     LOOP_IMG_RE = re.compile(r"^(/dev/loop\d+)\s+(.+?)\s+(\S+)\s")
 
+    @staticmethod
+    def _euid() -> int:
+        """Effective uid, or a human MountError when the OS has no geteuid."""
+        geteuid = getattr(os, "geteuid", None)
+        if geteuid is None:
+            raise MountError(
+                "Loop-монтирование доступно только в Linux: в этой системе "
+                "нет os.geteuid. Выберите backend своей платформы."
+            )
+        return int(geteuid())
+
     def mount(self, image: Path, target: Path) -> Path:
         image = image.resolve()
 
-        if shutil.which("udisksctl") and os.geteuid() != 0:
+        if shutil.which("udisksctl") and self._euid() != 0:
             r = self._run(["udisksctl", "loop-setup", "--read-only", "-f", str(image)])
             m = re.search(r"(/dev/loop\d+)", r)
             if not m:
@@ -410,7 +421,7 @@ class LinuxBackend(MountBackend):
                     self._run(["udisksctl", "loop-delete", "-b", dev])
                 raise
 
-        if os.geteuid() != 0:
+        if self._euid() != 0:
             raise MountError(
                 "Root is required to mount loop devices.\n"
                 "Either run with sudo, or install udisks2 for unprivileged mounting."
@@ -422,7 +433,7 @@ class LinuxBackend(MountBackend):
 
     def unmount(self, target: Path) -> None:
         target = target.resolve()
-        if os.geteuid() == 0:
+        if self._euid() == 0:
             self._run(["umount", "--", str(target)])
             return
         if shutil.which("udisksctl"):

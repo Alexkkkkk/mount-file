@@ -109,17 +109,53 @@ def test_image_hex_save_rejects_changed_contents_even_with_same_provider(win, tm
 def test_image_hex_can_save_twice_and_advance_expected_snapshot(win, tmp_path):
     assert win.load_image(build_disk(tmp_path))
     panel = win.panelL
+    assert panel.writer is not None, panel.write_reason
     panel.table.setCurrentCell(panel._row_of("HELLO.TXT"), 0)
     win.f3_hex_view()
     page = win.workspace_stack.currentWidget()
     page.hex_view.insertBytes(b"one")
-    page.save()
+    assert page.save(), page.last_error
     assert not page.hex_view.isModified()
     page.hex_view.insertBytes(b"two")
     expected = page.hex_view.data()
-    page.save()
+    assert page.save(), page.last_error
     assert not page.hex_view.isModified()
     assert panel.provider.read_file("/HELLO.TXT") == expected
+
+
+def test_volume_extent_ignores_signature_hits_inside_a_filesystem(
+    win, monkeypatch, tmp_path
+):
+    """Signature scanning finds headers inside a volume; they are not bounds."""
+    from mountfile import vfs
+    from mountfile.vfs import TskError
+
+    image = tmp_path / "whole-disk.img"
+    image.write_bytes(b"\x00" * 8192)
+    win.image_path = str(image)
+    win.volumes = [
+        SimpleNamespace(
+            offset=0, fstype="NTFS", size=None, source="signature", desc="NTFS @ 0x0"
+        ),
+        SimpleNamespace(
+            offset=2048,
+            fstype="ext2/3/4",
+            size=None,
+            source="signature",
+            desc="ext @ 0x800",
+        ),
+    ]
+    seen = {}
+
+    def fake_open(path, offset=0, volume_size=None, **_kwargs):
+        seen["volume_size"] = volume_size
+        raise TskError("stop after recording the extent")
+
+    monkeypatch.setattr(vfs, "open_image_provider", fake_open)
+    monkeypatch.setattr(win, "_auto_pick", lambda *_args, **_kwargs: False)
+
+    assert not win.mount_volume(win.panelL, 0)
+    assert seen["volume_size"] == len(image.read_bytes())
 
 
 def test_relative_cd_resolves_against_panel_directory(win, tmp_path):

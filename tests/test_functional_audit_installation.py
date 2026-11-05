@@ -20,6 +20,12 @@ import install_mountfile as installer
 from mountfile import ollama_setup, updater
 
 ROOT = Path(__file__).resolve().parents[1]
+# Loop devices, udisksctl and /proc/mounts exist only where os.geteuid does;
+# the same tests must not turn into AttributeError noise on Windows runners.
+POSIX_EUID = hasattr(os, "geteuid")
+requires_posix_euid = pytest.mark.skipif(
+    not POSIX_EUID, reason="loop/udisksctl paths require a POSIX os.geteuid"
+)
 
 
 @pytest.fixture(scope="module")
@@ -67,6 +73,7 @@ def test_full_profile_checks_all_runtime_extras():
     ]
 
 
+@requires_posix_euid
 def test_linux_loop_setup_is_read_only_and_does_not_create_ignored_target(
     standalone, monkeypatch, tmp_path
 ):
@@ -90,6 +97,7 @@ def test_linux_loop_setup_is_read_only_and_does_not_create_ignored_target(
     assert not target.exists()
 
 
+@requires_posix_euid
 def test_linux_mount_failure_detaches_loop_device(standalone, monkeypatch, tmp_path):
     backend = standalone.LinuxBackend()
     monkeypatch.setattr(standalone.os, "geteuid", lambda: 1000)
@@ -110,6 +118,7 @@ def test_linux_mount_failure_detaches_loop_device(standalone, monkeypatch, tmp_p
     assert calls[-1] == ["udisksctl", "loop-delete", "-b", "/dev/loop9"]
 
 
+@requires_posix_euid
 def test_linux_unmount_resolves_mountpoint_to_loop_and_cleans_up(
     standalone, monkeypatch, tmp_path
 ):
@@ -131,6 +140,7 @@ def test_linux_unmount_resolves_mountpoint_to_loop_and_cleans_up(
     ]
 
 
+@requires_posix_euid
 def test_linux_unmount_does_not_use_parent_or_user_device(
     standalone, monkeypatch, tmp_path
 ):
@@ -160,6 +170,7 @@ def test_linux_proc_mounts_decodes_space_and_backslash(standalone, monkeypatch):
     ]
 
 
+@requires_posix_euid
 def test_linux_root_mount_uses_read_only_and_argument_terminator(
     standalone, monkeypatch, tmp_path
 ):
@@ -182,6 +193,16 @@ def test_linux_run_uses_stable_locale(standalone, monkeypatch):
     monkeypatch.setattr(standalone.subprocess, "run", run)
     assert standalone.LinuxBackend._run(["udisksctl", "mount"]) == "ok"
     assert seen["env"]["LC_ALL"] == "C"
+
+
+def test_linux_backend_without_geteuid_reports_human_error(standalone, monkeypatch):
+    """Off POSIX the loop backend must refuse with MountError, not AttributeError."""
+    monkeypatch.delattr(standalone.os, "geteuid", raising=False)
+    backend = standalone.LinuxBackend()
+    with pytest.raises(standalone.MountError, match="Linux"):
+        backend.mount(Path("/tmp/image.img"), Path("/tmp/target"))
+    with pytest.raises(standalone.MountError, match="Linux"):
+        backend.unmount(Path("/tmp/target"))
 
 
 def test_mac_mount_info_uses_plist_not_whitespace_columns(standalone, monkeypatch):
@@ -211,7 +232,10 @@ def test_mac_mount_info_uses_plist_not_whitespace_columns(standalone, monkeypatc
 def test_missing_os_tool_is_human_mount_error(
     standalone, monkeypatch, tmp_path, backend
 ):
-    monkeypatch.setattr(standalone.os, "geteuid", lambda: 0)
+    # Windows has no os.geteuid; every backend must still fail with a human
+    # MountError instead of leaking AttributeError/FileNotFoundError.
+    if POSIX_EUID:
+        monkeypatch.setattr(standalone.os, "geteuid", lambda: 0)
     monkeypatch.setattr(
         standalone.subprocess,
         "run",
@@ -411,7 +435,9 @@ def test_windows_swap_paths_escape_percent_and_preserve_metacharacters(
     script = updater._windows_swap_script(
         r"C:\new%TEMP% & x.exe", r"C:\тест!\MountFile.exe", 5, str(tmp_path / "log")
     )
-    text = Path(script).read_text()
+    # The swap script is written as UTF-8 (it runs `chcp 65001`), so reading it
+    # must not fall back to the Windows ANSI code page.
+    text = Path(script).read_text(encoding="utf-8")
     assert "DisableDelayedExpansion" in text
     assert "chcp 65001" in text
     assert 'move /Y "C:\\new%%TEMP%% & x.exe"' in text

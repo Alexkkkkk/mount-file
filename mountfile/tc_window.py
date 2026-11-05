@@ -401,6 +401,9 @@ class HexEditorPage(QWidget):
         super().__init__(parent)
         self._save_callback = save_callback
         self._close_callback = close_callback
+        # Последняя причина отказа записи: без неё сохранение «молча» оставляло
+        # кнопку активной, а пользователь не понимал, почему файл не изменился.
+        self.last_error = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         top = QHBoxLayout()
@@ -464,13 +467,20 @@ class HexEditorPage(QWidget):
             )
 
     def save(self):
+        """Записать правку в образ. Возвращает True только при успехе."""
         if not self.hex_view.isModified() or self._save_callback is None:
-            return
+            return False
+        self.last_error = ""
         try:
             if self._save_callback(self.hex_view.data()):
                 self.hex_view.setData(self.hex_view.data())
+                return True
+            return False
         except Exception as exc:
+            self.last_error = str(exc)
+            self.status.setText("Не сохранено: %s" % exc)
             QMessageBox.critical(self, "Сохранение HEX не удалось", str(exc))
+            return False
 
     def find(self):
         value, ok = QInputDialog.getText(self, "Поиск байтов", "HEX или текст:")
@@ -3891,10 +3901,16 @@ class MainWindow(QMainWindow):
         )
         if volume_size is None:
             image_size = os.path.getsize(self.image_path)
+            # Only partition-table rows delimit a volume. Signature scanning
+            # also reports filesystem headers found *inside* an existing
+            # filesystem; using those offsets as boundaries cut the real volume
+            # short and made a whole-image NTFS/exFAT open fail with
+            # "declared size exceeds the selected volume bounds".
             next_offsets = [
                 int(getattr(volume, "offset"))
                 for volume in (self.volumes or [])
                 if getattr(volume, "offset", -1) > offset
+                and getattr(volume, "source", "table") == "table"
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
