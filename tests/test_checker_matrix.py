@@ -52,7 +52,7 @@ def test_checker_matrix_never_conflates_available_tool_with_fixture_evidence(
     monkeypatch.setattr(
         "scripts.checker_matrix.subprocess.run",
         lambda *args, **kwargs: type(
-            "Result", (), {"stdout": "tool 1.2\n", "stderr": ""}
+            "Result", (), {"returncode": 0, "stdout": "tool 1.2\n", "stderr": ""}
         )(),
     )
     report = build_report()

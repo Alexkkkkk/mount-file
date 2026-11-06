@@ -91,7 +91,7 @@ def _tool_version(item: dict, executable: str | None) -> str | None:
         except (OSError, subprocess.SubprocessError):
             continue
         output = (result.stdout or result.stderr or "").strip()
-        if output:
+        if result.returncode == 0 and output:
             return output.splitlines()[0][:240]
     return None
 
