@@ -361,9 +361,14 @@ _RECOVERY_CONTRACTS = MappingProxyType(
                 "quarantine": "not_applicable",
             }
             for profile_id in (
-                "fat12-native-ro", "fat16-native-ro", "fat32-native-ro",
-                "ext2-native-ro", "ext3-native-ro", "ext4-native-ro",
-                "ntfs-native-ro", "exfat-native-ro",
+                "fat12-native-ro",
+                "fat16-native-ro",
+                "fat32-native-ro",
+                "ext2-native-ro",
+                "ext3-native-ro",
+                "ext4-native-ro",
+                "ntfs-native-ro",
+                "exfat-native-ro",
             )
         },
         "fat12-16-native-rw": {
