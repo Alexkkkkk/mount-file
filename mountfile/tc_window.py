@@ -3604,15 +3604,17 @@ class MainWindow(QMainWindow):
                 except FileExistsError:
                     backup = self.image_path + ".bak.%d" % suffix
                     suffix += 1
+            before = _local_file_identity(
+                os.stat(self.image_path, follow_symlinks=False)
+            )
             with output, open(self.image_path, "rb") as source:
-                before = _local_file_identity(os.fstat(source.fileno()))
                 shutil.copyfileobj(source, output, length=1 << 20)
                 output.flush()
                 os.fsync(output.fileno())
-                after = _local_file_identity(os.fstat(source.fileno()))
-                if before != after or after != _local_file_identity(
-                    os.stat(self.image_path)
-                ):
+                after = _local_file_identity(
+                    os.stat(self.image_path, follow_symlinks=False)
+                )
+                if before != after:
                     raise RuntimeError(
                         "образ изменился во время создания резервной копии"
                     )
