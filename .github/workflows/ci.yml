@@ -234,6 +234,17 @@ jobs:
           python -m pytest tests/ -v --cov=mountfile --cov-report=term
           --cov-fail-under=20
 
+      - name: Emit external-checker capability matrix
+        run: python scripts/checker_matrix.py --json-out checker-matrix.json
+
+      - name: Upload external-checker capability matrix
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: external-checker-matrix-linux
+          path: checker-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Entry-point and GUI import diagnostics
         run: |
           python main.py --version
