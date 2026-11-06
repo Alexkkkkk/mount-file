@@ -14,7 +14,6 @@ import platform
 import shutil
 from pathlib import Path
 
-
 MATRIX = (
     {
         "profile": "ext2-native-rw",
