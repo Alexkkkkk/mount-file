@@ -1,7 +1,9 @@
 name: CI Guardian
 
 # Creates one tracked incident issue for a failing trusted main-branch run and
-# closes it after a later successful run. It never edits source or auto-merges.
+# closes it after a later successful run. Superseded/cancelled runs are ignored:
+# concurrency cancellation is expected when a newer main commit starts CI. It
+# never edits source or auto-merges.
 on:
   workflow_run:
     workflows: [CI, Quality, Security, mfsync]
@@ -83,7 +85,16 @@ jobs:
               return;
             }
 
-            if (conclusion === 'failure' || conclusion === 'cancelled' || conclusion === 'timed_out') {
+            // A cancelled run is normally a superseded push because the
+            // workflow concurrency group started a newer main run. Treating
+            // it as an incident creates false positives and can hide the
+            // result of the newer run behind a stale issue.
+            if (conclusion === 'cancelled') {
+              core.info('Ignoring cancelled run; a newer or manually retried run owns this check.');
+              return;
+            }
+
+            if (conclusion === 'failure' || conclusion === 'timed_out') {
               if (matching.length > 0) {
                 await github.rest.issues.createComment({
                   owner,
