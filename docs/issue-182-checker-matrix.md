@@ -16,10 +16,13 @@ artifact. It is deliberately an inventory, not a parity verdict.
 | `ntfs-native-ro` | `ntfsfix -n` | `ntfs-3g` | **not authoritative**; result is always inconclusive | explicit test that a zero exit is not called clean |
 | native readers | `pytsk3` | Python optional runtime | differential/reference only | benchmark or format-specific differential fixture where available |
 
-The report includes tool availability, runner platform, the fixture test names,
-and `parity: not_claimed`. If a tool is absent, the entry is `unavailable` and
-never `pass`. A checker receiving a disposable image copy must not mutate the
-source image; the wrapper tests enforce source and copy identity rules.
+The report includes tool availability, the first bounded tool-version line,
+runner platform, the fixture test names, and `evidence: fixture_required`.
+`parity: not_claimed` remains mandatory for every inventory entry: an installed
+binary is not evidence that a fixture passed. If a tool is absent, the entry is
+`unavailable` and never `pass`; its version is `null`. A checker receiving a
+disposable image copy must not mutate the source image; the wrapper tests
+enforce source and copy identity rules.
 
 ## Reproduction
 

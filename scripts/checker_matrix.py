@@ -12,6 +12,7 @@ import importlib.util
 import json
 import platform
 import shutil
+import subprocess
 from pathlib import Path
 
 MATRIX = (
@@ -71,6 +72,30 @@ MATRIX = (
 )
 
 
+def _tool_version(item: dict, executable: str | None) -> str | None:
+    """Return a bounded version string without turning inventory into evidence."""
+    if not executable:
+        return None
+    if item.get("checker_kind") == "python_module":
+        module = importlib.util.find_spec(item["checker"])
+        return getattr(module, "version", None) if module else None
+    for flag in ("--version", "-V"):
+        try:
+            result = subprocess.run(
+                [executable, flag],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        output = (result.stdout or result.stderr or "").strip()
+        if output:
+            return output.splitlines()[0][:240]
+    return None
+
+
 def build_report() -> dict[str, object]:
     entries = []
     for item in MATRIX:
@@ -79,15 +104,18 @@ def build_report() -> dict[str, object]:
             executable = module.origin if module else None
         else:
             executable = shutil.which(item["checker"])
+        available = bool(executable)
         entries.append(
             {
                 **item,
                 "checker_path": executable,
-                "availability": "available" if executable else "unavailable",
+                "checker_version": _tool_version(item, executable),
+                "availability": "available" if available else "unavailable",
+                "evidence": "fixture_required",
                 "parity": "not_claimed",
                 "reason": (
                     "fixture-specific test required; inventory alone is not parity"
-                    if executable
+                    if available
                     else "required checker/runtime is unavailable on this runner"
                 ),
             }

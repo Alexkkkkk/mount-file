@@ -22,6 +22,7 @@ def test_checker_matrix_is_json_serialisable_and_never_claims_parity():
         "all-native-readers",
     } == set(profiles)
     assert all(entry["parity"] == "not_claimed" for entry in report["entries"])
+    assert all(entry["evidence"] == "fixture_required" for entry in report["entries"])
     assert profiles["ntfs-native-ro"]["checker_authoritative"] is False
     assert profiles["all-native-readers"]["checker_kind"] == "python_module"
 
@@ -35,3 +36,29 @@ def test_checker_matrix_records_unavailable_as_unknown_not_pass(monkeypatch):
     assert all(entry["availability"] == "unavailable" for entry in report["entries"])
     assert all(entry["parity"] == "not_claimed" for entry in report["entries"])
     assert all("unavailable" in entry["reason"] for entry in report["entries"])
+    assert all(entry["checker_version"] is None for entry in report["entries"])
+
+
+def test_checker_matrix_never_conflates_available_tool_with_fixture_evidence(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "scripts.checker_matrix.shutil.which", lambda name: "/usr/bin/" + name
+    )
+    monkeypatch.setattr(
+        "scripts.checker_matrix.importlib.util.find_spec",
+        lambda name: type("Spec", (), {"origin": "/site-packages/" + name + ".so"})(),
+    )
+    monkeypatch.setattr(
+        "scripts.checker_matrix.subprocess.run",
+        lambda *args, **kwargs: type(
+            "Result", (), {"stdout": "tool 1.2\n", "stderr": ""}
+        )(),
+    )
+    report = build_report()
+    assert all(entry["availability"] == "available" for entry in report["entries"])
+    assert all(
+        entry["checker_version"] in {"tool 1.2", None} for entry in report["entries"]
+    )
+    assert all(entry["evidence"] == "fixture_required" for entry in report["entries"])
+    assert all(entry["parity"] == "not_claimed" for entry in report["entries"])
