@@ -9,9 +9,17 @@
 
 from mountfile.rw.v2 import *  # noqa: F401,F403
 
+
+def main(argv=None):
+    """Run the installed entry point with optional explicit arguments."""
+    import sys
+
+    from mountfile.rw.v2 import main as implementation
+
+    return implementation(sys.argv[1:] if argv is None else argv)
+
+
 if __name__ == "__main__":
     import sys
 
-    from mountfile.rw.v2 import main
-
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

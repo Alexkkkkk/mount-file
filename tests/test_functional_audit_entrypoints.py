@@ -12,11 +12,23 @@ import pytest
 import mountfile_all
 import mountfile_dfir
 import mountfile_grep
+import mountfile_rw_complete
+import mountfile_rw_v2
 from mountfile.rw import complete, v2
 
 
 @pytest.mark.parametrize("module", [complete, v2])
 def test_console_entrypoint_uses_sys_argv_when_argv_is_omitted(module, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["installed-command", "--help"])
+    with pytest.raises(SystemExit) as result:
+        module.main()
+    assert result.value.code == 0
+
+
+@pytest.mark.parametrize("module", [mountfile_rw_complete, mountfile_rw_v2])
+def test_top_level_console_wrapper_uses_sys_argv_when_argv_is_omitted(
+    module, monkeypatch
+):
     monkeypatch.setattr(sys, "argv", ["installed-command", "--help"])
     with pytest.raises(SystemExit) as result:
         module.main()
