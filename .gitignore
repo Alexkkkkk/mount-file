@@ -10,7 +10,9 @@ dist/
 .venv/
 venv/
 .idea/
-.vscode/
+.vscode/*
+# MCP: общий конфиг серверов в репозитории, локальные оверрайды — нет
+!.vscode/mcp.json
 .pytest_cache/
 # Disk images and dumps (never commit test data)
 *.img

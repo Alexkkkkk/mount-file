@@ -1,0 +1,30 @@
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "github_mcp_pat",
+      "description": "GitHub Personal Access Token для MCP (fine-grained, read-only достаточно)",
+      "password": true
+    }
+  ],
+  "servers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${input:github_mcp_pat}",
+        "X-MCP-Toolsets": "context,repos,issues,pull_requests,actions,code_security,secret_protection",
+        "X-MCP-Readonly": "true"
+      }
+    },
+    "github-write": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${input:github_mcp_pat}",
+        "X-MCP-Toolsets": "context,repos,issues,pull_requests",
+        "X-MCP-Readonly": "false"
+      }
+    }
+  }
+}
