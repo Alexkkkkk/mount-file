@@ -27,7 +27,7 @@
 
 ## CI Guardian
 
-`ci-guardian.yml` слушает завершение trusted workflow для `main`. При `failure`, `cancelled` или `timed_out` он создаёт одну deduplicated issue с labels `automation` и `ci-failure`, добавляет ссылку на run и commit, а повторные падения добавляет комментариями. После успешного запуска того же workflow открытая incident issue закрывается с указанием recovery commit.
+`ci-guardian.yml` слушает завершение trusted workflow для `main`. При `failure` или `timed_out` он создаёт одну deduplicated issue с labels `automation` и `ci-failure`, добавляет ссылку на run и commit, а повторные падения добавляет комментариями. Отменённые запуски не считаются инцидентами: их обычно отменяет concurrency-группа после нового push, поэтому они не должны создавать ложные issue. После успешного запуска того же workflow открытая incident issue закрывается с указанием recovery commit.
 
 Guardian не редактирует исходники и не закрывает PR. Это операционный контур обнаружения, а не скрытая самопочинка.
 

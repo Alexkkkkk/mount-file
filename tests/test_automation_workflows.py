@@ -241,6 +241,8 @@ def test_ci_guardian_deduplicates_incidents_and_closes_on_recovery():
     assert "issues.create" in text
     assert "ci-failure" in text
     assert "issues.update" in text
+    assert "if (conclusion === 'cancelled')" in text
+    assert "conclusion === 'failure' || conclusion === 'timed_out'" in text
     assert "does not modify source code" in text
 
 
