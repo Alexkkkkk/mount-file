@@ -91,6 +91,23 @@ FAT12/16/32 и поддержанные native ext-профили работаю
 fallback явно установите `python -m pip install '.[legacy-tsk]'`; дополнительные
 возможности устанавливаются через `.[api]`, `.[ai]` или `.[dfir]`.
 
+Для полного Python-окружения разработчика (все optional features, legacy `pytsk3`,
+тестовые/форматирующие инструменты и документация) из корня репозитория выполните:
+
+```bash
+python -m pip install -r requirements-all.txt
+```
+
+На Debian/Ubuntu для полного набора интеграционных проверок реальных файловых
+систем и headless GUI дополнительно нужны системные пакеты:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential python3-dev pkg-config \
+  dosfstools mtools e2fsprogs exfatprogs ntfs-3g \
+  libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+```
+
 Для явно выбранного library-level compatibility режима ext2/3/4 на Windows можно
 использовать WSL: установите дистрибутив Linux, откройте его терминал и выполните
 `sudo apt install e2fsprogs`. Этот режим находит `debugfs` в WSL и изменяет
