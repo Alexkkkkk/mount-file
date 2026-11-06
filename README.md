@@ -31,7 +31,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.73.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Current package version | `1.73.1` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
@@ -329,6 +329,7 @@ Useful targets:
 | `make fmt` | apply Ruff, isort and Black |
 | `make sample` | build sample images when `dosfstools` and `mtools` are available |
 | `make all-in-one` | run the broad no-GUI smoke flow |
+| `make smoke-images` | end-to-end CLI and GUI checks on freshly built images, verified by `mtools`, `fsck.vfat`, `fsck.exfat` and `e2fsck` |
 | `make exe` | build the main PyInstaller binary |
 | `make mountfile-exe` | build the standalone binary |
 
@@ -341,6 +342,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md),
 [`docs/structure.md`](docs/structure.md),
 [`docs/quality.md`](docs/quality.md) and [`docs/sync.md`](docs/sync.md) before
 opening a pull request.
+
+Проверка исправленных пользовательских сценариев, команды повторного тестирования
+и оставшиеся ограничения описаны в
+[`docs/functional-validation.md`](docs/functional-validation.md).
 
 ## Repository map
 

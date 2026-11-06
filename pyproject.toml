@@ -54,6 +54,7 @@ dev = [
     "ruff>=0.4",
     "black>=24.4",
     "isort>=5.13",
+    "pre-commit>=3.0",
     "pyinstaller>=6.22.3",
 ]
 api = [
@@ -98,6 +99,7 @@ mountfile-rw-v2 = "mountfile_rw_v2:main"
 # ``mountfile-rw`` / ``mountfile-rw-v2`` entry points never get installed.
 py-modules = [
     "mountfile_ai",
+    "mountfile_dfir_tools",
     "mountfile_universal_rw",
     "mountfile_rw_complete",
     "mountfile_rw_v2",

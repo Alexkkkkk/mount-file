@@ -562,6 +562,9 @@ class WriteEngine:
         # the facade snapshots the whole image itself; never duplicate the copy
         fs._auto_backup = False
         self.offset = fs.offset
+        # Commit closes the live backend before hashing and running checkers.
+        # Preserve its validated profile without calling methods after close.
+        self._backend_info = fs.info()
         return fs
 
     @property
@@ -798,7 +801,7 @@ class WriteEngine:
         structural = self._probe()
         checks.extend(structural["checks"])
         fs_check = self._run_fs_check()
-        if self._fs.info().write_strategy == "native-ext2":
+        if self._backend_info.write_strategy == "native-ext2":
             fs_check_detail = (
                 "external e2fsck not run; native ext2 validates staged metadata "
                 "after each mutation"
@@ -830,7 +833,7 @@ class WriteEngine:
         }
 
     def _run_fs_check(self) -> Optional[bool]:
-        if self._fs.info().write_strategy == "native-ext2":
+        if self._backend_info.write_strategy == "native-ext2":
             return None
         fs_type = fs_family((self.damage or {}).get("fs_type"))
         if fs_type == "fat" and shutil.which("fsck.fat"):

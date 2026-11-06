@@ -31,10 +31,10 @@ def test_image_paths_use_posix_semantics_independent_of_host_os():
 @pytest.mark.parametrize(
     ("fs_type", "offset", "checker", "arguments"),
     [
-        ("ext4", 4096, "e2fsck", ["-E", "offset=4096", "-f", "-y"]),
-        ("ext4", 0, "e2fsck", ["-f", "-y"]),
+        ("ext4", 4096, "e2fsck", None),
+        ("ext4", 0, "e2fsck", ["-f", "-n"]),
         ("fat32", 4096, "fsck.fat", None),
-        ("fat32", 0, "fsck.fat", ["-a"]),
+        ("fat32", 0, "fsck.fat", ["-n"]),
     ],
 )
 def test_flush_checker_is_partition_aware(
@@ -65,7 +65,11 @@ def test_flush_checker_is_partition_aware(
     if arguments is None:
         assert calls == []
         assert result["fsck"] == {
-            "skipped": "fsck.fat does not support filesystem offsets"
+            "skipped": (
+                "fsck.fat does not support filesystem offsets"
+                if fs_type == "fat32"
+                else "e2fsck cannot enforce selected partition bounds"
+            )
         }
     else:
         assert len(calls) == 1

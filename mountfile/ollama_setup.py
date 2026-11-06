@@ -10,7 +10,7 @@ import subprocess
 
 SCRIPT_NAME = "install-ollama.ps1"
 DEFAULT_MODEL = "llama3.2:3b"
-_MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,128}$")
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 
 class OllamaSetupError(RuntimeError):

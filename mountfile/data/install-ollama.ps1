@@ -2,7 +2,7 @@
 # Windows PowerShell 5.1+. Called only after the user confirms in MountFile.
 [CmdletBinding()]
 param(
-    [ValidatePattern('^[A-Za-z0-9._:/-]{1,128}$')]
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$')]
     [string]$Model = 'llama3.2:3b'
 )
 
@@ -13,6 +13,7 @@ $ProgressPreference = 'Continue'
 $work = Join-Path ([IO.Path]::GetTempPath()) ('mountfile-ollama-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $work | Out-Null
 $installer = Join-Path $work 'OllamaSetup.exe'
+$exitCode = 0
 
 try {
     Write-Host 'MountFile: downloading the official Ollama for Windows installer.' -ForegroundColor Cyan
@@ -79,9 +80,11 @@ try {
     Write-Host "Setup complete. Model $Model is ready. Return to MountFile and click 'Проверить и настроить Ollama'." -ForegroundColor Green
 } catch {
     Write-Host "Setup failed: $($_.Exception.Message)" -ForegroundColor Red
+    $exitCode = 1
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
 Read-Host 'Press Enter to close this setup window' | Out-Null
+exit $exitCode

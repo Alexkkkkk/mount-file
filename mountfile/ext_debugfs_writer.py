@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 
 class ExtWriteError(RuntimeError):
@@ -157,6 +158,7 @@ class Ext234ImageWriter:
         self.wsl_executable = None
         self.wsl_distribution = None
         self._wsl_path_cache = {}
+        self._operation_lock = threading.RLock()
         self.native_backend = None
         self.native_rejection = ""
         self.native_unsafe_error = ""
@@ -342,7 +344,7 @@ class Ext234ImageWriter:
             timeout=120,
         )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
-        if result.returncode:
+        if result.returncode or "Command not found" in output:
             raise ExtWriteError(f"debugfs failed: {output.strip()[-600:]}")
         return output
 
@@ -356,7 +358,8 @@ class Ext234ImageWriter:
                     raise ExtWriteError(
                         "unexpected end of image while copying ext extent"
                     )
-                dst.write(data)
+                if dst.write(data) != len(data):
+                    raise ExtWriteError("short write while staging ext extent")
                 remaining -= len(data)
             dst.flush()
             os.fsync(dst.fileno())
@@ -364,6 +367,14 @@ class Ext234ImageWriter:
     def _commit_extent(self, modified_path):
         """Commit a verified extent; restore original bytes if commit errors."""
         expected = self._hash_extent(modified_path, 0)
+        original_hash = getattr(self, "_pending_source_hash", None)
+        if (
+            original_hash is not None
+            and self._hash_extent(self.image_path, self.offset) != original_hash
+        ):
+            raise ExtWriteError(
+                "source ext image changed concurrently; refusing commit"
+            )
         with tempfile.TemporaryDirectory(prefix="mountfile-ext-rollback-") as work:
             rollback_path = os.path.join(work, "original.ext")
             self._copy_extent(self.image_path, rollback_path)
@@ -372,13 +383,23 @@ class Ext234ImageWriter:
                     open(self.image_path, "r+b") as image,
                     open(modified_path, "rb") as src,
                 ):
+                    if (
+                        original_hash is not None
+                        and self._hash_extent(image, self.offset) != original_hash
+                    ):
+                        raise ExtWriteError(
+                            "source ext image changed concurrently; refusing commit"
+                        )
                     image.seek(self.offset)
                     remaining = self.filesystem_size
                     while remaining:
                         block = src.read(min(_CHUNK, remaining))
                         if not block:
                             raise ExtWriteError("modified ext extent is truncated")
-                        image.write(block)
+                        if image.write(block) != len(block):
+                            raise ExtWriteError(
+                                "short write while committing ext extent"
+                            )
                         remaining -= len(block)
                     image.flush()
                     os.fsync(image.fileno())
@@ -428,11 +449,25 @@ class Ext234ImageWriter:
         return digest.digest()
 
     def _with_working_extent(self, operation):
-        with tempfile.TemporaryDirectory(prefix="mountfile-ext-work-") as work:
+        with (
+            self._operation_lock,
+            tempfile.TemporaryDirectory(prefix="mountfile-ext-work-") as work,
+        ):
             working = os.path.join(work, "filesystem.ext")
+            original_hash = self._hash_extent(self.image_path, self.offset)
             self._copy_extent(self.image_path, working)
+            if self._hash_extent(working, 0) != original_hash:
+                raise ExtWriteError("source ext image changed while staging")
             result = operation(working, work)
-            self._commit_extent(working)
+            if self._hash_extent(self.image_path, self.offset) != original_hash:
+                raise ExtWriteError(
+                    "source ext image changed concurrently; refusing commit"
+                )
+            self._pending_source_hash = original_hash
+            try:
+                self._commit_extent(working)
+            finally:
+                self._pending_source_hash = None
             return result
 
     def read_file(self, path):
@@ -499,7 +534,11 @@ class Ext234ImageWriter:
                 stream.flush()
                 os.fsync(stream.fileno())
             # Remove-if-present is done only on the disposable working extent.
-            self._run(working, f"rm {_debugfs_quote(image_path)}", write=True)
+            existing = self._extent_entry(working, image_path)
+            if existing is not None:
+                if existing["is_dir"]:
+                    raise IsADirectoryError(image_path)
+                self._run(working, f"rm {_debugfs_quote(image_path)}", write=True)
             output = self._run(
                 working,
                 f"write {self._host_debugfs_quote(source)} {_debugfs_quote(image_path)}",
@@ -527,7 +566,12 @@ class Ext234ImageWriter:
         image_path = normalize_image_path(path)
 
         def apply(working, _work):
+            if self._extent_entry(working, image_path) is not None:
+                raise FileExistsError(image_path)
             self._run(working, f"mkdir {_debugfs_quote(image_path)}", write=True)
+            created = self._extent_entry(working, image_path)
+            if created is None or not created["is_dir"]:
+                raise ExtWriteError("debugfs mkdir read-back validation failed")
 
         self._with_working_extent(apply)
 
@@ -539,11 +583,32 @@ class Ext234ImageWriter:
         dst = normalize_image_path(destination)
 
         def apply(working, _work):
+            entry = self._extent_entry(working, src)
+            if entry is None:
+                raise FileNotFoundError(src)
+            if src == dst:
+                return
+            if self._extent_entry(working, dst) is not None:
+                raise FileExistsError(dst)
+            if entry["is_dir"]:
+                raise ExtWriteError(
+                    "legacy debugfs directory rename is outside the bounded profile"
+                )
+            # debugfs has no `rename` command. `ln` and `unlink` deliberately
+            # do not alter i_links_count; together they move one regular-file
+            # directory entry without releasing the inode or its data blocks.
             self._run(
                 working,
-                f"rename {_debugfs_quote(src)} {_debugfs_quote(dst)}",
+                f"ln {_debugfs_quote(src)} {_debugfs_quote(dst)}",
                 write=True,
             )
+            linked = self._extent_entry(working, dst)
+            if linked is None or linked["inode"] != entry["inode"]:
+                raise ExtWriteError("debugfs rename destination validation failed")
+            self._run(working, f"unlink {_debugfs_quote(src)}", write=True)
+            moved = self._extent_entry(working, dst)
+            if self._extent_entry(working, src) is not None or moved != linked:
+                raise ExtWriteError("debugfs rename read-back validation failed")
 
         self._with_working_extent(apply)
 
@@ -579,12 +644,37 @@ class Ext234ImageWriter:
             self._run(working, f"rmdir {_debugfs_quote(target)}", write=True)
 
         def apply(working, _work):
+            if self._extent_entry(working, image_path) is None:
+                raise FileNotFoundError(image_path)
             if self._is_dir(image_path):
                 remove_dir(working, image_path)
             else:
                 self._run(working, f"rm {_debugfs_quote(image_path)}", write=True)
+            if self._extent_entry(working, image_path) is not None:
+                raise ExtWriteError("debugfs delete read-back validation failed")
 
         self._with_working_extent(apply)
+
+    def _extent_entry(self, working, path):
+        """Find one entry using machine-readable debugfs output on the stage."""
+        parent, name = path.rsplit("/", 1)
+        output = self._run(working, f"ls -p {_debugfs_quote(parent or '/')}")
+        for line in output.splitlines():
+            fields = line.split("/")
+            if len(fields) < 8 or not fields[1].isdigit() or fields[5] != name:
+                continue
+            try:
+                mode = int(fields[2], 8)
+                inode = int(fields[1])
+                size = int(fields[6]) if fields[6] else 0
+            except ValueError as exc:
+                raise ExtWriteError("malformed debugfs directory metadata") from exc
+            return {
+                "inode": inode,
+                "is_dir": (mode & 0o170000) == 0o040000,
+                "size": size,
+            }
+        return None
 
     def _is_dir(self, path):
         """True when `path` is an existing directory in the image."""

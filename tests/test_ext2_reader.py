@@ -493,16 +493,12 @@ def test_vfs_native_provider_does_not_require_pytsk3(tmp_path, monkeypatch):
 def test_dirty_ext2_is_rejected_without_pytsk3_or_fat32_fallback(tmp_path, monkeypatch):
     image_path = tmp_path / "dirty-ext2-routing.img"
     _make_image(image_path, state=2)
+    before = image_path.read_bytes()
 
     monkeypatch.setattr(
         vfs,
         "TskImage",
         lambda *args, **kwargs: pytest.fail("dirty ext2 reached pytsk3 fallback"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "Fat32Provider",
-        lambda *args, **kwargs: pytest.fail("dirty ext2 reached FAT32 fallback"),
     )
 
     with pytest.raises(vfs.RecognizedFilesystemError, match="ext2 volume is dirty"):
@@ -511,6 +507,7 @@ def test_dirty_ext2_is_rejected_without_pytsk3_or_fat32_fallback(tmp_path, monke
         )
     with pytest.raises(vfs.RecognizedFilesystemError, match="ext2 volume is dirty"):
         cli._provider(str(image_path), 0)
+    assert image_path.read_bytes() == before
 
 
 def test_cli_selects_native_ext2_for_bounded_whole_image(tmp_path, monkeypatch):

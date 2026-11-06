@@ -201,12 +201,22 @@ def scan_files_from_fs(
     hits: list[YaraHit] = []
     for path, entry in iter_file_entries(fs):
         size = int(getattr(entry.info.meta, "size", 0) or 0)
+        if size <= 0:
+            # Empty files carry no scannable bytes; reading them is wasted work
+            # and some filesystems report zero-length special entries.
+            continue
         if max_file_size is not None and size > max_file_size:
             continue
         try:
             data = entry.read_random(0, size)
         except Exception as exc:
-            raise YaraScanError("unable to read file %s: %s" % (path, exc)) from exc
+            # FAT volume labels and other metadata records are reported by some
+            # filesystems as regular files without readable extents. One such
+            # entry must not abort the whole evidence scan.
+            logging.getLogger(__name__).warning(
+                "skipping unreadable file %s during YARA scan: %s", path, exc
+            )
+            continue
         if not data:
             continue
         hits.extend(match_blob(rules, bytes(data), path=path, target=TARGET_FILES))
@@ -279,6 +289,7 @@ def scan_unallocated_from_fs(
     image_size: int,
     *,
     chunk: int = DEFAULT_CHUNK,
+    image_path: Optional[os.PathLike | str] = None,
 ) -> list[YaraHit]:
     """Scan complete unallocated extents without signature-length limits.
 
@@ -286,12 +297,18 @@ def scan_unallocated_from_fs(
     is still read in bounded chunks, but matching is performed over the whole
     extent so arbitrarily long signatures cannot disappear at chunk edges.
     The temporary file is removed even when reading or matching fails.
+
+    ``image_path`` must be supplied when the filesystem object cannot carry the
+    source path itself (pytsk3 objects reject arbitrary attributes), otherwise
+    raw region reads have no source and the scan refuses to continue.
     """
 
     if chunk <= 0:
         raise ValueError("chunk must be positive")
     hits: list[YaraHit] = []
-    source = getattr(fs, "_image_path", None)
+    source = os.fspath(image_path) if image_path is not None else None
+    if source is None:
+        source = getattr(fs, "_image_path", None)
     for start, end in unallocated_ranges(fs, image_size):
         fd, temp_path = tempfile.mkstemp(prefix="mountfile-yara-")
         try:
@@ -422,7 +439,13 @@ def scan_image(
         hits.extend(scan_files_from_fs(fs, rules, max_file_size=max_file_size))
     if TARGET_UNALLOCATED in targets:
         hits.extend(
-            scan_unallocated_from_fs(fs, rules, path.stat().st_size, chunk=chunk)
+            scan_unallocated_from_fs(
+                fs,
+                rules,
+                path.stat().st_size,
+                chunk=chunk,
+                image_path=path,
+            )
         )
     return hits
 

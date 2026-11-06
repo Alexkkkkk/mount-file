@@ -164,6 +164,8 @@ def _parse_ebr_chain(f, extended_base, extended_sectors, image_sectors, start_in
             ptype0
             and size0
             and ptype0 not in _EXTENDED_TYPES
+            and rel0 > 0
+            and e0[0] in (0, 0x80)
             and extended_base <= logical_start < extended_end
             and logical_start + size0 <= extended_end
         ):
@@ -197,6 +199,8 @@ def _parse_mbr(f):
     mbr = f.read(SECTOR_SIZE)
     if len(mbr) < SECTOR_SIZE or mbr[510:512] != b"\x55\xaa":
         return []
+    f.seek(0, 2)
+    image_sectors = f.tell() // SECTOR_SIZE
     parts = []
     extended_lba = 0
     extended_sectors = 0
@@ -205,6 +209,13 @@ def _parse_mbr(f):
         ptype = e[4]
         start, size = struct.unpack_from("<II", e, 8)
         if ptype == 0 or size == 0:
+            continue
+        if e[0] not in (0, 0x80) or start == 0 or start >= image_sectors:
+            continue
+        if ptype == 0xEE and start == 1:
+            # Protective entries may deliberately use 0xFFFFFFFF sectors.
+            size = min(size, image_sectors - start)
+        elif start + size > image_sectors:
             continue
         if ptype in _EXTENDED_TYPES and not extended_lba:
             extended_lba = start
@@ -251,7 +262,7 @@ def _parse_gpt(f):
         if type_guid.int == 0:
             continue
         first, last = struct.unpack_from("<QQ", e, 32)
-        if last < first or last >= image_sectors:
+        if first < 2 or last < first or last >= image_sectors:
             continue
         name = e[56:128].decode("utf-16-le", "ignore").rstrip("\x00")
         parts.append(

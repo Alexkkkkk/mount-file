@@ -28,6 +28,7 @@ import importlib
 import importlib.util
 import inspect
 import os
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
@@ -379,7 +380,9 @@ class PluginRegistry:
                 else getattr(callback, "__name__", "callback")
             )
             callback_plugin = type(
-                "_CallbackPlugin", (), {"name": str(callback_name), hook: callback}
+                "_CallbackPlugin",
+                (),
+                {"name": str(callback_name), hook: staticmethod(callback)},
             )()
             return self.register(callback_plugin)
 
@@ -623,9 +626,13 @@ class PluginRegistry:
                 if spec is None or spec.loader is None:
                     raise ImportError("cannot create import specification")
                 module = importlib.util.module_from_spec(spec)
+                # Dataclasses and forward annotations resolve their module via
+                # sys.modules just as they do during a normal Python import.
+                sys.modules[module_name] = module
                 spec.loader.exec_module(module)
                 self._register_export(module, origin)
             except Exception as exc:
+                sys.modules.pop(module_name, None)
                 self._record_failure(origin, "discovery", exc)
 
         if entry_points:

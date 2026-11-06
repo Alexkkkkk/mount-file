@@ -448,7 +448,9 @@ def _image_argument(image: Source) -> str:
     raise TypeError("adapter operations require a filesystem image path")
 
 
-def _secret_input(value: Optional[Union[str, bytes]]) -> Optional[bytes]:
+def _secret_input(
+    value: Optional[Union[str, bytes]], *, line: bool = True
+) -> Optional[bytes]:
     if value is None:
         return None
     if isinstance(value, str):
@@ -459,9 +461,8 @@ def _secret_input(value: Optional[Union[str, bytes]]) -> Optional[bytes]:
         raise TypeError("password must be str or bytes")
     if not secret:
         raise ValueError("password must not be empty")
-    # cryptsetup/dislocker prompt modes consume a line; the newline is added
-    # only in the private stdin buffer and is never present in argv/logs.
-    return secret + b"\n"
+    # Interactive prompts consume a line; key-file stdin consumes raw bytes.
+    return secret + b"\n" if line else secret
 
 
 def _validate_mapper_name(name: str) -> str:
@@ -506,21 +507,23 @@ def unlock_luks(
 
     A supplied password is passed through stdin using ``--key-file=-``.  It is
     never put in argv, environment variables, logs, or exception messages.
-    A detached image offset is represented by cryptsetup's ``--offset`` in
-    512-byte sectors; callers should prefer a partition-specific image when
-    possible because not every cryptsetup build handles image offsets alike.
+    Nonzero partition offsets are refused: cryptsetup's ``--offset`` changes
+    the data payload location, not the location of a LUKS header in a raw disk.
+    Pass a separately resolved partition device/image instead.
     """
 
     if offset < 0 or offset % 512:
         raise ValueError("offset must be a non-negative multiple of 512")
+    if offset:
+        raise CryptoOperationError(
+            "LUKS partition offsets require a partition-specific device or image"
+        )
     if key_file is not None and password is not None:
         raise ValueError("provide key_file or password, not both")
     executable = _require_adapter("cryptsetup")
     mapping = _validate_mapper_name(name)
-    secret = _secret_input(password)
-    command = [executable, "luksOpen"]
-    if offset:
-        command.extend(["--offset", str(offset // 512)])
+    secret = _secret_input(password, line=False)
+    command = [executable, "luksOpen", "--readonly"]
     if key_file is not None:
         command.extend(["--key-file", os.fspath(key_file)])
     elif secret is not None:
@@ -551,7 +554,7 @@ def unlock_bitlocker(
         raise ValueError("offset must be non-negative")
     executable = _require_adapter("dislocker")
     secret = _secret_input(password)
-    command = [executable, "-V", _image_argument(image)]
+    command = [executable, "-r", "-V", _image_argument(image)]
     if offset:
         command.extend(["-o", str(offset)])
     command.extend(["-p", "--", os.fspath(mountpoint)])

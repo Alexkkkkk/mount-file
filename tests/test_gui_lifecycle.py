@@ -118,7 +118,9 @@ def test_saved_image_editor_copy_is_removed_when_window_closes(
         assert temp_dir and os.path.isdir(temp_dir)
         assert saved == {"path": ("/", "settings.ini"), "data": b"value=saved\n"}
         assert provider.data == b"value=saved\n"
-        assert os.path.exists(os.path.join(temp_dir, "settings.ini"))
+        from pathlib import Path
+
+        assert len(list(Path(temp_dir).rglob("settings.ini"))) == 1
 
         win.close()
         assert not os.path.exists(temp_dir)
@@ -188,6 +190,8 @@ def test_image_directory_copy_uses_provider_and_exports_files(
     class Provider:
         def list_dir(self, path):
             calls.append(path)
+            if path == "/":
+                return [{"name": "folder", "is_dir": True}]
             return [{"name": "note.txt", "is_dir": False}]
 
         def read_file(self, path):
@@ -212,7 +216,7 @@ def test_image_directory_copy_uses_provider_and_exports_files(
         win._copy_img_to_local(
             Panel(), LocalPanel(), [{"name": "folder", "is_dir": True}]
         )
-        assert calls == ["/folder"]
+        assert calls == ["/folder", "/", "/folder"]
         assert (tmp_path / "folder" / "note.txt").read_bytes() == b"exported"
     finally:
         win.close()

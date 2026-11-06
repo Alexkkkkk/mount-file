@@ -35,7 +35,10 @@ Linux поддерживаются через apt на Debian/Ubuntu, macOS — 
 Homebrew. `--minimal` отключает дополнительные Python-профили и системные пакеты,
 `--no-sys` пропускает системную установку, `--system-only` ставит только системные
 компоненты, `--skip-ext` и `--skip-imdisk` отключают соответствующие backends.
-Инструменты разработчика устанавливаются только с `--dev`. На Windows при
+По умолчанию устанавливаются профили `api,ai,dfir`; `pytsk3` не входит в этот
+набор. Для явного legacy fallback добавьте `--legacy-tsk` к Python-установщику
+или `-LegacyTsk` к `install.bat`. Инструменты разработчика, включая `pre-commit`,
+устанавливаются только с `--dev`. На Windows при
 отсутствии готового wheel может понадобиться отдельная установка C++ Build Tools;
 AI-модели, серверы и API-ключи не загружаются вместе с Python-зависимостями.
 
@@ -50,7 +53,7 @@ cd mount-file
 python -m venv .venv
 source .venv/bin/activate       # Linux/macOS
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install '.[api,ai,dfir]'
 ```
 
 Windows PowerShell:
@@ -58,8 +61,12 @@ Windows PowerShell:
 ```powershell
 py -3 -m venv .venv
 .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install ".[api,ai,dfir]"
 ```
+
+Установка пакета создаёт команды `mountfile`, `mountfile-ai`, `mountfile-rw` и
+`mountfile-rw-v2`. `requirements.txt` устанавливает только библиотеки; для
+console scripts отдельно установите пакет. `make install` выполняет оба шага.
 
 Запуск и диагностика:
 
@@ -135,6 +142,9 @@ docker compose run --rm mountfile info /evidence/dump.img
 `docker build --build-arg INSTALL_FORENSIC_TOOLS=1 -t mountfile:forensics .`.
 Этот профиль добавляет системные утилиты, но не превращает экспериментальные
 DFIR-модули проекта в полноценную систему carving или malware verdict.
+
+`pytsk3` устанавливается в контейнер только с явным build argument
+`INSTALL_LEGACY_TSK=1`; обычный native CLI-профиль работает без него.
 
 CI собирает образ и выполняет CLI smoke test на PR и push. Публикация в GHCR —
 отдельный ручной запуск **Actions → Docker → Run workflow** с `publish=true`;

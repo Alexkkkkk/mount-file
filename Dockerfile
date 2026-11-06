@@ -4,6 +4,7 @@
 FROM python:3.12-slim
 
 ARG PYTSK3_VERSION=20260715
+ARG INSTALL_LEGACY_TSK=0
 ARG INSTALL_FORENSIC_TOOLS=0
 
 ENV HOME=/home/mountfile \
@@ -12,8 +13,8 @@ ENV HOME=/home/mountfile \
     PYTHONPATH=/opt/mountfile \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# The default image needs no apt packages: the pytsk3 wheel bundles the Python
-# binding used by the CLI.  Opt in only when command-line forensic utilities
+# The default image uses the native readers and needs no apt or pip packages.
+# Opt in only when command-line forensic utilities
 # are useful in the same container:
 #   INSTALL_FORENSIC_TOOLS=1 adds the optional read-only triage toolchain:
 #   - sleuthkit, testdisk and binutils: filesystem/recovery inspection helpers
@@ -39,14 +40,20 @@ RUN set -eux; \
             ;; \
     esac
 
-# Keep pip's download cache in a BuildKit cache mount rather than in an image
-# layer. Pinning the default version makes the native dependency repeatable;
-# PYTSK3_VERSION can be overridden deliberately for a project update.
+# Legacy fallback is opt-in, just like the package's legacy-tsk extra. Require
+# a wheel rather than silently installing a compiler toolchain in a CLI image.
+# Pinning the version keeps deliberately enabled builds repeatable.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install "pytsk3==${PYTSK3_VERSION}"
+    set -eux; \
+    case "${INSTALL_LEGACY_TSK}" in \
+        0) ;; \
+        1) python -m pip install --only-binary=:all: "pytsk3==${PYTSK3_VERSION}" ;; \
+        *) echo "INSTALL_LEGACY_TSK must be 0 or 1" >&2; exit 2 ;; \
+    esac
 
 WORKDIR /opt/mountfile
 COPY mountfile/ ./mountfile/
+COPY mountfile_dfir_tools.py ./
 
 # The source tree is used directly so installing project metadata cannot pull
 # in GUI-only packages. mountfile.__main__ is the supported CLI module and is

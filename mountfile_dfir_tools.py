@@ -25,8 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
-import struct
+import operator
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
@@ -44,6 +43,24 @@ class DFIRError(Exception):
 
 class DependencyMissing(DFIRError):
     pass
+
+
+MAX_SCAN_SIZE = 64 * 1024 * 1024
+MAX_RULE_SIZE = 4 * 1024 * 1024
+MAX_REGIONS = 1_000_000
+SCAN_TIMEOUT = 30
+
+
+def _integer(value, name: str, *, positive: bool = False) -> int:
+    try:
+        if isinstance(value, bool):
+            raise TypeError("bool is not an offset/size")
+        result = operator.index(value)
+    except TypeError as exc:
+        raise DFIRError(f"{name} must be an integer") from exc
+    if result < 0 or (positive and result == 0):
+        raise DFIRError(f"{name} has an invalid value")
+    return result
 
 
 @dataclass
@@ -85,21 +102,37 @@ class ImageReader:
     # --- прямой доступ -----------------------------------------------------
 
     def read(self, offset: int, length: int) -> bytes:
-        with open(self.image_path, "rb") as f:
-            f.seek(offset)
-            return f.read(length)
+        offset = _integer(offset, "offset")
+        length = _integer(length, "length")
+        if length > MAX_SCAN_SIZE:
+            raise DFIRError("read exceeds bounded memory limit")
+        try:
+            with open(self.image_path, "rb") as f:
+                f.seek(offset)
+                return f.read(length)
+        except OSError as exc:
+            raise DFIRError(f"cannot read image: {exc}") from exc
+
+    def read_exact(self, offset: int, length: int) -> bytes:
+        offset = _integer(offset, "offset")
+        length = _integer(length, "length")
+        if offset > self.size or length > self.size - offset:
+            raise DFIRError("region extends beyond image")
+        data = self.read(offset, length)
+        if len(data) != length:
+            raise DFIRError(
+                f"short image read at {offset}: wanted {length}, got {len(data)}"
+            )
+        return data
 
     def stream_chunks(
         self, chunk_size: int = 8 * 1024 * 1024
     ) -> Iterator[tuple[int, bytes]]:
-        with open(self.image_path, "rb") as f:
-            offset = 0
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                yield offset, chunk
-                offset += len(chunk)
+        chunk_size = _integer(chunk_size, "chunk_size", positive=True)
+        if chunk_size > MAX_SCAN_SIZE:
+            raise DFIRError("chunk exceeds bounded memory limit")
+        for offset in range(0, self.size, chunk_size):
+            yield offset, self.read_exact(offset, min(chunk_size, self.size - offset))
 
     # --- pytsk3 ------------------------------------------------------------
 
@@ -109,9 +142,12 @@ class ImageReader:
         try:
             import pytsk3  # type: ignore
         except ImportError as e:
-            raise DependencyMissing(f"pytsk3 не установлен: {e}")
-        img = pytsk3.Img_Info(str(self.image_path))
-        self._tsk_fs = pytsk3.FS_Info(img)
+            raise DependencyMissing(f"pytsk3 не установлен: {e}") from e
+        try:
+            img = pytsk3.Img_Info(str(self.image_path))
+            self._tsk_fs = pytsk3.FS_Info(img)
+        except Exception as exc:
+            raise DFIRError(f"cannot open filesystem: {exc}") from exc
         return self._tsk_fs
 
     def has_pytsk3(self) -> bool:
@@ -122,76 +158,60 @@ class ImageReader:
             return False
 
     def iter_files(self) -> Iterator[tuple[str, bytes]]:
+        """Yield complete regular files; never pretend raw chunks are files.
+
+        Oversized files and unreadable directories/files are explicitly refused,
+        rather than scanning truncated content under different YARA semantics.
         """
-        Итерирует по всем файлам образа, отдавая (path, data).
-        Если pytsk3 нет — итерирует по всему образу как по одному файлу.
-        """
-        if not self.has_pytsk3():
-            # fallback: считаем весь образ «одним файлом»
-            for off, chunk in self.stream_chunks():
-                yield f"<raw:{off}>", chunk
-            return
+        from mountfile.slack import _iter_file_entries
+
         fs = self._tsk()
-
-        def walk(directory, prefix=""):
-            try:
-                for e in directory:
-                    name = e.info.name.name.decode("utf-8", "replace")
-                    if name in (".", ".."):
-                        continue
-                    path = f"{prefix}/{name}"
-                    if e.info.meta.type == 2:  # directory
-                        yield from walk(fs.open_dir(inode=e.info.meta.addr), path)
-                    else:
-                        try:
-                            f = fs.open_meta(inode=e.info.meta.addr)
-                            data = f.read_random(0, f.info.meta.size)
-                            yield path, data
-                        except OSError:
-                            continue
-            except OSError:
-                return
-
-        yield from walk(fs.open_dir("/"))
+        try:
+            for path, entry in _iter_file_entries(fs):
+                size = _integer(entry.info.meta.size, "file size")
+                if size > MAX_SCAN_SIZE:
+                    raise DFIRError(f"file exceeds bounded scan limit: {path}")
+                data = entry.read_random(0, size) if size else b""
+                if len(data) != size:
+                    raise DFIRError(f"short file read: {path}")
+                yield path, data
+        except DFIRError:
+            raise
+        except Exception as exc:
+            raise DFIRError(f"cannot enumerate/read filesystem files: {exc}") from exc
 
     # --- файловая структура (для unallocated/slack) -------------------------
 
     def iter_allocated_regions(self) -> Iterator[RegionInfo]:
+        """Refuse discovery without a proven complete filesystem allocation map.
+
+        File runs alone omit metadata, reserved blocks and unreachable allocated
+        inodes. pytsk3 does not expose TSK block_walk; an MFT prefix is not an
+        allocation bitmap. Consequently neither source proves the complement.
+        Use mountfile.dfir_unallocated_scan with independently verified ranges.
         """
-        Регионы, занятые файлами. Для unallocated = весь образ минус это.
-        Без pytsk3 — эвристика по FAT/NTFS.
-        """
-        if self.has_pytsk3():
-            for path, data in self.iter_files():
-                # pytsk3 не даёт физические offset; используем эвристику по сигнатуре
-                yield RegionInfo(offset=0, length=len(data), kind="file", owner=path)
-            return
-        # fallback: NTFS MFT walker (упрощённый)
-        for r in self._iter_ntfs_allocated():
-            yield r
+        raise DFIRError(
+            "complete filesystem allocation map unavailable; automatic unallocated "
+            "discovery refused (file runs/MFT heuristics are insufficient). "
+            "Use scan_unallocated() with independently verified explicit ranges"
+        )
 
     def _iter_ntfs_allocated(self) -> Iterator[RegionInfo]:
-        """Упрощённый парсер NTFS: читает $MFT и выдаёт занятые кластеры."""
-        boot = self.read(0, 512)
-        if boot[3:11] != b"NTFS    ":
-            return
-        bytes_per_sector = struct.unpack("<H", boot[0x0B:0x0D])[0]
-        sectors_per_cluster = boot[0x0D] or 1
-        cluster_size = bytes_per_sector * sectors_per_cluster
-        mft_lcn = struct.unpack("<Q", boot[0x30:0x38])[0]
-        mft_offset = mft_lcn * cluster_size
-        # читаем первые 1 MiB $MFT (эвристика; для полного разбора нужен $MFT bitmap)
-        mft_data = self.read(mft_offset, 1024 * 1024)
-        # ищем сигнатуру "FILE" и берём размеры записей 1 KiB
-        for i in range(0, len(mft_data) - 4, 1024):
-            if mft_data[i : i + 4] == b"FILE":
-                # очень упрощённо: помечаем кластер занятым
-                yield RegionInfo(
-                    offset=mft_offset + i,
-                    length=1024,
-                    kind="file",
-                    owner=f"mft_record_{i//1024}",
-                )
+        """Compatibility entry point; the former incomplete heuristic is refused."""
+        return self.iter_allocated_regions()
+
+
+def _allocated_ranges(reader: ImageReader) -> list[tuple[int, int]]:
+    ranges = []
+    for index, region in enumerate(reader.iter_allocated_regions()):
+        if index >= MAX_REGIONS:
+            raise DFIRError("too many allocation regions")
+        offset = _integer(region.offset, "allocated offset")
+        length = _integer(region.length, "allocated length", positive=True)
+        if offset > reader.size or length > reader.size - offset:
+            raise DFIRError("allocation region extends beyond image")
+        ranges.append((offset, offset + length))
+    return sorted(ranges)
 
 
 # ===========================================================================
@@ -200,11 +220,7 @@ class ImageReader:
 
 
 class YaraScanner:
-    """
-    Сканирует файлы образа и/или unallocated space YARA-правилами.
-    Fallback: если yara-python нет — простой regex-матчер по правилам
-    вида `rule name { strings: $a = "text" condition: $a }`.
-    """
+    """Bounded YARA scans using the real engine, never a condition-blind regex."""
 
     def __init__(self, image_path: Path):
         self.reader = ImageReader(image_path)
@@ -217,95 +233,84 @@ class YaraScanner:
         return matches
 
     def scan_unallocated(self, rules_path: Path) -> list[YaraMatch]:
+        """Scan complete contiguous free regions, without zero-filling allocation.
+
+        Rules see each region as an independent blob. Oversized regions are
+        refused: splitting changes conditions (filesize, offsets, conjunctions).
+        Automatic discovery currently refuses without a complete allocation map.
+        """
         rules = self._load_rules(rules_path)
         matches: list[YaraMatch] = []
         alloc = self._allocated_ranges()
-        for off, chunk in self.reader.stream_chunks():
-            # вырезаем занятые регионы
-            for start, end in alloc:
-                if off <= start < off + len(chunk):
-                    chunk = (
-                        chunk[: start - off]
-                        + b"\0" * (min(end, off + len(chunk)) - start)
-                        + chunk[min(end, off + len(chunk)) - off :]
-                    )
+        free = UnallocatedExtractor._subtract(0, self.reader.size, alloc)
+        if any(region.length > MAX_SCAN_SIZE for region in free):
+            raise DFIRError("unallocated region exceeds bounded scan limit")
+        for region in free:
+            data = self.reader.read_exact(region.offset, region.length)
             matches.extend(
-                self._scan_blob(chunk, rules, path="<unallocated>", base_offset=off)
+                self._scan_blob(
+                    data, rules, path="<unallocated>", base_offset=region.offset
+                )
             )
         return matches
 
     def _allocated_ranges(self) -> list[tuple[int, int]]:
-        ranges = []
-        for r in self.reader.iter_allocated_regions():
-            ranges.append((r.offset, r.offset + r.length))
-        ranges.sort()
-        return ranges
+        return _allocated_ranges(self.reader)
 
     def _load_rules(self, rules_path: Path):
-        text = Path(rules_path).read_text(encoding="utf-8")
         try:
             import yara  # type: ignore
+        except ImportError as exc:
+            raise DependencyMissing(
+                "YARA scanning requires yara-python; no regex fallback"
+            ) from exc
+        try:
+            path = Path(rules_path)
+            if path.stat().st_size > MAX_RULE_SIZE:
+                raise DFIRError("rules exceed bounded input limit")
+            with path.open("rb") as stream:
+                raw = stream.read(MAX_RULE_SIZE + 1)
+            if len(raw) > MAX_RULE_SIZE:
+                raise DFIRError("rules exceed bounded input limit")
+            return {
+                "type": "yara",
+                "compiled": yara.compile(source=raw.decode("utf-8")),
+            }
+        except DFIRError:
+            raise
+        except Exception as exc:
+            raise DFIRError(f"cannot load/compile YARA rules: {exc}") from exc
 
-            return {"type": "yara", "compiled": yara.compile(source=text)}
-        except ImportError:
-            return {"type": "regex", "rules": self._parse_simple_rules(text)}
-
-    def _parse_simple_rules(self, text: str) -> list[tuple[str, re.Pattern]]:
-        """Fallback-парсер для простых YARA-правил вида $a = "text"."""
-        rules = []
-        for m in re.finditer(
-            r"rule\s+(\w+)\s*\{(.*?)\n\}",
-            text,
-            re.DOTALL,
-        ):
-            name, body = m.group(1), m.group(2)
-            patterns = []
-            for sm in re.finditer(r'\$[a-z0-9_]+\s*=\s*"((?:[^"\\]|\\.)*)"', body):
-                patterns.append(
-                    re.escape(sm.group(1).encode().decode("unicode_escape"))
-                )
-            if patterns:
-                rules.append(
-                    (name, re.compile(b"|".join(p.encode() for p in patterns)))
-                )
-        return rules
+    def _parse_simple_rules(self, text: str):
+        """Former private fallback entry point; incomplete YARA parsing is refused."""
+        raise DependencyMissing("regex fallback cannot preserve YARA conditions")
 
     def _scan_blob(
         self, data: bytes, rules, path: str, base_offset: int = 0
     ) -> list[YaraMatch]:
-        if rules["type"] == "yara":
-            try:
-                result = rules["compiled"].match(data=data)
-                out = []
-                for m in result:
-                    out.append(
-                        YaraMatch(
-                            rule=m.rule,
-                            namespace=m.namespace,
-                            tags=list(m.tags),
-                            data_sha256=hashlib.sha256(data).hexdigest(),
-                            path=path,
-                            offset=base_offset or None,
-                        )
-                    )
-                return out
-            except Exception:
-                return []
-        # regex fallback
-        out = []
-        for name, pat in rules["rules"]:
-            if pat.search(data):
-                out.append(
-                    YaraMatch(
-                        rule=name,
-                        namespace="fallback",
-                        tags=[],
-                        data_sha256=hashlib.sha256(data).hexdigest(),
-                        path=path,
-                        offset=base_offset or None,
-                    )
+        base_offset = _integer(base_offset, "base_offset")
+        if len(data) > MAX_SCAN_SIZE:
+            raise DFIRError("blob exceeds bounded scan limit")
+        if rules.get("type") != "yara":
+            raise DFIRError("unsupported rule engine; real YARA is required")
+        try:
+            result = rules["compiled"].match(data=data, timeout=SCAN_TIMEOUT)
+            digest = hashlib.sha256(data).hexdigest()
+            return [
+                YaraMatch(
+                    rule=match.rule,
+                    namespace=match.namespace,
+                    tags=list(match.tags),
+                    data_sha256=digest,
+                    path=path,
+                    offset=(
+                        base_offset if path == "<unallocated>" or base_offset else None
+                    ),
                 )
-        return out
+                for match in result
+            ]
+        except Exception as exc:
+            raise DFIRError(f"YARA scan failed for {path}: {exc}") from exc
 
 
 # ===========================================================================
@@ -314,50 +319,64 @@ class YaraScanner:
 
 
 class UnallocatedExtractor:
-    """
-    Извлекает нераспределённое пространство образа.
-    Без pytsk3 — эвристика по NTFS $MFT / FAT-таблице.
-    """
+    """Extract verified free space; incomplete automatic discovery is refused."""
 
     def __init__(self, image_path: Path):
         self.reader = ImageReader(image_path)
         self.image_path = Path(image_path)
 
     def extract(self, out_dir: Path, *, min_region: int = 4096) -> list[RegionInfo]:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        min_region = _integer(min_region, "min_region", positive=True)
         occupied = self._occupied_ranges()
         free = self._subtract(0, self.reader.size, occupied)
         free = [r for r in free if r.length >= min_region]
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
         written = []
         for i, r in enumerate(free):
             out = out_dir / f"unalloc_{i:04d}_off{r.offset:08x}_len{r.length}.bin"
-            with open(out, "wb") as f:
-                remaining = r.length
-                cursor = r.offset
-                while remaining > 0:
-                    chunk = self.reader.read(cursor, min(8 * 1024 * 1024, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    cursor += len(chunk)
-                    remaining -= len(chunk)
+            created = False
+            try:
+                with open(out, "xb") as f:
+                    created = True
+                    remaining = r.length
+                    cursor = r.offset
+                    while remaining > 0:
+                        chunk = self.reader.read_exact(
+                            cursor, min(8 * 1024 * 1024, remaining)
+                        )
+                        f.write(chunk)
+                        cursor += len(chunk)
+                        remaining -= len(chunk)
+            except Exception:
+                if created:
+                    out.unlink()
+                raise
             written.append(r)
         return written
 
     def _occupied_ranges(self) -> list[tuple[int, int]]:
-        ranges = []
-        for r in self.reader.iter_allocated_regions():
-            ranges.append((r.offset, r.offset + r.length))
-        return sorted(ranges)
+        return _allocated_ranges(self.reader)
 
     @staticmethod
     def _subtract(
         start: int, end: int, occupied: list[tuple[int, int]]
     ) -> list[RegionInfo]:
         """Вычисляет свободные интервалы как разность [start, end] и occupied."""
+        start = _integer(start, "range start")
+        end = _integer(end, "range end")
+        if end < start:
+            raise DFIRError("inverted range")
         free = []
         cursor = start
+        checked = []
         for o_start, o_end in occupied:
+            o_start = _integer(o_start, "occupied start")
+            o_end = _integer(o_end, "occupied end")
+            if o_end < o_start:
+                raise DFIRError("inverted occupied range")
+            checked.append((o_start, o_end))
+        for o_start, o_end in sorted(checked):
             if o_end <= cursor:
                 continue
             if o_start >= end:
@@ -382,99 +401,43 @@ class UnallocatedExtractor:
 
 
 class SlackExtractor:
-    """
-    Извлекает slack-пространство: разница между выделенным размером
-    кластера и фактическим размером файла.
-    Для NTFS — по $DATA attribute real/allocated sizes.
-    Для FAT32 — по размеру файла в каталоге и cluster size.
-    Без pytsk3 — эвристика.
-    """
+    """Compatibility facade for verified EOF-cluster slack via pytsk3."""
 
     def __init__(self, image_path: Path):
         self.reader = ImageReader(image_path)
         self.image_path = Path(image_path)
 
     def extract(self, out_dir: Path) -> list[RegionInfo]:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        from mountfile.slack import SlackError, SlackRegion, extract_slack
+
         regions = list(self._find_slack_regions())
-        for i, r in enumerate(regions):
-            data = self.reader.read(r.offset, r.length)
-            out = out_dir / f"slack_{i:04d}_{Path(r.owner or 'unknown').name}.bin"
-            out.write_bytes(data)
+        # Extraction receives already located physical regions; the original
+        # public return type remains RegionInfo for the compatibility facade.
+        mapped = [
+            SlackRegion(r.owner or "unknown", r.offset, r.length, 0, 0) for r in regions
+        ]
+        try:
+            extract_slack(self.image_path, out_dir, regions=mapped)
+        except SlackError as exc:
+            raise DFIRError(str(exc)) from exc
         return regions
 
     def _find_slack_regions(self) -> Iterator[RegionInfo]:
-        boot = self.reader.read(0, 512)
-        if boot[3:11] == b"NTFS    ":
-            yield from self._ntfs_slack(boot)
-        elif boot[82:90].startswith(b"FAT32"):
-            yield from self._fat32_slack(boot)
-        # если ничего не нашли — пустой генератор
+        from mountfile.slack import SlackError, find_slack_regions
+
+        try:
+            for region in find_slack_regions(self.image_path):
+                yield RegionInfo(region.offset, region.length, "slack", region.path)
+        except SlackError as exc:
+            raise DFIRError(str(exc)) from exc
 
     def _ntfs_slack(self, boot: bytes) -> Iterator[RegionInfo]:
-        """
-        Упрощённый: читает $MFT, ищет $DATA с real_size < alloc_size,
-        читает хвост от real_size до alloc_size.
-        """
-        bytes_per_sector = struct.unpack("<H", boot[0x0B:0x0D])[0]
-        sectors_per_cluster = boot[0x0D] or 1
-        cluster_size = bytes_per_sector * sectors_per_cluster
-        mft_lcn = struct.unpack("<Q", boot[0x30:0x38])[0]
-        mft_offset = mft_lcn * cluster_size
-        mft_data = self.reader.read(mft_offset, 4 * 1024 * 1024)
-
-        for i in range(0, len(mft_data) - 4, 1024):
-            if mft_data[i : i + 4] != b"FILE":
-                continue
-            # ищем $DATA (0x80) с non-resident flag = 1 (0x01)
-            # очень упрощённо: ищем байты 0x80 0x00 0x00 0x00 в записи
-            record = mft_data[i : i + 1024]
-            for j in range(0x38, len(record) - 4):
-                if record[j] == 0x80 and record[j + 1 : j + 4] == b"\x00\x00\x00":
-                    # real_size / alloc_size в non-resident $DATA
-                    # смещение 0x30 (real) и 0x28 (alloc) от начала записи attr
-                    # для простоты пропускаем — реальный парсер в отдельной задаче
-                    break
-        # Если разбор не удался — не выдаём ничего (честно)
-        return
+        """Compatibility entry point: use TSK data runs, never a partial MFT parse."""
+        yield from self._find_slack_regions()
 
     def _fat32_slack(self, boot: bytes) -> Iterator[RegionInfo]:
-        bytes_per_sector = struct.unpack("<H", boot[0x0B:0x0D])[0]
-        sectors_per_cluster = boot[0x0D] or 1
-        cluster_size = bytes_per_sector * sectors_per_cluster
-        reserved = struct.unpack("<H", boot[0x0E:0x10])[0]
-        num_fats = boot[0x10]
-        root_entries = struct.unpack("<H", boot[0x11:0x13])[0]
-        fat_size = struct.unpack("<I", boot[0x24:0x28])[0]
-        root_off = (reserved + num_fats * fat_size) * bytes_per_sector
-        # root_entries FAT32 = 0 (корень в FAT-цепочке), но для упрощения
-        # читаем первые root_entries записей
-        if root_entries == 0:
-            return
-        data = self.reader.read(root_off, root_entries * 32)
-        for k in range(0, len(data), 32):
-            entry = data[k : k + 32]
-            if entry[0] == 0:
-                break
-            if entry[0] == 0xE5:
-                continue
-            size = struct.unpack("<I", entry[28:32])[0]
-            cluster = (struct.unpack("<H", entry[20:22])[0] << 16) | struct.unpack(
-                "<H", entry[26:28]
-            )[0]
-            if size == 0 or cluster == 0:
-                continue
-            alloc = ((size + cluster_size - 1) // cluster_size) * cluster_size
-            if alloc > size:
-                # данные начинаются после reserved + FATs
-                data_off = (reserved + num_fats * fat_size) * bytes_per_sector
-                file_off = data_off + (cluster - 2) * cluster_size
-                yield RegionInfo(
-                    offset=file_off + size,
-                    length=alloc - size,
-                    kind="slack",
-                    owner=entry[:11].decode("ascii", "replace").strip(),
-                )
+        """Compatibility entry point: TSK follows the actual FAT cluster chain."""
+        yield from self._find_slack_regions()
 
 
 # ===========================================================================
@@ -565,7 +528,9 @@ def cmd_yara(args):
         print(json.dumps([asdict(m) for m in matches], indent=2, ensure_ascii=False))
     else:
         for m in matches:
-            print(f"{m.rule:<30} {m.path:<40} {m.offset or '-'}")
+            print(
+                f"{m.rule:<30} {m.path:<40} {m.offset if m.offset is not None else '-'}"
+            )
     return 0 if not matches else 1
 
 
@@ -618,7 +583,7 @@ def cmd_selftest(args):
     ], f"bad subtract: {[(r.offset, r.length) for r in free]}"
     print("ok: UnallocatedExtractor._subtract")
 
-    # 3. Yara regex fallback
+    # 3. Real YARA, or an explicit missing-dependency refusal.
     with tempfile.TemporaryDirectory() as td:
         rules = Path(td) / "r.yar"
         rules.write_text(
@@ -627,12 +592,15 @@ def cmd_selftest(args):
         img = Path(td) / "img.bin"
         img.write_bytes(b"\0" * 1024 + b"hello" + b"\0" * 1024)
         scanner = YaraScanner(img)
-        # вызываем _load_rules + _scan_blob напрямую
-        loaded = scanner._load_rules(rules)
-        assert loaded["type"] == "regex", "fallback должен быть regex"
-        matches = scanner._scan_blob(b"...hello...", loaded, path="/test")
-        assert len(matches) == 1 and matches[0].rule == "test_rule"
-        print("ok: YaraScanner (regex fallback)")
+        try:
+            loaded = scanner._load_rules(rules)
+        except DependencyMissing:
+            print("ok: YaraScanner explicitly requires yara-python")
+        else:
+            assert loaded["type"] == "yara"
+            matches = scanner._scan_blob(b"...hello...", loaded, path="/test")
+            assert len(matches) == 1 and matches[0].rule == "test_rule"
+            print("ok: YaraScanner (real engine)")
 
     # 4. ImageDiffer.diff_regions
     with tempfile.TemporaryDirectory() as td:
@@ -646,24 +614,17 @@ def cmd_selftest(args):
         assert entries[0].status == "modified"
         print("ok: ImageDiffer.diff_regions")
 
-    # 5. FAT32 slack
+    # 5. Unsupported raw images must not claim to have clean/empty slack.
     with tempfile.TemporaryDirectory() as td:
-        img = Path(td) / "fat32.img"
-        boot = bytearray(512)
-        boot[0x0B:0x0D] = (512).to_bytes(2, "little")  # bps
-        boot[0x0D] = 1  # spc
-        boot[0x0E:0x10] = (32).to_bytes(2, "little")  # reserved
-        boot[0x10] = 2  # num FATs
-        boot[0x11:0x13] = (16).to_bytes(2, "little")  # root entries
-        boot[0x24:0x28] = (4).to_bytes(4, "little")  # fat_size (sectors)
-        boot[82:90] = b"FAT32   "
-        boot[510:512] = b"\x55\xaa"
-        img.write_bytes(bytes(boot) + b"\0" * 64 * 1024)
+        img = Path(td) / "raw.img"
+        img.write_bytes(b"\0" * 4096)
         ex = SlackExtractor(img)
-        regions = list(ex._find_slack_regions())
-        # без валидных записей — пусто, но не падает
-        assert regions == [] or all(r.kind == "slack" for r in regions)
-        print("ok: SlackExtractor._fat32_slack (no crash)")
+        try:
+            list(ex._find_slack_regions())
+        except DFIRError:
+            print("ok: SlackExtractor refuses unsupported images")
+        else:
+            raise AssertionError("unsupported image was not refused")
 
     print(f"=== {failures} failures ===")
     return failures

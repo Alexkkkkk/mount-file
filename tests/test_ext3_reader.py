@@ -82,11 +82,11 @@ def _make_ext4_extent_image(path):
         "<III",
         image,
         inode_offset + 132,
-        123_456_789,
-        (1 << 30) | 987_654_321,
-        1,
+        123_456_789 << 2,
+        (987_654_321 << 2) | 1,
+        1 << 2,
     )
-    struct.pack_into("<II", image, inode_offset + 144, 1_700_000_000, 500_000_000)
+    struct.pack_into("<II", image, inode_offset + 144, 1_700_000_000, 500_000_000 << 2)
 
     root_directory = _dir_block([(".", 2, 2), ("..", 2, 2), ("hello.txt", 11, 1)])
     root_start = ROOT_DIR_BLOCK * BLOCK_SIZE
@@ -1308,7 +1308,7 @@ def test_ext4_stat_rejects_malformed_extended_timestamps(tmp_path, corruption):
     if corruption == "extra_isize":
         struct.pack_into("<H", image, inode_offset + 128, 132)
     else:
-        struct.pack_into("<I", image, inode_offset + 136, 1_000_000_000)
+        struct.pack_into("<I", image, inode_offset + 136, 1_000_000_000 << 2)
     image_path.write_bytes(image)
 
     provider = NativeExt4Image(image_path, volume_size=len(image))

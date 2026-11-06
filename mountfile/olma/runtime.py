@@ -1,5 +1,9 @@
 # MOUNTFILE_FIX — OLMA runtime tracing
-"""Трассировка файловых и memory-операций во время работы программы."""
+"""Opt-in tracing of builtins.open and newly created BytesIO/StringIO streams.
+
+C extension IO classes are immutable. Instrument supported factories instead of
+attempting to patch IOBase; existing streams and C-created handles are not traced.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 
 @dataclass
 class RuntimeEvent:
-    kind: str  # open/read/write/seek/close/error
+    kind: str
     path: str
     offset: int = 0
     size: int = 0
@@ -28,8 +32,157 @@ class RuntimeEvent:
         return asdict(self)
 
 
+class _TracedFile:
+    """Delegate a file's API while recording operations and one close event."""
+
+    def __init__(self, handle, tracer):
+        self._handle = handle
+        self._tracer = tracer
+        self._close_recorded = False
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+    def _operation(self, name, kind, *args, **kwargs):
+        started = time.perf_counter()
+        try:
+            offset = self._handle.tell()
+        except (OSError, ValueError):
+            offset = 0
+        try:
+            result = getattr(self._handle, name)(*args, **kwargs)
+        except Exception as exc:
+            self._tracer.on_error(getattr(self._handle, "name", "?"), exc)
+            raise
+        size = 0
+        if kind == "read":
+            if isinstance(result, (str, bytes, bytearray)):
+                size = len(result)
+            elif isinstance(result, int):
+                size = result
+            elif isinstance(result, list):
+                size = sum(len(line) for line in result)
+        elif kind == "write":
+            size = result if isinstance(result, int) else 0
+        self._tracer._push(
+            RuntimeEvent(
+                kind,
+                str(getattr(self._handle, "name", "?")),
+                offset=offset,
+                size=size,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+        )
+        return result
+
+    def read(self, *args, **kwargs):
+        return self._operation("read", "read", *args, **kwargs)
+
+    def read1(self, *args, **kwargs):
+        return self._operation("read1", "read", *args, **kwargs)
+
+    def readinto(self, *args, **kwargs):
+        return self._operation("readinto", "read", *args, **kwargs)
+
+    def readinto1(self, *args, **kwargs):
+        return self._operation("readinto1", "read", *args, **kwargs)
+
+    def readline(self, *args, **kwargs):
+        return self._operation("readline", "read", *args, **kwargs)
+
+    def readlines(self, *args, **kwargs):
+        return self._operation("readlines", "read", *args, **kwargs)
+
+    def write(self, *args, **kwargs):
+        return self._operation("write", "write", *args, **kwargs)
+
+    def writelines(self, lines):
+        # Preserve generator/stream behavior; do not materialize the input.
+        for line in lines:
+            self.write(line)
+
+    def seek(self, *args, **kwargs):
+        return self._operation("seek", "seek", *args, **kwargs)
+
+    def close(self):
+        try:
+            return self._handle.close()
+        finally:
+            if self._handle.closed and not self._close_recorded:
+                self._close_recorded = True
+                self._tracer.on_close(getattr(self._handle, "name", "?"))
+
+    def __enter__(self):
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            # Interpreter shutdown can invalidate tracing infrastructure.
+            return
+
+
+def _memory_factory(base, tracer):
+    class TracedMemory(base):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._trace_name = "<%s:%x>" % (base.__name__, id(self))
+            self._trace_closed = False
+            tracer.on_open(self._trace_name, "memory")
+
+        def read(self, *args, **kwargs):
+            offset = self.tell()
+            result = super().read(*args, **kwargs)
+            tracer.on_read(self._trace_name, offset, len(result))
+            return result
+
+        def readline(self, *args, **kwargs):
+            offset = self.tell()
+            result = super().readline(*args, **kwargs)
+            tracer.on_read(self._trace_name, offset, len(result))
+            return result
+
+        def readinto(self, *args, **kwargs):
+            offset = self.tell()
+            result = super().readinto(*args, **kwargs)
+            tracer.on_read(self._trace_name, offset, result)
+            return result
+
+        def write(self, *args, **kwargs):
+            offset = self.tell()
+            result = super().write(*args, **kwargs)
+            tracer.on_write(self._trace_name, offset, result)
+            return result
+
+        def close(self):
+            try:
+                return super().close()
+            finally:
+                if self.closed and not getattr(self, "_trace_closed", True):
+                    self._trace_closed = True
+                    tracer.on_close(self._trace_name)
+
+    TracedMemory.__name__ = base.__name__
+    return TracedMemory
+
+
 class OlmaRuntime:
-    """Патчит builtins.open + io.IOBase, собирает события."""
+    """Temporarily instrument supported IO factories; uninstall in LIFO order."""
 
     MAX_EVENTS = 20_000
 
@@ -40,46 +193,44 @@ class OlmaRuntime:
         self._lock = threading.Lock()
         self._installed = False
         self._orig_open = None
-        self._orig_io_read = None
-        self._orig_io_write = None
-        self._orig_io_close = None
-        # Re-entrancy guard: traceback.extract_stack() can itself allocate
-        # or load modules that call open() again. A second call inside the
-        # hook would loop forever, which is exactly the "maximum recursion
-        # depth exceeded" we see when the bootloader opens resource files
-        # during startup. The hook short-circuits to the real open in that
-        # case instead of re-recording and risking a stack blow.
-        self._reentrant = 0
+        self._memory_factories = {}
+        self._reentrant = threading.local()
 
-    # --- install/uninstall ---
     def install(self) -> None:
         if self._installed:
             return
-        self._orig_open = builtins.open
-        builtins.open = self._patched_open
+        if self._trace_files:
+            self._orig_open = builtins.open
+            builtins.open = self._patched_open
         if self._trace_memory:
-            self._orig_io_read = io.IOBase.read
-            self._orig_io_write = io.IOBase.write
-            self._orig_io_close = io.IOBase.close
-            io.IOBase.read = self._patched_read
-            io.IOBase.write = self._patched_write
-            io.IOBase.close = self._patched_close
+            for name in ("BytesIO", "StringIO"):
+                original = getattr(io, name)
+                replacement = _memory_factory(original, self)
+                self._memory_factories[name] = (original, replacement)
+                setattr(io, name, replacement)
         self._installed = True
 
     def uninstall(self) -> None:
         if not self._installed:
             return
-        if self._orig_open:
+        if self._trace_files and builtins.open != self._patched_open:
+            raise RuntimeError(
+                "IO tracing must be uninstalled in reverse install order"
+            )
+        if any(
+            getattr(io, name) is not replacement
+            for name, (_, replacement) in self._memory_factories.items()
+        ):
+            raise RuntimeError(
+                "IO tracing must be uninstalled in reverse install order"
+            )
+        if self._trace_files:
             builtins.open = self._orig_open
-        if self._orig_io_read:
-            io.IOBase.read = self._orig_io_read
-        if self._orig_io_write:
-            io.IOBase.write = self._orig_io_write
-        if self._orig_io_close:
-            io.IOBase.close = self._orig_io_close
+        for name, (original, _) in self._memory_factories.items():
+            setattr(io, name, original)
+        self._memory_factories.clear()
         self._installed = False
 
-    # --- hooks ---
     def on_open(self, path, mode):
         self._push(RuntimeEvent("open", str(path), mode=mode, stack=self._stack()))
 
@@ -97,87 +248,60 @@ class OlmaRuntime:
             RuntimeEvent("error", str(path), error=repr(err), stack=self._stack())
         )
 
-    # --- patched functions ---
-    def _patched_open(self, file, mode="r", *a, **kw):
-        # Short-circuit if we are already inside the hook; this both breaks
-        # recursion and protects against any code path (Qt, importlib,
-        # traceback itself) that legitimately opens a file under the hook.
-        if self._reentrant:
-            return self._orig_open(file, mode, *a, **kw)
-        self._reentrant += 1
+    def _patched_open(self, file, mode="r", *args, **kwargs):
+        if getattr(self._reentrant, "active", False):
+            return self._orig_open(file, mode, *args, **kwargs)
+        self._reentrant.active = True
         try:
-            t0 = time.perf_counter()
+            started = time.perf_counter()
             try:
-                fh = self._orig_open(file, mode, *a, **kw)
-            except Exception as e:
-                self.on_error(file, e)
+                handle = self._orig_open(file, mode, *args, **kwargs)
+            except Exception as exc:
+                self.on_error(file, exc)
                 raise
-            dt = (time.perf_counter() - t0) * 1000
             self._push(
                 RuntimeEvent(
-                    "open", str(file), mode=mode, duration_ms=dt, stack=self._stack()
+                    "open",
+                    str(file),
+                    mode=mode,
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                    stack=self._stack(),
                 )
             )
-            return fh
+            return _TracedFile(handle, self)
         finally:
-            self._reentrant -= 1
+            self._reentrant.active = False
 
-    def _patched_read(self, self_, *a, **kw):
-        t0 = time.perf_counter()
-        try:
-            r = self._orig_io_read(self_, *a, **kw)
-            dt = (time.perf_counter() - t0) * 1000
-            n = len(r) if isinstance(r, (bytes, bytearray, str)) else 0
-            p = getattr(self_, "name", "?")
-            self._push(RuntimeEvent("read", str(p), size=n, duration_ms=dt))
-            return r
-        except Exception as e:
-            self.on_error(getattr(self_, "name", "?"), e)
-            raise
-
-    def _patched_write(self, self_, *a, **kw):
-        t0 = time.perf_counter()
-        try:
-            r = self._orig_io_write(self_, *a, **kw)
-            dt = (time.perf_counter() - t0) * 1000
-            n = len(a[0]) if a and isinstance(a[0], (bytes, bytearray, str)) else 0
-            p = getattr(self_, "name", "?")
-            self._push(RuntimeEvent("write", str(p), size=n, duration_ms=dt))
-            return r
-        except Exception as e:
-            self.on_error(getattr(self_, "name", "?"), e)
-            raise
-
-    def _patched_close(self, self_):
-        try:
-            return self._orig_io_close(self_)
-        finally:
-            self._push(RuntimeEvent("close", str(getattr(self_, "name", "?"))))
-
-    # --- helpers ---
-    def _push(self, ev: RuntimeEvent) -> None:
+    def _push(self, event):
         with self._lock:
-            self._events.append(ev)
+            self._events.append(event)
 
-    def _stack(self, depth: int = 6) -> str:
+    def _stack(self, depth=6):
         frames = traceback.extract_stack()[:-2][-depth:]
         return " | ".join(
-            f"{f.filename.split(chr(47))[-1]}:{f.lineno}:{f.name}" for f in frames
+            f"{frame.filename.split(chr(47))[-1]}:{frame.lineno}:{frame.name}"
+            for frame in frames
         )
 
-    # --- queries ---
-    def events(self, limit: int = 100) -> list[dict]:
+    def events(self, limit=100):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("limit must be a non-negative integer")
         with self._lock:
-            return [e.to_dict() for e in list(self._events)[-limit:]]
+            return (
+                [event.to_dict() for event in list(self._events)[-limit:]]
+                if limit
+                else []
+            )
 
-    def stats(self) -> dict:
+    def stats(self):
         with self._lock:
-            evs = list(self._events)
-        s = {
-            "total": len(evs),
+            events = list(self._events)
+        result = {
+            "total": len(events),
             "open": 0,
             "read": 0,
             "write": 0,
+            "seek": 0,
             "close": 0,
             "error": 0,
             "bytes_read": 0,
@@ -186,50 +310,62 @@ class OlmaRuntime:
             "files_touched": set(),
             "errors": [],
         }
-        for e in evs:
-            s[e.kind] = s.get(e.kind, 0) + 1
-            if e.size:
-                if e.kind == "read":
-                    s["bytes_read"] += e.size
-                if e.kind == "write":
-                    s["bytes_written"] += e.size
-            if e.duration_ms > 100:
-                s["slow_ops"].append(
-                    {"path": e.path, "ms": round(e.duration_ms, 1), "kind": e.kind}
+        for event in events:
+            result[event.kind] = result.get(event.kind, 0) + 1
+            if event.kind == "read":
+                result["bytes_read"] += event.size
+            elif event.kind == "write":
+                result["bytes_written"] += event.size
+            if event.duration_ms > 100:
+                result["slow_ops"].append(
+                    {
+                        "path": event.path,
+                        "ms": round(event.duration_ms, 1),
+                        "kind": event.kind,
+                    }
                 )
-            if e.path:
-                s["files_touched"].add(e.path)
-            if e.kind == "error":
-                s["errors"].append({"path": e.path, "error": e.error, "stack": e.stack})
-        s["files_touched"] = sorted(s["files_touched"])
-        s["slow_ops"] = s["slow_ops"][:50]
-        s["errors"] = s["errors"][:50]
-        return s
+            if event.path:
+                result["files_touched"].add(event.path)
+            if event.kind == "error":
+                result["errors"].append(
+                    {"path": event.path, "error": event.error, "stack": event.stack}
+                )
+        result["files_touched"] = sorted(result["files_touched"])
+        result["slow_ops"] = result["slow_ops"][:50]
+        result["errors"] = result["errors"][:50]
+        return result
 
-    def detect_anomalies(self) -> list[dict]:
-        """Ищет утечки, повторные close, ошибки."""
+    def detect_anomalies(self):
         with self._lock:
-            evs = list(self._events)
-        anomalies = []
-        opens: dict[str, int] = {}
-        closes: dict[str, int] = {}
-        for e in evs:
-            if e.kind == "open":
-                opens[e.path] = opens.get(e.path, 0) + 1
-            if e.kind == "close":
-                closes[e.path] = closes.get(e.path, 0) + 1
-            if e.kind == "error":
+            events = list(self._events)
+        anomalies, opens, closes = [], {}, {}
+        for event in events:
+            if event.kind == "open":
+                opens[event.path] = opens.get(event.path, 0) + 1
+            elif event.kind == "close":
+                closes[event.path] = closes.get(event.path, 0) + 1
+            elif event.kind == "error":
                 anomalies.append(
-                    {"type": "runtime_error", "path": e.path, "detail": e.error}
+                    {"type": "runtime_error", "path": event.path, "detail": event.error}
                 )
-        for p, n in opens.items():
-            c = closes.get(p, 0)
-            if n > c:
+        for path in opens.keys() | closes.keys():
+            count, closed = opens.get(path, 0), closes.get(path, 0)
+            if count > closed:
                 anomalies.append(
-                    {"type": "possible_leak", "path": p, "open": n, "close": c}
+                    {
+                        "type": "possible_leak",
+                        "path": path,
+                        "open": count,
+                        "close": closed,
+                    }
                 )
-            elif c > n:
+            elif closed > count:
                 anomalies.append(
-                    {"type": "double_close", "path": p, "open": n, "close": c}
+                    {
+                        "type": "double_close",
+                        "path": path,
+                        "open": count,
+                        "close": closed,
+                    }
                 )
         return anomalies

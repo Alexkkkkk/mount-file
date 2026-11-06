@@ -39,7 +39,7 @@ class FakeRegistry:
 
     def filesystem_read(self, image, path, offset=0, length=1 << 23):
         self.calls.append(("read", image, path, offset, length))
-        return b"evidence"
+        return b"evidence"[:length]
 
     def filesystem_status(self, image, offset=0):
         self.calls.append(("status", image, offset))
