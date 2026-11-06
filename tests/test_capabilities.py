@@ -130,6 +130,34 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
     }
 
 
+def test_v5_matrix_publishes_evidence_bounded_recovery_contracts():
+    profiles = {
+        item["profile_id"]: item for item in get_native_capability_matrix()["profiles"]
+    }
+    for profile in profiles.values():
+        recovery = profile["recovery"]
+        assert set(recovery) == {
+            "rollback",
+            "process_kill",
+            "power_loss",
+            "quarantine",
+        }
+        assert recovery["power_loss"] == "unsupported"
+    assert profiles["ext2-native-rw"]["recovery"] == {
+        "rollback": "tested_on_failure",
+        "process_kill": "tested_with_recovery_sidecar",
+        "power_loss": "unsupported",
+        "quarantine": "tested_on_recovery_failure",
+    }
+    for profile_id in (
+        "fat12-16-native-rw",
+        "fat32-native-rw",
+        "exfat-native-rw",
+    ):
+        assert profiles[profile_id]["recovery"]["process_kill"] == "not_proven"
+        assert profiles[profile_id]["recovery"]["quarantine"] == "not_proven"
+
+
 def test_exfat_matrix_matches_single_fat_and_volume_flag_gates(tmp_path, monkeypatch):
     profiles = {
         profile["profile_id"]: profile
@@ -281,6 +309,7 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
     assert status["operations"]["stat"]["state"] == "refused"
     assert status["constraint_ids"]
     assert status["gates"]
+    assert status["recovery"] == profile.recovery_contract
     assert (
         tuple(status["write_capabilities"])
         == NATIVE_WRITE_PROFILES_BY_STRATEGY[strategy].write_capabilities

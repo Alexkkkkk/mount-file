@@ -235,6 +235,11 @@ engine.close()
   writes fail with an explicit unsupported-profile reason; they do not invoke a
   subprocess or fall back to a legacy writer. A read-only backend reports an
   empty write capability list and a human-readable rejection reason.
+  Capability/status schema v5 also publishes a `recovery` contract. It records
+  tested failure rollback and the ext2 recovery-sidecar process-kill evidence,
+  while FAT/exFAT process-kill and quarantine remain `not_proven`; all native
+  writers report `power_loss: unsupported`. This is an explicit refusal of
+  unstated durability claims, not a promise of filesystem-wide crash safety.
 * Если backend, драйвер или права отсутствуют, операция завершается явной
   ошибкой; фасад не сообщает об успешной записи после молчаливого RO-mount.
 * Вне области действия: физические устройства, таблицы разделов, шифрованные
