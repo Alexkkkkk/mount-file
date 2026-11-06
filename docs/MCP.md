@@ -14,7 +14,7 @@
 
 ## 1. VS Code
 
-Файл [`.vscode/mcp.json`](../.vscode/mcp.json) уже в репозитории. Он объявляет
+Файл [`.vscode/mcp.json`](https://github.com/Alexkkkkk/mount-file/blob/main/.vscode/mcp.json) уже в репозитории. Он объявляет
 два сервера на одном remote-эндпоинте `https://api.githubcopilot.com/mcp/`:
 
 * `github` — только чтение (`X-MCP-Readonly: true`), тулсеты
