@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from mountfile.api import FASTAPI_AVAILABLE, APIConfigurationError, create_app
+from mountfile.safety import RefusalCode, RefusalError, RefusalRuntimeError
 
 if FASTAPI_AVAILABLE:
     try:
@@ -38,6 +39,10 @@ class FakeRegistry:
     def filesystem_read(self, image, path, offset=0, length=1 << 23):
         self.calls.append(("read", image, path, offset, length))
         return b"evidence"
+
+    def filesystem_status(self, image, offset=0):
+        self.calls.append(("status", image, offset))
+        return {"backend": "native-ext2", "profile_id": "ext2-native-ro"}
 
     def timeline(self, image=None, limit=100, path=None, offset=0):
         self.calls.append(("timeline", image, limit, path, offset))
@@ -124,6 +129,71 @@ def test_bearer_auth_protects_non_loopback_endpoints(tmp_path):
         ).status_code
         == 200
     )
+    assert client.get("/capabilities").status_code == 401
+
+
+@needs_fastapi
+def test_capability_and_explicit_status_endpoints_are_read_only(tmp_path):
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+    registry = FakeRegistry()
+    app = create_app(registry, image_roots=tmp_path)
+    client = _client_or_skip(app)
+
+    capabilities = client.get("/capabilities")
+    assert capabilities.status_code == 200
+    body = capabilities.json()
+    assert body["matrix"]["version"] == 6
+    assert body["http_interface"]["mode"] == "read-only"
+    assert body["http_interface"]["write_capabilities"] == []
+    assert body["http_interface"]["write_enabled"] is False
+
+    response = client.get("/filesystem/status", params={"image": "disk.img"})
+    assert response.status_code == 200
+    status_body = response.json()
+    assert status_body["backend_status"]["profile_id"] == "ext2-native-ro"
+    assert status_body["write_capabilities"] == []
+    assert status_body["write_rejection_code"] == "operation_not_supported"
+    assert registry.calls == [("status", str(image.resolve()), 0)]
+    assert not any("write" in route.path.lower() for route in app.routes)
+
+
+@needs_fastapi
+@pytest.mark.parametrize(
+    ("error", "expected_status", "code", "category"),
+    [
+        (
+            RefusalError("volume is dirty", RefusalCode.DIRTY_OR_RECOVERY_REQUIRED),
+            409,
+            "dirty_or_recovery_required",
+            "dirty_recovery",
+        ),
+        (
+            RefusalRuntimeError("create disabled", RefusalCode.OPERATION_NOT_SUPPORTED),
+            501,
+            "operation_not_supported",
+            "unsupported",
+        ),
+    ],
+)
+def test_typed_refusals_keep_code_category_and_message_in_http_response(
+    tmp_path, error, expected_status, code, category
+):
+    class RefusingRegistry(FakeRegistry):
+        def filesystem_read(self, image, path, offset=0, length=1 << 23):
+            self.calls.append(("read", image, path, offset, length))
+            raise error
+
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"image")
+    registry = RefusingRegistry()
+    client = _client_or_skip(create_app(registry, image_roots=image))
+    response = client.get("/filesystem/read", params={"path": "/file"})
+
+    assert response.status_code == expected_status
+    refusal = response.json()["detail"]
+    assert refusal == {"code": code, "category": category, "message": str(error)}
+    assert [call[0] for call in registry.calls] == ["read"]
 
 
 @needs_fastapi

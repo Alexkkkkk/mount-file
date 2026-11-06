@@ -2839,7 +2839,9 @@ class UniversalFSRW:
             rejection_code = RefusalCode.OPERATION_NOT_SUPPORTED.value
         status = {
             "backend": info.backend,
+            "interface": "universal-fs-rw",
             "mode": "read-write" if write else "read-only",
+            "matrix_version": CAPABILITY_MATRIX_VERSION,
             "read_capabilities": read,
             "write_capabilities": write,
             "write_enabled": bool(write),

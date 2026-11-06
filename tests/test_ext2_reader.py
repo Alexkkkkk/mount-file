@@ -8,6 +8,7 @@ import pytest
 
 from mountfile import cli, vfs
 from mountfile.ext2_reader import Ext2ReadError, NativeExt2Image
+from mountfile.safety import RefusalCode
 
 BLOCK_SIZE = 1024
 BLOCKS_COUNT = 64
@@ -556,8 +557,9 @@ def test_partition_offset_is_bounded_and_image_is_unchanged(tmp_path):
 def test_dirty_journaled_and_unknown_feature_profiles_fail_closed(tmp_path):
     dirty = tmp_path / "dirty.img"
     _make_image(dirty, state=2)
-    with pytest.raises(Ext2ReadError, match="dirty"):
+    with pytest.raises(Ext2ReadError, match="dirty") as caught:
         NativeExt2Image(dirty, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
+    assert caught.value.code is RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
 
     journaled = tmp_path / "journaled.img"
     _make_image(journaled, compat=0x000C)

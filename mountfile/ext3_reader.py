@@ -42,6 +42,7 @@ from mountfile.ext_probe import (
     _RO_COMPAT_BIGALLOC,
     _RO_COMPAT_METADATA_CSUM,
 )
+from mountfile.safety import RefusalCode
 
 _JBD2_MAGIC = 0xC03B3998
 _JBD2_DESCRIPTOR = 1
@@ -74,16 +75,29 @@ class NativeExt3Image(NativeExt2Image):
     def _validate_profile(profile) -> None:
         if profile.fs_type not in ("ext3", "ext4"):
             raise Ext3ReadError(
-                "native ext3/ext4 reader requires an ext3 or ext4 profile"
+                "native ext3/ext4 reader requires an ext3 or ext4 profile",
+                RefusalCode.UNSUPPORTED_PROFILE,
             )
         if not profile.clean_unmounted or profile.state != 0x0001:
-            raise Ext3ReadError("dirty or recovery-required ext volume")
+            raise Ext3ReadError(
+                "dirty or recovery-required ext volume",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+            )
         if profile.journal_recovery_needed:
-            raise Ext3ReadError("superblock requires journal recovery")
+            raise Ext3ReadError(
+                "superblock requires journal recovery",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+            )
         if profile.revision not in (0, 1):
-            raise Ext3ReadError("unsupported ext superblock revision")
+            raise Ext3ReadError(
+                "unsupported ext superblock revision",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if profile.block_size not in (1024, 2048, 4096):
-            raise Ext3ReadError("reader supports only 1, 2 or 4 KiB blocks")
+            raise Ext3ReadError(
+                "reader supports only 1, 2 or 4 KiB blocks",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if profile.first_data_block != (1 if profile.block_size == 1024 else 0):
             raise Ext3ReadError("invalid first-data-block value")
         compat_allowed = _COMPAT_EXT_ATTR | _COMPAT_RESIZE_INODE | _COMPAT_HAS_JOURNAL
@@ -128,7 +142,9 @@ class NativeExt3Image(NativeExt2Image):
                 self._validate_empty_journal(replay_journal=replay_journal)
         except Ext2ReadError as exc:
             self.close()
-            raise Ext3ReadError(f"journal inode/JBD2 validation failed: {exc}") from exc
+            raise Ext3ReadError(
+                f"journal inode/JBD2 validation failed: {exc}", exc.code
+            ) from exc
         except Exception:
             self.close()
             raise

@@ -11,6 +11,7 @@ from mountfile.capabilities import (
     NATIVE_CAPABILITY_MATRIX,
     NATIVE_CAPABILITY_PROFILES,
     NATIVE_WRITE_PROFILES_BY_STRATEGY,
+    OPERATION_VOCABULARY,
     RW_READ_CAPABILITIES,
     RW_WRITE_CAPABILITIES,
     VFS_READ_CAPABILITIES,
@@ -19,6 +20,7 @@ from mountfile.capabilities import (
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.safety import RefusalCode
 from mountfile.universal_fs_rw import FSInfo, UniversalFSRW
 
 
@@ -46,10 +48,33 @@ def test_native_capability_matrix_is_unique_and_json_serialisable():
         "caller-mutation"
         not in get_native_capability_matrix()["profiles"][0]["read_capabilities"]
     )
+    exfat = next(
+        profile
+        for profile in snapshot["profiles"]
+        if profile["profile_id"] == "exfat-native-rw"
+    )
+    exfat["known_gates"]["feature_gates"][0]["supported_values"].append(3)
+    live_exfat = next(
+        profile
+        for profile in get_native_capability_matrix()["profiles"]
+        if profile["profile_id"] == "exfat-native-rw"
+    )
+    assert live_exfat["known_gates"]["feature_gates"][0]["supported_values"] == [1, 2]
 
 
 def test_read_and_write_profiles_use_the_correct_api_vocabulary():
     for profile in NATIVE_CAPABILITY_MATRIX:
+        decisions = {
+            decision["operation"]: decision
+            for decision in profile.to_dict()["operation_decisions"]
+        }
+        advertised = set(profile.read_capabilities) | set(profile.write_capabilities)
+        assert set(decisions) == set(OPERATION_VOCABULARY)
+        assert {
+            operation
+            for operation, decision in decisions.items()
+            if decision["outcome"] == "allow"
+        } == advertised
         if profile.interface == "vfs":
             assert profile.mode == "read-only"
             assert profile.read_capabilities == VFS_READ_CAPABILITIES
@@ -62,7 +87,7 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
 
 
 def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
-    assert CAPABILITY_MATRIX_VERSION == 4
+    assert CAPABILITY_MATRIX_VERSION == 6
     assert VFS_READ_CAPABILITIES == (
         "list",
         "stat",
@@ -74,6 +99,39 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
         if profile.interface == "vfs":
             assert "read-file" in profile.read_capabilities
             assert "read-range" in profile.read_capabilities
+            assert profile.to_dict()["known_gates"]["coverage"] == (
+                "selected-known-gates-not-exhaustive"
+            )
+            assert profile.to_dict()["known_gates"]["limits"]["max_read_range_bytes"]
+            decisions = profile.to_dict()["operation_decisions"]
+            assert {decision["operation"] for decision in decisions} == set(
+                OPERATION_VOCABULARY
+            )
+            assert all(
+                decision["refusal_code"]
+                for decision in decisions
+                if decision["outcome"] == "refuse"
+            )
+    assert get_native_capability_matrix()["coverage"] == (
+        "complete-operation-vocabulary; selected-feature-state-gates-not-exhaustive"
+    )
+
+
+def test_exfat_known_state_and_feature_gates_are_machine_readable():
+    profiles = {
+        profile["profile_id"]: profile
+        for profile in get_native_capability_matrix()["profiles"]
+    }
+    exfat_ro = profiles["exfat-native-ro"]["known_gates"]
+    assert {gate["state"] for gate in exfat_ro["state_gates"]} == {
+        "volume_dirty",
+        "media_failure",
+    }
+    assert exfat_ro["limits"]["max_read_range_bytes"] == 16 * 1024 * 1024
+    exfat_rw = profiles["exfat-native-rw"]["known_gates"]
+    feature = exfat_rw["feature_gates"][0]
+    assert feature["supported_values"] == [1, 2]
+    assert feature["selection"] == "validated_active_fat_and_mirror_updates"
 
 
 def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
@@ -135,8 +193,14 @@ def test_exfat_matrix_matches_active_multifat_and_volume_flag_gates(
     clear_to_zero_reader.close()
     for flags, message in ((0x0002, "volume is dirty"), (0x0004, "media failure")):
         reader_profile.volume_flags = flags
-        with pytest.raises(ExfatReadError, match=message):
+        with pytest.raises(ExfatReadError, match=message) as caught:
             NativeExfatImage(image, volume_size=512)
+        expected_code = (
+            RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
+            if flags == 0x0002
+            else RefusalCode.INTEGRITY_CHECK_FAILED
+        )
+        assert caught.value.code is expected_code
 
     writer_profile = SimpleNamespace(
         volume_flags=0x0001, volume_length=1, bytes_per_sector=512
@@ -204,6 +268,7 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
     status = UniversalFSRW.backend_status(info)
 
     assert status["backend"] == profile.backend
+    assert status["interface"] == "universal-fs-rw"
     assert status["mode"] == profile.mode
     assert status["profile_id"] == profile.profile_id
     assert status["matrix_version"] == CAPABILITY_MATRIX_VERSION

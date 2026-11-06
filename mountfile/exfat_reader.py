@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mountfile.exfat_probe import ExfatProbeError, probe_exfat_boot_region
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.safety import (
+    RefusalCode,
+    RefusalError,
+    checked_image_range,
+    checked_range,
+)
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
@@ -111,9 +116,15 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 self.image_path, offset=self.offset, volume_size=self._volume_size
             )
             if self.profile.volume_flags & 0x0002:
-                raise ExfatReadError("exFAT volume is dirty and requires recovery")
+                raise ExfatReadError(
+                    "exFAT volume is dirty and requires recovery",
+                    RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+                )
             if self.profile.volume_flags & 0x0004:
-                raise ExfatReadError("exFAT volume reports media failure")
+                raise ExfatReadError(
+                    "exFAT volume reports media failure",
+                    RefusalCode.INTEGRITY_CHECK_FAILED,
+                )
             self.volume_end = (
                 self.offset + self.profile.volume_length * self.profile.bytes_per_sector
             )
@@ -143,19 +154,13 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _read_rel(self, relative, size):
         if self._stream is None:
             raise ExfatReadError("exFAT image is closed")
-        checked_range(
+        absolute, _ = checked_image_range(
             relative,
             size,
-            upper=self.volume_end - self.offset,
+            image_size=self._image_size,
+            base_offset=self.offset,
+            extent_size=self.volume_end - self.offset,
             context="exFAT read exceeds selected volume bounds",
-            error_type=ExfatReadError,
-        )
-        absolute = self.offset + relative
-        checked_range(
-            absolute,
-            size,
-            upper=self._image_size,
-            context="exFAT read exceeds image bounds",
             error_type=ExfatReadError,
         )
         self._stream.seek(absolute)

@@ -3,7 +3,13 @@
 
 import pytest
 
-from mountfile.safety import RefusalCategory, RefusalCode, RefusalError, checked_range
+from mountfile.safety import (
+    RefusalCategory,
+    RefusalCode,
+    RefusalError,
+    checked_image_range,
+    checked_range,
+)
 
 
 @pytest.mark.parametrize(
@@ -45,6 +51,59 @@ def test_checked_range_supports_parser_specific_error_subclasses():
     with pytest.raises(ParserRefusal) as caught:
         checked_range(8, 4, upper=10, error_type=ParserRefusal)
     assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+
+
+@pytest.mark.parametrize(
+    ("start", "length", "base", "extent", "image_size", "expected"),
+    [
+        (0, 0, 4, 6, 16, (4, 4)),
+        (1, 3, 4, 6, 16, (5, 8)),
+        (5, 1, 4, 6, 16, (9, 10)),
+        (0, 4, 8, 4, 12, (8, 12)),
+    ],
+)
+def test_checked_image_range_returns_absolute_bounds_for_nested_extent(
+    start, length, base, extent, image_size, expected
+):
+    assert (
+        checked_image_range(
+            start,
+            length,
+            base_offset=base,
+            extent_size=extent,
+            image_size=image_size,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "length", "base", "extent", "image_size"),
+    [
+        (0, 1, 4, 6, 9),  # selected extent exceeds the image
+        (5, 2, 4, 6, 16),  # request exceeds selected extent
+        (-1, 1, 4, 6, 16),
+        (0, 1, -1, 2, 16),
+        (0, 1, 4, True, 16),
+        (0, 1, 4, 2, False),
+    ],
+)
+def test_checked_image_range_rejects_invalid_nested_bounds(
+    start, length, base, extent, image_size
+):
+    with pytest.raises(RefusalError) as caught:
+        checked_image_range(
+            start,
+            length,
+            base_offset=base,
+            extent_size=extent,
+            image_size=image_size,
+        )
+    assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+
+
+def test_checked_image_range_defaults_to_image_remainder():
+    assert checked_image_range(3, 2, base_offset=7, image_size=12) == (10, 12)
 
 
 def test_checked_range_matches_exhaustive_small_integer_interval_contract():

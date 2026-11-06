@@ -17,7 +17,12 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.safety import (
+    RefusalCode,
+    RefusalError,
+    checked_image_range,
+    checked_range,
+)
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
@@ -293,22 +298,25 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
     def _read_absolute(self, absolute: int, size: int, *, image_only=False) -> bytes:
         if self._stream is None:
             raise FatReadError("filesystem image is closed")
-        if not image_only:
-            checked_range(
+        if image_only:
+            checked_image_range(
                 absolute,
                 size,
-                lower=self.offset,
-                upper=self.volume_end,
+                image_size=self._image_size,
+                extent_size=self._image_size,
+                context="FAT read exceeds image bounds",
+                error_type=FatReadError,
+            )
+        else:
+            checked_image_range(
+                absolute - self.offset,
+                size,
+                image_size=self._image_size,
+                base_offset=self.offset,
+                extent_size=self.volume_end - self.offset,
                 context="FAT read exceeds selected volume bounds",
                 error_type=FatReadError,
             )
-        checked_range(
-            absolute,
-            size,
-            upper=self._image_size,
-            context="FAT read exceeds image bounds",
-            error_type=FatReadError,
-        )
         with self._lock:
             self._stream.seek(absolute)
             data = self._stream.read(size)
@@ -317,13 +325,6 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         return data
 
     def _read_at(self, relative: int, size: int) -> bytes:
-        checked_range(
-            relative,
-            size,
-            upper=self.volume_end - self.offset,
-            context="FAT read exceeds selected volume bounds",
-            error_type=FatReadError,
-        )
         return self._read_absolute(self.offset + relative, size)
 
     def _fat_entry(self, cluster: int) -> int:

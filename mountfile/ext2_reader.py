@@ -23,7 +23,12 @@ from mountfile.ext_probe import (
     ExtSuperblockProfile,
     probe_ext_superblock,
 )
-from mountfile.safety import RefusalCode, RefusalError, checked_range
+from mountfile.safety import (
+    RefusalCode,
+    RefusalError,
+    checked_image_range,
+    checked_range,
+)
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 
 
@@ -216,17 +221,30 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
     @staticmethod
     def _validate_profile(profile: ExtSuperblockProfile) -> None:
         if profile.fs_type != "ext2":
-            raise Ext2ReadError("native reader supports ext2 profiles only")
+            raise Ext2ReadError(
+                "native reader supports ext2 profiles only",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if not profile.clean_unmounted or profile.state != 0x0001:
-            raise Ext2ReadError("dirty or recovery-required ext volumes are read-only")
+            raise Ext2ReadError(
+                "dirty or recovery-required ext volumes are read-only",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+            )
         if profile.has_journal or profile.journal_recovery_needed:
             raise Ext2ReadError(
-                "journaled ext profiles are not supported by this reader"
+                "journaled ext profiles are not supported by this reader",
+                RefusalCode.UNSUPPORTED_PROFILE,
             )
         if profile.revision not in (0, 1):
-            raise Ext2ReadError("unsupported ext superblock revision")
+            raise Ext2ReadError(
+                "unsupported ext superblock revision",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if profile.block_size not in (1024, 2048, 4096):
-            raise Ext2ReadError("native reader supports only 1, 2 or 4 KiB blocks")
+            raise Ext2ReadError(
+                "native reader supports only 1, 2 or 4 KiB blocks",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if profile.first_data_block != (1 if profile.block_size == 1024 else 0):
             raise Ext2ReadError("invalid first-data-block value for ext block size")
         compat_allowed = _COMPAT_EXT_ATTR | _COMPAT_RESIZE_INODE
@@ -276,22 +294,17 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
     def _read_at(self, relative_offset: int, size: int) -> bytes:
         if self._stream is None:
             raise Ext2ReadError("filesystem image is closed")
-        _, end = checked_range(
+        absolute, _ = checked_image_range(
             relative_offset,
             size,
-            upper=self.filesystem_size,
+            image_size=self._image_size,
+            base_offset=self.offset,
+            extent_size=self.filesystem_size,
             context="filesystem read exceeds selected partition bounds",
             error_type=Ext2ReadError,
         )
-        checked_range(
-            self.offset + relative_offset,
-            size,
-            upper=self._image_size,
-            context="filesystem read exceeds image bounds",
-            error_type=Ext2ReadError,
-        )
         with self._lock:
-            self._stream.seek(self.offset + relative_offset)
+            self._stream.seek(absolute)
             data = self._stream.read(size)
         if len(data) != size:
             raise Ext2ReadError("short read from filesystem image")

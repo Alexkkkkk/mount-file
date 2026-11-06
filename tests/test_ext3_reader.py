@@ -23,6 +23,7 @@ from mountfile.ext2_reader import (
     _Inode,
 )
 from mountfile.ext3_reader import Ext3ReadError, NativeExt3Image, NativeExt4Image
+from mountfile.safety import RefusalCode
 from tests.test_ext2_reader import (
     BLOCK_SIZE,
     BLOCKS_COUNT,
@@ -507,8 +508,11 @@ def test_dirty_ext_profile_fails_before_any_provider_open(tmp_path, monkeypatch)
         "TskImage",
         lambda *args, **kwargs: pytest.fail("dirty ext must not use fallback"),
     )
-    with pytest.raises(vfs.TskError, match="dirty or requires journal recovery"):
+    with pytest.raises(
+        vfs.TskError, match="dirty or requires journal recovery"
+    ) as caught:
         vfs.open_image_provider(image_path, offset=0, volume_size=BLOCKS_COUNT * 1024)
+    assert caught.value.code is RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
 
 
 def test_external_journal_device_is_rejected_explicitly(tmp_path):

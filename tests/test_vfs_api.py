@@ -77,7 +77,9 @@ def test_backend_status_is_explicitly_read_only_and_serialisable():
     assert provider.write_capabilities == ()
     assert provider.backend_status == {
         "backend": "_Provider",
+        "interface": "vfs",
         "mode": "read-only",
+        "matrix_version": 6,
         "read_capabilities": [
             "list",
             "stat",
@@ -87,6 +89,7 @@ def test_backend_status_is_explicitly_read_only_and_serialisable():
         ],
         "write_capabilities": [],
         "write_enabled": False,
+        "write_rejection_code": "operation_not_supported",
         "write_rejection_reason": (
             "native provider is read-only; use an explicitly selected "
             "bounded writer profile"

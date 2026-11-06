@@ -134,3 +134,71 @@ def checked_range(
             RefusalCode.RANGE_OUT_OF_BOUNDS,
         )
     return start, start + length
+
+
+def checked_image_range(
+    start: int,
+    length: int,
+    *,
+    image_size: int,
+    base_offset: int = 0,
+    extent_size: int | None = None,
+    context: str = "image range",
+    error_type: type[_E] = RefusalError,
+) -> tuple[int, int]:
+    """Validate a relative request inside an extent and return absolute bounds.
+
+    The selected extent itself must fit inside the image before the requested
+    sub-range is checked.  ``start`` is relative to ``base_offset``; when no
+    ``extent_size`` is supplied, the containing extent is the image remainder.
+    This centralizes nested image/partition bounds without assuming that the
+    filesystem's own declared size equals the selected partition size.
+    """
+    # Validate scalar types first via the same stable typed refusal contract.
+    if extent_size is None:
+        if (
+            not isinstance(image_size, int)
+            or isinstance(image_size, bool)
+            or not isinstance(base_offset, int)
+            or isinstance(base_offset, bool)
+        ):
+            raise error_type(
+                f"{context}: bounds must be integers",
+                RefusalCode.RANGE_OUT_OF_BOUNDS,
+            )
+        extent_size = image_size - base_offset
+
+    _, image_end = checked_range(
+        0,
+        image_size,
+        upper=image_size,
+        context=f"{context} image bounds",
+        error_type=error_type,
+    )
+    _, extent_end = checked_range(
+        base_offset,
+        extent_size,
+        upper=image_end,
+        context=f"{context} selected extent",
+        error_type=error_type,
+    )
+    relative_start, relative_end = checked_range(
+        start,
+        length,
+        upper=extent_size,
+        context=context,
+        error_type=error_type,
+    )
+    absolute_start = base_offset + relative_start
+    absolute_end = base_offset + relative_end
+    # Keep this final containment explicit: it is cheap, documents the
+    # returned-coordinate invariant, and protects future changes above.
+    checked_range(
+        absolute_start,
+        absolute_end - absolute_start,
+        lower=base_offset,
+        upper=extent_end,
+        context=context,
+        error_type=error_type,
+    )
+    return absolute_start, absolute_end

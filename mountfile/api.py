@@ -13,6 +13,8 @@ these operations (the aliases in parentheses are accepted for compatibility):
 * ``list_images`` (``images``) -- list configured images;
 * ``filesystem_ls`` (``list_directory``, ``ls``) -- list an image directory;
 * ``filesystem_read`` (``read_file``, ``read``) -- read an image file;
+* ``filesystem_status`` (``backend_status``, ``status``) -- explicitly supplied
+  backend status for a validated image; this transport does not open the image;
 * ``timeline`` (``get_timeline``, ``list_timeline``) -- query timeline rows.
 
 Service methods receive a validated host image path as ``str`` and a validated
@@ -33,6 +35,12 @@ import posixpath
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Optional, Protocol, Sequence, Union
+
+from mountfile.capabilities import (
+    CAPABILITY_MATRIX_VERSION,
+    get_native_capability_matrix,
+)
+from mountfile.safety import RefusalCode, RefusalError, RefusalRuntimeError
 
 try:  # Optional by design: importing mountfile must not require FastAPI.
     from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
@@ -94,6 +102,7 @@ _OPERATION_NAMES = {
     "images": ("list_images", "images", "get_images", "image_list"),
     "ls": ("filesystem_ls", "list_directory", "ls", "list"),
     "read": ("filesystem_read", "read_file", "file_read", "read"),
+    "filesystem_status": ("filesystem_status", "backend_status", "status"),
     "timeline": ("timeline", "get_timeline", "list_timeline", "timeline_events"),
     "health": ("health", "healthcheck", "health_check"),
 }
@@ -416,6 +425,21 @@ def _configured_images(roots: Sequence[Path]) -> list[dict[str, str]]:
 
 
 def _http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (RefusalError, RefusalRuntimeError)):
+        status_by_code = {
+            RefusalCode.UNSUPPORTED_PROFILE: 422,
+            RefusalCode.DIRTY_OR_RECOVERY_REQUIRED: status.HTTP_409_CONFLICT,
+            RefusalCode.MALFORMED_METADATA: 422,
+            RefusalCode.RANGE_OUT_OF_BOUNDS: 416,
+            RefusalCode.INTEGRITY_CHECK_FAILED: 422,
+            RefusalCode.OPERATION_NOT_SUPPORTED: status.HTTP_501_NOT_IMPLEMENTED,
+            RefusalCode.CONCURRENT_CHANGE: status.HTTP_409_CONFLICT,
+            RefusalCode.UNSAFE: status.HTTP_400_BAD_REQUEST,
+        }
+        return HTTPException(
+            status_code=status_by_code[exc.code],
+            detail=exc.to_dict(),
+        )
     if isinstance(exc, APIPathError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if isinstance(exc, (FileNotFoundError, KeyError)):
@@ -542,6 +566,21 @@ def create_app(
             return {"status": "ok" if value else "degraded", "healthy": value}
         return {"status": "ok", "detail": _json_value(value)}
 
+    @app.get("/capabilities", dependencies=[_dependency()])
+    def capabilities() -> Any:
+        """Publish static profile declarations and the HTTP read-only surface."""
+        return {
+            "matrix": get_native_capability_matrix(),
+            "http_interface": {
+                "mode": "read-only",
+                "matrix_version": CAPABILITY_MATRIX_VERSION,
+                "read_capabilities": ["list", "read-range"],
+                "write_capabilities": [],
+                "write_enabled": False,
+                "write_rejection_code": RefusalCode.OPERATION_NOT_SUPPORTED.value,
+            },
+        }
+
     @app.get("/images", dependencies=[_dependency()])
     def images() -> Any:
         operation = _find_operation(service_registry, "images")
@@ -567,6 +606,42 @@ def create_app(
             if isinstance(exc, APIPathError):
                 raise
             raise APIPathError("invalid image path") from exc
+
+    @app.get("/filesystem/status", dependencies=[_dependency()])
+    def filesystem_status(
+        image: Optional[str] = Query(default=None),
+        offset: int = Query(default=0),
+    ) -> Any:
+        """Return adapter status without opening or probing the image in HTTP."""
+        try:
+            image_path, _, partition_offset = _filesystem_context(image, "/", offset)
+        except Exception as exc:
+            raise _http_error(exc)
+        operation = _find_operation(service_registry, "filesystem_status")
+        if operation is None:
+            raise _http_error(
+                ServiceUnavailableError("filesystem status is unavailable")
+            )
+        try:
+            backend_status = _json_value(
+                _invoke(
+                    operation,
+                    {"image": image_path, "offset": partition_offset},
+                    "filesystem_status",
+                )
+            )
+        except Exception as exc:
+            raise _http_error(exc)
+        return {
+            "interface": "http-read-only",
+            "matrix_version": CAPABILITY_MATRIX_VERSION,
+            "mode": "read-only",
+            "read_capabilities": ["list", "read-range"],
+            "write_capabilities": [],
+            "write_enabled": False,
+            "write_rejection_code": RefusalCode.OPERATION_NOT_SUPPORTED.value,
+            "backend_status": backend_status,
+        }
 
     def _ls_impl(image: Optional[str], path: str, offset: int) -> Any:
         try:

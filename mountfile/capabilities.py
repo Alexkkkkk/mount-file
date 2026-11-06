@@ -8,10 +8,11 @@ its parser/writer validates the selected image and all profile-specific gates.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
 
-CAPABILITY_MATRIX_VERSION = 4
+CAPABILITY_MATRIX_VERSION = 6
 
 # Read-only providers surfaced through the public VFS API.
 VFS_READ_CAPABILITIES = ("list", "stat", "read-file", "read-range", "extract")
@@ -20,6 +21,18 @@ VFS_WRITE_CAPABILITIES: tuple[str, ...] = ()
 # Operations surfaced by UniversalFSRW; this is a distinct API vocabulary.
 RW_READ_CAPABILITIES = ("list", "read", "extract")
 RW_WRITE_CAPABILITIES = ("write_file", "mkdir", "delete", "rename")
+OPERATION_VOCABULARY = (
+    "list",
+    "stat",
+    "read",
+    "read-file",
+    "read-range",
+    "extract",
+    "write_file",
+    "mkdir",
+    "delete",
+    "rename",
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,8 @@ class CapabilityProfile:
         value["read_capabilities"] = list(self.read_capabilities)
         value["write_capabilities"] = list(self.write_capabilities)
         value["constraints"] = list(_PROFILE_CONSTRAINTS[self.profile_id])
+        value["known_gates"] = _profile_known_gates(self.profile_id)
+        value["operation_decisions"] = _profile_operation_decisions(self)
         return value
 
 
@@ -195,6 +210,178 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         ),
     }
 )
+
+_MAX_READ_RANGE_BYTES = MappingProxyType(
+    {
+        "fat12-native-ro": 16 * 1024 * 1024,
+        "fat16-native-ro": 16 * 1024 * 1024,
+        "fat32-native-ro": 16 * 1024 * 1024,
+        "ext2-native-ro": 16 * 1024 * 1024,
+        "ext3-native-ro": 16 * 1024 * 1024,
+        "ext4-native-ro": 16 * 1024 * 1024,
+        "ntfs-native-ro": 1 * 1024 * 1024,
+        "exfat-native-ro": 16 * 1024 * 1024,
+    }
+)
+
+_PROFILE_STATE_GATES = MappingProxyType(
+    {
+        "ext2-native-ro": (
+            {
+                "state": "dirty_or_recovery_required",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+        ),
+        "ext3-native-ro": (
+            {
+                "state": "dirty_or_journal_recovery_required",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+        ),
+        "ext4-native-ro": (
+            {
+                "state": "dirty_or_journal_recovery_required",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+        ),
+        "ntfs-native-ro": (
+            {
+                "state": "dirty_or_logfile_recovery_required",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+        ),
+        "exfat-native-ro": (
+            {
+                "state": "volume_dirty",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+            {
+                "state": "media_failure",
+                "outcome": "refuse",
+                "code": "integrity_check_failed",
+            },
+        ),
+        "exfat-native-rw": (
+            {
+                "state": "volume_dirty",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+            {
+                "state": "media_failure",
+                "outcome": "refuse",
+                "code": "integrity_check_failed",
+            },
+            {
+                "state": "clear_to_zero_or_reserved_flags",
+                "outcome": "refuse",
+                "code": "unsupported_profile",
+            },
+        ),
+        "ext2-native-rw": (
+            {
+                "state": "dirty_or_journaled_profile",
+                "outcome": "refuse",
+                "code": "dirty_or_recovery_required",
+            },
+        ),
+    }
+)
+
+_PROFILE_FEATURE_GATES = MappingProxyType(
+    {
+        "ext2-native-ro": (
+            {
+                "feature": "unsupported_ext_feature_or_inode_layout",
+                "outcome": "refuse",
+                "code": "unsupported_profile",
+            },
+        ),
+        "ext3-native-ro": (
+            {
+                "feature": "unsupported_jbd2_or_ext_feature",
+                "outcome": "refuse",
+                "code": "unsupported_profile",
+            },
+        ),
+        "ext4-native-ro": (
+            {
+                "feature": "64bit_flex_bg_bigalloc_metadata_csum_or_unknown",
+                "outcome": "refuse",
+                "code": "unsupported_profile",
+            },
+        ),
+        "ntfs-native-ro": (
+            {
+                "feature": "attribute_list_bootstrap_or_sparse_compressed_encrypted_stream",
+                "outcome": "refuse",
+                "code": "unsupported_profile",
+            },
+        ),
+        "exfat-native-ro": (
+            {
+                "feature": "fat_copy_count",
+                "supported_values": [1, 2],
+                "selection": "validated_active_fat",
+            },
+        ),
+        "exfat-native-rw": (
+            {
+                "feature": "fat_copy_count",
+                "supported_values": [1, 2],
+                "selection": "validated_active_fat_and_mirror_updates",
+            },
+        ),
+        "ext2-native-rw": (
+            {
+                "feature": "sparse_or_double_triple_indirect_write",
+                "outcome": "refuse",
+                "code": "unsupported_profile",
+            },
+        ),
+    }
+)
+
+
+def _profile_known_gates(profile_id: str) -> dict[str, object]:
+    """Expose selected verified gates without claiming exhaustive validation."""
+    return {
+        "coverage": "selected-known-gates-not-exhaustive",
+        "state_gates": [
+            deepcopy(rule) for rule in _PROFILE_STATE_GATES.get(profile_id, ())
+        ],
+        "feature_gates": [
+            deepcopy(rule) for rule in _PROFILE_FEATURE_GATES.get(profile_id, ())
+        ],
+        "limits": {"max_read_range_bytes": _MAX_READ_RANGE_BYTES.get(profile_id)},
+    }
+
+
+def _profile_operation_decisions(profile: CapabilityProfile) -> list[dict[str, object]]:
+    """Give every operation in the public vocabulary an explicit decision."""
+    advertised = set(profile.read_capabilities) | set(profile.write_capabilities)
+    return [
+        {
+            "operation": operation,
+            "outcome": "allow" if operation in advertised else "refuse",
+            "refusal_code": (
+                None if operation in advertised else "operation_not_supported"
+            ),
+            "reason": (
+                None
+                if operation in advertised
+                else f"not advertised by {profile.interface} profile"
+            ),
+        }
+        for operation in OPERATION_VOCABULARY
+    ]
+
+
 NATIVE_CAPABILITY_PROFILES = MappingProxyType(
     {profile.profile_id: profile for profile in NATIVE_CAPABILITY_MATRIX}
 )
@@ -216,6 +403,10 @@ def get_native_capability_matrix() -> dict[str, object]:
     """Return a detached, versioned JSON-serialisable matrix snapshot."""
     return {
         "version": CAPABILITY_MATRIX_VERSION,
+        "coverage": (
+            "complete-operation-vocabulary; selected-feature-state-gates-not-exhaustive"
+        ),
+        "operation_vocabulary": list(OPERATION_VOCABULARY),
         "profiles": [profile.to_dict() for profile in NATIVE_CAPABILITY_MATRIX],
     }
 

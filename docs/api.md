@@ -43,8 +43,11 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 точного регистра. Для ext namespace lookup остаётся case-sensitive.
 В capability matrix токен `read-file` означает чтение всего файла методом
 `read_file`, а `read-range` — отдельный bounded вызов `read_file_range`; ни один
-из них не подразумевается наличием другого. Добавление этих операций в
-сериализуемую матрицу повышает её schema version до 3.
+из них не подразумевается наличием другого. Сериализуемая матрица имеет schema
+version 6. Каждая запись профиля содержит decision для каждой операции из
+`operation_vocabulary`; не поддерживаемая API-операция получает отказной код.
+Профильные `known_gates` и `limits` перечисляют только проверенные здесь state /
+feature gates и помечены как неполные; это не заменяет image-specific validation.
 Каждый native provider также публикует `backend_status`: сериализуемый словарь
 с backend name, read/write capabilities, режимом и явной причиной отказа от
 записи. Пустой `write_capabilities` означает именно read-only native profile,
@@ -53,6 +56,9 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 `write_rejection_code` содержит стабильный refusal code для profile-level отказа
 или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
 `write_rejection_reason` не следует разбирать приложениям.
+Статусы VFS и `UniversalFSRW` включают `interface`, `matrix_version`,
+`write_enabled` и стабильный `write_rejection_code`; словарь описывает API/backend
+contract и сам по себе не является повторной проверкой образа.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
 другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
 проверенного classic JBD2 существует только явный `open_native_ext3(...,
@@ -166,6 +172,23 @@ offset.
 ::: mountfile.vfs.open_image_provider
 
 ::: mountfile.vfs.ReadOnlyVFSStatMixin
+
+### Optional read-only HTTP capability/status
+
+Опциональный FastAPI server публикует `GET /capabilities` с canonical matrix и
+явно read-only HTTP surface. `GET /filesystem/status?image=...&offset=...`
+публикует статус только если интеграция явно внедрила registry operation
+`filesystem_status(image, offset)` (допускаются documented aliases). HTTP
+transport сам не открывает и не проверяет образ; без такого operation endpoint
+возвращает `501`. HTTP API не имеет mutation routes, даже если nested backend
+status описывает отдельный writer profile.
+
+`RefusalError` и `RefusalRuntimeError` превращаются в HTTP error status, у которого
+`detail` содержит объект `code`, `category` и `message`. Коды и категории являются
+машинным контрактом; тексты сообщений — только для человека. Диапазон вне образа
+возвращает `416`, dirty/recovery и concurrent-change — `409`, неподдержанный
+profile/повреждённые метаданные — `422`, неподдержанная операция — `501`, unsafe
+request — `400`.
 
 ### Владелец inode в ext providers
 

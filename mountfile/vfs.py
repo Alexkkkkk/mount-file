@@ -389,7 +389,7 @@ def _has_ntfs_boot_magic(image_path, offset, volume_size):
                         context="selected filesystem extent exceeds image bounds",
                     )
                 except RefusalError as exc:
-                    raise TskError(str(exc)) from exc
+                    raise TskError(str(exc), exc.code) from exc
                 try:
                     checked_range(
                         3,
@@ -516,24 +516,27 @@ def open_image_provider(
         if profile.fs_type == "ext2":
             if not profile.clean_unmounted or profile.journal_recovery_needed:
                 raise RecognizedFilesystemError(
-                    "ext2 volume is dirty or requires journal recovery"
+                    "ext2 volume is dirty or requires journal recovery",
+                    RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
                 )
             try:
                 return open_native_ext2(image_path, offset, volume_size)
             except Ext2ReadError as exc:
                 raise RecognizedFilesystemError(
-                    f"native ext2 reader declined the ext profile: {exc}"
+                    f"native ext2 reader declined the ext profile: {exc}", exc.code
                 ) from exc
         if profile.fs_type in ("ext3", "ext4"):
             if not profile.clean_unmounted or profile.journal_recovery_needed:
                 raise RecognizedFilesystemError(
-                    "ext volume is dirty or requires journal recovery"
+                    "ext volume is dirty or requires journal recovery",
+                    RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
                 )
             try:
                 return open_native_ext3(image_path, offset, volume_size)
             except Ext3ReadError as exc:
                 raise RecognizedFilesystemError(
-                    f"native ext3/ext4 reader declined the ext profile: {exc}"
+                    f"native ext3/ext4 reader declined the ext profile: {exc}",
+                    exc.code,
                 ) from exc
 
     if _has_exfat_boot_magic(image_path, offset, volume_size):
@@ -551,7 +554,7 @@ def open_image_provider(
             return NativeExfatImage(image_path, offset=offset, volume_size=volume_size)
         except ExfatReadError as exc:
             raise RecognizedFilesystemError(
-                f"native exFAT reader declined the exFAT profile: {exc}"
+                f"native exFAT reader declined the exFAT profile: {exc}", exc.code
             ) from exc
 
     if _has_ntfs_boot_magic(image_path, offset, volume_size):
@@ -563,7 +566,8 @@ def open_image_provider(
             return open_native_ntfs_metadata(image_path, offset, volume_size)
         except Exception as exc:
             raise RecognizedFilesystemError(
-                f"native NTFS reader declined the NTFS profile: {exc}"
+                f"native NTFS reader declined the NTFS profile: {exc}",
+                getattr(exc, "code", None),
             ) from exc
 
     if _has_fat_boot_magic(image_path, offset, volume_size):
@@ -571,7 +575,7 @@ def open_image_provider(
             return NativeFatImage(image_path, offset=offset, volume_size=volume_size)
         except FatReadError as exc:
             raise RecognizedFilesystemError(
-                f"native FAT reader declined the FAT profile: {exc}"
+                f"native FAT reader declined the FAT profile: {exc}", exc.code
             ) from exc
 
     macos_filesystem = _detect_macos_filesystem(image_path, offset, volume_size)
@@ -591,5 +595,5 @@ def open_image_provider(
     try:
         _legacy_tsk_extent(image_path, offset, volume_size)
     except TskError as exc:
-        raise RecognizedFilesystemError(str(exc)) from exc
+        raise RecognizedFilesystemError(str(exc), exc.code) from exc
     return TskImage(image_path, offset=offset, volume_size=volume_size)

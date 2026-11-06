@@ -13,6 +13,7 @@ from mountfile.capabilities import (
     VFS_WRITE_CAPABILITIES,
     get_native_capability_profile,
 )
+from mountfile.safety import RefusalCode
 
 
 class ReadOnlyVFSStatMixin:
@@ -124,10 +125,13 @@ class ReadOnlyVFSStatMixin:
         backend = str(getattr(self, "backend_name", type(self).__name__))
         status = {
             "backend": backend,
+            "interface": "vfs",
             "mode": "read-only",
+            "matrix_version": CAPABILITY_MATRIX_VERSION,
             "read_capabilities": list(self.read_capabilities),
             "write_capabilities": list(self.write_capabilities),
             "write_enabled": False,
+            "write_rejection_code": RefusalCode.OPERATION_NOT_SUPPORTED.value,
             "write_rejection_reason": (
                 "native provider is read-only; use an explicitly selected "
                 "bounded writer profile"
