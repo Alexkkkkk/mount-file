@@ -65,9 +65,13 @@ feature gates профиля; они не заменяют фактическу�
 `write_rejection_code` содержит стабильный refusal code для profile-level отказа
 или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
 `write_rejection_reason` не следует разбирать приложениям.
-В schema v5 status также содержит `write_rejection` и полную карту `operations`;
-клиенты должны использовать их, а не выводить доступность записи из одного
-булевого `writable`.
+В schema v5 status также содержит `write_rejection`, полную карту `operations`
+и `recovery`. Поле `recovery` содержит evidence-bounded значения для
+`rollback`, `process_kill`, `power_loss` и `quarantine`; значение
+`unsupported`/`not_proven` не следует трактовать как best-effort разрешение
+на запись. В частности, native writers не объявляют power-loss atomicity.
+Клиенты должны использовать эти поля, а не выводить доступность записи из
+одного булевого `writable`.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
 другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
 проверенного classic JBD2 существует только явный `open_native_ext3(...,

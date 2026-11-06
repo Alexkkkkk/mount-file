@@ -102,7 +102,9 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 `read_capabilities` и `write_capabilities` сохранены для existing clients, а
 `operations` публикует полный canonical набор с `available`/`refused`, точным
 именем API method и structured refusal code. `constraint_ids` и `gates`
-описывают accepted bounded profile; они не обходят validation выбранного image.
+описывают accepted bounded profile; `recovery` отдельно показывает доказанные
+границы rollback/process-kill/quarantine и всегда явно помечает power-loss как
+unsupported для текущих native writers. Эти поля не обходят validation выбранного image.
 
 `python -m mountfile status IMAGE` открывает выбранный bounded read provider и
 без mutation проверяет отдельный native writer profile с отключённым backup.

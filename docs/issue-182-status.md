@@ -8,6 +8,8 @@
 
 **Последняя заметка:** bounded classic JBD2 serializer и wrap-safe planner остаются отдельным экспериментом: escaping не поддерживается, serializer отказывает на требующем escape payload, а кодировщик и planner не записывают образ или journal superblock. ext3/ext4 writer API остаётся отключённым до ordering/checkpoint/recovery gates. Progress publisher валидирует issue-ветки read-only и публикует один комментарий только с актуального `main`; tracker не сканирует исходники. Native ext2/ext3/ext4 readers теперь используют консервативную allowlist inode flags и отвергают неизвестные, зарезервированные и неподдержанные биты при обращении к inode, не меняя образ. Native exFAT теперь ограничен one-FAT профилем: двух-FAT TexFAT отказывается до чтения metadata или записи, без legacy fallback; геометрический probe не является разрешением доступа. Capability/refusal status, bounded benchmark provenance, FAT12/FAT16 identity и повторное открытие VFS также усилены. Для quality milestone #182 scoped correctness gate (`S110`, `S112`, `F841`, `B006`, `E722`) теперь проходит с 0 findings; полный Ruff modernization backlog и coverage >80% остаются отдельными задачами. Полное завершение issue не заявляется.
 
+**Recovery-contract milestone:** schema v5 capability/status теперь публикует для каждого профиля отдельные поля `rollback`, `process_kill`, `power_loss` и `quarantine`. Для ext2 подтверждены failure rollback, process-crash recovery sidecar и quarantine при recovery failure; для FAT12/16, FAT32 и one-FAT exFAT failure rollback покрыт, но process-kill/quarantine не доказаны. Для всех native writers power-loss остаётся явно `unsupported`; это не объявление полной crash-safety или filesystem parity.
+
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
 | R1 | Native read API для заявленных bounded-профилей FAT, exFAT, ext2/3/4 и NTFS | Частично | Есть readers для принятых profiles; полный feature/layout/API parity не заявлен. |
@@ -55,6 +57,9 @@
 - 2026-11-04: status sheet refreshed so the issue-182 progress validator has a green head on `main` (previous `ci(actions)` push had no status update and left `validate-push` red).
 - 2026-11-04: ветка синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.
 
+- 2026-11-05: независимый ext2 `e2fsck -f -n` oracle теперь также проверяет файл 300 KiB+ через disposable copy, проходящий границу 12 direct + 256 single-indirect блоков при 1 KiB block size. Checker suite: 8 passed, 2 skipped (локально отсутствуют exFAT/NTFS tools); V1 остаётся частично закрытым.
+
+- 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, fail-closed гейты не изменились.
 - 2026-11-05: real-image acceptance покрывает FAT12/16 и FAT32 native writers: `mkfs.fat` создаёт fixtures, `fsck.fat -n` проверяет disposable copies после поддерживаемых create/mkdir/write/rename/delete/read-back операций; FAT12/16 failure injection подтверждает точный rollback и чистый checker verdict. Focused suites: 17 passed, 2 skipped (локально отсутствуют exFAT/NTFS tools). Это закрывает только часть V1; full profile × operation matrix остаётся незавершённой.
 
 - 2026-11-04: ветка fail-closed gaps синхронизирована с `main` (merge): конфликт status sheet разрешён, гейты preflight не изменились.

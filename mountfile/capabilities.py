@@ -117,6 +117,11 @@ class CapabilityProfile:
     def gates(self) -> tuple[CapabilityGate, ...]:
         return _PROFILE_GATES[self.profile_id]
 
+    @property
+    def recovery_contract(self) -> dict[str, str]:
+        """Return evidence-bounded crash and rollback claims for this profile."""
+        return dict(_RECOVERY_CONTRACTS[self.profile_id])
+
     def operation_matrix(
         self, *, write_enabled: bool | None = None
     ) -> dict[str, dict[str, object]]:
@@ -166,6 +171,7 @@ class CapabilityProfile:
         value["constraints"] = list(_PROFILE_CONSTRAINTS[self.profile_id])
         value["constraint_ids"] = list(self.constraint_ids)
         value["gates"] = [gate.to_dict() for gate in self.gates]
+        value["recovery"] = self.recovery_contract
         value["operations"] = self.operation_matrix()
         return value
 
@@ -339,6 +345,56 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "Unsupported metadata layouts are refused.",
             "A single root volume label is validated and exposed through FSInfo.label.",
         ),
+    }
+)
+
+# These are claims about the evidence committed to the repository, not claims
+# that a filesystem format is generally crash-safe. In particular, no native
+# writer in this matrix claims power-loss atomicity.
+_RECOVERY_CONTRACTS = MappingProxyType(
+    {
+        **{
+            profile_id: {
+                "rollback": "not_applicable",
+                "process_kill": "not_applicable",
+                "power_loss": "unsupported",
+                "quarantine": "not_applicable",
+            }
+            for profile_id in (
+                "fat12-native-ro",
+                "fat16-native-ro",
+                "fat32-native-ro",
+                "ext2-native-ro",
+                "ext3-native-ro",
+                "ext4-native-ro",
+                "ntfs-native-ro",
+                "exfat-native-ro",
+            )
+        },
+        "fat12-16-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "not_proven",
+        },
+        "fat32-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "not_proven",
+        },
+        "ext2-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "tested_with_recovery_sidecar",
+            "power_loss": "unsupported",
+            "quarantine": "tested_on_recovery_failure",
+        },
+        "exfat-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "not_proven",
+        },
     }
 )
 
@@ -664,4 +720,5 @@ def get_native_capability_status(
         ),
         "write_rejection": rejection,
         "operations": profile.operation_matrix(write_enabled=effective_write),
+        "recovery": profile.recovery_contract,
     }
