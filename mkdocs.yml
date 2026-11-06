@@ -54,6 +54,7 @@ nav:
   - DFIR: dfir.md
   - Движок записи (MF-WE): write_engine.md
   - API: api.md
+  - MCP: MCP.md
   - Demos: demos.md
   - Поддержка проекта: donations.md
   - Синхронизация кода: sync.md
