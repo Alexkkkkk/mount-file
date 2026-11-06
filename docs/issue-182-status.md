@@ -10,6 +10,8 @@
 
 **Recovery-contract milestone:** schema v5 capability/status теперь публикует для каждого профиля отдельные поля `rollback`, `process_kill`, `power_loss` и `quarantine`. Для ext2 подтверждены failure rollback, process-crash recovery sidecar и quarantine при recovery failure; для FAT12/16, FAT32 и one-FAT exFAT failure rollback покрыт, но process-kill/quarantine не доказаны. Для всех native writers power-loss остаётся явно `unsupported`; это не объявление полной crash-safety или filesystem parity.
 
+**External-checker matrix milestone:** `scripts/checker_matrix.py` и Linux integration artifact `external-checker-matrix-linux` публикуют воспроизводимую матрицу native profile × checker × runner availability × fixture evidence для `e2fsck`, `fsck.fat`, `fsck.exfat`, `ntfsfix` и `pytsk3`. Отсутствующий инструмент даёт `unavailable`, а `parity` всегда остаётся `not_claimed`; `ntfsfix` явно не считается authoritative checker. Полная format parity и cross-platform parity по-прежнему не заявляются.
+
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
 | R1 | Native read API для заявленных bounded-профилей FAT, exFAT, ext2/3/4 и NTFS | Частично | Есть readers для принятых profiles; полный feature/layout/API parity не заявлен. |
