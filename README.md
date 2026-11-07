@@ -393,3 +393,14 @@ for the full safety note.
 ## License
 
 Mount File is distributed under the [MIT License](LICENSE).
+
+## Copilot coding agent: MCP servers
+
+Free, no-API-key MCP servers for the [GitHub Copilot coding agent](https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers)
+are pre-configured in [`.github/copilot-mcp-config.json`](.github/copilot-mcp-config.json)
+(GitHub and Playwright MCP servers are built in and are not duplicated).
+
+Setup: open **Settings → Copilot → MCP servers** in this repository, paste the
+JSON from that file into the "MCP configuration" field and click
+**Save MCP configuration**. No secrets are required — every server below works
+without an API key.
