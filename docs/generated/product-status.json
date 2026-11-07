@@ -1,0 +1,18 @@
+{
+  "blockers": [],
+  "capability_matrix_version": 5,
+  "checker_acceptance_verdict": "not_run",
+  "checker_entry_count": 6,
+  "claims": {
+    "native_ext3_ext4_write": "unsupported",
+    "native_ntfs_write": "unsupported",
+    "parity": "not_claimed",
+    "power_loss": "unsupported"
+  },
+  "profile_count": 12,
+  "recovery_acceptance_verdict": "not_run",
+  "recovery_production_ready": false,
+  "report": "mountfile-product-status-contract",
+  "schema": 1,
+  "verdict": "pass"
+}

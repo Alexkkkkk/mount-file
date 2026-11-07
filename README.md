@@ -37,6 +37,20 @@ devices and does not claim complete filesystem or forensic-tool parity.
 | License | [MIT](LICENSE) |
 | Platforms | Windows 10/11, Linux and macOS |
 
+<!-- MOUNTFILE-AUTO-STATUS:START -->
+## Generated project status
+
+This block is synchronized automatically on every internal pull request. Source revision: `feat/automated-readme-sync`; package version: `1.80.0`.
+
+Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
+
+Canonical status data: `docs/generated/capability-matrix.json`, `checker-matrix.json`, `recovery-matrix.json` and `product-status.json`.
+
+Capability profiles currently declared: capability matrix available.
+
+This generated summary is informational: unsupported, dirty, ambiguous and recovery-required profiles remain fail-closed; benchmark and fixture evidence do not claim full filesystem parity or power-loss safety.
+<!-- MOUNTFILE-AUTO-STATUS:END -->
+
 ## What is supported today
 
 Mount File has two related layers:

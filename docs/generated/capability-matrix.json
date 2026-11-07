@@ -1,0 +1,1641 @@
+{
+  "operations": [
+    "list",
+    "stat",
+    "read-file",
+    "read-range",
+    "extract",
+    "write-file",
+    "mkdir",
+    "delete",
+    "rename"
+  ],
+  "profiles": [
+    {
+      "backend": "native-fat12-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "fat12-geometry"
+      ],
+      "constraints": [
+        "Native read-only profile; validate selected volume bounds."
+      ],
+      "filesystem": "FAT12",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "FAT12 BPB geometry and cluster chains must be valid.",
+          "id": "fat12-geometry",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "FAT12 BPB geometry and cluster chains must be valid."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "fat12-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-fat16-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "fat16-geometry"
+      ],
+      "constraints": [
+        "Native read-only profile; validate selected volume bounds."
+      ],
+      "filesystem": "FAT16",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "FAT16 BPB geometry and cluster chains must be valid.",
+          "id": "fat16-geometry",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "FAT16 BPB geometry and cluster chains must be valid."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "fat16-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-fat32-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "fat32-geometry"
+      ],
+      "constraints": [
+        "Native reader requires a validated FAT32 profile and bounded extent."
+      ],
+      "filesystem": "FAT32",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "FAT32 geometry and selected FAT metadata must be valid.",
+          "id": "fat32-geometry",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "FAT32 geometry and selected FAT metadata must be valid."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "fat32-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-ext2",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "clean-volume",
+        "allowlisted-ext2-features"
+      ],
+      "constraints": [
+        "Clean ext2 only; allowlisted features and bounded linear directories.",
+        "Unsupported inode layouts and indirect levels fail closed."
+      ],
+      "filesystem": "ext2",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Dirty or recovery-required ext volumes are rejected.",
+          "id": "clean-volume",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Dirty or recovery-required ext volumes are rejected."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Only the explicitly validated ext2 feature/layout profile is accepted.",
+          "id": "allowlisted-ext2-features",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "Only the explicitly validated ext2 feature/layout profile is accepted."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "ext2-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-ext3-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "clean-jbd2-state",
+        "validated-jbd2"
+      ],
+      "constraints": [
+        "Read-only ext3; only validated supported JBD2 states are exposed.",
+        "No writes or complete crash-recovery guarantee.",
+        "Explicit replay accepts classic 32-bit revoke records in a validated no-checksum JBD2 overlay."
+      ],
+      "filesystem": "ext3",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Journal recovery or unvalidated JBD2 state is rejected by default.",
+          "id": "clean-jbd2-state",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Journal recovery or unvalidated JBD2 state is rejected by default."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Only the bounded, validated JBD2 record profile is accepted.",
+          "id": "validated-jbd2",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "Only the bounded, validated JBD2 record profile is accepted."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "ext3-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-ext4-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "clean-volume",
+        "allowlisted-ext4-layout"
+      ],
+      "constraints": [
+        "Bounded classic/accepted extent profile only.",
+        "Bounded 64BIT group-descriptor ext4 profiles are supported.",
+        "flex_bg, bigalloc, and metadata_csum profiles fail closed."
+      ],
+      "filesystem": "ext4",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Dirty or recovery-required ext volumes are rejected.",
+          "id": "clean-volume",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Dirty or recovery-required ext volumes are rejected."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Unsupported layouts and unchecked metadata checksums are rejected.",
+          "id": "allowlisted-ext4-layout",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "Unsupported layouts and unchecked metadata checksums are rejected."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "ext4-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-ntfs-metadata-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "clean-logfile-state",
+        "supported-ntfs-stream"
+      ],
+      "constraints": [
+        "Bounded metadata/tree profile only; resident and bounded nonresident ATTRIBUTE_LIST resolution is supported for files and directories, while $MFT bootstrap extension records and unsupported streams are refused.",
+        "No $LogFile replay, sparse, compressed, or encrypted stream support."
+      ],
+      "filesystem": "NTFS",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Dirty or recovery-required $LogFile state is rejected.",
+          "id": "clean-logfile-state",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Dirty or recovery-required $LogFile state is rejected."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Unsupported streams and attributes are rejected instead of guessed.",
+          "id": "supported-ntfs-stream",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "Unsupported streams and attributes are rejected instead of guessed."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "ntfs-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-exfat-ro",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "single-exfat-fat",
+        "clean-exfat-state",
+        "validated-exfat-metadata"
+      ],
+      "constraints": [
+        "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
+        "Dirty or media-failure volumes are refused; ClearToZero is allowed read-only.",
+        "A present root volume-label entry is validated; malformed or duplicate labels are refused."
+      ],
+      "filesystem": "exFAT",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "NumberOfFats must be 1; two-FAT TexFAT is unsupported.",
+          "id": "single-exfat-fat",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "NumberOfFats must be 1; two-FAT TexFAT is unsupported."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Dirty or media-failure volumes are rejected.",
+          "id": "clean-exfat-state",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Dirty or media-failure volumes are rejected."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "The single FAT and mandatory system metadata must validate.",
+          "id": "validated-exfat-metadata",
+          "kind": "feature",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "The single FAT and mandatory system metadata must validate."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "vfs",
+      "mode": "read-only",
+      "operations": {
+        "delete": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "read-file": {
+          "api_operation": "read-file",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read-range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        }
+      },
+      "profile_id": "exfat-native-ro",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read-file",
+        "read-range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_applicable",
+        "quarantine": "not_applicable",
+        "rollback": "not_applicable"
+      },
+      "write_capabilities": [],
+      "write_strategy": ""
+    },
+    {
+      "backend": "native-fat-rw",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "staged-write-identity",
+        "fixed-root-fat-layout"
+      ],
+      "constraints": [
+        "Native bounded FAT12/FAT16 writer with packed and mirrored FAT updates.",
+        "Fixed root directory; unsupported special or sparse cases are refused."
+      ],
+      "filesystem": "FAT12",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Mutation rechecks source identity and uses staged read-back/rollback.",
+          "id": "staged-write-identity",
+          "kind": "image-state",
+          "refusal": {
+            "category": "concurrent_change",
+            "code": "concurrent_change",
+            "message": "Mutation rechecks source identity and uses staged read-back/rollback."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "FAT12/FAT16 writes require validated packed FAT and fixed-root geometry.",
+          "id": "fixed-root-fat-layout",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "FAT12/FAT16 writes require validated packed FAT and fixed-root geometry."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "universal-fs-rw",
+      "mode": "read-write",
+      "operations": {
+        "delete": {
+          "api_operation": "delete",
+          "refusal": null,
+          "state": "available"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": "mkdir",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-file": {
+          "api_operation": "read",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read_range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": "rename",
+          "refusal": null,
+          "state": "available"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": "write_file",
+          "refusal": null,
+          "state": "available"
+        }
+      },
+      "profile_id": "fat12-16-native-rw",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read",
+        "read_range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_proven",
+        "quarantine": "not_proven",
+        "rollback": "tested_on_failure"
+      },
+      "write_capabilities": [
+        "write_file",
+        "mkdir",
+        "delete",
+        "rename"
+      ],
+      "write_strategy": "native-fat12-16"
+    },
+    {
+      "backend": "native-fat-rw",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "staged-write-identity"
+      ],
+      "constraints": [
+        "Native bounded FAT32 writer; put/replace, mkdir, rename, and delete."
+      ],
+      "filesystem": "FAT32",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Mutation rechecks source identity and uses staged read-back/rollback.",
+          "id": "staged-write-identity",
+          "kind": "image-state",
+          "refusal": {
+            "category": "concurrent_change",
+            "code": "concurrent_change",
+            "message": "Mutation rechecks source identity and uses staged read-back/rollback."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "universal-fs-rw",
+      "mode": "read-write",
+      "operations": {
+        "delete": {
+          "api_operation": "delete",
+          "refusal": null,
+          "state": "available"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": "mkdir",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-file": {
+          "api_operation": "read",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read_range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": "rename",
+          "refusal": null,
+          "state": "available"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": "write_file",
+          "refusal": null,
+          "state": "available"
+        }
+      },
+      "profile_id": "fat32-native-rw",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read",
+        "read_range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_proven",
+        "quarantine": "not_proven",
+        "rollback": "tested_on_failure"
+      },
+      "write_capabilities": [
+        "write_file",
+        "mkdir",
+        "delete",
+        "rename"
+      ],
+      "write_strategy": "native"
+    },
+    {
+      "backend": "native-ext2",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "clean-ext2-write-state",
+        "bounded-ext2-write-layout"
+      ],
+      "constraints": [
+        "Clean ext2 allowlist only; regular files use bounded direct, single-, and double-indirect blocks, up to 64 MiB.",
+        "Sparse and triple-indirect files/directories are refused; directory growth supports bounded direct, single-, and double-indirect blocks."
+      ],
+      "filesystem": "ext2",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Only clean, unjournaled, allowlisted ext2 volumes are writable.",
+          "id": "clean-ext2-write-state",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Only clean, unjournaled, allowlisted ext2 volumes are writable."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Sparse and triple-indirect files are refused; double-indirect regular files are bounded to 64 MiB.",
+          "id": "bounded-ext2-write-layout",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "Sparse and triple-indirect files are refused; double-indirect regular files are bounded to 64 MiB."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "universal-fs-rw",
+      "mode": "read-write",
+      "operations": {
+        "delete": {
+          "api_operation": "delete",
+          "refusal": null,
+          "state": "available"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": "mkdir",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-file": {
+          "api_operation": "read",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read_range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": "rename",
+          "refusal": null,
+          "state": "available"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": "write_file",
+          "refusal": null,
+          "state": "available"
+        }
+      },
+      "profile_id": "ext2-native-rw",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read",
+        "read_range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "tested_with_recovery_sidecar",
+        "quarantine": "tested_on_recovery_failure",
+        "rollback": "tested_on_failure"
+      },
+      "write_capabilities": [
+        "write_file",
+        "mkdir",
+        "delete",
+        "rename"
+      ],
+      "write_strategy": "native-ext2"
+    },
+    {
+      "backend": "native-exfat-rw",
+      "constraint_ids": [
+        "bounded-extent",
+        "valid-metadata",
+        "single-exfat-fat",
+        "clean-exfat-write-state",
+        "validated-exfat-fat-write"
+      ],
+      "constraints": [
+        "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
+        "Requires ActiveFat=0; refuses dirty, media-failure, ClearToZero, and reserved flags.",
+        "Unsupported metadata layouts are refused.",
+        "A single root volume label is validated and exposed through FSInfo.label."
+      ],
+      "filesystem": "exFAT",
+      "gates": [
+        {
+          "detail": "The selected filesystem extent must be explicit and remain in image bounds.",
+          "id": "bounded-extent",
+          "kind": "image-state",
+          "refusal": {
+            "category": "out_of_bounds",
+            "code": "range_out_of_bounds",
+            "message": "The selected filesystem extent must be explicit and remain in image bounds."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Malformed or inconsistent metadata is rejected before the operation.",
+          "id": "valid-metadata",
+          "kind": "image-state",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "Malformed or inconsistent metadata is rejected before the operation."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "NumberOfFats must be 1; two-FAT TexFAT is unsupported.",
+          "id": "single-exfat-fat",
+          "kind": "feature",
+          "refusal": {
+            "category": "unsupported",
+            "code": "unsupported_profile",
+            "message": "NumberOfFats must be 1; two-FAT TexFAT is unsupported."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "Dirty, media-failure, ClearToZero and reserved volume flags are refused.",
+          "id": "clean-exfat-write-state",
+          "kind": "image-state",
+          "refusal": {
+            "category": "dirty_recovery",
+            "code": "dirty_or_recovery_required",
+            "message": "Dirty, media-failure, ClearToZero and reserved volume flags are refused."
+          },
+          "state": "required"
+        },
+        {
+          "detail": "The single FAT and mandatory system metadata must validate before mutation.",
+          "id": "validated-exfat-fat-write",
+          "kind": "feature",
+          "refusal": {
+            "category": "corrupt",
+            "code": "malformed_metadata",
+            "message": "The single FAT and mandatory system metadata must validate before mutation."
+          },
+          "state": "required"
+        }
+      ],
+      "interface": "universal-fs-rw",
+      "mode": "read-write",
+      "operations": {
+        "delete": {
+          "api_operation": "delete",
+          "refusal": null,
+          "state": "available"
+        },
+        "extract": {
+          "api_operation": "extract",
+          "refusal": null,
+          "state": "available"
+        },
+        "list": {
+          "api_operation": "list",
+          "refusal": null,
+          "state": "available"
+        },
+        "mkdir": {
+          "api_operation": "mkdir",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-file": {
+          "api_operation": "read",
+          "refusal": null,
+          "state": "available"
+        },
+        "read-range": {
+          "api_operation": "read_range",
+          "refusal": null,
+          "state": "available"
+        },
+        "rename": {
+          "api_operation": "rename",
+          "refusal": null,
+          "state": "available"
+        },
+        "stat": {
+          "api_operation": "stat",
+          "refusal": null,
+          "state": "available"
+        },
+        "write-file": {
+          "api_operation": "write_file",
+          "refusal": null,
+          "state": "available"
+        }
+      },
+      "profile_id": "exfat-native-rw",
+      "read_capabilities": [
+        "list",
+        "stat",
+        "read",
+        "read_range",
+        "extract"
+      ],
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_proven",
+        "quarantine": "not_proven",
+        "rollback": "tested_on_failure"
+      },
+      "write_capabilities": [
+        "write_file",
+        "mkdir",
+        "delete",
+        "rename"
+      ],
+      "write_strategy": "native-exfat-phase1"
+    }
+  ],
+  "version": 5
+}
