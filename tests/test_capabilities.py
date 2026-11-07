@@ -306,7 +306,11 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
         "api_operation": "write_file",
         "refusal": None,
     }
-    assert status["operations"]["stat"]["state"] == "refused"
+    assert status["operations"]["stat"] == {
+        "state": "available",
+        "api_operation": "stat",
+        "refusal": None,
+    }
     assert status["constraint_ids"]
     assert status["gates"]
     assert status["recovery"] == profile.recovery_contract
