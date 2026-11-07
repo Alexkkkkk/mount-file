@@ -50,6 +50,10 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 `api_operation` для данного интерфейса либо structured `refusal` с code и
 category. `constraint_ids` и `gates` описывают подтверждённые image-state и
 feature gates профиля; они не заменяют фактическую validation конкретного образа.
+Для `UniversalFSRW` canonical `read-range` теперь отображается на
+`read_range(path, offset, length)` с лимитом 1 MiB и fail-closed проверкой границ;
+совместимые backends без прямого range-reader используют уже существующий
+whole-file read только после той же проверки диапазона.
 Внутренний `mountfile.image_source.ImageSource` задаёт read-only positioned
 контракт без метода записи. `FileImageSource` выполняет точные чтения без общего
 курсорного состояния, а `BoundedImageSource` отказывает при любом чтении за

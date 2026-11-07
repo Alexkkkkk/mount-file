@@ -19,6 +19,7 @@ from mountfile.capabilities import (
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.safety import RefusalError
 from mountfile.universal_fs_rw import FSInfo, UniversalFSRW
 
 
@@ -128,6 +129,28 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         "api_operation": "write_file",
         "refusal": None,
     }
+
+
+def test_rw_facade_exposes_bounded_read_range_without_mutating_backend():
+    class Backend:
+        _reader = None
+
+        @staticmethod
+        def stat(_path):
+            return SimpleNamespace(size=6, is_dir=False)
+
+        @staticmethod
+        def read(_path):
+            return b"abcdef"
+
+    facade = UniversalFSRW.__new__(UniversalFSRW)
+    facade.backend = Backend()
+    facade._closed = False
+
+    assert facade.read_range("/file", 1, 3) == b"bcd"
+    assert facade.read_range("/file", 6, 3) == b""
+    with pytest.raises(RefusalError):
+        facade.read_range("/file", 0, (1 << 20) + 1)
 
 
 def test_v5_matrix_publishes_evidence_bounded_recovery_contracts():

@@ -66,6 +66,7 @@ except ImportError:
     pytsk3 = None
 
 log = logging.getLogger("mountfile.universal_fs_rw")
+RW_READ_RANGE_LIMIT = 1 << 20
 
 
 @contextlib.contextmanager
@@ -3460,6 +3461,37 @@ class UniversalFSRW:
     def read(self, path: str) -> bytes:
         self._require_open()
         return self.backend.read(path)
+
+    def read_range(
+        self, path: str, offset: int = 0, length: int = RW_READ_RANGE_LIMIT
+    ) -> bytes:
+        """Read a bounded byte range through the RW facade.
+
+        Native readers may provide a direct range method; compatibility backends
+        fall back to their existing whole-file read and slice the validated
+        result.  The public contract is still bounded and never mutates an
+        image.
+        """
+        self._require_open()
+        entry = self.backend.stat(path)
+        if entry is None:
+            raise FileNotFoundError(path)
+        if entry.is_dir:
+            raise IsADirectoryError(path)
+        size = int(entry.size)
+        checked_range(offset, 0, upper=size, context="RW file read offset")
+        checked_range(
+            0, length, upper=RW_READ_RANGE_LIMIT, context="RW file read length"
+        )
+        length = min(length, size - offset)
+        _, end = checked_range(offset, length, upper=size, context="RW file read range")
+        if offset >= size:
+            return b""
+        reader = getattr(self.backend, "_reader", None)
+        direct = getattr(reader, "read_file_range", None)
+        if callable(direct):
+            return direct(path, offset, end - offset)
+        return self.backend.read(path)[offset:end]
 
     def stat(self, path: str) -> FSEntry | None:
         self._require_open()
