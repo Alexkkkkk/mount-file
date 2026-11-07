@@ -33,6 +33,13 @@ def validate_report(report: dict) -> dict[str, object]:
         or not 0 < image["size_bytes"] <= MAX_IMAGE_BYTES
     ):
         blockers.append("image.size_bytes")
+    if (
+        isinstance(extent.get("offset_bytes"), int)
+        and isinstance(extent.get("volume_size_bytes"), int)
+        and isinstance(image.get("size_bytes"), int)
+        and extent["offset_bytes"] + extent["volume_size_bytes"] > image["size_bytes"]
+    ):
+        blockers.append("extent.outside_image")
     repeats = workload.get("repeats")
     warmups = workload.get("warmups")
     if not isinstance(repeats, int) or not 1 <= repeats <= MAX_REPEATS:

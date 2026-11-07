@@ -39,6 +39,14 @@ def test_valid_benchmark_artifact_passes():
     assert result["write_operations"] is False
 
 
+def test_benchmark_artifact_rejects_extent_outside_image():
+    report = _report()
+    report["extent"]["offset_bytes"] = 1
+    result = validate_report(report)
+    assert result["verdict"] == "blocked"
+    assert "extent.outside_image" in result["blockers"]
+
+
 def test_benchmark_artifact_rejects_dirty_or_overclaiming_report():
     report = _report()
     report["environment"]["runtime_versions"]["source_worktree_dirty"] = True

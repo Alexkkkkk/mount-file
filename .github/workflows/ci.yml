@@ -149,6 +149,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Emit external-checker inventory for this platform
+        if: always()
+        run: python scripts/checker_matrix.py --json-out checker-matrix.json
+
+      - name: Upload platform checker inventory
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: external-checker-matrix-${{ matrix.os }}-py${{ matrix.python }}
+          path: checker-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify installable AI surface
         shell: bash
         run: |

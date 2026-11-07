@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from scripts.recovery_acceptance import FIXTURE_GROUPS, _fixture_nodes, _junit_results
+from scripts.recovery_acceptance import (
+    CELL_FIXTURES,
+    FIXTURE_GROUPS,
+    _fixture_nodes,
+    _junit_results,
+)
 
 
 def test_all_recovery_fixture_declarations_resolve():
@@ -10,6 +15,17 @@ def test_all_recovery_fixture_declarations_resolve():
     declared = [name for names in FIXTURE_GROUPS.values() for name in names]
     assert all(name in nodes for name in declared)
     assert all("::" in nodes[name] for name in declared)
+
+
+def test_typed_recovery_cells_cover_writers_and_keep_power_loss_unsupported():
+    assert set(FIXTURE_GROUPS) == {"fat12-16", "fat32", "ext2", "exfat"}
+    nodes = _fixture_nodes(Path("tests"))
+    for cells in CELL_FIXTURES.values():
+        assert all(name in nodes for names in cells.values() for name in names)
+    assert "hash_preservation" in CELL_FIXTURES["fat12-16"]
+    assert "quarantine" in CELL_FIXTURES["fat32"]
+    assert "durable_recovery" in CELL_FIXTURES["ext2"]
+    assert all("independent_checker" in cells for cells in CELL_FIXTURES.values())
 
 
 def test_junit_results_preserve_recovery_statuses(tmp_path):

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from mountfile import cli
 from mountfile.capabilities import get_native_capability_matrix
+from mountfile.universal_fs_rw import UniversalFSRW
 
 
 class _FakeWriter:
@@ -188,3 +192,44 @@ def test_capabilities_command_prints_canonical_matrix(capsys):
 
     assert result == cli.OK
     assert json.loads(capsys.readouterr().out) == get_native_capability_matrix()
+
+
+@pytest.mark.parametrize("operation", ["put", "mkdir", "rename", "delete"])
+def test_ntfs_mutations_refuse_before_writer_and_preserve_image_hash(
+    tmp_path, monkeypatch, operation
+):
+    image = tmp_path / "ntfs.img"
+    image.write_bytes(b"synthetic NTFS volume bytes".ljust(8192, b"\x00"))
+    before = hashlib.sha256(image.read_bytes()).hexdigest()
+
+    monkeypatch.setattr("mountfile.firmware.detect_volumes", lambda _path: [])
+    monkeypatch.setattr(
+        "mountfile.firmware.probe_filesystem", lambda _path, _off: "NTFS"
+    )
+    monkeypatch.setattr(
+        "mountfile.universal_fs_rw.NtfsRW",
+        lambda *_args, **_kwargs: pytest.fail("NTFS writer must not be constructed"),
+    )
+
+    def request_mutation():
+        writer = UniversalFSRW(image, auto_backup=False)
+        try:
+            if operation == "put":
+                writer.write_file("/payload", b"data")
+            elif operation == "mkdir":
+                writer.mkdir("/new")
+            elif operation == "rename":
+                writer.rename("/old", "/new")
+            else:
+                writer.delete("/old")
+        finally:
+            writer.close()
+
+    with pytest.raises(
+        RuntimeError,
+        match="native NTFS writes are unsupported and not implemented",
+    ):
+        request_mutation()
+
+    after = hashlib.sha256(image.read_bytes()).hexdigest()
+    assert after == before
