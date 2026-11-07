@@ -27,7 +27,7 @@ VFS_WRITE_CAPABILITIES: tuple[str, ...] = ()
 
 # Operations surfaced by UniversalFSRW.  These are also retained as its
 # interface-specific API vocabulary.
-RW_READ_CAPABILITIES = ("list", "stat", "read", "extract")
+RW_READ_CAPABILITIES = ("list", "stat", "read", "read_range", "extract")
 RW_WRITE_CAPABILITIES = ("write_file", "mkdir", "delete", "rename")
 
 # Canonical, transport-neutral operation identifiers.  Each profile publishes
@@ -61,6 +61,7 @@ _INTERFACE_OPERATION_ALIASES = MappingProxyType(
                 "list": "list",
                 "stat": "stat",
                 "read-file": "read",
+                "read-range": "read_range",
                 "extract": "extract",
                 "write-file": "write_file",
                 "mkdir": "mkdir",
