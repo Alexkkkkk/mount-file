@@ -25,6 +25,12 @@ from collections.abc import Callable
 from importlib import metadata
 from pathlib import Path, PurePosixPath
 
+from mountfile.capabilities import (
+    CAPABILITY_MATRIX_VERSION,
+    VFS_READ_CAPABILITIES,
+    get_native_capability_profile,
+    get_native_capability_status,
+)
 from mountfile.extract import extract_file
 from mountfile.vfs import TskError, TskImage, open_image_provider
 
@@ -253,8 +259,30 @@ def _summarize_backend(
                 sum(run["operation_seconds"][operation]) for run in runs
             ),
         }
+    backend = str(provider_info.get("backend", ""))
+    profile = get_native_capability_profile(backend, "vfs")
+    if profile is not None:
+        capability_status = get_native_capability_status(
+            profile, backend=backend, write_enabled=False
+        )
+    else:
+        capability_status = {
+            "backend": backend,
+            "interface": "vfs",
+            "profile_id": None,
+            "matrix_version": CAPABILITY_MATRIX_VERSION,
+            "mode": "read-only",
+            "read_capabilities": list(VFS_READ_CAPABILITIES),
+            "write_capabilities": [],
+            "write_enabled": False,
+            "evidence": "runtime_backend_observation",
+            "parity": "not_claimed",
+        }
+    capability_status["evidence"] = "benchmark_observed_only"
+    capability_status["parity"] = "not_claimed"
     return {
         **provider_info,
+        "capability_status": capability_status,
         "open_seconds": _summarize(open_samples),
         "median_iteration_seconds": statistics.median(
             run["elapsed_seconds"] for run in runs
@@ -414,6 +442,17 @@ def build_report(
             "note": (
                 "The harness does not flush or control the operating-system page "
                 "cache; paired backends alternate order to reduce systematic order bias."
+            ),
+        },
+        "capability_contract": {
+            "matrix_version": CAPABILITY_MATRIX_VERSION,
+            "interface": "vfs",
+            "tested_operations": ["list", "stat", "read-range", "extract"],
+            "evidence": "benchmark_observed_only",
+            "parity": "not_claimed",
+            "note": (
+                "Benchmark timings and content equivalence do not prove full "
+                "filesystem parity or checker-backed production support."
             ),
         },
         "backends": {},

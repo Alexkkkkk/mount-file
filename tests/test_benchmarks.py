@@ -105,6 +105,17 @@ def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     )
 
     assert report["schema_version"] == 2
+    assert report["capability_contract"] == {
+        "matrix_version": 5,
+        "interface": "vfs",
+        "tested_operations": ["list", "stat", "read-range", "extract"],
+        "evidence": "benchmark_observed_only",
+        "parity": "not_claimed",
+        "note": (
+            "Benchmark timings and content equivalence do not prove full "
+            "filesystem parity or checker-backed production support."
+        ),
+    }
     assert set(report["environment"]["runtime_versions"]) == {
         "pytsk3",
         "source_revision",
@@ -115,6 +126,10 @@ def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     assert report["cache_state"]["managed_by_harness"] is False
     result = report["backends"]["native"]
     assert result["backend"] == "native-test-ro"
+    assert result["capability_status"]["matrix_version"] == 5
+    assert result["capability_status"]["profile_id"] is None
+    assert result["capability_status"]["evidence"] == "benchmark_observed_only"
+    assert result["capability_status"]["parity"] == "not_claimed"
     assert result["fs_type"] == "fixture"
     assert result["block_size"] == 4096
     assert len(result["iterations"]) == 3
