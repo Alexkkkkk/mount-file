@@ -34,6 +34,18 @@
     `capability_status`. Benchmark не превращает измерение скорости или совпадение
     содержимого в доказательство полной filesystem parity.
 
+Сохранённый отчёт можно проверить перед публикацией:
+
+```bash
+python scripts/benchmark_artifact.py /tmp/vfs-bench/bench_report.json \
+  --json-out /tmp/vfs-bench/benchmark-validation.json
+```
+
+Validator требует schema v2, bounded image/workload, полный набор операций,
+ровно заявленное число повторов, clean source provenance и консервативные
+`evidence=benchmark_observed_only`/`parity=not_claimed`. Это проверка качества
+артефакта, а не заявление filesystem parity; `write_operations` всегда false.
+
 ## 2. Фикстура: синтетический ext2-образ
 
 Бинарные образы в репозиторий не коммитятся. Детерминированный образ
