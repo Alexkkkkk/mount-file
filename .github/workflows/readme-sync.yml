@@ -50,6 +50,8 @@ jobs:
         run: python scripts/generate_readme.py --revision "${GITHUB_REF_NAME}"
 
       - name: Commit README when content changed
+        env:
+          HEAD_REF_PUSH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           if git diff --quiet -- README.md; then
@@ -61,7 +63,7 @@ jobs:
           git add README.md
           git commit -m 'docs: synchronize generated README status'
           if [ "${{ github.event_name }}" = 'pull_request_target' ]; then
-            git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+            git push origin "HEAD:$HEAD_REF_PUSH"
           else
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
