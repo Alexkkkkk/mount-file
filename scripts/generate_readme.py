@@ -48,6 +48,9 @@ def render(root: Path, revision: str) -> str:
             "",
             f"Validated automation: {features_text}.",
             "",
+            "Canonical status data: `docs/generated/capability-matrix.json`, "
+            "`checker-matrix.json`, `recovery-matrix.json` and `product-status.json`.",
+            "",
             f"Capability profiles currently declared: {rows_text}.",
             "",
             "This generated summary is informational: unsupported, dirty, ambiguous "

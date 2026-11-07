@@ -40,9 +40,11 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is synchronized automatically on every internal pull request. Source revision: `main`; package version: `1.80.0`.
+This block is synchronized automatically on every internal pull request. Source revision: `feat/automated-readme-sync`; package version: `1.80.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
+
+Canonical status data: `docs/generated/capability-matrix.json`, `checker-matrix.json`, `recovery-matrix.json` and `product-status.json`.
 
 Capability profiles currently declared: capability matrix available.
 
