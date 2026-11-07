@@ -1,24 +1,30 @@
-name: Sync repository status data
+name: Synchronize repository status
 
 on:
   push:
     branches: [main]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
-  group: repository-status-sync-${{ github.ref }}
+  group: repository-status-sync-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   sync:
+    # Fork PRs still execute the trusted generator for validation, but cannot
+    # receive a write-back commit. No PR code is executed in this workflow.
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout trusted workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -26,12 +32,44 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Generate canonical status data
+      - name: Generate status from PR tree as data
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
+          set -euo pipefail
+          git fetch --no-tags origin "pull/$PR_NUMBER/head"
+          rm -rf /tmp/mountfile-pr /tmp/mountfile-status
+          mkdir -p /tmp/mountfile-pr /tmp/mountfile-status
+          git archive FETCH_HEAD | tar -x -C /tmp/mountfile-pr
+          # These are trusted scripts from the default branch. The PR checkout
+          # is passed only as a data root; no PR Python code is executed.
+          python scripts/sync_repository_status.py \
+            --repo-root /tmp/mountfile-pr \
+            --output-dir /tmp/mountfile-status
+          python scripts/generate_readme.py \
+            --repo-root /tmp/mountfile-pr \
+            --output /tmp/README.generated \
+            --revision "$HEAD_REF"
+          git checkout --detach FETCH_HEAD
+          cp /tmp/README.generated README.md
+          mkdir -p docs/generated
+          cp /tmp/mountfile-status/*.json docs/generated/
+
+      - name: Generate status on trusted default branch
+        if: github.event_name != 'pull_request_target'
+        run: |
+          set -euo pipefail
           python scripts/sync_repository_status.py --output-dir docs/generated
           python scripts/generate_readme.py --revision "${GITHUB_REF_NAME}"
 
-      - name: Commit synchronized data
+      - name: Commit synchronized data when write-back is safe
+        if: >-
+          github.event_name != 'pull_request_target' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_REF_PUSH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           if git diff --quiet -- README.md docs/generated; then
@@ -42,4 +80,14 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add README.md docs/generated
           git commit -m 'docs: synchronize repository status data [skip ci]'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = 'pull_request_target' ]; then
+            git push origin "HEAD:$HEAD_REF_PUSH"
+          else
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Report fork PR synchronization limitation
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: echo 'Fork PR data was validated; write-back is intentionally disabled.'

@@ -14,6 +14,7 @@
 | CI Guardian | workflow completion | deduplicated incident issue, recovery close | issues only | нет |
 | mfsync | daily/manual/PR | secret scan, version parity, sync status, optional explicit sync | только manual write mode | нет |
 | External mirror | weekly/tag/manual on main | SSH push of branch and tag refs to a configured mirror | только внешний Git remote | нет |
+| Repository status sync | push main/PR/manual | README + capability/checker/recovery/product-status artifacts | same-repository PR/main only | нет |
 | Release | successful tested main | version PR/tag/build/release assets | PR/tag | только ruleset |
 
 ## Автоисправления
@@ -45,6 +46,12 @@ GitHub Actions не видит несохранённые файлы на ком
 - scheduled GitHub `mfsync` проверяет состояние, версии и секреты;
 - запись в remote через GitHub Actions возможна только явным `workflow_dispatch` после успешного Verify;
 - при divergence выполняется PR, а не force-push.
+
+`status-sync.yml` — единый workflow для README и всех canonical status artifacts. Он запускается на
+каждом push в `main`, на открытие/обновление PR и вручную. Для PR workflow checkout-ит trusted default
+branch, передаёт PR tree только как данные генераторам и не выполняет Python-код из PR; fork PR
+проверяется без write-back. Для branch того же репозитория generated README и JSON возвращаются в branch
+одним commit. Это заменяет отдельный README sync и не допускает расхождения между текстовым и машинным статусом.
 
 Это предотвращает ложное обещание «GitHub сам увидит любой файл на компьютере» и защищает forensic-данные от случайного попадания в Git.
 

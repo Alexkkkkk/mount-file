@@ -175,6 +175,18 @@ def test_quality_is_a_lint_gate_and_ci_owns_test_execution():
     assert "needs.test.result" not in text
 
 
+def test_status_sync_is_the_single_readme_and_artifact_writer():
+    text = workflow("status-sync.yml")
+    assert "pull_request_target:" in text
+    assert "python scripts/sync_repository_status.py" in text
+    assert "python scripts/generate_readme.py" in text
+    assert "--repo-root /tmp/mountfile-pr" in text
+    assert "no PR Python code is executed" in text
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in text
+    assert "cp /tmp/mountfile-status/*.json docs/generated/" in text
+    assert not (ROOT / ".github" / "workflows" / "readme-sync.yml").exists()
+
+
 def test_release_assets_and_production_deploy_have_one_owner_each():
     deploy = workflow("deploy.yml")
     release = workflow("release.yml")
