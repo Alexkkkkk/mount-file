@@ -7,12 +7,15 @@ routing remain in :mod:`mountfile.vfs`.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mountfile.capabilities import (
     VFS_READ_CAPABILITIES,
     VFS_WRITE_CAPABILITIES,
     get_native_capability_profile,
     get_native_capability_status,
 )
+from mountfile.extract import ExtractionLimits, extract_file, extract_path
 from mountfile.safety import RefusalCode, RefusalError
 
 
@@ -92,6 +95,23 @@ class ReadOnlyVFSStatMixin:
         result["size"] = int(entry.get("size", 0))
         result.setdefault("date", "")
         return result
+
+    def extract(
+        self,
+        path: str,
+        dest: str | Path,
+        *,
+        limits: ExtractionLimits | None = None,
+    ) -> Path:
+        """Extract a bounded file or directory through the shared safe writer."""
+        source = "/" + str(path or "/").strip().strip("/")
+        metadata = self.stat(source) if source != "/" else None
+        is_dir = source == "/" or bool(metadata and metadata["is_dir"])
+        if is_dir:
+            extract_path(self, source, dest, limits=limits)
+        else:
+            extract_file(self, source, dest, limits=limits)
+        return Path(dest)
 
     @property
     def read_capabilities(self) -> tuple[str, ...]:

@@ -20,7 +20,11 @@ from mountfile.capabilities import (
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
-from mountfile.safety import RefusalError
+from mountfile.ext2_reader import NativeExt2Image
+from mountfile.ext3_reader import NativeExt3Image, NativeExt4Image
+from mountfile.fat_reader import NativeFatImage
+from mountfile.ntfs_reader import NativeNtfsMetadataImage
+from mountfile.safety import RefusalCode, RefusalError, RefusalRuntimeError
 from mountfile.universal_fs_rw import FSInfo, UniversalFSRW
 
 
@@ -171,6 +175,75 @@ def test_rw_facade_exposes_bounded_read_range_without_mutating_backend():
     assert facade.read_range("/file", 6, 3) == b""
     with pytest.raises(RefusalError):
         facade.read_range("/file", 0, (1 << 20) + 1)
+
+
+def test_advertised_operations_have_callable_interface_endpoints():
+    # Matrix api_operation values are interface vocabulary; compare each value
+    # to the actual public endpoint, not just to another matrix projection.
+    interface_types = {
+        "vfs": (
+            NativeFatImage,
+            NativeExt2Image,
+            NativeExt3Image,
+            NativeExt4Image,
+            NativeExfatImage,
+            NativeNtfsMetadataImage,
+        ),
+        "universal-fs-rw": UniversalFSRW,
+    }
+    endpoint_names = {
+        "vfs": {
+            "list": "list_dir",
+            "stat": "stat",
+            "read-file": "read_file",
+            "read-range": "read_file_range",
+            "extract": "extract",
+        },
+        "universal-fs-rw": {
+            "list": "list",
+            "stat": "stat",
+            "read-file": "read",
+            "read-range": "read_range",
+            "extract": "extract",
+            "write-file": "write_file",
+            "mkdir": "mkdir",
+            "delete": "delete",
+            "rename": "rename",
+        },
+    }
+    for profile in NATIVE_CAPABILITY_MATRIX:
+        api = interface_types[profile.interface]
+        names = endpoint_names[profile.interface]
+        implementations = api if isinstance(api, tuple) else (api,)
+        for operation, cell in profile.operation_matrix().items():
+            if cell["state"] != "available":
+                continue
+            assert all(
+                callable(getattr(provider, names[operation], None))
+                for provider in implementations
+            ), (profile.profile_id, operation, cell["api_operation"])
+
+
+@pytest.mark.parametrize("operation", ["write_file", "mkdir", "delete", "rename"])
+def test_read_only_profile_mutations_share_typed_refusal(operation):
+    class ReadOnlyBackend:
+        @staticmethod
+        def info():
+            return FSInfo(
+                fs_type="ext3",
+                offset=0,
+                backend="native-ext3-ro",
+                writable=False,
+                write_strategy="read-only",
+            )
+
+    facade = UniversalFSRW.__new__(UniversalFSRW)
+    facade.backend = ReadOnlyBackend()
+    facade._closed = False
+    with pytest.raises(RefusalRuntimeError) as caught:
+        facade._require_operation(operation)
+    assert caught.value.code is RefusalCode.OPERATION_NOT_SUPPORTED
+    assert caught.value.to_dict()["code"] == "operation_not_supported"
 
 
 def test_v5_matrix_publishes_evidence_bounded_recovery_contracts():
