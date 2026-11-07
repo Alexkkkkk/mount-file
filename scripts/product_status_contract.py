@@ -26,6 +26,7 @@ def _execution_artifact_blockers(
     expected_entries: set[str],
     entry_key: str,
     evidence: str,
+    report_evidence: str | None = None,
 ) -> list[str]:
     if not isinstance(artifact, dict):
         return [f"{report_name} execution artifact is not an object"]
@@ -38,6 +39,8 @@ def _execution_artifact_blockers(
         blockers.append(f"{report_name} execution artifact has a nonzero pytest exit")
     if artifact.get("blockers") != []:
         blockers.append(f"{report_name} execution artifact has blockers")
+    if report_evidence is not None and artifact.get("evidence") != report_evidence:
+        blockers.append(f"{report_name} execution artifact lacks executed evidence")
     entries = artifact.get("entries")
     if not isinstance(entries, list):
         blockers.append(f"{report_name} execution artifact has no entries list")
@@ -102,7 +105,8 @@ def build_report(repo_root: Path | None = None) -> dict[str, object]:
                 report_name="mountfile-checker-execution-acceptance",
                 expected_entries={entry["profile"] for entry in checker["entries"]},
                 entry_key="profile",
-                evidence="executed_fixture_results",
+                evidence="executed_fixture_required",
+                report_evidence="executed_fixture_results",
             )
         )
     if recovery_acceptance is not None:
@@ -110,7 +114,7 @@ def build_report(repo_root: Path | None = None) -> dict[str, object]:
             _execution_artifact_blockers(
                 recovery_acceptance,
                 report_name="mountfile-recovery-execution-acceptance",
-                expected_entries={"ext2", "fat32", "exfat"},
+                expected_entries={"fat12-16", "ext2", "fat32", "exfat"},
                 entry_key="profile_group",
                 evidence="executed_recovery_fixture_results",
             )

@@ -134,12 +134,34 @@ def test_product_status_contract_accepts_only_complete_executed_coverage(
                 "verdict": "pass",
                 "pytest_exit_code": 0,
                 "blockers": [],
+                "evidence": "executed_fixture_results",
                 "entries": [
                     {
                         "profile": "ext2",
                         "fixture_status": "passed",
-                        "evidence": "executed_fixture_results",
+                        "evidence": "executed_fixture_required",
                     }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    recovery_groups = ["fat12-16", "ext2", "fat32", "exfat"]
+    (tmp_path / "recovery-acceptance.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "report": "mountfile-recovery-execution-acceptance",
+                "verdict": "pass",
+                "pytest_exit_code": 0,
+                "blockers": [],
+                "entries": [
+                    {
+                        "profile_group": group,
+                        "fixture_status": "passed",
+                        "evidence": "executed_recovery_fixture_results",
+                    }
+                    for group in recovery_groups
                 ],
             }
         ),
@@ -149,3 +171,4 @@ def test_product_status_contract_accepts_only_complete_executed_coverage(
     report = build_report(tmp_path)
     assert report["verdict"] == "pass"
     assert report["checker_acceptance_verdict"] == "pass"
+    assert report["recovery_acceptance_verdict"] == "pass"
