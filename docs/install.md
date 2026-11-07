@@ -86,7 +86,7 @@ python -m mountfile --help
 |---|---|---|
 | PyQt6 (в `requirements.txt` `>=6.11`) | основной для Win 10/11, Linux, macOS | GUI `main.py` |
 | `pytsk3` | optional extra `legacy-tsk`; явно включаемый fallback только для форматов, не распознанных native routing | сборка/колёса зависят от Python и платформы; recognized unsupported/dirty profiles fail closed |
-| `debugfs` из e2fsprogs | явный library-level compatibility backend для ext2 вне native allowlist и ext3/4; не нужен для supported clean ext2 и не включается GUI автоматически | `debugfs.exe` в `PATH` либо WSL/e2fsprogs; устанавливается через меню компонентов или `install-components.bat` |
+| `debugfs` из e2fsprogs | явный library-level compatibility backend только для unjournaled ext2 вне native allowlist; journaled ext3/ext4 всегда read-only; не нужен для supported clean ext2 и не включается GUI автоматически | `debugfs.exe` в `PATH` либо WSL/e2fsprogs; устанавливается через меню компонентов или `install-components.bat` |
 | ImDisk Virtual Disk Driver | нужен для записи в NTFS/exFAT/FAT12/16-образы на Windows | устанавливается через меню компонентов; запуск MountFile от имени администратора; [сайт автора](https://ltr-data.se/opencode.html/) |
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |
 | `dosfstools`, `mtools` | только разработка | создание синтетических образов через `make sample` |
@@ -115,11 +115,12 @@ sudo apt-get install -y build-essential python3-dev pkg-config \
   libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
 ```
 
-Для явно выбранного library-level compatibility режима ext2/3/4 на Windows можно
+Для явно выбранного library-level compatibility режима unjournaled ext2 на Windows можно
 использовать WSL: установите дистрибутив Linux, откройте его терминал и выполните
 `sudo apt install e2fsprogs`. Этот режим находит `debugfs` в WSL и изменяет
 временную копию выбранного extent с последующей проверкой и записью в образ;
-обычный GUI и `WriteEngine` его автоматически не выбирают. Для NTFS/exFAT/FAT12/16
+journaled ext3/ext4 отклоняются, потому что этот путь обходит журнал. Обычный GUI
+и `WriteEngine` legacy режим автоматически не выбирают. Для NTFS/exFAT/FAT12/16
 используется ImDisk; это отдельный путь и он требует запуска от имени администратора.
 
 В репозитории сохранены `requirements-win7.txt` и отдельные legacy build

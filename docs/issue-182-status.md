@@ -60,6 +60,8 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 - 2026-11-05: NTFS dirty `$Volume` и recovery-required `$LogFile` получают стабильный `DIRTY_OR_RECOVERY_REQUIRED` code; добавлены regression assertions. API, capability registry и audit docs уточняют bounded resident/nonresident `$ATTRIBUTE_LIST` support; это follow-up hardening, не закрытие полной profile × operation/crash-safety acceptance matrix.
 
 - 2026-11-05: exFAT rename выполняет полный allocation-owner scan перед изменением stage и отказывается от cross-linked file/directory clusters без изменения исходного образа. Writer также очищает stage после partial-write или interrupted-copy exception, включая `KeyboardInterrupt`; regression проверяет byte-identical source и отсутствие временных файлов. Это не гарантия cleanup/recovery после process kill или power loss.
+- 2026-11-05: journaled ext3/ext4 write отклоняется в обоих явных legacy `debugfs -w` entry points (`Ext234ImageWriter` и `Ext234RW`) до debugfs discovery/mutation; отказ имеет `UNSUPPORTED_PROFILE`, тесты подтверждают отсутствие мутации. Legacy debugfs success/failure regressions выполняются только на unjournaled ext2. Native ext3/ext4 writers/recovery не реализованы, поэтому поддержка остаётся read-only.
+- 2026-11-07: после rebase functional audit tests для legacy debugfs перенесены с ext4 на unjournaled ext2; полный локальный suite завершился: 2292 passed, 98 skipped из-за недоступных optional checkers/tools и платформенных зависимостей.
 
 - 2026-11-04: PR #349 native VFS tree synchronized with main and local suite verified (1812 passed).
 <!-- issue-182 validation checkpoint -->

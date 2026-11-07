@@ -7,7 +7,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
   1. NativeFat32Writer  — bounded native FAT32 writer (FAT, LFN, каталоги)
   2. NativeExt2Writer   — ограниченный clean ext2 profile, in-process Python
-  3. ExtDebugfsWriter   — явный legacy ext2/3/4 compatibility backend через `debugfs -w`
+  3. ExtDebugfsWriter   — явный legacy unjournaled ext2 compatibility backend через `debugfs -w`
   4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
   5. LoopMountWriter    — Linux loop-mount или Windows ImDisk для NTFS/FAT/exFAT
   6. RebuildWriter      — fallback: unpack → mkfs → repack
@@ -2032,13 +2032,15 @@ NativeFat1216Writer = Fat1216RW
 
 
 # =============================================================================
-# 5. EXT2/3/4 (native ext2 phase 1; explicit debugfs compatibility)
+# 5. EXT2/3/4 (native ext2; journaled ext3/ext4 read-only; explicit ext2 compatibility)
 # =============================================================================
 class Ext234RW(RWBackend):
     """
     ext2 uses MountFile's bounded in-process writer when its clean feature
     profile is supported. The e2fsprogs debugfs compatibility path is disabled
-    unless the library caller explicitly sets ``allow_legacy_debugfs=True``.
+    unless the library caller explicitly sets ``allow_legacy_debugfs=True``; it
+    remains unavailable for journaled ext3/ext4 profiles because debugfs bypasses
+    their journal ordering and recovery protocol.
     """
 
     def __init__(
@@ -2076,6 +2078,12 @@ class Ext234RW(RWBackend):
                     "native ext2 profile rejected this volume; legacy debugfs "
                     "compatibility requires allow_legacy_debugfs=True: %s"
                     % self._native_rejection
+                )
+            if self.is_ext3 or self.is_ext4:
+                raise RefusalRuntimeError(
+                    "legacy debugfs writes are refused for journaled ext3/ext4; "
+                    "native journal ordering and recovery are not implemented",
+                    RefusalCode.UNSUPPORTED_PROFILE,
                 )
             self._require_debugfs()
         else:

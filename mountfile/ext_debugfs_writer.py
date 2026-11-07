@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
-"""Transactional, opt-in ext2/3/4 file writer backed by e2fsprogs debugfs.
+"""Transactional, opt-in compatibility writer for unsupported unjournaled ext2.
 
 The writer never asks debugfs to mutate the source image directly. It copies the
 filesystem extent to a temporary file, applies the operation there, verifies a
 file write by reading it back, then commits the extent to the image with a
 rollback snapshot. The UI must still create a persistent image backup before
-calling it.
+calling it. Journaled ext3/ext4 profiles are refused because debugfs bypasses
+their journal ordering and recovery protocol.
 """
 
 import hashlib
@@ -17,9 +18,15 @@ import sys
 import tempfile
 import threading
 
+from .safety import RefusalCode
+
 
 class ExtWriteError(RuntimeError):
     """An ext write was rejected or failed before verified completion."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = RefusalCode(code) if code is not None else None
 
 
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.+@=-]+$")
@@ -126,8 +133,9 @@ class Ext234ImageWriter:
     superblock's own block count bounds the copied extent; bytes after the
     filesystem (for example, following partitions) are never included. A
     conservative clean ext2 feature subset is handled by MountFile's native
-    writer. Other ext variants may use the legacy debugfs-backed compatibility
-    path only when callers explicitly pass ``allow_legacy_debugfs=True``.
+    writer. Journaled ext3/ext4 profiles stay read-only because debugfs mutations
+    bypass the filesystem journal. Explicit debugfs mode is limited to
+    unjournaled ext2 profiles.
     """
 
     def __init__(
@@ -165,6 +173,12 @@ class Ext234ImageWriter:
         if self._try_native_ext2():
             return
         self._read_superblock()
+        if self.allow_legacy_debugfs and self.fs_type in ("ext3", "ext4"):
+            raise ExtWriteError(
+                "legacy debugfs writes are refused for journaled ext3/ext4; "
+                "native journal ordering and recovery are not implemented",
+                RefusalCode.UNSUPPORTED_PROFILE,
+            )
         if not self.allow_legacy_debugfs:
             self.write_strategy = (
                 "read-only-unsafe"
@@ -187,7 +201,7 @@ class Ext234ImageWriter:
                 else ""
             )
             raise ExtWriteError(
-                "e2fsprogs debugfs is required for ext2/3/4 writes; on Windows, "
+                "e2fsprogs debugfs is required for unjournaled ext2 compatibility writes; on Windows, "
                 "use Configuration > Install components, or add debugfs.exe to PATH. "
                 "On Linux/macOS run python3 install_mountfile.py." + native_detail
             )

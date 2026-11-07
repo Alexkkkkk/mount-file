@@ -2983,7 +2983,8 @@ class MainWindow(QMainWindow):
             self,
             "Установить компоненты Windows",
             "Будет открыт отдельный PowerShell-установщик для записи образов:\n"
-            "• отдельный WSL/Ubuntu-дистрибутив MountFileTools для debugfs и ext2/3/4 "
+            "• отдельный WSL/Ubuntu-дистрибутив MountFileTools для e2fsprogs/debugfs "
+            "(explicit unjournaled ext2 compatibility; journaled ext3/ext4 остаются read-only) "
             "(около 325 МБ загрузки и место на диске);\n"
             "• подписанный драйвер ImDisk для поддерживаемых Windows-томов.\n\n"
             "Нужны интернет и подтверждение прав администратора (UAC). После установки "
