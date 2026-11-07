@@ -41,6 +41,15 @@ def _image(path, size):
     return path
 
 
+def _legacy_ext2_writer(image, monkeypatch):
+    from mountfile.ext_debugfs_writer import Ext234ImageWriter
+
+    _tool("debugfs")
+    _run(_tool("mke2fs"), "-F", "-q", "-t", "ext2", str(image))
+    monkeypatch.setattr(Ext234ImageWriter, "_try_native_ext2", lambda _self: False)
+    return Ext234ImageWriter(image, allow_legacy_debugfs=True)
+
+
 @pytest.mark.parametrize("fat_type,size", [(12, 1440 * 1024), (16, 32 * 1024**2)])
 def test_mkfs_fat12_16_extended_bpb_and_exact_length_lfn(tmp_path, fat_type, size):
     image = _image(tmp_path / "fat.img", size)
@@ -374,12 +383,11 @@ def test_exfat_contiguous_directory_read_and_write_refusal(tmp_path):
     assert hashlib.sha256(image.read_bytes()).digest() == before
 
 
-def test_legacy_debugfs_regular_file_rename_is_real_and_consistent(tmp_path):
-    from mountfile.ext_debugfs_writer import Ext234ImageWriter
-
-    image = _image(tmp_path / "ext4.img", 16 * 1024**2)
-    _run(_tool("mkfs.ext4"), "-F", "-q", str(image))
-    writer = Ext234ImageWriter(image, allow_legacy_debugfs=True)
+def test_legacy_debugfs_regular_file_rename_is_real_and_consistent(
+    tmp_path, monkeypatch
+):
+    image = _image(tmp_path / "ext2.img", 16 * 1024**2)
+    writer = _legacy_ext2_writer(image, monkeypatch)
     writer.mkdir("/DIR")
     writer.write_file("/old.txt", b"preserve inode and data")
     writer.rename("/old.txt", "/DIR/new.txt")
@@ -391,12 +399,13 @@ def test_legacy_debugfs_regular_file_rename_is_real_and_consistent(tmp_path):
 @pytest.mark.parametrize(
     "operation", ["mkdir-missing-parent", "rename-directory", "delete-missing"]
 )
-def test_legacy_debugfs_refusals_never_become_dummy_success(tmp_path, operation):
-    from mountfile.ext_debugfs_writer import Ext234ImageWriter, ExtWriteError
+def test_legacy_debugfs_refusals_never_become_dummy_success(
+    tmp_path, monkeypatch, operation
+):
+    from mountfile.ext_debugfs_writer import ExtWriteError
 
-    image = _image(tmp_path / "ext4.img", 16 * 1024**2)
-    _run(_tool("mkfs.ext4"), "-F", "-q", str(image))
-    writer = Ext234ImageWriter(image, allow_legacy_debugfs=True)
+    image = _image(tmp_path / "ext2.img", 16 * 1024**2)
+    writer = _legacy_ext2_writer(image, monkeypatch)
     writer.mkdir("/DIR")
     before = hashlib.sha256(image.read_bytes()).digest()
     with pytest.raises((ExtWriteError, FileNotFoundError)):
@@ -410,11 +419,10 @@ def test_legacy_debugfs_refusals_never_become_dummy_success(tmp_path, operation)
 
 
 def test_legacy_debugfs_concurrent_change_is_not_overwritten(tmp_path, monkeypatch):
-    from mountfile.ext_debugfs_writer import Ext234ImageWriter, ExtWriteError
+    from mountfile.ext_debugfs_writer import ExtWriteError
 
-    image = _image(tmp_path / "ext4.img", 16 * 1024**2)
-    _run(_tool("mkfs.ext4"), "-F", "-q", str(image))
-    writer = Ext234ImageWriter(image, allow_legacy_debugfs=True)
+    image = _image(tmp_path / "ext2.img", 16 * 1024**2)
+    writer = _legacy_ext2_writer(image, monkeypatch)
     original_run = writer._run
     injected = False
 

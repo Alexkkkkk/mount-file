@@ -127,10 +127,11 @@ carver или chain-of-custody система.
 поддерживаются встроенно. Native ext2 не требует `debugfs`, использует
 allowlisted features и 1/2/4 KiB blocks; regular files и каталоги поддерживают
 bounded direct/single/double-indirect addressing до 64 MiB (без sparse/triple-indirect);
-неподдерживаемый или нечистый том не получает native RW. Для иных ext2 features
-и ext3/ext4 GUI оставляет том read-only: legacy `debugfs` (`PATH`, `debugfs.exe`
-или WSL/e2fsprogs) является только явным library-level compatibility opt-in
-`allow_legacy_debugfs=True`, не скрытым GUI fallback. Перед записью приложение
+неподдерживаемый или нечистый том не получает native RW. Для иных unjournaled
+ext2 features legacy `debugfs` (`PATH`, `debugfs.exe` или WSL/e2fsprogs) остаётся
+только явным library-level compatibility opt-in `allow_legacy_debugfs=True`, не
+скрытым GUI fallback. Journaled ext3/ext4 остаются read-only даже при opt-in:
+`debugfs -w` обходит их журнал, а recovery protocol не реализован. Перед записью приложение
 создаёт резервную копию образа рядом с ним; отказ от копии отменяет запись. Native ext2 сначала
 проверяет staged extent, затем применяет изменения; внешние ext writers также
 используют временную копию и read-back. Native NTFS writer отключён: GUI оставляет

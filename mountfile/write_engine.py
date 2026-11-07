@@ -6,7 +6,8 @@
 What this module *is*
 ---------------------
 A thin transactional **facade** over the write backends that already exist in
-``mountfile.universal_fs_rw`` (native FAT12/16/32, ext2/3/4 via ``debugfs``,
+``mountfile.universal_fs_rw`` (native FAT12/16/32, ext2 native or explicit
+unjournaled-ext2 ``debugfs`` compatibility,
 NTFS via the mount helper, loop mount, rebuild).  It adds exactly the layers the
 specification marks as mandatory (ТЗ §8):
 
