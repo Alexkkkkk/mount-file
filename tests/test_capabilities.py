@@ -15,6 +15,7 @@ from mountfile.capabilities import (
     RW_WRITE_CAPABILITIES,
     VFS_READ_CAPABILITIES,
     VFS_WRITE_CAPABILITIES,
+    canonical_operation_for_api_operation,
     get_native_capability_matrix,
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
@@ -75,6 +76,25 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
         if profile.interface == "vfs":
             assert "read-file" in profile.read_capabilities
             assert "read-range" in profile.read_capabilities
+
+
+@pytest.mark.parametrize(
+    ("interface", "api_operation", "canonical"),
+    [
+        ("vfs", "list", "list"),
+        ("vfs", "read-file", "read-file"),
+        ("vfs", "read-range", "read-range"),
+        ("universal-fs-rw", "read", "read-file"),
+        ("universal-fs-rw", "read_range", "read-range"),
+        ("universal-fs-rw", "write_file", "write-file"),
+        ("universal-fs-rw", "rename", "rename"),
+    ],
+)
+def test_operation_aliases_round_trip_to_canonical_cells(
+    interface, api_operation, canonical
+):
+    assert canonical_operation_for_api_operation(interface, api_operation) == canonical
+    assert canonical_operation_for_api_operation(interface, "unknown-operation") is None
 
 
 def test_v5_matrix_publishes_complete_operation_and_gate_contract():
