@@ -7,11 +7,19 @@ from scripts.checker_acceptance import _fixture_nodes, _junit_results
 
 def test_fixture_nodes_resolve_declared_test_functions():
     nodes = _fixture_nodes(Path("tests"))
-    assert nodes["test_native_ext2_mutation_passes_e2fsck_on_disposable_copy"].endswith(
-        "tests/test_independent_checkers.py::test_native_ext2_mutation_passes_e2fsck_on_disposable_copy"
+    assert (
+        nodes["test_native_ext2_mutation_passes_e2fsck_on_disposable_copy"]
+        .replace("\\", "/")
+        .endswith(
+            "tests/test_independent_checkers.py::test_native_ext2_mutation_passes_e2fsck_on_disposable_copy"
+        )
     )
-    assert nodes["test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"].endswith(
-        "tests/test_independent_checkers.py::test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+    assert (
+        nodes["test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"]
+        .replace("\\", "/")
+        .endswith(
+            "tests/test_independent_checkers.py::test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+        )
     )
 
 
