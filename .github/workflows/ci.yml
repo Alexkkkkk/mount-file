@@ -261,6 +261,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Execute writer recovery acceptance fixtures
+        run: >-
+          python scripts/recovery_acceptance.py
+          --json-out recovery-acceptance.json
+          --junitxml recovery-acceptance-junit.xml
+
+      - name: Upload writer recovery acceptance artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: writer-recovery-acceptance-linux
+          path: |
+            recovery-acceptance.json
+            recovery-acceptance-junit.xml
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Validate conservative product status contract
         run: python scripts/product_status_contract.py --json-out product-status.json
 

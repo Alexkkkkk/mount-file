@@ -29,6 +29,12 @@ def build_report(repo_root: Path | None = None) -> dict[str, object]:
     acceptance = None
     if acceptance_path.exists():
         acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    recovery_acceptance_path = root / "recovery-acceptance.json"
+    recovery_acceptance = None
+    if recovery_acceptance_path.exists():
+        recovery_acceptance = json.loads(
+            recovery_acceptance_path.read_text(encoding="utf-8")
+        )
     blockers: list[str] = []
 
     if capability["version"] != CAPABILITY_MATRIX_VERSION:
@@ -46,6 +52,8 @@ def build_report(repo_root: Path | None = None) -> dict[str, object]:
         blockers.append("recovery report must remain production_ready=false")
     if acceptance is not None and acceptance.get("verdict") != "pass":
         blockers.append("executed checker acceptance artifact is not passing")
+    if recovery_acceptance is not None and recovery_acceptance.get("verdict") != "pass":
+        blockers.append("executed recovery acceptance artifact is not passing")
     if "power_loss" not in status_doc or "not_claimed" not in status_doc:
         blockers.append("status documentation is missing conservative recovery markers")
     for marker in ("| B1 |", "| D1 |", "| P1 |"):
@@ -61,6 +69,11 @@ def build_report(repo_root: Path | None = None) -> dict[str, object]:
         "checker_entry_count": len(checker["entries"]),
         "checker_acceptance_verdict": (
             acceptance.get("verdict") if acceptance is not None else "not_run"
+        ),
+        "recovery_acceptance_verdict": (
+            recovery_acceptance.get("verdict")
+            if recovery_acceptance is not None
+            else "not_run"
         ),
         "verdict": "pass" if not blockers else "blocked",
         "blockers": blockers,

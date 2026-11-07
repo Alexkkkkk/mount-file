@@ -26,6 +26,12 @@ acceptance report по всем native RW profiles. Отчёт не запуск
 обязывает сохранять `parity=not_claimed`, `power_loss=unsupported`, а native
 ext3/ext4 и NTFS writes — `unsupported`.
 
+**Executed recovery evidence milestone:** `scripts/recovery_acceptance.py`
+запускает cancellation, process-die, rollback и quarantine fixtures для ext2,
+FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успешное выполнение
+этих fixtures подтверждает только воспроизводимость конкретных сценариев;
+`production_ready` остаётся `false`, а `power_loss` — `unsupported`.
+
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
 | R1 | Native read API для заявленных bounded-профилей FAT, exFAT, ext2/3/4 и NTFS | Частично | Есть readers для принятых profiles; полный feature/layout/API parity не заявлен. |
