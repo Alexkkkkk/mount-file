@@ -19,6 +19,13 @@ acceptance report по всем native RW profiles. Отчёт не запуск
 
 **External-checker matrix milestone:** `scripts/checker_matrix.py` и Linux integration artifact `external-checker-matrix-linux` публикуют воспроизводимую матрицу native profile × checker × runner availability × fixture evidence для `e2fsck`, `fsck.fat`, `fsck.exfat`, `ntfsfix` и `pytsk3`. Отсутствующий инструмент даёт `unavailable`, а `parity` всегда остаётся `not_claimed`; `ntfsfix` явно не считается authoritative checker. Полная format parity и cross-platform parity по-прежнему не заявляются.
 
+**Product-status contract milestone:** `scripts/product_status_contract.py`
+сверяет версию capability matrix, recovery report, checker evidence и
+консервативные markers этого status sheet. Его `pass` означает только
+согласованность заявлений; это не означает production readiness. Validator
+обязывает сохранять `parity=not_claimed`, `power_loss=unsupported`, а native
+ext3/ext4 и NTFS writes — `unsupported`.
+
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
 | R1 | Native read API для заявленных bounded-профилей FAT, exFAT, ext2/3/4 и NTFS | Частично | Есть readers для принятых profiles; полный feature/layout/API parity не заявлен. |
