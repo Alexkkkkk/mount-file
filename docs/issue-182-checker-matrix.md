@@ -17,7 +17,11 @@ artifact. It is deliberately an inventory, not a parity verdict.
 | native readers | `pytsk3` | Python optional runtime | differential/reference only | benchmark or format-specific differential fixture where available |
 
 The report includes tool availability, the first bounded tool-version line,
-runner platform, the fixture test names, and `evidence: fixture_required`.
+runner platform, and the fixture test names. It parses the test suite without
+importing it and publishes `fixture_status`: `fixture_declared` means every
+named test exists but was not executed by this inventory command;
+`fixture_missing` means at least one declaration is absent. Accordingly,
+`evidence` is `fixture_required` or `fixture_missing`, never a pass verdict.
 `parity: not_claimed` remains mandatory for every inventory entry: an installed
 binary is not evidence that a fixture passed. If a tool is absent, the entry is
 `unavailable` and never `pass`; its version is `null`. A checker receiving a

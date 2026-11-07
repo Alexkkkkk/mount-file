@@ -62,3 +62,30 @@ def test_checker_matrix_never_conflates_available_tool_with_fixture_evidence(
     )
     assert all(entry["evidence"] == "fixture_required" for entry in report["entries"])
     assert all(entry["parity"] == "not_claimed" for entry in report["entries"])
+
+
+def test_checker_matrix_marks_missing_fixture_declarations(tmp_path):
+    report = build_report(tests_root=tmp_path)
+    assert all(
+        entry["fixture_status"] == "fixture_missing" for entry in report["entries"]
+    )
+    assert all(entry["evidence"] == "fixture_missing" for entry in report["entries"])
+    assert all(entry["fixture_tests_found"] == [] for entry in report["entries"])
+    assert all(entry["fixture_tests_missing"] for entry in report["entries"])
+    assert all(entry["parity"] == "not_claimed" for entry in report["entries"])
+
+
+def test_checker_matrix_reports_declared_fixture_functions(tmp_path):
+    (tmp_path / "test_fixture.py").write_text(
+        "def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    report = build_report(tests_root=tmp_path)
+    ext2 = next(
+        entry for entry in report["entries"] if entry["profile"] == "ext2-native-rw"
+    )
+    assert ext2["fixture_status"] == "fixture_declared"
+    assert ext2["evidence"] == "fixture_required"
+    assert ext2["fixture_tests_missing"] == []
+    assert ext2["fixture_tests_found"] == ext2["fixture_tests"]
