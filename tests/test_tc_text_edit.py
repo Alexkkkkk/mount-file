@@ -183,8 +183,8 @@ def test_f4_persists_edited_image_text(monkeypatch, qapp):
 
 
 @pytest.mark.skipif(
-    not shutil.which("mke2fs"),
-    reason="e2fsprogs mke2fs is required",
+    not (shutil.which("mke2fs") and shutil.which("debugfs")),
+    reason="e2fsprogs mke2fs and debugfs are required",
 )
 def test_f4_saves_existing_ext2_ini_through_real_backend(monkeypatch, tmp_path, qapp):
     image = tmp_path / "factorydata.ext2"

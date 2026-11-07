@@ -44,6 +44,7 @@ def _image(path, size):
 def _legacy_ext2_writer(image, monkeypatch):
     from mountfile.ext_debugfs_writer import Ext234ImageWriter
 
+    _tool("debugfs")
     _run(_tool("mke2fs"), "-F", "-q", "-t", "ext2", str(image))
     monkeypatch.setattr(Ext234ImageWriter, "_try_native_ext2", lambda _self: False)
     return Ext234ImageWriter(image, allow_legacy_debugfs=True)
