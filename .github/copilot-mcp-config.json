@@ -32,10 +32,27 @@
         "list_allowed_directories"
       ]
     },
+    "sequential-thinking": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "tools": ["*"]
+    },
+    "memory": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "tools": ["*"]
+    },
     "deepwiki": {
       "type": "http",
       "url": "https://mcp.deepwiki.com/mcp",
       "tools": ["read_wiki_structure", "read_wiki_contents", "ask_question"]
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "tools": ["resolve-library-id", "query-docs"]
     },
     "microsoft_learn": {
       "type": "http",
@@ -43,8 +60,8 @@
       "tools": ["*"]
     },
     "cloudflare_docs": {
-      "type": "sse",
-      "url": "https://docs.mcp.cloudflare.com/sse",
+      "type": "http",
+      "url": "https://docs.mcp.cloudflare.com/mcp",
       "tools": ["*"]
     }
   }

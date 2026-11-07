@@ -404,3 +404,8 @@ Setup: open **Settings → Copilot → MCP servers** in this repository, paste t
 JSON from that file into the "MCP configuration" field and click
 **Save MCP configuration**. No secrets are required — every server below works
 without an API key.
+
+Added no-key reasoning helpers (`sequential-thinking`, `memory`), the Context7
+docs server, and switched `cloudflare_docs` to its current Streamable HTTP
+endpoint (`https://docs.mcp.cloudflare.com/mcp`; the legacy `/sse` URL is
+retired).
