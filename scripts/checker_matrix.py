@@ -8,6 +8,7 @@ operation; missing tools are reported as unavailable rather than passing.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import platform
@@ -72,6 +73,22 @@ MATRIX = (
 )
 
 
+def _discover_fixture_tests(tests_root: Path) -> set[str]:
+    """Collect test function names without importing the test suite."""
+    discovered: set[str] = set()
+    for path in sorted(tests_root.glob("test_*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError, UnicodeError):
+            continue
+        discovered.update(
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+    return discovered
+
+
 def _tool_version(item: dict, executable: str | None) -> str | None:
     """Return a bounded version string without turning inventory into evidence."""
     if not executable:
@@ -96,7 +113,9 @@ def _tool_version(item: dict, executable: str | None) -> str | None:
     return None
 
 
-def build_report() -> dict[str, object]:
+def build_report(tests_root: Path | None = None) -> dict[str, object]:
+    tests_root = tests_root or Path(__file__).resolve().parents[1] / "tests"
+    discovered_tests = _discover_fixture_tests(tests_root)
     entries = []
     for item in MATRIX:
         if item.get("checker_kind") == "python_module":
@@ -105,18 +124,34 @@ def build_report() -> dict[str, object]:
         else:
             executable = shutil.which(item["checker"])
         available = bool(executable)
+        fixture_tests = list(item["fixture_tests"])
+        missing_fixtures = [
+            name for name in fixture_tests if name not in discovered_tests
+        ]
+        fixture_status = "fixture_missing" if missing_fixtures else "fixture_declared"
+        evidence = "fixture_missing" if missing_fixtures else "fixture_required"
         entries.append(
             {
                 **item,
+                "fixture_status": fixture_status,
+                "fixture_tests_found": [
+                    name for name in fixture_tests if name in discovered_tests
+                ],
+                "fixture_tests_missing": missing_fixtures,
                 "checker_path": executable,
                 "checker_version": _tool_version(item, executable),
                 "availability": "available" if available else "unavailable",
-                "evidence": "fixture_required",
+                "evidence": evidence,
                 "parity": "not_claimed",
                 "reason": (
-                    "fixture-specific test required; inventory alone is not parity"
-                    if available
-                    else "required checker/runtime is unavailable on this runner"
+                    "fixture-specific test exists but was not executed; inventory "
+                    "alone is not parity"
+                    if not missing_fixtures and available
+                    else (
+                        "declared fixture test is missing from the test suite"
+                        if missing_fixtures
+                        else "required checker/runtime is unavailable on this runner"
+                    )
                 ),
             }
         )
