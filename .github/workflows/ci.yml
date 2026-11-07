@@ -226,7 +226,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov hypothesis 'setuptools>=68' wheel
+          python -m pip install pytest pytest-cov hypothesis pytsk3 'setuptools>=68' wheel
           python -m pip install -r requirements.txt
 
       - name: Run the full suite with pytsk3 available
@@ -242,6 +242,22 @@ jobs:
         with:
           name: external-checker-matrix-linux
           path: checker-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Execute checker fixture acceptance matrix
+        run: >-
+          python scripts/checker_acceptance.py
+          --json-out checker-acceptance.json
+          --junitxml checker-acceptance-junit.xml
+
+      - name: Upload checker fixture acceptance artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: checker-fixture-acceptance-linux
+          path: |
+            checker-acceptance.json
+            checker-acceptance-junit.xml
           if-no-files-found: error
           retention-days: 14
 
