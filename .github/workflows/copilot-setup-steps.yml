@@ -1,0 +1,53 @@
+name: "Copilot Setup Steps"
+
+# Автоматически запускаться при изменении этого файла — чтобы проверить,
+# что шаги работают, и разрешить ручной запуск во вкладке "Actions".
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+permissions:
+  # Минимально необходимые права: только чтение кода.
+  # Свои операции Copilot выполняет со своим собственным токеном.
+  contents: read
+
+jobs:
+  # Job ОБЯЗАН называться `copilot-setup-steps`, иначе Copilot его не подхватит.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      # Runtime для npx-серверов MCP: filesystem, sequential-thinking, memory
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "22"
+
+      # Runtime для uvx-серверов MCP: fetch, git, time
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      # Предзагрузка uvx-серверов: колёса попадут в кэш,
+      # и первый запуск агента не упрётся в таймаут на скачивании.
+      - name: Pre-install uvx MCP servers (fetch, git, time)
+        run: |
+          uv tool install mcp-server-fetch
+          uv tool install mcp-server-git
+          uv tool install mcp-server-time
+
+      # Предзагрузка npx-серверов MCP в глобальный node_modules:
+      # `npx -y` в конфиге затем подхватит их локально, без сети.
+      - name: Pre-install npx MCP servers (filesystem, sequential-thinking, memory)
+        run: |
+          npm install -g \
+            @modelcontextprotocol/server-filesystem \
+            @modelcontextprotocol/server-sequential-thinking \
+            @modelcontextprotocol/server-memory
