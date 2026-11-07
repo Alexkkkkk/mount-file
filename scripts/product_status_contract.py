@@ -19,6 +19,51 @@ from scripts.checker_matrix import build_report as build_checker_report
 from scripts.recovery_matrix import build_report as build_recovery_report
 
 
+def _execution_artifact_blockers(
+    artifact: object,
+    *,
+    report_name: str,
+    expected_entries: set[str],
+    entry_key: str,
+    evidence: str,
+) -> list[str]:
+    if not isinstance(artifact, dict):
+        return [f"{report_name} execution artifact is not an object"]
+    blockers: list[str] = []
+    if artifact.get("schema") != 1 or artifact.get("report") != report_name:
+        blockers.append(f"{report_name} execution artifact has an invalid identity")
+    if artifact.get("verdict") != "pass":
+        blockers.append(f"{report_name} execution artifact is not passing")
+    if artifact.get("pytest_exit_code") != 0:
+        blockers.append(f"{report_name} execution artifact has a nonzero pytest exit")
+    if artifact.get("blockers") != []:
+        blockers.append(f"{report_name} execution artifact has blockers")
+    entries = artifact.get("entries")
+    if not isinstance(entries, list):
+        blockers.append(f"{report_name} execution artifact has no entries list")
+        return blockers
+    actual_entries: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            blockers.append(f"{report_name} execution artifact has an invalid entry")
+            continue
+        name = entry.get(entry_key)
+        if isinstance(name, str):
+            actual_entries.append(name)
+        if entry.get("fixture_status") != "passed":
+            blockers.append(f"{report_name} execution entry is not passed: {name}")
+        if entry.get("evidence") != evidence:
+            blockers.append(
+                f"{report_name} execution entry lacks executed evidence: {name}"
+            )
+    if (
+        len(actual_entries) != len(set(actual_entries))
+        or set(actual_entries) != expected_entries
+    ):
+        blockers.append(f"{report_name} execution artifact coverage is incomplete")
+    return blockers
+
+
 def build_report(repo_root: Path | None = None) -> dict[str, object]:
     root = repo_root or _REPO_ROOT
     status_doc = (root / "docs" / "issue-182-status.md").read_text(encoding="utf-8")
@@ -50,10 +95,26 @@ def build_report(repo_root: Path | None = None) -> dict[str, object]:
             blockers.append(f"checker evidence is not bounded: {entry['profile']}")
     if recovery["production_ready"] is not False:
         blockers.append("recovery report must remain production_ready=false")
-    if acceptance is not None and acceptance.get("verdict") != "pass":
-        blockers.append("executed checker acceptance artifact is not passing")
-    if recovery_acceptance is not None and recovery_acceptance.get("verdict") != "pass":
-        blockers.append("executed recovery acceptance artifact is not passing")
+    if acceptance is not None:
+        blockers.extend(
+            _execution_artifact_blockers(
+                acceptance,
+                report_name="mountfile-checker-execution-acceptance",
+                expected_entries={entry["profile"] for entry in checker["entries"]},
+                entry_key="profile",
+                evidence="executed_fixture_results",
+            )
+        )
+    if recovery_acceptance is not None:
+        blockers.extend(
+            _execution_artifact_blockers(
+                recovery_acceptance,
+                report_name="mountfile-recovery-execution-acceptance",
+                expected_entries={"ext2", "fat32", "exfat"},
+                entry_key="profile_group",
+                evidence="executed_recovery_fixture_results",
+            )
+        )
     if "power_loss" not in status_doc or "not_claimed" not in status_doc:
         blockers.append("status documentation is missing conservative recovery markers")
     for marker in ("| B1 |", "| D1 |", "| P1 |"):

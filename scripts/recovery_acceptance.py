@@ -18,16 +18,77 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts.recovery_matrix import build_report as build_recovery_report
 
 FIXTURE_GROUPS = {
+    "fat12-16": (
+        "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+        "test_real_fat1216_mutations_pass_fsck_on_disposable_copy",
+    ),
     "ext2": (
         "test_native_ext2_recovers_after_process_dies_mid_commit",
         "test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup",
         "test_ext2_cancellation_leaves_original_and_repeated_recovery_is_idempotent",
+        "test_native_ext2_rolls_back_and_verifies_restored_extent_hash",
+        "test_native_ext2_mutation_passes_e2fsck_on_disposable_copy",
     ),
     "fat32": (
         "test_failed_fat_rollback_quarantines_image_and_retains_snapshot",
         "test_fat32_short_write_and_cancellation_restore_selected_extent",
+        "test_fat32_injected_exception_and_external_suffix_change_are_bounded",
+        "test_native_fat32_mutation_passes_fsck_on_disposable_copy",
     ),
-    "exfat": ("test_exfat_short_write_exception_and_cancellation_never_publish",),
+    "exfat": (
+        "test_exfat_short_write_exception_and_cancellation_never_publish",
+        "test_exfat_success_and_repeated_recovery_safe_retries_preserve_sentinels",
+        "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck",
+    ),
+}
+
+# Evidence labels remain fixture-bounded and never imply power-loss safety.
+CELL_FIXTURES = {
+    "fat12-16": {
+        "rollback": (
+            "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+        ),
+        "hash_preservation": (
+            "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+        ),
+        "independent_checker": (
+            "test_real_fat1216_mutations_pass_fsck_on_disposable_copy",
+        ),
+    },
+    "ext2": {
+        "durable_recovery": (
+            "test_native_ext2_recovers_after_process_dies_mid_commit",
+            "test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup",
+        ),
+        "hash_preservation": (
+            "test_native_ext2_rolls_back_and_verifies_restored_extent_hash",
+        ),
+        "quarantine": (
+            "test_ext2_cancellation_leaves_original_and_repeated_recovery_is_idempotent",
+        ),
+        "independent_checker": (
+            "test_native_ext2_mutation_passes_e2fsck_on_disposable_copy",
+        ),
+    },
+    "fat32": {
+        "hash_preservation": (
+            "test_fat32_short_write_and_cancellation_restore_selected_extent",
+        ),
+        "quarantine": (
+            "test_failed_fat_rollback_quarantines_image_and_retains_snapshot",
+        ),
+        "independent_checker": (
+            "test_native_fat32_mutation_passes_fsck_on_disposable_copy",
+        ),
+    },
+    "exfat": {
+        "hash_preservation": (
+            "test_exfat_short_write_exception_and_cancellation_never_publish",
+        ),
+        "independent_checker": (
+            "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck",
+        ),
+    },
 }
 
 
@@ -110,6 +171,24 @@ def build_execution_report(
                 "fixture_tests": list(names),
                 "fixture_status": status,
                 "results": group_results,
+                "cells": {
+                    **{
+                        cell: {
+                            "status": (
+                                "passed"
+                                if all(
+                                    name in nodes
+                                    and results.get(name, {}).get("status") == "passed"
+                                    for name in fixture_names
+                                )
+                                else "blocked"
+                            ),
+                            "fixture_tests": list(fixture_names),
+                        }
+                        for cell, fixture_names in CELL_FIXTURES.get(group, {}).items()
+                    },
+                    "power_loss": {"status": "unsupported", "claim": False},
+                },
                 "evidence": "executed_recovery_fixture_results",
                 "production_ready": False,
                 "power_loss": "unsupported",
