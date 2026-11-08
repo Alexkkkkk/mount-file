@@ -11,28 +11,32 @@ import pytest
 
 from mountfile.exfat_reader import NativeExfatImage
 from mountfile.exfat_writer import NativeExfatWriter
+from tests._independent_checkers import record_fixture_evidence
 
 
 def _assert_read_only_fsck(fsck, image, checker_copy):
+    source_before = hashlib.sha256(image.read_bytes()).hexdigest()
     shutil.copyfile(image, checker_copy)
-    before = hashlib.sha256(checker_copy.read_bytes()).digest()
+    copy_before = hashlib.sha256(checker_copy.read_bytes()).hexdigest()
     result = subprocess.run(
         [fsck, "-n", str(checker_copy)],
         capture_output=True,
         text=True,
         timeout=60,
     )
-    after = hashlib.sha256(checker_copy.read_bytes()).digest()
+    copy_after = hashlib.sha256(checker_copy.read_bytes()).hexdigest()
+    source_after = hashlib.sha256(image.read_bytes()).hexdigest()
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert before == after, "fsck.exfat -n unexpectedly modified its disposable copy"
+    return result, source_before, source_after, copy_before, copy_after
 
 
 @pytest.mark.skipif(
     sys.platform != "linux",
     reason="the real-image consistency test uses Linux exfatprogs tools",
 )
-def test_real_exfat_unicode_write_and_rename_pass_read_only_fsck(tmp_path):
+def test_real_exfat_unicode_write_and_rename_pass_read_only_fsck(
+    tmp_path, record_property
+):
     mkfs = shutil.which("mkfs.exfat")
     fsck = shutil.which("fsck.exfat")
     if not mkfs or not fsck:
@@ -88,7 +92,25 @@ def test_real_exfat_unicode_write_and_rename_pass_read_only_fsck(tmp_path):
     finally:
         reader.close()
 
-    _assert_read_only_fsck(fsck, image, tmp_path / "checker-copy.img")
+    result, source_before, source_after, copy_before, copy_after = (
+        _assert_read_only_fsck(fsck, image, tmp_path / "checker-copy.img")
+    )
+    record_fixture_evidence(
+        record_property,
+        profile="exfat-native-rw",
+        image_size_bytes=image.stat().st_size,
+        source_sha256_before=source_before,
+        source_sha256_after=source_after,
+        checker_tool="fsck.exfat",
+        checker_verdict="clean" if result.returncode == 0 else "not-verified-clean",
+        copy_sha256_before=copy_before,
+        copy_sha256_after=copy_after,
+        source_unchanged=source_before == source_after,
+        copy_unchanged=copy_before == copy_after,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert copy_before == copy_after, "fsck.exfat -n unexpectedly modified its disposable copy"
+    assert source_before == source_after, "checker invocation modified its source image"
 
 
 @pytest.mark.skipif(
@@ -135,4 +157,11 @@ def test_real_exfat_root_directory_growth_passes_read_only_fsck(tmp_path):
     finally:
         reader.close()
 
-    _assert_read_only_fsck(fsck, image, tmp_path / "root-growth-checker-copy.img")
+    result, source_before, source_after, copy_before, copy_after = (
+        _assert_read_only_fsck(
+            fsck, image, tmp_path / "root-growth-checker-copy.img"
+        )
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert copy_before == copy_after, "fsck.exfat -n unexpectedly modified its disposable copy"
+    assert source_before == source_after, "checker invocation modified its source image"

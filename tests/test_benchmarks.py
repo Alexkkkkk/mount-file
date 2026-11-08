@@ -14,6 +14,7 @@ from mountfile.ext2_native import NativeExt2ImageWriter
 from mountfile.ext2_reader import NativeExt2Image
 from mountfile.vfs_api import ReadOnlyVFSStatMixin
 from scripts import make_bench_ext2_image
+from tests._independent_checkers import record_fixture_evidence
 
 
 class _FakeProvider(ReadOnlyVFSStatMixin):
@@ -370,7 +371,9 @@ def test_build_report_withholds_performance_comparison_on_content_mismatch(
 
 
 @pytest.mark.skipif(not shutil.which("mke2fs"), reason="mke2fs is required")
-def test_real_ext2_benchmark_requires_identical_pytsk3_file_content(tmp_path):
+def test_real_ext2_benchmark_requires_identical_pytsk3_file_content(
+    tmp_path, record_property
+):
     pytest.importorskip("pytsk3")
     image = tmp_path / "benchmark.ext2"
     image_size = 16 * 1024 * 1024
@@ -394,6 +397,7 @@ def test_real_ext2_benchmark_requires_identical_pytsk3_file_content(tmp_path):
     )
     expected = b"benchmark differential payload\x00" * 300
     NativeExt2ImageWriter(image).write_file("/benchmark.bin", expected)
+    source_before = hashlib.sha256(image.read_bytes()).hexdigest()
 
     report = bench_vfs.build_report(
         image,
@@ -403,6 +407,21 @@ def test_real_ext2_benchmark_requires_identical_pytsk3_file_content(tmp_path):
         baseline="both",
         repeats=1,
         warmups=0,
+    )
+    source_after = hashlib.sha256(image.read_bytes()).hexdigest()
+    content_equivalent = report["comparison"]["content_equivalent"] is True
+    record_fixture_evidence(
+        record_property,
+        profile="all-native-readers",
+        image_size_bytes=image.stat().st_size,
+        source_sha256_before=source_before,
+        source_sha256_after=source_after,
+        checker_tool="pytsk3",
+        checker_verdict="pass" if content_equivalent else "failed",
+        copy_sha256_before=None,
+        copy_sha256_after=None,
+        source_unchanged=source_before == source_after,
+        copy_unchanged=None,
     )
 
     assert "native_error" not in report["backends"]

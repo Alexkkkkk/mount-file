@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -27,16 +28,16 @@ def _fixture_nodes(tests_root: Path) -> dict[str, str]:
         except (OSError, SyntaxError, UnicodeError):
             continue
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 nodes.setdefault(node.name, f"{path}::{node.name}")
     return nodes
 
 
-def _junit_results(path: Path) -> dict[str, dict[str, object]]:
+def _junit_results(path: Path) -> dict[str, list[dict[str, object]]]:
     if not path.exists():
         return {}
     root = ET.parse(path).getroot()
-    results: dict[str, dict[str, object]] = {}
+    results: dict[str, list[dict[str, object]]] = {}
     for case in root.iter("testcase"):
         name = case.attrib.get("name", "")
         classname = case.attrib.get("classname", "")
@@ -52,13 +53,108 @@ def _junit_results(path: Path) -> dict[str, dict[str, object]]:
         elif case.find("skipped") is not None:
             status = "skipped"
             detail = case.find("skipped").attrib.get("message", "")
-        results[key] = {
-            "status": status,
-            "detail": detail,
-            "classname": classname,
-            "duration_seconds": float(case.attrib.get("time", "0") or 0),
+        properties = {
+            prop.attrib.get("name", ""): prop.attrib.get("value", "")
+            for prop in case.findall("./properties/property")
         }
+        results.setdefault(key, []).append(
+            {
+                "case_name": name,
+                "status": status,
+                "detail": detail,
+                "classname": classname,
+                "duration_seconds": float(case.attrib.get("time", "0") or 0),
+                "properties": properties,
+            }
+        )
     return results
+
+
+def _fixture_evidence(
+    profile: str,
+    checker: str,
+    results: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], str]:
+    """Validate per-case image/copy hashes carried by the pytest JUnit report."""
+    required_profiles = (
+        {"fat12-native-rw", "fat16-native-rw"}
+        if profile == "fat12-16-native-rw"
+        else {profile}
+    )
+    if profile == "ntfs-native-ro":
+        expected_checker_verdict = "inconclusive"
+    elif checker == "pytsk3":
+        expected_checker_verdict = "pass"
+    else:
+        expected_checker_verdict = "clean"
+    images = []
+    valid = True
+    observed_profiles = set()
+    for result in results:
+        props = result.get("properties", {})
+        if not isinstance(props, dict):
+            valid = False
+            continue
+        item_profile = props.get("mountfile.fixture.profile", "")
+        observed_profiles.add(item_profile)
+        source_before = props.get("mountfile.fixture.sha256_before_checker", "")
+        source_after = props.get("mountfile.fixture.sha256_after_checker", "")
+        size_raw = props.get("mountfile.fixture.image_size_bytes", "")
+        tool = props.get("mountfile.checker.tool", "")
+        verdict = props.get("mountfile.checker.verdict", "")
+        copy_before = props.get("mountfile.checker.copy_sha256_before", "")
+        copy_after = props.get("mountfile.checker.copy_sha256_after", "")
+        source_unchanged = props.get("mountfile.checker.source_unchanged", "")
+        copy_unchanged = props.get("mountfile.checker.copy_unchanged", "")
+        try:
+            size_bytes = int(size_raw)
+        except (TypeError, ValueError):
+            size_bytes = 0
+        def valid_hash(value: object) -> bool:
+            return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+        is_direct_reader = checker == "pytsk3"
+        case_valid = (
+            result.get("status") == "passed"
+            and item_profile in required_profiles
+            and valid_hash(source_before)
+            and source_before == source_after
+            and size_bytes > 0
+            and tool == checker
+            and verdict == expected_checker_verdict
+            and source_unchanged == "true"
+        )
+        if is_direct_reader:
+            case_valid = case_valid and not copy_before and not copy_after and copy_unchanged == "not_applicable"
+        else:
+            case_valid = (
+                case_valid
+                and valid_hash(copy_before)
+                and copy_before == source_before
+                and copy_after == copy_before
+                and copy_unchanged == "true"
+            )
+        valid = valid and case_valid
+        images.append(
+            {
+                "test_case": result.get("case_name", ""),
+                "profile": item_profile,
+                "image_size_bytes": size_bytes,
+                "source_sha256_before_checker": source_before,
+                "source_sha256_after_checker": source_after,
+                "checker": tool,
+                "checker_verdict": verdict,
+                "checker_copy_sha256_before": copy_before or None,
+                "checker_copy_sha256_after": copy_after or None,
+                "source_unchanged": source_unchanged == "true",
+                "checker_copy_unchanged": copy_unchanged,
+                "evidence_status": "pass" if case_valid else "blocked",
+            }
+        )
+    expected_count = len(required_profiles)
+    if len(images) != expected_count or observed_profiles != required_profiles:
+        valid = False
+    return images, "complete" if valid else "blocked"
 
 
 def build_execution_report(
@@ -110,7 +206,16 @@ def build_execution_report(
             }
         )
 
-    command = [sys.executable, "-m", "pytest", "-q", f"--junitxml={junit}", *nodeids]
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-o",
+        "junit_family=legacy",
+        f"--junitxml={junit}",
+        *nodeids,
+    ]
     started = time.monotonic()
     if nodeids:
         result = subprocess.run(command, cwd=root, check=False)
@@ -122,9 +227,7 @@ def build_execution_report(
     for entry in entries:
         statuses = []
         for test_name in entry["fixture_tests"]:
-            result = parsed.get(test_name)
-            if result is not None:
-                statuses.append(result)
+            statuses.extend(parsed.get(test_name, []))
         if not statuses:
             entry["fixture_status"] = (
                 "unavailable"
@@ -138,12 +241,22 @@ def build_execution_report(
         else:
             entry["fixture_status"] = "passed"
         entry["results"] = statuses
+        fixture_images, fixture_evidence_status = _fixture_evidence(
+            entry["profile"], entry["checker"], statuses
+        )
+        entry["fixture_images"] = fixture_images
+        entry["fixture_evidence_status"] = fixture_evidence_status
 
     blockers = [
         entry["profile"]
         for entry in entries
         if entry["fixture_status"] not in {"passed"}
     ]
+    blockers.extend(
+        f"fixture-evidence:{entry['profile']}"
+        for entry in entries
+        if entry["fixture_evidence_status"] != "complete"
+    )
     blockers.extend(f"missing:{name}" for name in missing)
     if unavailable and not allow_unavailable:
         blockers.extend(f"unavailable:{name}" for name in unavailable)

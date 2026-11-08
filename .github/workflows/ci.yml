@@ -113,12 +113,29 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          & ./scripts/test-windows-installers.ps1
+          $evidencePath = 'windows-installer-evidence.json'
+          & ./scripts/test-windows-installers.ps1 -EvidencePath $evidencePath
           if (-not $?) { throw 'PowerShell mock tests failed' }
           & ./scripts/install-windows-components.ps1 -DryRun
           if ($LASTEXITCODE -ne 0) { throw 'component dry-run failed' }
           & ./scripts/install-windows.ps1 -DryRun
           if ($LASTEXITCODE -ne 0) { throw 'source bootstrap dry-run failed' }
+          $report = Get-Content $evidencePath -Raw | ConvertFrom-Json
+          $report.checks = @($report.checks) + @(
+            [pscustomobject]@{ id='component-installer-dry-run'; status='pass' },
+            [pscustomobject]@{ id='source-bootstrap-dry-run'; status='pass' }
+          )
+          $report.check_count = $report.checks.Count
+          $report | ConvertTo-Json -Depth 8 | Set-Content -Path $evidencePath -Encoding UTF8
+
+      - name: Upload Windows platform adapter evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-installer-evidence-${{ matrix.os }}-py${{ matrix.python }}
+          path: windows-installer-evidence.json
+          if-no-files-found: error
+          retention-days: 14
 
       # Modest package-wide floor: OS-specific and optional GUI/backends are
       # intentionally not exercised on every matrix leg; fail only on a broad
@@ -147,6 +164,23 @@ jobs:
           name: coverage-${{ matrix.os }}-py${{ matrix.python }}
           path: coverage.xml
           if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Emit cross-platform native read fixture evidence
+        if: always()
+        run: >-
+          python scripts/native_read_evidence.py
+          --junitxml test-results.xml
+          --windows-installer-evidence windows-installer-evidence.json
+          --json-out native-read-evidence.json
+
+      - name: Upload native read fixture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-read-evidence-${{ matrix.os }}-py${{ matrix.python }}
+          path: native-read-evidence.json
+          if-no-files-found: error
           retention-days: 14
 
       - name: Emit external-checker inventory for this platform
