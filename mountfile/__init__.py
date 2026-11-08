@@ -11,4 +11,4 @@ validated native profiles; external tools and OS mount drivers remain
 optional compatibility backends rather than prerequisites for native reads.
 """
 
-__version__ = "1.81.0"
+__version__ = "1.82.0"
