@@ -110,6 +110,7 @@ def _junit_results(path: Path) -> dict[str, dict[str, object]]:
         return {}
     root = ET.parse(path).getroot()
     result: dict[str, dict[str, object]] = {}
+    status_priority = {"passed": 0, "skipped": 1, "failed": 2, "error": 3}
     for case in root.iter("testcase"):
         name = case.attrib.get("name", "").split("[", 1)[0]
         status = "passed"
@@ -123,11 +124,26 @@ def _junit_results(path: Path) -> dict[str, dict[str, object]]:
         elif case.find("skipped") is not None:
             status = "skipped"
             detail = case.find("skipped").attrib.get("message", "")
-        result[name] = {
-            "status": status,
-            "detail": detail,
-            "duration_seconds": float(case.attrib.get("time", "0") or 0),
-        }
+        duration = float(case.attrib.get("time", "0") or 0)
+        previous = result.get(name)
+        if previous is None:
+            result[name] = {
+                "status": status,
+                "detail": detail,
+                "duration_seconds": duration,
+            }
+            continue
+
+        previous_status = str(previous["status"])
+        if status_priority[status] > status_priority[previous_status]:
+            previous["status"] = status
+            previous["detail"] = detail
+        elif detail and status_priority[status] == status_priority[previous_status]:
+            previous_detail = str(previous["detail"])
+            previous["detail"] = "\n---\n".join(
+                value for value in (previous_detail, detail) if value
+            )[-1000:]
+        previous["duration_seconds"] = float(previous["duration_seconds"]) + duration
     return result
 
 
