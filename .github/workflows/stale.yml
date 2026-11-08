@@ -25,7 +25,7 @@ jobs:
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: 'pinned,security,good first issue,help wanted'
-          exempt-pr-labels: 'pinned,security,automerge'
+          exempt-pr-labels: 'pinned,security,auto-merge'
           exempt-all-milestones: true
           exempt-draft-pr: true
           operations-per-run: 100

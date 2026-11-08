@@ -14,5 +14,11 @@
   "recovery_production_ready": false,
   "report": "mountfile-product-status-contract",
   "schema": 1,
+  "surface_contract": {
+    "cli_canonical_capabilities": true,
+    "gui_capability_driven_write_controls": true,
+    "readme_native_write_table": true,
+    "unreleased_conservative_status": true
+  },
   "verdict": "pass"
 }
