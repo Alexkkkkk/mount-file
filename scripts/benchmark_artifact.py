@@ -10,6 +10,7 @@ MAX_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REPEATS = 100
 MAX_WARMUPS = 20
 REQUIRED_OPERATIONS = {"list_dir", "stat", "read_range", "extract"}
+REQUIRED_BACKENDS = {"native", "pytsk3"}
 
 
 def validate_report(report: dict) -> dict[str, object]:
@@ -54,6 +55,11 @@ def validate_report(report: dict) -> dict[str, object]:
         blockers.append("capability_contract.parity")
     if runtime.get("source_worktree_dirty") is not False:
         blockers.append("environment.runtime_versions.source_worktree_dirty")
+    comparison = report.get("comparison", {})
+    if comparison.get("content_equivalent") is not True:
+        blockers.append("comparison.content_equivalent")
+    if comparison.get("content_mismatches") != []:
+        blockers.append("comparison.content_mismatches")
     backends = report.get("backends", {})
     observed = []
     for name, backend in backends.items():
@@ -67,8 +73,8 @@ def validate_report(report: dict) -> dict[str, object]:
             blockers.append(f"backend.{name}.operations")
         if len(backend.get("iterations", [])) != repeats:
             blockers.append(f"backend.{name}.iterations")
-    if not observed:
-        blockers.append("backends")
+    if not REQUIRED_BACKENDS.issubset(backends):
+        blockers.append("backends.required")
     return {
         "schema": 1,
         "report": "mountfile-benchmark-artifact-validation",
