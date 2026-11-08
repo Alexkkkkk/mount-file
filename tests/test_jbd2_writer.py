@@ -93,9 +93,58 @@ def test_accepts_byte_oriented_memoryview_and_copies_its_contents():
     assert records[1] == b"M" * 1024
 
 
-def test_rejects_data_that_requires_unsupported_escape_handling():
-    with pytest.raises(JBD2WriteProfileError, match="ESCAPE"):
-        encode(writes={8: _MAGIC_BYTES + b"A" * 1020})
+def test_encodes_data_starting_with_magic_using_escape_tag():
+    payload = _MAGIC_BYTES + b"A" * 1020
+
+    records = encode(writes={8: payload})
+
+    assert struct.unpack_from(">II", records[0], 12) == (8, 0x00000009)
+    assert records[1] == b"\x00" * 4 + payload[4:]
+    plan = plan_classic_jbd2_ring_transaction(
+        first=1,
+        max_length=8,
+        head=1,
+        tail=1,
+        records=records,
+        block_size=1024,
+        empty=True,
+    )
+    assert len(plan.writes) == len(records)
+
+
+def test_ring_planner_rejects_escaped_tag_with_nonzero_prefix():
+    records = [
+        bytearray(record) for record in encode(writes={8: _MAGIC_BYTES + b"A" * 1020})
+    ]
+    records[1][:4] = b"BAD!"
+
+    with pytest.raises(JBD2WriteProfileError, match="zero prefix"):
+        plan_classic_jbd2_ring_transaction(
+            first=1,
+            max_length=8,
+            head=1,
+            tail=1,
+            records=[bytes(record) for record in records],
+            block_size=1024,
+            empty=True,
+        )
+
+
+def test_ring_planner_rejects_magic_prefix_without_escape_tag():
+    records = [bytearray(record) for record in encode(writes={8: b"A" * 1024})]
+    struct.pack_into(">I", records[0], 16, 0x00000008)
+    records[1][:4] = _MAGIC_BYTES
+
+    with pytest.raises(JBD2WriteProfileError, match="lacks ESCAPE"):
+        plan_classic_jbd2_ring_transaction(
+            first=1,
+            max_length=8,
+            head=1,
+            tail=1,
+            records=[bytes(record) for record in records],
+            block_size=1024,
+            empty=True,
+        )
 
 
 def test_encodes_revoke_only_transaction():
@@ -129,7 +178,9 @@ def test_encodes_multiple_revoke_blocks_and_planner_accepts_them():
 
 def test_serialized_transaction_passes_existing_classic_jbd2_validator():
     records = encode(
-        sequence=23, writes={8: b"A" * 1024, 12: b"B" * 1024}, revokes=[31]
+        sequence=23,
+        writes={8: _MAGIC_BYTES + b"A" * 1020, 12: b"B" * 1024},
+        revokes=[31],
     )
     reader = NativeExt3Image.__new__(NativeExt3Image)
     reader.block_size = 1024
