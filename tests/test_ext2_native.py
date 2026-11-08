@@ -99,6 +99,50 @@ def test_native_ext2_file_and_directory_crud_is_consistent(tmp_path):
     _assert_e2fsck_clean(image)
 
 
+def test_native_ext2_hard_link_shares_inode_and_unlinks_one_name(tmp_path):
+    image = tmp_path / "hard-link.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    payload = b"shared ext2 inode"
+    writer.write_file("/original.bin", payload)
+
+    writer.link("/original.bin", "/alias.bin")
+    original = writer._fs._lookup_child(2, b"original.bin")
+    alias = writer._fs._lookup_child(2, b"alias.bin")
+    assert original["inode"] == alias["inode"]
+    assert writer._fs._u16(writer._fs._read_inode(original["inode"]), 26) == 2
+    assert writer.read_file("/alias.bin") == payload
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/original.bin")
+    assert writer.read_file("/alias.bin") == payload
+    assert writer._fs._u16(writer._fs._read_inode(alias["inode"]), 26) == 1
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/alias.bin")
+    assert {entry["name"] for entry in writer.list_dir("/")} == {"lost+found"}
+    _assert_e2fsck_clean(image)
+
+
+def test_native_ext2_hard_link_refusals_leave_image_unchanged(tmp_path):
+    image = tmp_path / "hard-link-refusal.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    writer.write_file("/file.bin", b"content")
+    writer.mkdir("/directory")
+    before = hashlib.sha256(image.read_bytes()).digest()
+
+    with pytest.raises(NativeExt2Error, match="regular files"):
+        writer.link("/directory", "/directory-alias")
+    with pytest.raises(FileExistsError):
+        writer.link("/file.bin", "/directory")
+    with pytest.raises(FileNotFoundError):
+        writer.link("/missing", "/new-name")
+
+    assert hashlib.sha256(image.read_bytes()).digest() == before
+    _assert_e2fsck_clean(image)
+
+
 @pytest.mark.parametrize("block_size", [1024, 2048, 4096])
 def test_native_ext2_single_indirect_file_roundtrip_and_reclamation(
     tmp_path, block_size
@@ -570,6 +614,8 @@ def test_native_ext2_routes_gui_and_universal_facade_without_debugfs(
     assert gui_writer.write_strategy == "native-ext2"
     gui_writer.write_file("/from-gui.txt", b"native")
     assert gui_writer.read_file("/from-gui.txt") == b"native"
+    gui_writer.link("/from-gui.txt", "/from-gui-link.txt")
+    assert gui_writer.read_file("/from-gui-link.txt") == b"native"
 
     from mountfile.universal_fs_rw import UniversalFSRW
 
