@@ -5,7 +5,7 @@ The matrix describes operations exposed by the current VFS and RW APIs.  It is
 not a claim of full filesystem-format parity: a profile is available only after
 its parser/writer validates the selected image and all profile-specific gates.
 
-Schema v5 retains the v4 interface-specific capability lists for compatibility,
+Schema v6 retains the v4 interface-specific capability lists for compatibility,
 and adds a common operation/status projection.  Clients can therefore render a
 single profile × operation × refusal view without guessing whether the selected
 backend was opened through VFS or :class:`UniversalFSRW`.
