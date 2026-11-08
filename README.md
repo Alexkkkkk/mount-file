@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is synchronized automatically on every internal pull request. Source revision: `feat/issues-384-390-acceptance-gaps`; package version: `1.80.0`.
+This block is synchronized automatically on every internal pull request. Source revision: `feat/issue-390-ci-benchmark-matrix`; package version: `1.80.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
