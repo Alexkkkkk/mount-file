@@ -44,7 +44,7 @@ def test_product_status_contract_is_conservative_and_consistent():
     assert report["schema"] == 1
     assert report["verdict"] == "pass"
     assert report["blockers"] == []
-    assert report["capability_matrix_version"] == 5
+    assert report["capability_matrix_version"] == 6
     assert report["recovery_production_ready"] is False
     assert report["claims"] == {
         "parity": "not_claimed",
@@ -149,11 +149,11 @@ def test_product_status_contract_accepts_only_complete_executed_coverage(
     )
     monkeypatch.setattr(
         "scripts.product_status_contract.get_native_capability_matrix",
-        lambda: {"version": 5, "profiles": []},
+        lambda: {"version": 6, "profiles": []},
     )
     monkeypatch.setattr(
         "scripts.product_status_contract.build_recovery_report",
-        lambda: {"capability_matrix_version": 5, "production_ready": False},
+        lambda: {"capability_matrix_version": 6, "production_ready": False},
     )
     checker_entries = [
         {"profile": "ext2", "parity": "not_claimed", "evidence": "fixture_required"}

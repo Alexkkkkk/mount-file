@@ -8,7 +8,8 @@
     "write-file",
     "mkdir",
     "delete",
-    "rename"
+    "rename",
+    "hard-link"
   ],
   "profiles": [
     {
@@ -73,6 +74,15 @@
           "api_operation": "extract",
           "refusal": null,
           "state": "available"
+        },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
         },
         "list": {
           "api_operation": "list",
@@ -202,6 +212,15 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -329,6 +348,15 @@
           "api_operation": "extract",
           "refusal": null,
           "state": "available"
+        },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
         },
         "list": {
           "api_operation": "list",
@@ -470,6 +498,15 @@
           "api_operation": "extract",
           "refusal": null,
           "state": "available"
+        },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
         },
         "list": {
           "api_operation": "list",
@@ -613,6 +650,15 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -755,6 +801,15 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -895,6 +950,15 @@
           "api_operation": "extract",
           "refusal": null,
           "state": "available"
+        },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
         },
         "list": {
           "api_operation": "list",
@@ -1050,6 +1114,15 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "selected profile is read-only for this operation"
+          },
+          "state": "refused"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -1187,6 +1260,15 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "operation is not exposed by the selected profile interface"
+          },
+          "state": "refused"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -1303,6 +1385,15 @@
           "api_operation": "extract",
           "refusal": null,
           "state": "available"
+        },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "operation is not exposed by the selected profile interface"
+          },
+          "state": "refused"
         },
         "list": {
           "api_operation": "list",
@@ -1434,6 +1525,11 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": "link",
+          "refusal": null,
+          "state": "available"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -1488,7 +1584,8 @@
         "write_file",
         "mkdir",
         "delete",
-        "rename"
+        "rename",
+        "link"
       ],
       "write_strategy": "native-ext2"
     },
@@ -1578,6 +1675,15 @@
           "refusal": null,
           "state": "available"
         },
+        "hard-link": {
+          "api_operation": null,
+          "refusal": {
+            "category": "unsupported",
+            "code": "operation_not_supported",
+            "message": "operation is not exposed by the selected profile interface"
+          },
+          "state": "refused"
+        },
         "list": {
           "api_operation": "list",
           "refusal": null,
@@ -1637,5 +1743,5 @@
       "write_strategy": "native-exfat-phase1"
     }
   ],
-  "version": 5
+  "version": 6
 }

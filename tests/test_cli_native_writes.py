@@ -27,6 +27,9 @@ class _FakeWriter:
     def rename(self, source, destination):
         self.calls.append(("rename", source, destination))
 
+    def link(self, source, destination):
+        self.calls.append(("link", source, destination))
+
     def delete(self, path, recursive=False):
         self.calls.append(("delete", path, recursive))
 
@@ -119,6 +122,27 @@ def test_mkdir_mv_and_recursive_rm_route_through_native_writer(monkeypatch):
         ("rename", "/docs/old.txt", "/docs/new.txt"),
         ("delete", "/docs/new", True),
     ]
+    assert writer.closed
+
+
+def test_hard_link_requires_confirmation_and_routes_through_writer(monkeypatch):
+    writer = _FakeWriter()
+    monkeypatch.setattr(cli, "_select", lambda *_args: (4096, "ext2", "volume"))
+    monkeypatch.setattr(cli, "_open_write", lambda *_args, **_kwargs: writer)
+
+    args = SimpleNamespace(
+        yes=False,
+        image="disk.img",
+        source="/original",
+        destination="/alias",
+        backup=False,
+    )
+    assert cli.cmd_ln(args) == cli.NEED_CONFIRM
+    assert writer.calls == []
+
+    args.yes = True
+    assert cli.cmd_ln(args) == cli.OK
+    assert writer.calls == [("link", "/original", "/alias")]
     assert writer.closed
 
 

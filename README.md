@@ -247,8 +247,12 @@ silently falling back:
 python -m mountfile put dump.img ./hello.txt --dest /docs --backup --yes
 python -m mountfile mkdir dump.img /docs/new --backup --yes
 python -m mountfile mv dump.img /hello.txt renamed.txt --backup --yes
+python -m mountfile ln dump.img /hello.txt /docs/hello-link.txt --yes
 python -m mountfile rm dump.img /docs/new --recursive --backup --yes
 ```
+
+The `ln` hard-link operation is available only for the validated native ext2
+write profile; other filesystems refuse it through the capability gate.
 
 `--backup` creates a neighboring `<image>.bak`; it is not a transaction. The
 usual exit codes are `0` for success, `1` for an error, `2` when confirmation is

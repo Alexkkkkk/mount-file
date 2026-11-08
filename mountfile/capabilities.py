@@ -5,7 +5,7 @@ The matrix describes operations exposed by the current VFS and RW APIs.  It is
 not a claim of full filesystem-format parity: a profile is available only after
 its parser/writer validates the selected image and all profile-specific gates.
 
-Schema v5 retains the v4 interface-specific capability lists for compatibility,
+Schema v6 retains the v4 interface-specific capability lists for compatibility,
 and adds a common operation/status projection.  Clients can therefore render a
 single profile × operation × refusal view without guessing whether the selected
 backend was opened through VFS or :class:`UniversalFSRW`.
@@ -18,7 +18,7 @@ from types import MappingProxyType
 
 from mountfile.safety import RefusalCode, RefusalError
 
-CAPABILITY_MATRIX_VERSION = 5
+CAPABILITY_MATRIX_VERSION = 6
 
 # Read-only providers surfaced through the public VFS API.  These legacy names
 # are kept unchanged in the versioned JSON payload.
@@ -43,6 +43,7 @@ CANONICAL_OPERATIONS = (
     "mkdir",
     "delete",
     "rename",
+    "hard-link",
 )
 
 _INTERFACE_OPERATION_ALIASES = MappingProxyType(
@@ -67,6 +68,7 @@ _INTERFACE_OPERATION_ALIASES = MappingProxyType(
                 "mkdir": "mkdir",
                 "delete": "delete",
                 "rename": "rename",
+                "hard-link": "link",
             }
         ),
     }
@@ -273,7 +275,7 @@ _WRITE_PROFILES = (
         "universal-fs-rw",
         "read-write",
         RW_READ_CAPABILITIES,
-        RW_WRITE_CAPABILITIES,
+        (*RW_WRITE_CAPABILITIES, "link"),
         "native-ext2",
     ),
     CapabilityProfile(
@@ -629,7 +631,9 @@ NATIVE_WRITE_CAPABILITIES_BY_STRATEGY = MappingProxyType(
 NATIVE_WRITE_PROFILES_BY_STRATEGY = MappingProxyType(
     {profile.write_strategy: profile for profile in _WRITE_PROFILES}
 )
-_WRITE_CANONICAL_OPERATIONS = frozenset(("write-file", "mkdir", "delete", "rename"))
+_WRITE_CANONICAL_OPERATIONS = frozenset(
+    ("write-file", "mkdir", "delete", "rename", "hard-link")
+)
 
 
 def _refusal_payload(code: RefusalCode, message: str) -> dict[str, str]:
