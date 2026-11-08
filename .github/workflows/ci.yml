@@ -312,6 +312,8 @@ jobs:
           PYTHON_BIN: python
           INCLUDE_10M: "1"
         run: |
+          rm -f checker-matrix.json checker-acceptance.json checker-acceptance-junit.xml
+          rm -f recovery-acceptance.json recovery-acceptance-junit.xml product-status.json
           output_dir="${RUNNER_TEMP}/mountfile-vfs-benchmark"
           scripts/run_vfs_benchmarks.sh "${output_dir}"
           python scripts/benchmark_artifact.py \
