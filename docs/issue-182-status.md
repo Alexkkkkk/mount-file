@@ -26,6 +26,12 @@ acceptance report по всем native RW profiles. Отчёт не запуск
 обязывает сохранять `parity=not_claimed`, `power_loss=unsupported`, а native
 ext3/ext4 и NTFS writes — `unsupported`.
 
+**Cross-surface status follow-up:** README and Unreleased changelog now state
+that native ext3/ext4/NTFS writes and power-loss safety are unsupported; CLI
+capabilities and GUI write controls consume the canonical capability matrix.
+The status-contract check covers these conservative claims. This does not claim
+full release-note, GUI-label or cross-platform benchmark parity.
+
 **Executed recovery evidence milestone:** `scripts/recovery_acceptance.py`
 запускает cancellation, process-die, rollback и quarantine fixtures для ext2,
 FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успешное выполнение
@@ -41,8 +47,8 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 | V1 | Read-back и независимый checker для каждого writer | Частично | Linux CI требует e2fsprogs/dosfstools/exfatprogs/ntfs-3g для реальных oracle-тестов; full profile × operation matrix и writer-oracle parity ещё не закрыты. |
 | C1 | Crash recovery/quarantine и проверка process-kill/power-loss | Частично | ext2 имеет sidecar recovery и process-crash tests; нет общей полной crash/power-loss гарантии для всех writers. |
 | CI1 | Обязательная Linux/Windows/macOS матрица с реальными fixtures | Частично | CI workflow и локальные тесты существуют; полный набор внешних checker/integration tests на всех ОС не подтверждён. |
-| B1 | Воспроизводимые benchmark на Linux, Windows и macOS | Не готово | Опубликован ограниченный ext2/Linux ARM64 результат; cross-platform benchmark matrix отсутствует. |
-| D1 | Единый актуальный статус в docs, GUI, CLI, VFS и release | Частично | FAT12/16, ext2 files/directories, ext4 inode flag policy, one-FAT exFAT policy и benchmark provenance синхронизированы; полное согласование интерфейсов и release status ещё впереди. |
+| B1 | Воспроизводимые benchmark на Linux, Windows и macOS | Не готово | Linux CI публикует ограниченный ext2 read-only benchmark artifact; write workloads и Windows/macOS provenance отсутствуют. |
+| D1 | Единый актуальный статус в docs, GUI, CLI, VFS и release | Частично | README, status sheet и Unreleased changelog явно фиксируют unsupported writes; CLI/GUI используют capability status. Полная проверка всех labels и release surfaces ещё впереди. |
 | P1 | Пройти все acceptance gates и объявить поддержанные профили production-ready | Не готово | Все обязательные gates должны выполняться одновременно; текущие ограничения выше не позволяют считать issue завершённой. |
 
 ### Обновление bounded ImageSource / NTFS

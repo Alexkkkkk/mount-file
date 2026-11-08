@@ -1,5 +1,11 @@
-name: Synchronize repository status
+name: Verify repository status
 
+# Validation only. An earlier revision committed generated data straight into
+# the pull request head with a skip-CI trailer, which left the head without any
+# check runs: the required status checks could never be reported and every
+# internal pull request became permanently unmergeable. The generator is still
+# executed from the trusted default branch, but the result is compared with the
+# committed data and the workflow fails instead of pushing.
 on:
   push:
     branches: [main]
@@ -8,7 +14,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -16,9 +22,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sync:
-    # Fork PRs still execute the trusted generator for validation, but cannot
-    # receive a write-back commit. No PR code is executed in this workflow.
+  verify:
+    # Fork PRs are validated the same way as same-repository PRs: the trusted
+    # generator reads the PR tree as data only, so no PR Python code is
+    # executed and nothing is written back.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted workflow source
@@ -36,7 +43,6 @@ jobs:
         if: github.event_name == 'pull_request_target'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin "pull/$PR_NUMBER/head"
@@ -48,46 +54,51 @@ jobs:
           python scripts/sync_repository_status.py \
             --repo-root /tmp/mountfile-pr \
             --output-dir /tmp/mountfile-status
-          python scripts/generate_readme.py \
-            --repo-root /tmp/mountfile-pr \
-            --output /tmp/README.generated \
-            --revision "$HEAD_REF"
-          git checkout --detach FETCH_HEAD
-          cp /tmp/README.generated README.md
-          mkdir -p docs/generated
-          cp /tmp/mountfile-status/*.json docs/generated/
+          git rev-parse FETCH_HEAD > /tmp/mountfile-head-sha
 
       - name: Generate status on trusted default branch
         if: github.event_name != 'pull_request_target'
         run: |
           set -euo pipefail
-          python scripts/sync_repository_status.py --output-dir docs/generated
-          python scripts/generate_readme.py --revision "${GITHUB_REF_NAME}"
+          rm -rf /tmp/mountfile-status
+          mkdir -p /tmp/mountfile-status
+          python scripts/sync_repository_status.py --output-dir /tmp/mountfile-status
 
-      - name: Commit synchronized data when write-back is safe
-        if: >-
-          github.event_name != 'pull_request_target' ||
-          github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          HEAD_REF_PUSH: ${{ github.event.pull_request.head.ref }}
+      - name: Fail when committed status data is stale
         run: |
           set -euo pipefail
-          if git diff --quiet -- README.md docs/generated; then
-            echo 'Repository status data is already synchronized.'
-            exit 0
+          status=0
+          for name in capability-matrix.json checker-matrix.json recovery-matrix.json product-status.json; do
+            committed="/tmp/committed-${name}"
+            if [ -f /tmp/mountfile-head-sha ]; then
+              git show "$(cat /tmp/mountfile-head-sha):docs/generated/${name}" > "${committed}"
+            else
+              cp "docs/generated/${name}" "${committed}"
+            fi
+            if ! diff -u "${committed}" "/tmp/mountfile-status/${name}"; then
+              echo "::error file=docs/generated/${name}::Committed status data is stale. Run 'python scripts/sync_repository_status.py' and commit the regenerated files."
+              status=1
+            fi
+          done
+          if [ "${status}" -ne 0 ]; then
+            echo "Canonical status data must be regenerated inside the pull request itself."
+            exit 1
           fi
-          git config user.name 'mount-file status bot'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add README.md docs/generated
-          git commit -m 'docs: synchronize repository status data [skip ci]'
-          if [ "${{ github.event_name }}" = 'pull_request_target' ]; then
-            git push origin "HEAD:$HEAD_REF_PUSH"
-          else
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
+          echo "Canonical status data matches the committed files."
 
-      - name: Report fork PR synchronization limitation
-        if: >-
-          github.event_name == 'pull_request_target' &&
-          github.event.pull_request.head.repo.full_name != github.repository
-        run: echo 'Fork PR data was validated; write-back is intentionally disabled.'
+      - name: Report stale generated README block
+        if: github.event_name == 'pull_request_target'
+        run: |
+          set -euo pipefail
+          head_sha="$(cat /tmp/mountfile-head-sha)"
+          git show "${head_sha}:README.md" > /tmp/README.committed
+          python scripts/generate_readme.py \
+            --repo-root /tmp/mountfile-pr \
+            --output /tmp/README.generated
+          # The block is informational and version-derived only, so a stale copy
+          # is reported without failing the pull request.
+          if ! diff -q /tmp/README.committed /tmp/README.generated > /dev/null; then
+            echo "::warning file=README.md::Generated README block is stale. Run 'python scripts/generate_readme.py' to refresh it."
+          else
+            echo "Generated README block matches the committed file."
+          fi

@@ -47,11 +47,18 @@ GitHub Actions не видит несохранённые файлы на ком
 - запись в remote через GitHub Actions возможна только явным `workflow_dispatch` после успешного Verify;
 - при divergence выполняется PR, а не force-push.
 
-`status-sync.yml` — единый workflow для README и всех canonical status artifacts. Он запускается на
+`status-sync.yml` — единая проверка README и всех canonical status artifacts. Он запускается на
 каждом push в `main`, на открытие/обновление PR и вручную. Для PR workflow checkout-ит trusted default
-branch, передаёт PR tree только как данные генераторам и не выполняет Python-код из PR; fork PR
-проверяется без write-back. Для branch того же репозитория generated README и JSON возвращаются в branch
-одним commit. Это заменяет отдельный README sync и не допускает расхождения между текстовым и машинным статусом.
+branch, передаёт PR tree только как данные генераторам и не выполняет Python-код из PR. Workflow ничего
+не коммитит и не пушит: он перегенерирует данные и падает, если закоммиченные JSON расходятся с деревом PR.
+Расхождение исправляется в самом PR командами `python scripts/sync_repository_status.py` и
+`python scripts/generate_readme.py`.
+
+Автоматический write-back убран намеренно. Коммит в head PR-ветки с трейлером `[skip ci]` не создаёт ни
+одного check run, поэтому обязательные проверки (`quality-gate`, `dependency-review`) на новой голове
+никогда не появляются и PR становится невозможно смержить. Дополнительно generated README больше не
+содержит имя ветки: строка «Source revision: `<branch>`» делала данные уникальными для каждой ветки и
+порождала конфликты README между PR.
 
 Это предотвращает ложное обещание «GitHub сам увидит любой файл на компьютере» и защищает forensic-данные от случайного попадания в Git.
 

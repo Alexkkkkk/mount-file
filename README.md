@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is synchronized automatically on every internal pull request. Source revision: `feat/issue-390-benchmark-provenance`; package version: `1.80.0`.
+This block is generated from the canonical status data in this repository. Package version: `1.80.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
@@ -69,6 +69,11 @@ layout accepted by a filesystem specification:
 | ext2 | Yes | Limited | Allowlisted metadata and bounded direct/indirect capacity |
 | ext3/ext4 | Read-only | No | Conservative profiles; journal/recovery and unsupported features fail closed |
 | NTFS | Read-only | No | Bounded reader; native writer is intentionally disabled |
+
+Native ext3/ext4 and NTFS writes are unsupported; power-loss safety is
+unsupported. Limited writes are available only through the explicitly enabled
+bounded profiles above. Backup, rollback and benchmark evidence do not imply
+power-loss safety or full filesystem parity.
 
 The versioned machine-readable matrix is the source of truth for operations,
 state gates and refusal codes:
