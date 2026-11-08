@@ -44,7 +44,7 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 В capability matrix токен `read-file` означает чтение всего файла методом
 `read_file`, а `read-range` — отдельный bounded вызов `read_file_range`; ни один
 из них не подразумевается наличием другого. Добавление этих операций в
-сериализуемую матрицу повышает её schema version до 5. Schema v5 сохраняет
+сериализуемую матрицу повышает её schema version до 6. Schema v6 сохраняет
 прежние `read_capabilities` и `write_capabilities`, а также публикует общий
 словарь `operations`: у каждой canonical операции есть `state`, точное
 `api_operation` для данного интерфейса либо structured `refusal` с code и
@@ -69,7 +69,7 @@ whole-file read только после той же проверки диапа�
 `write_rejection_code` содержит стабильный refusal code для profile-level отказа
 или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
 `write_rejection_reason` не следует разбирать приложениям.
-В schema v5 status также содержит `write_rejection`, полную карту `operations`
+В schema v6 status также содержит `write_rejection`, полную карту `operations`
 и `recovery`. Поле `recovery` содержит evidence-bounded значения для
 `rollback`, `process_kill`, `power_loss` и `quarantine`; значение
 `unsupported`/`not_proven` не следует трактовать как best-effort разрешение
@@ -119,7 +119,10 @@ timestamps вместе с сырым DOS attribute mask; NTFS в текущем
 нельзя использовать как нормализованный UTC timeline timestamp.
 
 Общий VFS contract не предоставляет owner/group, POSIX permissions/ACL,
-xattrs, число или семантику hard links и все timestamps. NTFS reader открывает
+xattrs, полный link graph и все timestamps. Bounded native ext2 writer
+поддерживает создание hard link для regular file, increment/decrement inode link
+count и освобождение данных только после удаления последнего имени; каталоги и
+специальные файлы отвергаются. NTFS reader открывает
 только unnamed `$DATA`; alternate data streams не перечисляются и не извлекаются
 через этот API. ext2 может обозначить тип записи как `symlink`, но это не
 обещание следования по ссылке: callers не должны трактовать имя/`kind` как

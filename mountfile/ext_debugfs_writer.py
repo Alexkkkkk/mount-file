@@ -589,6 +589,11 @@ class Ext234ImageWriter:
 
         self._with_working_extent(apply)
 
+    def link(self, source, destination):
+        if self.native_backend is None:
+            raise ExtWriteError("hard links require the native ext2 profile")
+        return self.native_backend.link(source, destination)
+
     def rename(self, source, destination):
         if self.native_backend is not None:
             return self.native_backend.rename(source, destination)

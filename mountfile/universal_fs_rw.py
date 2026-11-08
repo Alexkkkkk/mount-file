@@ -2303,6 +2303,11 @@ class Ext234RW(RWBackend):
         self._debugfs(f"mkdir {path}", write=True)
         self._flush_tmp()
 
+    def link(self, source: str, destination: str) -> None:
+        if self._native is None:
+            raise NotImplementedError("hard links require the native ext2 profile")
+        return self._native.link(source, destination)
+
     def delete(self, path: str, recursive: bool = False) -> None:
         if self._native is not None:
             return self._native.delete(path, recursive=recursive)
@@ -3551,6 +3556,12 @@ class UniversalFSRW:
         op = WriteOperation("rename", src, {"dst": dst})
         self._audit_and_backup(op)
         self.backend.rename(src, dst)
+
+    def link(self, source: str, destination: str) -> None:
+        self._require_operation("link")
+        op = WriteOperation("hard-link", source, {"dst": destination})
+        self._audit_and_backup(op)
+        self.backend.link(source, destination)
 
     # ---- maintenance ------------------------------------------------------
     def flush(self) -> dict:
