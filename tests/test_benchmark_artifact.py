@@ -28,7 +28,8 @@ def _report():
             "evidence": "benchmark_observed_only",
             "parity": "not_claimed",
         },
-        "backends": {"native": backend},
+        "comparison": {"content_equivalent": True, "content_mismatches": []},
+        "backends": {"native": backend, "pytsk3": dict(backend)},
     }
 
 
@@ -45,6 +46,26 @@ def test_benchmark_artifact_rejects_extent_outside_image():
     result = validate_report(report)
     assert result["verdict"] == "blocked"
     assert "extent.outside_image" in result["blockers"]
+
+
+def test_benchmark_artifact_rejects_content_mismatch():
+    report = _report()
+    report["comparison"] = {
+        "content_equivalent": False,
+        "content_mismatches": ["/bench/file.bin"],
+    }
+    result = validate_report(report)
+    assert result["verdict"] == "blocked"
+    assert "comparison.content_equivalent" in result["blockers"]
+    assert "comparison.content_mismatches" in result["blockers"]
+
+
+def test_benchmark_artifact_requires_reference_backend():
+    report = _report()
+    del report["backends"]["pytsk3"]
+    result = validate_report(report)
+    assert result["verdict"] == "blocked"
+    assert "backends.required" in result["blockers"]
 
 
 def test_benchmark_artifact_rejects_dirty_or_overclaiming_report():
