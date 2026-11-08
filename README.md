@@ -70,6 +70,11 @@ layout accepted by a filesystem specification:
 | ext3/ext4 | Read-only | No | Conservative profiles; journal/recovery and unsupported features fail closed |
 | NTFS | Read-only | No | Bounded reader; native writer is intentionally disabled |
 
+Native ext3/ext4 and NTFS writes are unsupported; power-loss safety is
+unsupported. Limited writes are available only through the explicitly enabled
+bounded profiles above. Backup, rollback and benchmark evidence do not imply
+power-loss safety or full filesystem parity.
+
 The versioned machine-readable matrix is the source of truth for operations,
 state gates and refusal codes:
 
