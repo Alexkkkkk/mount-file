@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import platform
+import shutil
 import statistics
 import subprocess
 import sys
@@ -36,10 +37,17 @@ from mountfile.vfs import TskError, TskImage, open_image_provider
 
 _SCHEMA_VERSION = 2
 _RANGE_LIMIT = 1 << 20
+_MAX_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_PATHS = 256
+_MAX_TOTAL_EXTRACT_BYTES = 256 * 1024 * 1024
+_MAX_REPEATS = 100
+_MAX_WARMUPS = 20
 
 
 def _validate_paths(paths: list[str]) -> list[str]:
     """Require absolute, normalized VFS paths and reject traversal components."""
+    if not paths:
+        raise ValueError("benchmark requires at least one file path")
     normalized = []
     for raw in paths:
         if not raw or "\x00" in raw:
@@ -57,6 +65,8 @@ def _validate_paths(paths: list[str]) -> list[str]:
         normalized.append(canonical)
     if len(set(normalized)) != len(normalized):
         raise ValueError("benchmark paths must be unique")
+    if len(normalized) > _MAX_PATHS:
+        raise ValueError(f"benchmark paths exceed the {_MAX_PATHS}-path limit")
     return normalized
 
 
@@ -120,6 +130,31 @@ def _runtime_versions() -> dict:
     }
 
 
+def _tool_versions() -> dict[str, str | None]:
+    """Capture versions of tools used to build the benchmark fixture."""
+    versions: dict[str, str | None] = {}
+    for name in ("mke2fs", "debugfs"):
+        if shutil.which(name) is None:
+            versions[name] = None
+            continue
+        try:
+            result = subprocess.run(
+                [name, "-V"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            versions[name] = None
+            continue
+        output = "\n".join((result.stdout, result.stderr)).strip()
+        versions[name] = next(
+            (line.strip() for line in output.splitlines() if line.strip()), None
+        )
+    return versions
+
+
 def _quantile(values: list[float], percentile: float) -> float | None:
     if not values:
         return None
@@ -175,19 +210,28 @@ def _iteration(provider, paths: list[str]) -> dict:
         samples["list_dir"].append(elapsed)
         listed_entries += len(entries)
 
+    for path in paths:
+        metadata, elapsed = _timed(lambda p=path: provider.stat(p))
+        if metadata.get("is_dir"):
+            raise ValueError(
+                f"benchmark path is a directory, not a regular file: {path!r}"
+            )
+        size = int(metadata["size"])
+        if size < 0:
+            raise ValueError(f"provider returned negative file size for {path!r}")
+        samples["stat"].append(elapsed)
+        file_sizes[path] = size
+    total_extract_bytes = sum(file_sizes.values())
+    if total_extract_bytes > _MAX_TOTAL_EXTRACT_BYTES:
+        raise ValueError(
+            "benchmark extraction workload exceeds the "
+            f"{_MAX_TOTAL_EXTRACT_BYTES}-byte per-iteration limit"
+        )
+
     with tempfile.TemporaryDirectory(prefix="mountfile-bench-") as tmp:
         output_root = Path(tmp)
         for index, path in enumerate(paths):
-            metadata, elapsed = _timed(lambda p=path: provider.stat(p))
-            if metadata.get("is_dir"):
-                raise ValueError(
-                    f"benchmark path is a directory, not a regular file: {path!r}"
-                )
-            size = int(metadata["size"])
-            if size < 0:
-                raise ValueError(f"provider returned negative file size for {path!r}")
-            samples["stat"].append(elapsed)
-            file_sizes[path] = size
+            size = file_sizes[path]
 
             requested = min(size, _RANGE_LIMIT)
             if requested:
@@ -407,10 +451,14 @@ def build_report(
     if offset < 0 or volume_size <= 0:
         raise ValueError("offset must be non-negative and volume-size positive")
     image_size = image.stat().st_size
+    if image_size > _MAX_IMAGE_BYTES:
+        raise ValueError(f"image exceeds the {_MAX_IMAGE_BYTES}-byte benchmark limit")
     if offset + volume_size > image_size:
         raise ValueError("selected volume extent exceeds image bounds")
-    if repeats < 1 or warmups < 0:
-        raise ValueError("repeats must be >= 1 and warmups must be >= 0")
+    if not 1 <= repeats <= _MAX_REPEATS or not 0 <= warmups <= _MAX_WARMUPS:
+        raise ValueError(
+            f"repeats must be 1..{_MAX_REPEATS} and warmups 0..{_MAX_WARMUPS}"
+        )
     paths = _validate_paths(paths)
 
     report = {
@@ -420,6 +468,7 @@ def build_report(
             "implementation": platform.python_implementation(),
             "platform": platform.platform(),
             "runtime_versions": _runtime_versions(),
+            "tool_versions": _tool_versions(),
         },
         "image": {
             "path": str(image),
@@ -431,6 +480,14 @@ def build_report(
             "paths": paths,
             "directories": sorted({_directory(path) for path in paths}),
             "range_read_limit_bytes_per_file": _RANGE_LIMIT,
+            "resource_limits": {
+                "max_image_bytes": _MAX_IMAGE_BYTES,
+                "max_paths": _MAX_PATHS,
+                "max_total_extract_bytes_per_iteration": _MAX_TOTAL_EXTRACT_BYTES,
+                "max_range_read_bytes_per_file": _RANGE_LIMIT,
+                "max_repeats": _MAX_REPEATS,
+                "max_warmups": _MAX_WARMUPS,
+            },
             "extraction": "complete file, temporary destination, size verified",
             "stat_implementation": "provider.stat; shared adapter may traverse list_dir components",
             "repeats": repeats,
