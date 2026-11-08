@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      issues: write
     steps:
       - name: Checkout source history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -55,7 +56,6 @@ jobs:
             exit 1
           fi
 
-          # Normalize: strip trailing slashes and an optional single .git suffix.
           mirror_url="$(printf '%s' "$MIRROR_REPOSITORY" | sed -e 's|/*$||' -e 's|[.]git$||')"
           if [[ ! "$mirror_url" =~ ^https://([A-Za-z0-9.-]+)/([A-Za-z0-9_./-]+)$ ]]; then
             echo "::error::MIRROR_REPOSITORY must use the HTTPS form https://host/owner/repository.git"
@@ -67,38 +67,38 @@ jobs:
 
           git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
 
-          # Snapshot of what the mirror currently has (empty if the mirror is a brand-new repo).
           REMOTE_SNAP="$RUNNER_TEMP/remote_refs.txt"
           git ls-remote mirror > "$REMOTE_SNAP" 2>/dev/null || true
 
-          new_refs=(); upd_refs=(); up_to_date=(); failed=()
+          new_refs=(); upd_refs=(); up_to_date=(); failed=(); verify_fail=()
+          FAILED_FILE="$RUNNER_TEMP/failed_refs.txt"
+          : > "$FAILED_FILE"
+
+          push_with_retry() { # $1 sha, $2 ref, $3 label
+            local attempt
+            for attempt in 1 2 3; do
+              if git push mirror "$1:$2"; then return 0; fi
+              echo "::warning::push of $3 failed (attempt $attempt/3), retrying in 5s"
+              sleep 5
+            done
+            return 1
+          }
 
           sync_ref() { # $1 local sha, $2 full target ref, $3 human label, $4 remote sha (may be empty)
-            local sha="$1" ref="$2" label="$3" remote_sha="$4" attempt
+            local sha="$1" ref="$2" label="$3" remote_sha="$4"
             if [[ "$DRY_RUN" == 'true' ]]; then
               if [[ -z "$remote_sha" ]]; then new_refs+=("$label"); else upd_refs+=("$label"); fi
               return 0
             fi
             if [[ -z "$remote_sha" ]]; then
-              for attempt in 1 2 3; do
-                if git push mirror "$sha:$ref"; then new_refs+=("$label"); return 0; fi
-                echo "::warning::push of $label failed (attempt $attempt/3), retrying in 5s"
-                sleep 5
-              done
-              failed+=("$label"); return 0
+              if push_with_retry "$sha" "$ref" "$label"; then new_refs+=("$label"); else failed+=("$label"); printf '%s\n' "$label" >> "$FAILED_FILE"; fi
+            elif [[ "$remote_sha" != "$sha" ]]; then
+              if push_with_retry "$sha" "$ref" "$label"; then upd_refs+=("$label"); else failed+=("$label"); printf '%s\n' "$label" >> "$FAILED_FILE"; fi
+            else
+              up_to_date+=("$label")
             fi
-            if [[ "$remote_sha" != "$sha" ]]; then
-              for attempt in 1 2 3; do
-                if git push mirror "$sha:$ref"; then upd_refs+=("$label"); return 0; fi
-                echo "::warning::push of $label failed (attempt $attempt/3), retrying in 5s"
-                sleep 5
-              done
-              failed+=("$label"); return 0
-            fi
-            up_to_date+=("$label")
           }
 
-          # Branches: origin/X -> refs/heads/X
           while IFS=' ' read -r remote_ref sha; do
             branch="${remote_ref#refs/remotes/origin/}"
             [[ "$branch" == 'HEAD' ]] && continue
@@ -106,7 +106,6 @@ jobs:
             sync_ref "$sha" "refs/heads/$branch" "branch $branch" "$remote_sha"
           done < <(git for-each-ref --format='%(refname) %(objectname)' refs/remotes/origin)
 
-          # Tags: annotated tags are compared by tag object or peeled commit.
           while IFS=' ' read -r tag obj peeled; do
             ref="refs/tags/$tag"
             remote_sha="$(awk -v r="$ref" '$2==r{print $1}' "$REMOTE_SNAP" | head -1)"
@@ -118,24 +117,49 @@ jobs:
             fi
           done < <(git for-each-ref --format='%(refname:short) %(objectname) %(*objectname)' refs/tags)
 
-          # Job summary
+          # Post-push verification: re-read the mirror and diff against local history.
+          if [[ "$DRY_RUN" != 'true' ]]; then
+            REMOTE_AFTER="$RUNNER_TEMP/remote_after.txt"
+            git ls-remote mirror > "$REMOTE_AFTER" 2>/dev/null || true
+            while IFS=' ' read -r remote_ref sha; do
+              branch="${remote_ref#refs/remotes/origin/}"
+              [[ "$branch" == 'HEAD' ]] && continue
+              remote_now="$(awk -v r="refs/heads/$branch" '$2==r{print $1}' "$REMOTE_AFTER" | head -1)"
+              if [[ "$remote_now" != "$sha" ]]; then
+                verify_fail+=("branch $branch (expected $sha, found ${remote_now:-none})")
+                printf '%s\n' "branch $branch (expected $sha, found ${remote_now:-none})" >> "$FAILED_FILE"
+              fi
+            done < <(git for-each-ref --format='%(refname) %(objectname)' refs/remotes/origin)
+            while IFS=' ' read -r tag obj peeled; do
+              ref="refs/tags/$tag"
+              remote_now="$(awk -v r="$ref" '$2==r{print $1}' "$REMOTE_AFTER" | head -1)"
+              remote_peel="$(awk -v r="$ref^{}" '$2==r{print $1}' "$REMOTE_AFTER" | head -1)"
+              if [[ "$remote_now" != "$obj" ]] || { [[ -n "$peeled" ]] && [[ "$remote_peel" != "$peeled" ]]; }; then
+                verify_fail+=("tag $tag (expected $obj, found ${remote_now:-none})")
+                printf '%s\n' "tag $tag (expected $obj, found ${remote_now:-none})" >> "$FAILED_FILE"
+              fi
+            done < <(git for-each-ref --format='%(refname:short) %(objectname) %(*objectname)' refs/tags)
+          fi
+
           {
             echo "## Mirror sync summary"
             echo ""
-            if [[ "$DRY_RUN" == 'true' ]]; then echo "> dry-run: nothing was pushed"; echo ""; fi
+            if [[ "$DRY_RUN" == 'true' ]]; then echo "> dry-run: nothing was pushed, verification skipped"; echo ""; fi
             echo "| Status | Count |"
             echo "|---|---|"
             echo "| New (pushed) | ${#new_refs[@]} |"
             echo "| Updated (pushed) | ${#upd_refs[@]} |"
             echo "| Up-to-date (skipped) | ${#up_to_date[@]} |"
-            echo "| Failed | ${#failed[@]} |"
+            echo "| Push failed | ${#failed[@]} |"
+            echo "| Verification failed | ${#verify_fail[@]} |"
             echo ""
-            for title in "New" "Updated" "Up-to-date" "Failed"; do
+            for title in New Updated Up-to-date "Push failed" "Verification failed"; do
               case "$title" in
                 New) arr=("${new_refs[@]:+${new_refs[@]}}") ;;
                 Updated) arr=("${upd_refs[@]:+${upd_refs[@]}}") ;;
                 Up-to-date) arr=("${up_to_date[@]:+${up_to_date[@]}}") ;;
-                Failed) arr=("${failed[@]:+${failed[@]}}") ;;
+                "Push failed") arr=("${failed[@]:+${failed[@]}}") ;;
+                "Verification failed") arr=("${verify_fail[@]:+${verify_fail[@]}}") ;;
               esac
               if [[ -n "${arr:-}" ]]; then
                 echo "**$title:**"
@@ -145,8 +169,36 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ "${#failed[@]}" -gt 0 ]]; then
-            echo "::error::${#failed[@]} ref(s) failed to sync after retries"
+          if [[ "${#failed[@]}" -gt 0 || "${#verify_fail[@]}" -gt 0 ]]; then
+            echo "::error::mirror sync incomplete: ${#failed[@]} push failure(s), ${#verify_fail[@]} verification failure(s)"
             exit 1
           fi
-          echo "Mirror sync completed: ${#new_refs[@]} new, ${#upd_refs[@]} updated, ${#up_to_date[@]} up-to-date."
+          echo "Mirror sync completed: ${#new_refs[@]} new, ${#upd_refs[@]} updated, ${#up_to_date[@]} up-to-date, verification passed."
+
+      - name: Open or update a failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "Mirror sync failed in run [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo ""
+            if [ -s "$RUNNER_TEMP/failed_refs.txt" ]; then
+              echo "Refs that failed to sync or failed verification:"
+              echo ""
+              echo '```'
+              cat "$RUNNER_TEMP/failed_refs.txt"
+              echo '```'
+            else
+              echo "(no ref-level details captured)"
+            fi
+          } > "$RUNNER_TEMP/issue_body.md"
+          existing="$(gh issue list --state open --json number,title --jq '.[] | select(.title == "Mirror sync failed") | .number' | head -1 || true)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/issue_body.md"
+            echo "appended run details to existing issue #$existing"
+          else
+            gh issue create --title "Mirror sync failed" --body-file "$RUNNER_TEMP/issue_body.md"
+            echo "opened a new failure issue"
+          fi
