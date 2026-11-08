@@ -1,6 +1,6 @@
 {
   "blockers": [],
-  "capability_matrix_version": 5,
+  "capability_matrix_version": 6,
   "checker_acceptance_verdict": "not_run",
   "checker_entry_count": 6,
   "claims": {

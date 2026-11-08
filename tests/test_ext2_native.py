@@ -623,8 +623,13 @@ def test_native_ext2_routes_gui_and_universal_facade_without_debugfs(
         assert filesystem.info().write_strategy == "native-ext2"
         filesystem.mkdir("/from-api")
         filesystem.write_file("/from-api/file", b"API")
+        filesystem.link("/from-api/file", "/from-api/alias")
         assert filesystem.read("/from-api/file") == b"API"
-        assert [entry.name for entry in filesystem.list("/from-api")] == ["file"]
+        assert filesystem.read("/from-api/alias") == b"API"
+        assert {entry.name for entry in filesystem.list("/from-api")} == {
+            "file",
+            "alias",
+        }
         flush_result = filesystem.flush()
         assert "no external repair tool" in flush_result["fsck"]["skipped"]
     _assert_e2fsck_clean(image)

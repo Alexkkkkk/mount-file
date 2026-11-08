@@ -3557,6 +3557,12 @@ class UniversalFSRW:
         self._audit_and_backup(op)
         self.backend.rename(src, dst)
 
+    def link(self, source: str, destination: str) -> None:
+        self._require_operation("link")
+        op = WriteOperation("hard-link", source, {"dst": destination})
+        self._audit_and_backup(op)
+        self.backend.link(source, destination)
+
     # ---- maintenance ------------------------------------------------------
     def flush(self) -> dict:
         """Read-only integrity check + sync; never repair image bytes implicitly."""
