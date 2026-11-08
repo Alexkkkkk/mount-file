@@ -45,6 +45,11 @@ Validator требует schema v2, bounded image/workload, полный наб�
 ровно заявленное число повторов, clean source provenance и консервативные
 `evidence=benchmark_observed_only`/`parity=not_claimed`. Это проверка качества
 артефакта, а не заявление filesystem parity; `write_operations` всегда false.
+Report фиксирует обнаруженные версии `mke2fs` и `debugfs` вместе с жесткими
+resource limits: image до 2 GiB, до 256 путей, совокупное извлечение до 256 MiB
+на итерацию, range-read до 1 MiB на файл, до 100 измеряемых повторов и 20
+warmups. Перед extraction harness сначала проверяет суммарный размер выбранных
+файлов, чтобы превысивший лимит workload завершился до записи временных файлов.
 
 ## 2. Фикстура: синтетический ext2-образ
 
@@ -134,7 +139,8 @@ scripts/run_vfs_benchmarks.sh /tmp/vfs-bench
 10 MiB, измеряет `list_dir`, `stat`, range-read (до 1 MiB на файл) и полное
 извлечение для native и pytsk3, а затем валидирует JSON через
 `scripts/benchmark_artifact.py`. Raw report содержит commit, состояние source
-worktree, версии Python/pytsk3, размер и SHA-256 fixture, workload и метрики;
+worktree, версии Python/pytsk3 и инструментов `mke2fs`/`debugfs`, объявленные
+resource limits, размер и SHA-256 fixture, workload и метрики;
 GitHub Actions сохраняет report и validation summary как artifact
 `vfs-benchmark-linux`. Изменение benchmark contract или невалидный report
 проваливает integration gate.

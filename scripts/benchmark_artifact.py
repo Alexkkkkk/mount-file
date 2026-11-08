@@ -7,8 +7,11 @@ import json
 from pathlib import Path
 
 MAX_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+MAX_PATHS = 256
+MAX_TOTAL_EXTRACT_BYTES = 256 * 1024 * 1024
 MAX_REPEATS = 100
 MAX_WARMUPS = 20
+RANGE_READ_LIMIT_BYTES = 1 << 20
 REQUIRED_OPERATIONS = {"list_dir", "stat", "read_range", "extract"}
 REQUIRED_BACKENDS = {"native", "pytsk3"}
 
@@ -22,6 +25,7 @@ def validate_report(report: dict) -> dict[str, object]:
     workload = report.get("workload", {})
     capability = report.get("capability_contract", {})
     runtime = report.get("environment", {}).get("runtime_versions", {})
+    tool_versions = report.get("environment", {}).get("tool_versions", {})
     if not isinstance(extent.get("offset_bytes"), int) or extent["offset_bytes"] < 0:
         blockers.append("extent.offset_bytes")
     if (
@@ -47,8 +51,46 @@ def validate_report(report: dict) -> dict[str, object]:
         blockers.append("workload.repeats")
     if not isinstance(warmups, int) or not 0 <= warmups <= MAX_WARMUPS:
         blockers.append("workload.warmups")
-    if workload.get("range_read_limit_bytes_per_file") != 1 << 20:
+    if workload.get("range_read_limit_bytes_per_file") != RANGE_READ_LIMIT_BYTES:
         blockers.append("workload.range_read_limit_bytes_per_file")
+    expected_limits = {
+        "max_image_bytes": MAX_IMAGE_BYTES,
+        "max_paths": MAX_PATHS,
+        "max_total_extract_bytes_per_iteration": MAX_TOTAL_EXTRACT_BYTES,
+        "max_range_read_bytes_per_file": RANGE_READ_LIMIT_BYTES,
+        "max_repeats": MAX_REPEATS,
+        "max_warmups": MAX_WARMUPS,
+    }
+    if workload.get("resource_limits") != expected_limits:
+        blockers.append("workload.resource_limits")
+    paths = workload.get("paths")
+    paths_valid = (
+        isinstance(paths, list)
+        and 1 <= len(paths) <= MAX_PATHS
+        and all(
+            isinstance(path, str)
+            and path.startswith("/")
+            and ".." not in path.split("/")
+            for path in paths
+        )
+    )
+    if not paths_valid:
+        blockers.append("workload.paths")
+    if not isinstance(tool_versions, dict) or not (
+        isinstance(tool_versions.get("mke2fs"), str) and tool_versions["mke2fs"].strip()
+    ):
+        blockers.append("environment.tool_versions.mke2fs")
+    if (
+        paths_valid
+        and isinstance(paths, list)
+        and any(path.endswith("large_10m.dat") for path in paths)
+        and not (
+            isinstance(tool_versions, dict)
+            and isinstance(tool_versions.get("debugfs"), str)
+            and tool_versions["debugfs"].strip()
+        )
+    ):
+        blockers.append("environment.tool_versions.debugfs")
     if capability.get("evidence") != "benchmark_observed_only":
         blockers.append("capability_contract.evidence")
     if capability.get("parity") != "not_claimed":
@@ -73,6 +115,14 @@ def validate_report(report: dict) -> dict[str, object]:
             blockers.append(f"backend.{name}.operations")
         if len(backend.get("iterations", [])) != repeats:
             blockers.append(f"backend.{name}.iterations")
+        for index, iteration in enumerate(backend.get("iterations", [])):
+            extracted_bytes = iteration.get("extracted_bytes")
+            if (
+                type(extracted_bytes) is not int
+                or extracted_bytes < 0
+                or extracted_bytes > MAX_TOTAL_EXTRACT_BYTES
+            ):
+                blockers.append(f"backend.{name}.iterations[{index}].extracted_bytes")
     if not REQUIRED_BACKENDS.issubset(backends):
         blockers.append("backends.required")
     return {
