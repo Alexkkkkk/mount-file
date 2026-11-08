@@ -652,6 +652,19 @@ def canonical_operation_for_api_operation(
     return None
 
 
+def api_operation_for_canonical_operation(
+    interface: str, canonical_operation: str
+) -> str | None:
+    """Map one canonical operation to its interface-specific API name.
+
+    Returning ``None`` for unknown interfaces or operations keeps capability
+    consumers fail-closed: a missing mapping is never mistaken for a callable
+    method on a provider.
+    """
+
+    return _INTERFACE_OPERATION_ALIASES.get(interface, {}).get(canonical_operation)
+
+
 def get_native_capability_matrix() -> dict[str, object]:
     """Return a detached, versioned JSON-serialisable matrix snapshot."""
     return {

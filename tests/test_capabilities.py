@@ -15,6 +15,7 @@ from mountfile.capabilities import (
     RW_WRITE_CAPABILITIES,
     VFS_READ_CAPABILITIES,
     VFS_WRITE_CAPABILITIES,
+    api_operation_for_canonical_operation,
     canonical_operation_for_api_operation,
     get_native_capability_matrix,
 )
@@ -101,7 +102,9 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
 def test_operation_aliases_round_trip_to_canonical_cells(
     interface, api_operation, canonical
 ):
+    assert api_operation_for_canonical_operation(interface, canonical) == api_operation
     assert canonical_operation_for_api_operation(interface, api_operation) == canonical
+    assert api_operation_for_canonical_operation(interface, "unknown-operation") is None
     assert canonical_operation_for_api_operation(interface, "unknown-operation") is None
 
 
