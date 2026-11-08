@@ -129,6 +129,23 @@ scripts/run_vfs_benchmarks.sh /tmp/vfs-bench
 # отчёт: /tmp/vfs-bench/bench_report.json (schema v2, полные выборки)
 ```
 
+В обязательном Linux integration CI выполняется тот же read-only runner с
+опцией `INCLUDE_10M=1`: он строит детерминированный 32 MiB ext2 образ с файлом
+10 MiB, измеряет `list_dir`, `stat`, range-read (до 1 MiB на файл) и полное
+извлечение для native и pytsk3, а затем валидирует JSON через
+`scripts/benchmark_artifact.py`. Raw report содержит commit, состояние source
+worktree, версии Python/pytsk3, размер и SHA-256 fixture, workload и метрики;
+GitHub Actions сохраняет report и validation summary как artifact
+`vfs-benchmark-linux`. Изменение benchmark contract или невалидный report
+проваливает integration gate.
+
+CI предоставляет воспроизводимый Linux baseline, но не заявляет cross-platform
+performance: Windows/macOS benchmark provenance и fixture/checker matrix ещё
+не готовы. Write workload в этом read-only harness отсутствует; его нельзя
+считать выполненным или поддержанным. Для локального acceptance report запускайте
+из чистого checkout, иначе validator закономерно отвергнет dirty source
+provenance.
+
 ## 4. Результаты
 
 Два независимых запуска до новой 10 MiB fixture/reader оптимизации сохранены как
