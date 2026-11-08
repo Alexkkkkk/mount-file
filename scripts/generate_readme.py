@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Update only the generated status block in README.md."""
+
 from __future__ import annotations
 
 import argparse
@@ -28,7 +29,7 @@ def _support_rows(root: Path) -> list[str]:
     return rows[:12]
 
 
-def render(root: Path, revision: str) -> str:
+def render(root: Path) -> str:
     features = [
         ("checker acceptance", root / "scripts" / "checker_acceptance.py"),
         ("recovery acceptance", root / "scripts" / "recovery_acceptance.py"),
@@ -43,8 +44,8 @@ def render(root: Path, revision: str) -> str:
             START,
             "## Generated project status",
             "",
-            f"This block is synchronized automatically on every internal pull request. "
-            f"Source revision: `{revision}`; package version: `{_version(root)}`.",
+            "This block is generated from the canonical status data in this "
+            f"repository. Package version: `{_version(root)}`.",
             "",
             f"Validated automation: {features_text}.",
             "",
@@ -75,13 +76,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--revision", default="working-tree")
     args = parser.parse_args()
     root = args.repo_root.resolve()
     readme_path = root / "README.md"
-    result = update(
-        readme_path.read_text(encoding="utf-8"), render(root, args.revision)
-    )
+    result = update(readme_path.read_text(encoding="utf-8"), render(root))
     destination = args.output or readme_path
     destination.write_text(result, encoding="utf-8")
     return 0
