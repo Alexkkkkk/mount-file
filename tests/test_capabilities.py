@@ -136,8 +136,9 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         for constraint in profiles["ext2-native-rw"]["constraints"]
     )
     assert (
-        "Explicit replay accepts classic 32-bit revoke records in a validated "
-        "no-checksum JBD2 overlay." in profiles["ext3-native-ro"]["constraints"]
+        "Explicit replay accepts classic 32-bit descriptor/revoke records and "
+        "escaped data blocks in a validated no-checksum JBD2 overlay."
+        in profiles["ext3-native-ro"]["constraints"]
     )
     assert (
         "Bounded 64BIT group-descriptor ext4 profiles are supported."
