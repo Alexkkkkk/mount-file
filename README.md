@@ -31,7 +31,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.73.1` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Current package version | `1.81.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.80.0`.
+This block is generated from the canonical status data in this repository. Package version: `1.81.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
