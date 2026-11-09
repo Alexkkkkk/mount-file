@@ -944,9 +944,13 @@ class _Ext2FS:
 
     def _inode_data(self, raw: bytes | bytearray) -> bytes:
         size = self._inode_size(raw)
-        if size > self._max_file_blocks(
-            allow_double_indirect=True, allow_triple_indirect=True
-        ) * self.block_size:
+        if (
+            size
+            > self._max_file_blocks(
+                allow_double_indirect=True, allow_triple_indirect=True
+            )
+            * self.block_size
+        ):
             raise NativeExt2Error(
                 "native ext2 profile exceeds triple-indirect capacity"
             )
@@ -1328,9 +1332,12 @@ class _Ext2FS:
         return self._inode_data(inode_raw)
 
     def write_file(self, path: str, data: bytes) -> None:
-        maximum_bytes = self._max_file_blocks(
-            allow_double_indirect=True, allow_triple_indirect=True
-        ) * self.block_size
+        maximum_bytes = (
+            self._max_file_blocks(
+                allow_double_indirect=True, allow_triple_indirect=True
+            )
+            * self.block_size
+        )
         try:
             incoming_size = len(data)
         except TypeError:
@@ -1436,21 +1443,15 @@ class _Ext2FS:
                     indirect_block = self._allocate_block(preferred)
                     new_pointer_blocks.append(indirect_block)
                     indirect_table = bytearray(self.block_size)
-                    chunk = child_data[
-                        child_first : child_first + entries_per_block
-                    ]
+                    chunk = child_data[child_first : child_first + entries_per_block]
                     for data_index, block in enumerate(chunk):
-                        struct.pack_into(
-                            "<I", indirect_table, data_index * 4, block
-                        )
+                        struct.pack_into("<I", indirect_table, data_index * 4, block)
                     self._write_block(indirect_block, bytes(indirect_table))
                     struct.pack_into(
                         "<I", child_table, indirect_index * 4, indirect_block
                     )
                 self._write_block(double_child, bytes(child_table))
-                struct.pack_into(
-                    "<I", triple_table, double_index * 4, double_child
-                )
+                struct.pack_into("<I", triple_table, double_index * 4, double_child)
             self._write_block(new_triple_indirect, bytes(triple_table))
         inode_raw[40:100] = b"\x00" * 60
         for index, block in enumerate(new_blocks[:_DIRECT_BLOCKS]):

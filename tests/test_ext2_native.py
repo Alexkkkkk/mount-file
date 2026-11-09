@@ -12,8 +12,8 @@ import sys
 import pytest
 
 import mountfile.ext2_native as ext2_native
-from mountfile.ext2_reader import NativeExt2Image
 from mountfile.ext2_native import NativeExt2Error, NativeExt2ImageWriter
+from mountfile.ext2_reader import NativeExt2Image
 
 MKE2FS = shutil.which("mke2fs")
 E2FSCK = shutil.which("e2fsck")
@@ -220,13 +220,13 @@ def test_native_ext2_triple_indirect_file_roundtrip_replace_and_delete(
     writer = NativeExt2ImageWriter(image)
     payload = bytes(index % 251 for index in range(size))
     batch_sizes = []
-    allocate_blocks = writer._fs._allocate_blocks
+    allocate_blocks = ext2_native._Ext2FS._allocate_blocks
 
-    def allocate_many(count, preferred_group=0):
+    def allocate_many(fs, count, preferred_group=0):
         batch_sizes.append(count)
-        return allocate_blocks(count, preferred_group)
+        return allocate_blocks(fs, count, preferred_group)
 
-    monkeypatch.setattr(writer._fs, "_allocate_blocks", allocate_many)
+    monkeypatch.setattr(ext2_native._Ext2FS, "_allocate_blocks", allocate_many)
 
     writer.write_file("/triple.bin", payload)
     assert batch_sizes == [(size + block_size - 1) // block_size]
@@ -242,10 +242,7 @@ def test_native_ext2_triple_indirect_file_roundtrip_replace_and_delete(
         len(writer._fs._inode_blocks(raw, allow_triple_indirect=True))
         == (size + block_size - 1) // block_size
     )
-    assert (
-        len(writer._fs._inode_pointer_blocks(raw, allow_triple_indirect=True))
-        >= 261
-    )
+    assert len(writer._fs._inode_pointer_blocks(raw, allow_triple_indirect=True)) >= 261
     _assert_e2fsck_clean(image)
 
     provider = NativeExt2Image(image, volume_size=image.stat().st_size)
