@@ -1,9 +1,10 @@
 # Issue #182 — external-checker matrix
 
 `scripts/checker_matrix.py` emits a JSON capability inventory for the external
-checker tools used by the native filesystem acceptance tests. The report is
-uploaded by the Linux integration job as the `external-checker-matrix-linux`
-artifact. It is deliberately an inventory, not a parity verdict.
+checker tools used by the native filesystem acceptance tests. A per-platform,
+per-Python inventory is uploaded by the regular test matrix. Linux integration
+also publishes an executed checker-fixture acceptance artifact. The inventory
+is deliberately not a parity verdict.
 
 ## Matrix
 
@@ -26,14 +27,53 @@ named test exists but was not executed by this inventory command;
 binary is not evidence that a fixture passed. If a tool is absent, the entry is
 `unavailable` and never `pass`; its version is `null`. A checker receiving a
 disposable image copy must not mutate the source image; the wrapper tests
-enforce source and copy identity rules.
+enforce source and copy identity rules. They record SHA-256 values for the
+source image and disposable copy before and after each checker invocation as
+JUnit properties. `scripts/checker_acceptance.py` validates and carries those
+hashes into its executed JSON report per fixture; FAT12 and FAT16 remain
+separate content-addressed cases. Hashes identify the evidence inputs and do
+not establish broader format parity.
 
 ## Reproduction
 
 ```bash
 python scripts/checker_matrix.py --json-out checker-matrix.json
 python -m pytest -q tests/test_checker_matrix.py tests/test_independent_checkers.py
+python scripts/native_read_evidence.py --junitxml test-results.xml --json-out native-read-evidence.json
 ```
+
+## Cross-platform native read evidence
+
+Each Ubuntu, Windows, and macOS test leg runs
+`scripts/native_read_evidence.py` and uploads a uniquely named
+`native-read-evidence-<runner>-py<version>` JSON artifact. It covers all eight
+native VFS read profiles and the `list`, `stat`, `read-file`, `read-range`, and
+`extract` operations. Legacy fallback is disabled. Every fixture image has a
+SHA-256 before and after the read-only checks; a changed image blocks the
+report. The artifact records runner/Python provenance, fixture kind/source,
+observed native backend, operation results, and the separate checker inventory
+with bounded tool-version strings.
+
+The report also consumes that CI leg's `test-results.xml`. Required mocked
+macOS adapter probes (signature/offset detection, no silent fallback,
+read-only APFS status, and lifecycle behavior) and Windows installer contract
+tests must be present and pass; a missing or skipped required probe blocks the
+artifact. The Windows runner additionally emits a PowerShell JSON sidecar with
+script hashes and mock assertion results, then records both installer dry-run
+results. That sidecar is required and validated on Windows; Windows-specific
+installer execution is marked not applicable on other operating systems. This
+does not claim that HFS+/APFS images were read on macOS or that optional
+`apfs-fuse`/pytsk3 dependencies are available.
+
+FAT12/16/32, exFAT, ext2/3/4 use the existing portable synthetic builders.
+NTFS uses the real-format compressed image
+`tests/fixtures/ntfs-readonly-32m.img.gz`; its manifest pins compressed and
+uncompressed image hashes and the expected file content. A fixture execution
+may report `pass` for the native read contract, but its independent-oracle
+field remains `not_claimed`. The external checker inventory does not imply
+that a checker ran on the same fixture. Linux checker and writer recovery
+acceptance artifacts remain the separate evidence for mutations; this read
+report does not enable or claim additional writers.
 
 Real-image tests remain conditional on their required formatter/checker tools.
 Linux CI installs and requires the e2fsprogs, dosfstools, exfatprogs and ntfs-3g

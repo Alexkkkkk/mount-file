@@ -91,12 +91,15 @@ python -m mountfile --help
 | `mcp[cli]`, `pydantic`, `openai` | нужны `mountfile_ai.py` и его MCP/OpenAI-совместимому слою | AI-сервер не нужен обычному CLI |
 | `dosfstools`, `mtools` | только разработка | создание синтетических образов через `make sample` |
 | `fastapi`, `uvicorn` | только DFIR REST-команда | нужны лишь для `mountfile_dfir.py serve` |
+| `Pillow` | optional extra `images` | проверка размеров и содержимого поставляемой `.ico`; не требуется базовому runtime |
+| `atheris` | optional extra `fuzz` на Linux | coverage-guided fuzz harnesses; не требуется для обычных запусков |
 
 `requirements.txt` — полный профиль и включает optional AI/API зависимости.
 Команда `python -m pip install .` устанавливает PyQt6 и не требует `pytsk3`:
 FAT12/16/32 и поддержанные native ext-профили работают без libtsk. Для legacy
 fallback явно установите `python -m pip install '.[legacy-tsk]'`; дополнительные
-возможности устанавливаются через `.[api]`, `.[ai]` или `.[dfir]`.
+возможности устанавливаются через `.[api]`, `.[ai]`, `.[dfir]`, `.[images]` или
+`.[fuzz]` на Linux.
 
 Для полного Python-окружения разработчика (все optional features, legacy `pytsk3`,
 тестовые/форматирующие инструменты и документация) из корня репозитория выполните:
