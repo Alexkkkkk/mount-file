@@ -106,6 +106,11 @@ def olma_main(argv: list[str] | None = None) -> int:
 
     # ---------- learn ----------
     if args.cmd in ("learn", "train"):
+        from ..layers.manager import LayerManager
+
+        if not LayerManager().enabled("code_repair"):
+            print("Code-repair learning is disabled; no fixer outcomes were learned.")
+            return 0
         from .learn import OlmaLearner
 
         learner = OlmaLearner(root)
@@ -143,6 +148,11 @@ def olma_main(argv: list[str] | None = None) -> int:
 
     # ---------- suggest ----------
     if args.cmd == "suggest":
+        from ..layers.manager import LayerManager
+
+        if not LayerManager().enabled("code_repair"):
+            print("Code-repair suggestions are disabled.")
+            return 0
         from .learn import OlmaLearner
 
         learner = OlmaLearner(root)

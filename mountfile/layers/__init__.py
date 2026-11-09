@@ -24,13 +24,21 @@ Run the tests:  python -m pytest tests/test_selflearning_layers.py -v
 from __future__ import annotations
 
 from .base import EWMA, BetaLearner, KnowledgeStore, Layer, LogisticWeights
+from .control import DecisionOrchestrator, Feedback, Hooks, LayerContext, LayerDecision
+from .manager import LayerManager
 from .pipeline import SelfLearningStack
 
 __all__ = [
     "BetaLearner",
     "EWMA",
+    "DecisionOrchestrator",
+    "Feedback",
+    "Hooks",
+    "LayerContext",
+    "LayerDecision",
     "KnowledgeStore",
     "Layer",
     "LogisticWeights",
+    "LayerManager",
     "SelfLearningStack",
 ]

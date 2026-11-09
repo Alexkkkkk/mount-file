@@ -463,7 +463,7 @@ def maybe_advise(settings, path, parent=None, log=None, head=None):
     from .layers.hooks import stack_for
 
     stack = stack_for(path)
-    if stack is not None:
+    if stack is not None and stack.is_enabled("advisor"):
         calibrated = stack.advisor.calibrate(hyps)
         if calibrated is not None:
             hyps = calibrated

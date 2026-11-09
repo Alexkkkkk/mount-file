@@ -19,29 +19,61 @@ import pkgutil
 from pathlib import Path
 from typing import Any
 
-# Маршрутизация: команда CLI -> слой, который обучается на её пути.
-# Непокрытые команды попадают на advisor (калибровка по фидбеку).
+# Маршрутизация CLI-команд по предметным слоям. Непокрытые команды получают
+# только агрегированную телеметрию в отдельном opt-in operations-слое.
 LAYER_ROUTING: dict[str, str] = {
     "autopick": "volume",
-    "volumes": "volume",
-    "info": "volume",
     "ls": "volume",
     "stat": "volume",
     "get": "volume",
     "read-range": "volume",
     "preflight": "preflight",
-    "capabilities": "preflight",
-    "status": "preflight",
-    "put": "cache",
-    "write-range": "cache",
-    "append": "cache",
-    "truncate": "cache",
-    "mkdir": "cache",
-    "mv": "cache",
-    "rm": "cache",
+    "ai-guard": "advisor",
+    "ai-schemas": "advisor",
+    "ai-analyze": "advisor",
+    # The following are explicit operation telemetry only; they do not map to
+    # an AI policy or claim that a learned result controls their semantics.
+    "volumes": "operations",
+    "info": "operations",
+    "capabilities": "operations",
+    "status": "operations",
+    "put": "operations",
+    "write-range": "operations",
+    "append": "operations",
+    "truncate": "operations",
+    "mkdir": "operations",
+    "mv": "operations",
+    "rm": "operations",
+    "ln": "operations",
+    "decode": "operations",
+    "split": "operations",
+    "grep": "operations",
+    "hash": "operations",
+    "evidence-manifest": "operations",
+    "timeline": "operations",
+    "timeline-export": "operations",
+    "timestomp": "operations",
+    "yara": "operations",
+    "unallocated-scan": "operations",
+    "slack": "operations",
+    "timeline-build": "operations",
+    "timeline-query": "operations",
+    "search": "operations",
+    "yara-scan": "operations",
+    "timestomp-scan": "operations",
+    "slack-extract": "operations",
+    "live-diff": "operations",
+    "layers": "operations",
 }
-DEFAULT_LAYER = "advisor"
-LAYER_NAMES = ("volume", "preflight", "cache", "advisor")
+DEFAULT_LAYER = "operations"
+LAYER_NAMES = (
+    "volume",
+    "preflight",
+    "cache",
+    "advisor",
+    "code_repair",
+    "operations",
+)
 
 
 def cli_commands() -> list[str]:

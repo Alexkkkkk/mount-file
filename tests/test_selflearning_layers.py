@@ -139,6 +139,26 @@ class TestPreflightLayer:
         hint = stack.preflight.pass_hint("ntfs")
         assert hint is not None and hint > 0.8
 
+    def test_preflight_image_learns_from_actual_payload(self, root: Path, monkeypatch) -> None:
+        from mountfile import fs_preflight
+
+        monkeypatch.setattr(
+            fs_preflight,
+            "preflight_image",
+            lambda *_args, **_kwargs: {
+                "volumes": [
+                    {"filesystem": "NTFS", "eligible_for_read": False},
+                    {"filesystem": "ext4", "eligible_for_read": True},
+                ]
+            },
+        )
+        stack = SelfLearningStack(str(root))
+        payload = stack.preflight.preflight_image("image.img")
+        assert payload["volumes"][0]["eligible_for_read"] is False
+        assert stack.preflight.observations == 2
+        assert stack.preflight.families["ntfs"].beta() < 0.5
+        assert stack.preflight.families["ext"].beta() > 0.5
+
     def test_display_name_is_normalized_and_learned(self, root: Path) -> None:
         stack = SelfLearningStack(str(root))
         for _ in range(4):
@@ -180,6 +200,29 @@ class TestCacheLayer:
         cached = stack.cache.wrap(FS())
         assert isinstance(cached, turbo.CachedFS)
 
+    def test_live_wrapper_observes_hits_and_flushes_state(self, root: Path) -> None:
+        from types import SimpleNamespace
+
+        class Entry:
+            info = SimpleNamespace(
+                name=SimpleNamespace(name=b"file.bin"),
+                meta=SimpleNamespace(size=4, type=1, addr=2, mtime=0),
+            )
+
+        class FS:
+            def open_dir(self, _path):
+                return [Entry()]
+
+        stack = SelfLearningStack(str(root))
+        cached = stack.cache.wrap(FS())
+        assert cached.list_dir("/") == cached.list_dir("/")
+        assert cached.stats()["misses"] == 1
+        assert cached.stats()["hits"] == 1
+        assert stack.cache.miss_rate.n == 2
+        stack.cache.flush()
+        restored = SelfLearningStack(str(root))
+        assert restored.cache.miss_rate.n == 2
+
 
 # ------------------------------------------------------------ advisor
 class TestAdvisorLayer:
@@ -210,7 +253,13 @@ class TestAdvisorLayer:
 class TestStack:
     def test_summary(self, root: Path) -> None:
         stack = SelfLearningStack(str(root))
-        assert stack.summary() == {"volume": 0, "preflight": 0, "cache": 0, "advisor": 0}
+        assert stack.summary() == {
+            "volume": 0,
+            "preflight": 0,
+            "cache": 0,
+            "advisor": 0,
+            "operations": 0,
+        }
 
     def test_summary_does_not_double_count_volume_feedback(self, root: Path) -> None:
         stack = SelfLearningStack(str(root))

@@ -38,10 +38,10 @@ def test_stack_for_uses_env_dir(layers_env: Path, tmp_path: Path) -> None:
 def test_stack_for_readonly_dir_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv(hooks.ENV_STORE, raising=False)
     readonly = tmp_path / "ro"
     readonly.mkdir()
     readonly.chmod(0o555)
+    monkeypatch.setenv(hooks.ENV_STORE, str(readonly))
     try:
         if os.access(readonly, os.W_OK):
             pytest.skip("sandbox ignores read-only mode")

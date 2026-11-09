@@ -26,12 +26,12 @@ import posixpath
 import shutil
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from . import __version__
 from .ai import SCHEMAS, build_backend, collect, local_reader, max_bytes, scan
-from .autopick import auto_select, format_candidates, format_choice
-from .layers.hooks import auto_select_learned
+from .autopick import format_candidates, format_choice
 from .capabilities import get_native_capability_matrix
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .dfir_slack import read_file_slack
@@ -42,7 +42,6 @@ from .evidence import EvidenceManifestError, create_evidence_manifest
 from .extract import ExtractError, extract_path
 from .fat32 import Fat32Error
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
-from .fs_preflight import preflight_image
 from .layers.hooks import auto_select_learned, preflight_learned
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
@@ -198,6 +197,7 @@ COMMANDS = (
     "truncate",
     "mkdir",
     "mv",
+    "ln",
     "rm",
     "decode",
     "split",
@@ -217,6 +217,7 @@ COMMANDS = (
     "timestomp-scan",
     "slack-extract",
     "live-diff",
+    "layers",
 )
 
 _READ_ERRORS = (
@@ -1279,13 +1280,106 @@ def cmd_ai_analyze(args):
     return OK
 
 
+def cmd_layers(args):
+    """Inspect and control persisted advisory/self-learning layers."""
+    from .layers.manager import LayerManager
+
+    manager = LayerManager(args.root)
+    action = args.layers_action
+    if action == "decide":
+        from .layers.control import DecisionOrchestrator, LayerContext
+
+        orchestrator = DecisionOrchestrator(args.root)
+        decisions = orchestrator.decide(
+            LayerContext(
+                path=args.path,
+                fs_type=args.fs,
+                size_bytes=args.size,
+                operation=args.operation,
+            )
+        )
+        if args.json:
+            print(json.dumps([item.to_dict() for item in decisions], ensure_ascii=False, indent=2))
+        elif not decisions:
+            print("No learned advisory is available; deterministic operation is unchanged.")
+        else:
+            for item in decisions:
+                print(
+                    "%s %s confidence=%.2f decision_id=%s advisory_only=true: %s"
+                    % (item.layer, item.action, item.confidence, item.decision_id, item.rationale)
+                )
+        return OK
+    if action == "feedback":
+        from .layers.control import DecisionOrchestrator, Feedback
+
+        orchestrator = DecisionOrchestrator(args.root)
+        recorded = orchestrator.feedback(
+            Feedback(args.decision_id, args.success, latency_ms=args.latency_ms)
+        )
+        print("recorded" if recorded else "decision not found or feedback rejected")
+        return OK if recorded else ERROR
+    if action == "status":
+        payload = manager.status()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print("Store: %s" % payload["store"])
+            for name, state in payload["layers"].items():
+                print(
+                    "%-12s %-8s observations=%d"
+                    % (name, "enabled" if state["enabled"] else "disabled", state["observations"])
+                )
+            print("CLI commands routed: %d" % len(payload["cli"]["layer_routing"]))
+        return OK
+    if action in {"enable", "disable"}:
+        enabled = action == "enable"
+        manager.set_enabled(args.layer, enabled)
+        print("%s: %s" % (args.layer, "enabled" if enabled else "disabled"))
+        return OK
+    if action == "reset":
+        manager.reset(args.layer)
+        print("learned state reset: %s" % args.layer)
+        return OK
+    return ERROR
+
+
 def build_parser():
+    from .layers.registry import LAYER_NAMES
+
     p = argparse.ArgumentParser(
         prog="python -m mountfile",
         description="Mount File - browse and edit raw disk images.",
     )
     p.add_argument("--version", action="version", version="Mount File %s" % __version__)
     sub = p.add_subparsers(dest="command", required=True)
+
+    layers = sub.add_parser("layers", help="manage advisory and self-learning layers")
+    layer_commands = layers.add_subparsers(dest="layers_action", required=True)
+    status = layer_commands.add_parser("status", help="show layer state and CLI routing")
+    status.add_argument("--root", default=None, help="learning-store root directory")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(func=cmd_layers)
+    for action in ("enable", "disable", "reset"):
+        layer_command = layer_commands.add_parser(action)
+        layer_command.add_argument("layer", choices=sorted(LAYER_NAMES))
+        layer_command.add_argument("--root", default=None, help="learning-store root directory")
+        layer_command.set_defaults(func=cmd_layers)
+    decide = layer_commands.add_parser("decide", help="get non-authoritative layer hints")
+    decide.add_argument("path", help="runtime context only; never persisted")
+    decide.add_argument("--operation", choices=["inspect", "autopick", "preflight", "browse", "advise"], default="inspect")
+    decide.add_argument("--fs", default=None)
+    decide.add_argument("--size", type=int, default=None)
+    decide.add_argument("--root", default=None, help="learning-store root directory")
+    decide.add_argument("--json", action="store_true")
+    decide.set_defaults(func=cmd_layers)
+    feedback = layer_commands.add_parser("feedback", help="explicitly label one advisory decision")
+    feedback.add_argument("decision_id")
+    outcome = feedback.add_mutually_exclusive_group(required=True)
+    outcome.add_argument("--success", dest="success", action="store_true")
+    outcome.add_argument("--failure", dest="success", action="store_false")
+    feedback.add_argument("--latency-ms", type=float, default=0.0)
+    feedback.add_argument("--root", default=None, help="learning-store root directory")
+    feedback.set_defaults(func=cmd_layers)
 
     sp = sub.add_parser("volumes", help="list detected volumes")
     _add_target(sp)
@@ -1681,16 +1775,29 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    started = time.perf_counter()
+    exit_code = ERROR
     try:
-        return args.func(args)
-    except _READ_ERRORS as e:
-        print("error: %s" % e, file=sys.stderr)
-        return ERROR
-    except KeyboardInterrupt:
-        # Ctrl+C is a normal way to abort a long scan: exit cleanly instead of
-        # dumping a multi-frame traceback from deep inside pytsk3.
-        print("\ninterrupted", file=sys.stderr)
-        return 130
+        try:
+            exit_code = args.func(args)
+        except _READ_ERRORS as e:
+            print("error: %s" % e, file=sys.stderr)
+            exit_code = ERROR
+        except KeyboardInterrupt:
+            # Ctrl+C is a normal way to abort a long scan: exit cleanly instead of
+            # dumping a multi-frame traceback from deep inside pytsk3.
+            print("\ninterrupted", file=sys.stderr)
+            exit_code = 130
+        return exit_code
+    finally:
+        try:
+            from .layers.hooks import record_cli_execution
+
+            record_cli_execution(
+                args.command, exit_code, time.perf_counter() - started
+            )
+        except Exception:  # noqa: BLE001 - telemetry cannot change command result
+            pass
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -106,7 +106,7 @@ class PreflightLayer:
         if family is None:
             return
         learner = self.families.setdefault(family, BetaLearner())
-        learner.update(bool(volume.get("eligible_for_read")))
+        learner.update(volume.get("eligible_for_read") is True)
         self.state["families"] = {
             key: value.to_dict() for key, value in sorted(self.families.items())
         }
@@ -117,7 +117,9 @@ class PreflightLayer:
         """Оригинальный ``preflight_image`` + обучение на его результате."""
         from .. import fs_preflight
 
-        report = fs_preflight.preflight_image(image_path, **kwargs)
-        passed = not getattr(report, "refusal_code", None) and not getattr(report, "refusals", None)
-        self.observe(report, bool(passed))
-        return report
+        payload = fs_preflight.preflight_image(image_path, **kwargs)
+        if isinstance(payload, dict):
+            for volume in payload.get("volumes", []):
+                if isinstance(volume, dict):
+                    self.observe_dict(volume)
+        return payload

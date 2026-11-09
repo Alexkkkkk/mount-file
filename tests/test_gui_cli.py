@@ -34,7 +34,7 @@ def test_ui_command_inventory_matches_every_package_cli_command():
     assert CLI_COMMANDS == tuple(cli.COMMANDS)
     assert set(CLI_HELP) == set(cli.COMMANDS)
     assert all(CLI_HELP[command] for command in CLI_COMMANDS)
-    assert set(IMAGE_WRITE_COMMANDS) == {"put", "mkdir", "mv", "rm"}
+    assert set(IMAGE_WRITE_COMMANDS) == {"put", "mkdir", "mv", "ln", "rm"}
 
 
 def test_command_center_exposes_help_for_every_registered_command(app):

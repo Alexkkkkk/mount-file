@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -33,6 +34,7 @@ _LOG = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 DEFAULT_STORE = ".mountfile/layers.json"
+MAX_STORE_BYTES = 4 * 1024 * 1024
 
 
 class KnowledgeStore:
@@ -56,8 +58,15 @@ class KnowledgeStore:
             data: dict[str, Any] = {"version": STORE_VERSION, "layers": {}}
             try:
                 if self.path.exists():
+                    if self.path.stat().st_size > MAX_STORE_BYTES:
+                        self._cache = data
+                        return self._cache
                     raw = json.loads(self.path.read_text(encoding="utf-8"))
-                    if isinstance(raw, dict) and raw.get("version") == STORE_VERSION:
+                    if (
+                        isinstance(raw, dict)
+                        and raw.get("version") == STORE_VERSION
+                        and isinstance(raw.get("layers"), dict)
+                    ):
                         data = raw
             except (OSError, ValueError):
                 pass
@@ -67,19 +76,45 @@ class KnowledgeStore:
     def layer(self, name: str) -> dict[str, Any]:
         data = self.load()
         layers = data.setdefault("layers", {})
-        return layers.setdefault(name, {})
+        state = layers.get(name)
+        if not isinstance(state, dict):
+            state = {}
+            layers[name] = state
+        return state
 
     def save(self) -> None:
         with self._lock:
             if self._cache is None:
                 return
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(self._cache, ensure_ascii=False, indent=1, sort_keys=True),
-                encoding="utf-8",
-            )
-            os.replace(tmp, self.path)
+            tmp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=self.path.parent,
+                    prefix=self.path.name + ".",
+                    suffix=".tmp",
+                    delete=False,
+                ) as tmp:
+                    tmp_path = Path(tmp.name)
+                    tmp.write(
+                        json.dumps(
+                            self._cache,
+                            ensure_ascii=False,
+                            indent=1,
+                            sort_keys=True,
+                        )
+                    )
+                os.chmod(tmp_path, 0o600)
+                os.replace(tmp_path, self.path)
+                tmp_path = None
+            finally:
+                if tmp_path is not None:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
 
 class BetaLearner:
@@ -92,8 +127,9 @@ class BetaLearner:
     __slots__ = ("a", "b")
 
     def __init__(self, a: float = 1.0, b: float = 1.0) -> None:
-        self.a = max(float(a), 0.0)
-        self.b = max(float(b), 0.0)
+        aa, bb = _num(a, 1.0), _num(b, 1.0)
+        self.a = min(max(aa, 0.0), 1e9)
+        self.b = min(max(bb, 0.0), 1e9)
 
     def to_dict(self) -> dict[str, float]:
         return {"a": round(self.a, 4), "b": round(self.b, 4)}
@@ -128,8 +164,9 @@ class LogisticWeights:
     """
 
     def __init__(self, dim: int, weights: list[float] | None = None) -> None:
-        self.dim = int(dim)
-        self.weights = list(weights) if weights is not None else [0.0] * self.dim
+        self.dim = min(max(int(dim), 1), 64)
+        values = [_num(value, 0.0) for value in (weights or [])[: self.dim]]
+        self.weights = values + [0.0] * (self.dim - len(values))
 
     def to_dict(self) -> dict[str, Any]:
         return {"dim": self.dim, "w": [round(w, 5) for w in self.weights]}
@@ -138,13 +175,15 @@ class LogisticWeights:
     def from_dict(cls, raw: Any) -> LogisticWeights:
         if not isinstance(raw, dict):
             return cls(1)
-        dim = int(_num(raw.get("dim"), 1))
+        dim = min(max(int(_num(raw.get("dim"), 1)), 1), 64)
         w = [_num(x, 0.0) for x in raw.get("w", [])][:dim]
         return cls(dim, w + [0.0] * (dim - len(w)))
 
     def score(self, features: list[float]) -> float:
+        if len(features) != len(self.weights):
+            return 0.0
         total = 0.0
-        for w, x in zip(self.weights, features, strict=False):
+        for w, x in zip(self.weights, features, strict=True):
             total += w * x
         return total
 
@@ -152,6 +191,8 @@ class LogisticWeights:
         """SGD-шаг по логистической функции. Возвращает loss до шага."""
         pred = _sigmoid(self.score(features))
         loss = -(label * math.log(pred + 1e-9) + (1 - label) * math.log(1 - pred + 1e-9))
+        if len(features) != len(self.weights):
+            return loss
         err = label - pred
         for i, x in enumerate(features):
             self.weights[i] += lr * err * x
@@ -191,8 +232,9 @@ class EWMA:
 
 def _num(value: Any, default: float) -> float:
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        result = float(value)
+        return result if math.isfinite(result) else default
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
