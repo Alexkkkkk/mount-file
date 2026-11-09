@@ -8,14 +8,13 @@ Run:  python -m pytest tests/test_selflearning_layers.py -v
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from mountfile.layers import (
-    BetaLearner,
     EWMA,
+    BetaLearner,
     KnowledgeStore,
     LogisticWeights,
     SelfLearningStack,
@@ -140,6 +139,15 @@ class TestPreflightLayer:
         hint = stack.preflight.pass_hint("ntfs")
         assert hint is not None and hint > 0.8
 
+    def test_display_name_is_normalized_and_learned(self, root: Path) -> None:
+        stack = SelfLearningStack(str(root))
+        for _ in range(4):
+            stack.preflight.observe_dict(
+                {"filesystem": "NTFS", "eligible_for_read": True}
+            )
+        assert stack.preflight.pass_hint("ntfs") is not None
+        assert stack.preflight.observations == 4
+
     def test_unknown_family_ignored(self, root: Path) -> None:
         stack = SelfLearningStack(str(root))
         report = self.Report()
@@ -203,3 +211,9 @@ class TestStack:
     def test_summary(self, root: Path) -> None:
         stack = SelfLearningStack(str(root))
         assert stack.summary() == {"volume": 0, "preflight": 0, "cache": 0, "advisor": 0}
+
+    def test_summary_does_not_double_count_volume_feedback(self, root: Path) -> None:
+        stack = SelfLearningStack(str(root))
+        candidate = TestVolumeLayer.Cand(10)
+        stack.volume.feedback(candidate, accepted=True)
+        assert stack.summary()["volume"] == 1

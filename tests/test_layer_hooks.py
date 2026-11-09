@@ -7,7 +7,6 @@ Run:  python -m pytest tests/test_layer_hooks.py -v
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -51,9 +50,7 @@ def test_stack_for_readonly_dir_returns_none(
         readonly.chmod(0o755)
 
 
-def test_preflight_learned_persists_family_stats(
-    layers_env: Path, tmp_path: Path
-) -> None:
+def test_preflight_learned_persists_family_stats(layers_env: Path, tmp_path: Path) -> None:
     from mountfile.layers.base import BetaLearner, KnowledgeStore
     from mountfile.layers.preflight_layer import PreflightLayer
 
@@ -63,9 +60,7 @@ def test_preflight_learned_persists_family_stats(
     layer.families["ntfs"] = BetaLearner()
     for _ in range(4):
         layer.families["ntfs"].update(True)
-    layer.state["families"] = {
-        key: value.to_dict() for key, value in layer.families.items()
-    }
+    layer.state["families"] = {key: value.to_dict() for key, value in layer.families.items()}
     store.save()
 
     image = tmp_path / "probe.img"
@@ -78,9 +73,7 @@ def test_preflight_learned_persists_family_stats(
     assert hooks.stack_for(image) is not None
 
 
-def test_auto_select_learned_falls_back_on_bad_image(
-    layers_env: Path, tmp_path: Path
-) -> None:
+def test_auto_select_learned_falls_back_on_bad_image(layers_env: Path, tmp_path: Path) -> None:
     from mountfile import autopick
 
     image = tmp_path / "junk.img"

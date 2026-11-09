@@ -20,13 +20,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
-import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 _LOG = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class BetaLearner:
         return {"a": round(self.a, 4), "b": round(self.b, 4)}
 
     @classmethod
-    def from_dict(cls, raw: Any) -> "BetaLearner":
+    def from_dict(cls, raw: Any) -> BetaLearner:
         if not isinstance(raw, dict):
             return cls()
         return cls(_num(raw.get("a"), 1.0), _num(raw.get("b"), 1.0))
@@ -134,7 +135,7 @@ class LogisticWeights:
         return {"dim": self.dim, "w": [round(w, 5) for w in self.weights]}
 
     @classmethod
-    def from_dict(cls, raw: Any) -> "LogisticWeights":
+    def from_dict(cls, raw: Any) -> LogisticWeights:
         if not isinstance(raw, dict):
             return cls(1)
         dim = int(_num(raw.get("dim"), 1))
@@ -143,7 +144,7 @@ class LogisticWeights:
 
     def score(self, features: list[float]) -> float:
         total = 0.0
-        for w, x in zip(self.weights, features):
+        for w, x in zip(self.weights, features, strict=False):
             total += w * x
         return total
 
@@ -174,7 +175,7 @@ class EWMA:
         return out
 
     @classmethod
-    def from_dict(cls, raw: Any) -> "EWMA":
+    def from_dict(cls, raw: Any) -> EWMA:
         if not isinstance(raw, dict):
             return cls()
         value = raw.get("value")
@@ -226,9 +227,7 @@ class Layer:
         self.store.save()
 
     @staticmethod
-    def with_fallback(
-        learned: Callable[[], Any] | None, original: Callable[[], Any]
-    ) -> Any:
+    def with_fallback(learned: Callable[[], Any] | None, original: Callable[[], Any]) -> Any:
         """Попытаться применить знания; при любой ошибке — оригинальная логика."""
         if learned is not None:
             try:

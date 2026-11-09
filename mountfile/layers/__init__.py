@@ -23,7 +23,7 @@ Run the tests:  python -m pytest tests/test_selflearning_layers.py -v
 
 from __future__ import annotations
 
-from .base import BetaLearner, EWMA, KnowledgeStore, Layer, LogisticWeights
+from .base import EWMA, BetaLearner, KnowledgeStore, Layer, LogisticWeights
 from .pipeline import SelfLearningStack
 
 __all__ = [

@@ -43,11 +43,26 @@ class PreflightLayer:
     @staticmethod
     def family_of(report: Any) -> str | None:
         """Семейство ФС из отчёта preflight (``_detect_family``-совместимо)."""
-        family = getattr(report, "family", None)
-        if isinstance(family, str) and family:
-            return family
-        detected = getattr(report, "detected_family", None)
-        return detected if isinstance(detected, str) and detected else None
+        family = getattr(report, "family", None) or getattr(
+            report, "detected_family", None
+        ) or getattr(report, "filesystem", None)
+        return PreflightLayer.normalize_family(family)
+
+    @staticmethod
+    def normalize_family(family: Any) -> str | None:
+        """Map display names (NTFS, FAT32, ext4) to stable learner keys."""
+        if not isinstance(family, str):
+            return None
+        value = family.strip().lower()
+        if value.startswith("fat"):
+            return "fat"
+        if value.startswith("exfat"):
+            return "exfat"
+        if value.startswith("ntfs"):
+            return "ntfs"
+        if value.startswith("ext"):
+            return "ext"
+        return None
 
     # ----------------------------------------------------------- подсказка
     def pass_hint(self, family: str | None) -> float | None:
@@ -56,7 +71,8 @@ class PreflightLayer:
         None — знаний ещё нет (меньше 3 фидбеков): слой фолбэчится,
         подсказка не выдается.
         """
-        if family not in self.families:
+        family = self.normalize_family(family)
+        if family is None or family not in self.families:
             return None
         learner = self.families[family]
         if learner.observations < 3:
@@ -67,7 +83,8 @@ class PreflightLayer:
     def observe(self, report: Any, passed: bool) -> None:
         """Зарегистрировать реальный результат preflight (явный фидбек)."""
         family = self.family_of(report)
-        if family not in {"fat", "exfat", "ntfs", "ext"}:
+        family = self.normalize_family(family)
+        if family is None:
             return
         learner = self.families.setdefault(family, BetaLearner())
         learner.update(bool(passed))
@@ -83,10 +100,12 @@ class PreflightLayer:
         Считает прогон пройденным, если том помечен ``eligible_for_read``
         (fail-closed остаётся у оригинала). Незнакомое семейство игнорирует.
         """
-        family = volume.get("family") or volume.get("filesystem") or ""
-        if not isinstance(family, str) or family not in self.families:
+        family = self.normalize_family(
+            volume.get("family") or volume.get("filesystem") or ""
+        )
+        if family is None:
             return
-        learner = self.families[family]
+        learner = self.families.setdefault(family, BetaLearner())
         learner.update(bool(volume.get("eligible_for_read")))
         self.state["families"] = {
             key: value.to_dict() for key, value in sorted(self.families.items())
@@ -99,8 +118,6 @@ class PreflightLayer:
         from .. import fs_preflight
 
         report = fs_preflight.preflight_image(image_path, **kwargs)
-        passed = not getattr(report, "refusal_code", None) and not getattr(
-            report, "refusals", None
-        )
+        passed = not getattr(report, "refusal_code", None) and not getattr(report, "refusals", None)
         self.observe(report, bool(passed))
         return report

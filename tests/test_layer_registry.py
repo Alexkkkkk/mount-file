@@ -69,7 +69,10 @@ def test_layers_import_registry_without_qt() -> None:
     assert d()["layer_routing"]["autopick"] == "volume"
 
 
-@pytest.mark.parametrize("command,layer", [("autopick", "volume"), ("preflight", "preflight"), ("put", "cache"), ("yara", "advisor")])
+@pytest.mark.parametrize(
+    "command,layer",
+    [("autopick", "volume"), ("preflight", "preflight"), ("put", "cache"), ("yara", "advisor")],
+)
 def test_known_routes(command: str, layer: str) -> None:
     data = discover()
     assert data["layer_routing"][command] == layer

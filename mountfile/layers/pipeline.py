@@ -36,8 +36,7 @@ class SelfLearningStack:
     def summary(self) -> dict[str, int]:
         """Наблюдений по слоям — для GUI/CLI и issue-отчётов."""
         return {
-            "volume": self.volume.observations
-            + int(self.volume.state.get("observations", 0)),
+            "volume": self.volume.observations,
             "preflight": self.preflight.observations,
             "cache": self.cache.miss_rate.n,
             "advisor": self.advisor.state.get("observations", 0),
