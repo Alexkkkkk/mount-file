@@ -3449,7 +3449,9 @@ class MainWindow(QMainWindow):
         udev = self._find_udev()
         self._autopick_busy = True
         try:
-            best, candidates = autopick.auto_select(self.image_path, udev=udev)
+            from .layers.hooks import auto_select_learned
+
+            best, candidates = auto_select_learned(self.image_path, udev=udev)
         except Exception as e:
             self.log_msg("Авто-подбор не удался: %s" % e)
             if not quiet:

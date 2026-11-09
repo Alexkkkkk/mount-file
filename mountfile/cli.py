@@ -31,6 +31,7 @@ from pathlib import Path
 from . import __version__
 from .ai import SCHEMAS, build_backend, collect, local_reader, max_bytes, scan
 from .autopick import auto_select, format_candidates, format_choice
+from .layers.hooks import auto_select_learned
 from .capabilities import get_native_capability_matrix
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
 from .dfir_slack import read_file_slack
@@ -42,6 +43,7 @@ from .extract import ExtractError, extract_path
 from .fat32 import Fat32Error
 from .firmware import DEFAULT_SCAN_LIMIT, detect_volumes, probe_filesystem
 from .fs_preflight import preflight_image
+from .layers.hooks import auto_select_learned, preflight_learned
 from .live_diff import LiveDiffError, diff_images, to_markdown, write_markdown
 from .rt809 import Rt809Error, decode_dump, split_by_udev
 from .safety import RefusalError, code_for_message
@@ -89,9 +91,9 @@ def cmd_preflight(args):
         offset = volumes[args.volume - 1].offset
     extent = getattr(args, "_selected_volume_size", None)
     if extent is None:
-        payload = preflight_image(args.image, offset=offset)
+        payload = preflight_learned(args.image, offset=offset)
     else:
-        payload = preflight_image(args.image, offset=offset, volume_size=extent)
+        payload = preflight_learned(args.image, offset=offset, volume_size=extent)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     reports = payload["volumes"]
     return (
@@ -282,7 +284,7 @@ def _select(image, args):
         # Automatic choice: partition table, udev offsets and filesystem
         # signatures are all tried, and the winner is confirmed by a real
         # mount, so a broken table cannot produce the TSK FS_Info_Con error.
-        best, _candidates = auto_select(
+        best, _candidates = auto_select_learned(
             image,
             udev=getattr(args, "udev", None),
             scan_limit=args.scan_limit,
@@ -747,7 +749,7 @@ def cmd_autopick(args):
     if args.udev and not os.path.isfile(args.udev):
         raise Rt809Error("no such udev file: %s" % args.udev)
 
-    best, candidates = auto_select(
+    best, candidates = auto_select_learned(
         args.image,
         udev=args.udev,
         hint=args.hint,

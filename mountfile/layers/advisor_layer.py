@@ -70,17 +70,25 @@ class AdvisorLayer:
         learned_any = False
         for hyp in hypotheses:
             out = dict(hyp)
-            fmt = str(hyp.get("format", ""))
+            # Оба формата гипотез: advisor v2 (name/score) и LLM-слой
+            # (format/confidence).
+            fmt = str(hyp.get("format") or hyp.get("name") or "")
             reliability = self._reliability(fmt)
             if reliability is not None:
                 learned_any = True
-                conf = float(hyp.get("confidence", 0.0) or 0.0)
-                out["confidence"] = round(conf * reliability, 4)
+                conf = float(hyp.get("confidence", hyp.get("score", 0.0)) or 0.0)
+                value = round(conf * reliability, 4)
+                if "confidence" in hyp:
+                    out["confidence"] = value
+                else:
+                    out["score"] = value
                 out["learned_reliability"] = round(reliability, 3)
             adjusted.append(out)
         if not learned_any:
             return None
-        adjusted.sort(key=lambda h: -float(h.get("confidence", 0.0)))
+        adjusted.sort(
+            key=lambda h: -float(h.get("confidence", h.get("score", 0.0)) or 0.0)
+        )
         return adjusted
 
     def best_format(self, hypotheses: list[dict[str, Any]]) -> str | None:
@@ -88,4 +96,5 @@ class AdvisorLayer:
         calibrated = self.calibrate(hypotheses)
         if not calibrated:
             return None
-        return str(calibrated[0].get("format", "")) or None
+        top = calibrated[0]
+        return str(top.get("format") or top.get("name") or "") or None

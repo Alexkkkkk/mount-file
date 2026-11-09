@@ -77,6 +77,23 @@ class PreflightLayer:
         self.state["observations"] = int(self.state.get("observations", 0)) + 1
         self.store.save()
 
+    def observe_dict(self, volume: dict[str, Any]) -> None:
+        """Фидбек из JSON-payload CLI-команды ``preflight``.
+
+        Считает прогон пройденным, если том помечен ``eligible_for_read``
+        (fail-closed остаётся у оригинала). Незнакомое семейство игнорирует.
+        """
+        family = volume.get("family") or volume.get("filesystem") or ""
+        if not isinstance(family, str) or family not in self.families:
+            return
+        learner = self.families[family]
+        learner.update(bool(volume.get("eligible_for_read")))
+        self.state["families"] = {
+            key: value.to_dict() for key, value in sorted(self.families.items())
+        }
+        self.state["observations"] = int(self.state.get("observations", 0)) + 1
+        self.store.save()
+
     def preflight_image(self, image_path: str | os.PathLike[str], **kwargs: Any) -> Any:
         """Оригинальный ``preflight_image`` + обучение на его результате."""
         from .. import fs_preflight

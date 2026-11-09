@@ -22,10 +22,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+
+_LOG = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 DEFAULT_STORE = ".mountfile/layers.json"
@@ -227,11 +230,11 @@ class Layer:
         learned: Callable[[], Any] | None, original: Callable[[], Any]
     ) -> Any:
         """Попытаться применить знания; при любой ошибке — оригинальная логика."""
-        if learned is not None and learned() is not None:
+        if learned is not None:
             try:
                 result = learned()
                 if result is not None:
                     return result
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 - любой сбой знаний => фолбэк
+                _LOG.debug("layer learned path failed, falling back", exc_info=True)
         return original()

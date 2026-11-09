@@ -22,11 +22,11 @@
       "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
     },
     {
-      "availability": "available",
+      "availability": "unavailable",
       "checker": "fsck.fat",
       "checker_authoritative": true,
       "checker_package": "dosfstools",
-      "checker_path": "/usr/sbin/fsck.fat",
+      "checker_path": null,
       "checker_version": null,
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
@@ -40,14 +40,14 @@
       "native": true,
       "parity": "not_claimed",
       "profile": "fat12-16-native-rw",
-      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
+      "reason": "required checker/runtime is unavailable on this runner"
     },
     {
-      "availability": "available",
+      "availability": "unavailable",
       "checker": "fsck.fat",
       "checker_authoritative": true,
       "checker_package": "dosfstools",
-      "checker_path": "/usr/sbin/fsck.fat",
+      "checker_path": null,
       "checker_version": null,
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
@@ -61,14 +61,14 @@
       "native": true,
       "parity": "not_claimed",
       "profile": "fat32-native-rw",
-      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
+      "reason": "required checker/runtime is unavailable on this runner"
     },
     {
-      "availability": "available",
+      "availability": "unavailable",
       "checker": "fsck.exfat",
       "checker_authoritative": true,
       "checker_package": "exfatprogs",
-      "checker_path": "/usr/sbin/fsck.exfat",
+      "checker_path": null,
       "checker_version": null,
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
@@ -82,15 +82,15 @@
       "native": true,
       "parity": "not_claimed",
       "profile": "exfat-native-rw",
-      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
+      "reason": "required checker/runtime is unavailable on this runner"
     },
     {
-      "availability": "available",
+      "availability": "unavailable",
       "checker": "ntfsfix",
       "checker_authoritative": false,
       "checker_package": "ntfs-3g",
-      "checker_path": "/usr/bin/ntfsfix",
-      "checker_version": "ntfsfix v2022.10.3",
+      "checker_path": null,
+      "checker_version": null,
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
       "fixture_tests": [
@@ -103,7 +103,7 @@
       "native": false,
       "parity": "not_claimed",
       "profile": "ntfs-native-ro",
-      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
+      "reason": "required checker/runtime is unavailable on this runner"
     },
     {
       "availability": "unavailable",
@@ -129,7 +129,7 @@
     }
   ],
   "platform": "linux",
-  "platform_release": "6.18.38+",
+  "platform_release": "6.18.15",
   "python": "3.12.3",
   "report": "mountfile-external-checker-matrix",
   "schema": 1
