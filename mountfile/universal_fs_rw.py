@@ -2613,18 +2613,25 @@ class LibguestfsRW(RWBackend):
         self._image_lock = None
         try:
             self._acquire_image_lock()
+        except ImportError as exc:
+            raise RuntimeError(
+                "libguestfs image locking requires POSIX flock support"
+            ) from exc
+        try:
             import guestfs
         except ImportError as exc:
+            self._release_image_lock()
             raise RuntimeError(
                 "libguestfs Python bindings are required; install python3-libguestfs"
             ) from exc
         self.volume_size = int(volume_size) if volume_size is not None else None
         self.fs_type = str(fs_type).lower()
-        self._g = guestfs.GuestFS(python_return_dict=True)
+        self._g = None
         self._device = None
         self._mounted = False
         self._shutdown = False
         try:
+            self._g = guestfs.GuestFS(python_return_dict=True)
             self._g.add_drive_opts(str(self.image), format="raw", readonly=0)
             self._g.launch()
             devices = self._g.list_devices()

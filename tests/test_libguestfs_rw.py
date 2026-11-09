@@ -1,4 +1,5 @@
 import builtins
+import os
 import sys
 from types import SimpleNamespace
 
@@ -40,6 +41,7 @@ def _install_fake_guestfs(monkeypatch):
     monkeypatch.setitem(sys.modules, "guestfs", SimpleNamespace(GuestFS=_FakeGuestFS))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="libguestfs image lock uses POSIX flock")
 def test_libguestfs_writer_serializes_image_access(tmp_path, monkeypatch):
     _install_fake_guestfs(monkeypatch)
     image = tmp_path / "ext4.img"
@@ -56,6 +58,7 @@ def test_libguestfs_writer_serializes_image_access(tmp_path, monkeypatch):
     second.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="libguestfs image lock uses POSIX flock")
 def test_libguestfs_import_failure_does_not_leave_lock(tmp_path, monkeypatch):
     image = tmp_path / "ext4.img"
     image.write_bytes(b"image")
@@ -76,3 +79,14 @@ def test_libguestfs_import_failure_does_not_leave_lock(tmp_path, monkeypatch):
     _install_fake_guestfs(monkeypatch)
     backend = LibguestfsRW(image, fs_type="ext4")
     backend.close()
+
+
+@pytest.mark.skipif(os.name == "posix", reason="POSIX hosts support libguestfs flock")
+def test_libguestfs_writer_rejects_non_posix_host(tmp_path):
+    image = tmp_path / "ext4.img"
+    image.write_bytes(b"image")
+
+    with pytest.raises(RuntimeError, match="requires a POSIX host"):
+        LibguestfsRW(image, fs_type="ext4")
+
+    assert not image.with_name(image.name + ".mountfile.lock").exists()
