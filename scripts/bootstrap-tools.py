@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import shutil
 import sys
-
 
 PYTHON_MODULES = {
     "PIL": "Pillow",
@@ -31,17 +31,30 @@ SYSTEM_TOOLS = (
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Verify the optional Python and external tools used by the full matrix."
+    )
+    parser.add_argument(
+        "--skip-system-tools",
+        action="store_true",
+        help="verify Python modules only (for systems without the Debian toolchain)",
+    )
+    args = parser.parse_args()
+
     missing = []
     for module, package in PYTHON_MODULES.items():
         available = importlib.util.find_spec(module) is not None
         print(f"python {module}: {'ok' if available else 'missing'} ({package})")
         if not available:
             missing.append(package)
-    for tool in SYSTEM_TOOLS:
-        available = shutil.which(tool) is not None
-        print(f"system {tool}: {'ok' if available else 'missing'}")
-        if not available:
-            missing.append(tool)
+    if args.skip_system_tools:
+        print("system tool checks: skipped")
+    else:
+        for tool in SYSTEM_TOOLS:
+            available = shutil.which(tool) is not None
+            print(f"system {tool}: {'ok' if available else 'missing'}")
+            if not available:
+                missing.append(tool)
     if missing:
         print("missing tools:", ", ".join(missing), file=sys.stderr)
         return 1

@@ -29,5 +29,9 @@ PYTHON_BIN=${PYTHON_BIN:-python3}
 "${PYTHON_BIN}" -m pip install -r requirements-all.txt
 
 if [[ "${SKIP_VERIFY:-0}" != "1" ]]; then
-  "${PYTHON_BIN}" scripts/bootstrap-tools.py
+  verify_args=()
+  if [[ "${SKIP_SYSTEM_TOOLS:-0}" == "1" ]]; then
+    verify_args+=(--skip-system-tools)
+  fi
+  "${PYTHON_BIN}" scripts/bootstrap-tools.py "${verify_args[@]}"
 fi
