@@ -797,9 +797,7 @@ class _Ext2FS:
             raise NativeExt2UnsafeError(
                 "ext2 inode block list is shorter than its size"
             )
-        data = b"".join(
-            self._read_block(block) for block in blocks[first : last + 1]
-        )
+        data = b"".join(self._read_block(block) for block in blocks[first : last + 1])
         start = offset - first * self.block_size
         return data[start : start + (end - offset)]
 

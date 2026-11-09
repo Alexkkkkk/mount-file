@@ -256,9 +256,7 @@ def test_exfat_read_range(tmp_path):
     image = tmp_path / "data.exfat"
     with image.open("wb") as stream:
         stream.truncate(128 * 1024 * 1024)
-    subprocess.run(
-        ["mkfs.exfat", str(image)], check=True, capture_output=True
-    )
+    subprocess.run(["mkfs.exfat", str(image)], check=True, capture_output=True)
     fs = NativeExfatRW(image, offset=0, volume_size=image.stat().st_size)
     try:
         payload = b"exfat-range-payload" * 50
