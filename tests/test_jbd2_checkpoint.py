@@ -1,3 +1,4 @@
+import io
 import struct
 
 import pytest
@@ -9,6 +10,7 @@ from mountfile.jbd2_checkpoint import (
     reduce_classic_jbd2_transactions,
 )
 from mountfile.jbd2_writer import (
+    JBD2DecodedTransaction,
     JBD2WriteProfileError,
     decode_classic_jbd2_transaction,
     encode_classic_jbd2_transaction,
@@ -142,6 +144,26 @@ def test_decoder_restores_escaped_data_and_reducer_applies_revoke():
     }
 
 
+@pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (0, 1), (True, 2)])
+def test_reducer_rejects_invalid_or_nonforward_transaction_sequences(sequences):
+    transactions = [
+        JBD2DecodedTransaction(sequence, (), ())
+        for sequence in sequences
+    ]
+
+    with pytest.raises(JBD2WriteProfileError, match="sequence"):
+        reduce_classic_jbd2_transactions(transactions)
+
+
+def test_reducer_accepts_forward_sequence_wraparound():
+    transactions = [
+        JBD2DecodedTransaction(0xFFFFFFFF, (), ()),
+        JBD2DecodedTransaction(1, (), ()),
+    ]
+
+    assert reduce_classic_jbd2_transactions(transactions) == {}
+
+
 def test_executor_syncs_data_before_clean_marker_and_can_inject_failure(tmp_path):
     image = tmp_path / "image.bin"
     image.write_bytes(b"\x00" * (100 * 1024))
@@ -194,3 +216,27 @@ def test_executor_success_syncs_twice_and_publishes_clean_marker(tmp_path):
         marker = stream.read(1024)
     assert struct.unpack_from(">III", marker, 0) == (0xC03B3998, 3, 0)
     assert struct.unpack_from(">II", marker, 24) == (0, 0)
+
+
+def test_executor_flushes_stream_before_each_sync_callback():
+    events = []
+
+    class FlushTrackingStream(io.BytesIO):
+        def write(self, data):
+            events.append("write")
+            return super().write(data)
+
+        def flush(self):
+            events.append("flush")
+            return super().flush()
+
+    stream = FlushTrackingStream(b"\x00" * (100 * 1024))
+    plan = make_plan(data_writes={8: b"X" * 1024})
+    execute_classic_jbd2_checkpoint(
+        stream,
+        plan,
+        block_size=1024,
+        sync=lambda: events.append("sync"),
+    )
+
+    assert events == ["write", "flush", "sync", "write", "flush", "sync"]

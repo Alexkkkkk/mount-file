@@ -67,12 +67,23 @@ def reduce_classic_jbd2_transactions(
     for transaction in transactions:
         if not isinstance(transaction, JBD2DecodedTransaction):
             raise JBD2WriteProfileError("transaction has the wrong type")
-        if previous_sequence is not None and transaction.sequence == previous_sequence:
-            raise JBD2WriteProfileError("duplicate JBD2 transaction sequence")
+        sequence = transaction.sequence
+        if (
+            isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or not 0 < sequence <= 0xFFFFFFFF
+        ):
+            raise JBD2WriteProfileError("invalid JBD2 transaction sequence")
+        if previous_sequence is not None:
+            delta = (sequence - previous_sequence) & 0xFFFFFFFF
+            if not 0 < delta < 0x80000000:
+                raise JBD2WriteProfileError(
+                    "JBD2 transactions are not in forward sequence order"
+                )
         for target in transaction.revokes:
             reduced.pop(target, None)
         reduced.update(transaction.writes)
-        previous_sequence = transaction.sequence
+        previous_sequence = sequence
     return dict(sorted(reduced.items()))
 
 
@@ -207,16 +218,22 @@ def execute_classic_jbd2_checkpoint(
         raise JBD2CheckpointExecutionError("unsupported checkpoint block size")
     if not isinstance(plan, JBD2CheckpointPlan):
         raise JBD2CheckpointExecutionError("checkpoint plan has the wrong type")
-    sync_fn = sync
-    if sync_fn is None:
+    if sync is None:
         try:
             descriptor = stream.fileno()
         except (AttributeError, OSError) as exc:
             raise JBD2CheckpointExecutionError(
                 "checkpoint stream has no durable fsync descriptor"
             ) from exc
+
         def sync_fn() -> None:
+            stream.flush()
             fsync(descriptor)
+    else:
+
+        def sync_fn() -> None:
+            stream.flush()
+            sync()
 
     try:
         for write in plan.writes[:-1]:
