@@ -186,7 +186,9 @@ def plan_classic_jbd2_checkpoint(
     )
 
 
-def _write_full_block(stream: BinaryIO, offset: int, data: bytes, block_size: int) -> None:
+def _write_full_block(
+    stream: BinaryIO, offset: int, data: bytes, block_size: int
+) -> None:
     if len(data) != block_size:
         raise JBD2CheckpointExecutionError("checkpoint attempted a partial block")
     stream.seek(offset * block_size)
@@ -229,6 +231,7 @@ def execute_classic_jbd2_checkpoint(
         def sync_fn() -> None:
             stream.flush()
             fsync(descriptor)
+
     else:
 
         def sync_fn() -> None:

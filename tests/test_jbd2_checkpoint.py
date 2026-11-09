@@ -146,10 +146,7 @@ def test_decoder_restores_escaped_data_and_reducer_applies_revoke():
 
 @pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (0, 1), (True, 2)])
 def test_reducer_rejects_invalid_or_nonforward_transaction_sequences(sequences):
-    transactions = [
-        JBD2DecodedTransaction(sequence, (), ())
-        for sequence in sequences
-    ]
+    transactions = [JBD2DecodedTransaction(sequence, (), ()) for sequence in sequences]
 
     with pytest.raises(JBD2WriteProfileError, match="sequence"):
         reduce_classic_jbd2_transactions(transactions)
@@ -177,8 +174,9 @@ def test_executor_syncs_data_before_clean_marker_and_can_inject_failure(tmp_path
         if write.phase == "journal-superblock":
             raise RuntimeError("simulated process termination")
 
-    with image.open("r+b") as stream, pytest.raises(
-        JBD2CheckpointExecutionError, match="before clean"
+    with (
+        image.open("r+b") as stream,
+        pytest.raises(JBD2CheckpointExecutionError, match="before clean"),
     ):
         execute_classic_jbd2_checkpoint(
             stream,

@@ -118,9 +118,7 @@ def decode_classic_jbd2_transaction(
 
     while index < len(records) - 1:
         revoke = records[index]
-        _magic, _type, revoke_sequence, byte_count = struct.unpack_from(
-            ">IIII", revoke
-        )
+        _magic, _type, revoke_sequence, byte_count = struct.unpack_from(">IIII", revoke)
         if revoke_sequence != sequence:
             raise JBD2WriteProfileError("JBD2 revoke sequence mismatch")
         for cursor in range(16, byte_count, 4):
