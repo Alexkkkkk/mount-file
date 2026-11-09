@@ -11,8 +11,10 @@ parser.
 from __future__ import annotations
 
 import struct
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from os import fsync
+from typing import BinaryIO
 
 from .jbd2_writer import (
     _JBD2_MAGIC,
@@ -41,6 +43,10 @@ class JBD2CheckpointPlan:
     clean_superblock: bytes
     state_before: JBD2JournalState
     flush_boundaries: tuple[int, ...]
+
+
+class JBD2CheckpointExecutionError(RuntimeError):
+    """Checkpoint execution stopped before the clean marker was durable."""
 
 
 def reduce_classic_jbd2_transactions(
@@ -167,3 +173,69 @@ def plan_classic_jbd2_checkpoint(
         state_before=state,
         flush_boundaries=(len(writes) - 1,),
     )
+
+
+def _write_full_block(stream: BinaryIO, offset: int, data: bytes, block_size: int) -> None:
+    if len(data) != block_size:
+        raise JBD2CheckpointExecutionError("checkpoint attempted a partial block")
+    stream.seek(offset * block_size)
+    cursor = 0
+    while cursor < len(data):
+        written = stream.write(data[cursor:])
+        if not isinstance(written, int) or written <= 0:
+            raise JBD2CheckpointExecutionError("checkpoint stream made no progress")
+        cursor += written
+
+
+def execute_classic_jbd2_checkpoint(
+    stream: BinaryIO,
+    plan: JBD2CheckpointPlan,
+    *,
+    block_size: int,
+    sync: Callable[[], None] | None = None,
+    fault_injector: Callable[[JBD2CheckpointWrite], None] | None = None,
+) -> None:
+    """Execute a checkpoint plan with a durable data-before-marker barrier.
+
+    ``stream`` must be a writable, seekable image opened by the caller. The
+    default sync calls ``fsync(stream.fileno())``; tests and controlled device
+    adapters may provide an equivalent sync callback. If a fault is injected
+    before the journal-superblock write begins, the old dirty marker is
+    intentionally left untouched and recovery remains required.
+    """
+    if block_size not in _SUPPORTED_BLOCK_SIZES:
+        raise JBD2CheckpointExecutionError("unsupported checkpoint block size")
+    if not isinstance(plan, JBD2CheckpointPlan):
+        raise JBD2CheckpointExecutionError("checkpoint plan has the wrong type")
+    sync_fn = sync
+    if sync_fn is None:
+        try:
+            descriptor = stream.fileno()
+        except (AttributeError, OSError) as exc:
+            raise JBD2CheckpointExecutionError(
+                "checkpoint stream has no durable fsync descriptor"
+            ) from exc
+        def sync_fn() -> None:
+            fsync(descriptor)
+
+    try:
+        for write in plan.writes[:-1]:
+            if write.phase != "data":
+                raise JBD2CheckpointExecutionError("data writes are not ordered first")
+            if fault_injector is not None:
+                fault_injector(write)
+            _write_full_block(stream, write.block, write.data, block_size)
+        sync_fn()
+        marker = plan.writes[-1]
+        if marker.phase != "journal-superblock":
+            raise JBD2CheckpointExecutionError("clean marker is not the final write")
+        if fault_injector is not None:
+            fault_injector(marker)
+        _write_full_block(stream, marker.block, marker.data, block_size)
+        sync_fn()
+    except JBD2CheckpointExecutionError:
+        raise
+    except Exception as exc:
+        raise JBD2CheckpointExecutionError(
+            "checkpoint stopped before clean marker became durable"
+        ) from exc

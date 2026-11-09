@@ -3,6 +3,8 @@ import struct
 import pytest
 
 from mountfile.jbd2_checkpoint import (
+    JBD2CheckpointExecutionError,
+    execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
     reduce_classic_jbd2_transactions,
 )
@@ -138,3 +140,57 @@ def test_decoder_restores_escaped_data_and_reducer_applies_revoke():
         12: b"B" * 1024,
         20: b"C" * 1024,
     }
+
+
+def test_executor_syncs_data_before_clean_marker_and_can_inject_failure(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"\x00" * (100 * 1024))
+    plan = make_plan(data_writes={8: b"X" * 1024})
+    syncs = []
+    with image.open("r+b") as stream:
+        stream.seek(40 * 1024)
+        stream.write(journal_superblock())
+
+    def fail_on_marker(write):
+        if write.phase == "journal-superblock":
+            raise RuntimeError("simulated process termination")
+
+    with image.open("r+b") as stream, pytest.raises(
+        JBD2CheckpointExecutionError, match="before clean"
+    ):
+        execute_classic_jbd2_checkpoint(
+            stream,
+            plan,
+            block_size=1024,
+            sync=lambda: syncs.append("sync"),
+            fault_injector=fail_on_marker,
+        )
+    assert syncs == ["sync"]
+    with image.open("rb") as stream:
+        stream.seek(8 * 1024)
+        assert stream.read(1024) == b"X" * 1024
+        stream.seek(40 * 1024)
+        assert struct.unpack_from(">I", stream.read(1024), 28)[0] == 5
+
+
+def test_executor_success_syncs_twice_and_publishes_clean_marker(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"\x00" * (100 * 1024))
+    plan = make_plan(data_writes={8: b"X" * 1024})
+    syncs = []
+    with image.open("r+b") as stream:
+        stream.seek(40 * 1024)
+        stream.write(journal_superblock())
+    with image.open("r+b") as stream:
+        execute_classic_jbd2_checkpoint(
+            stream,
+            plan,
+            block_size=1024,
+            sync=lambda: syncs.append("sync"),
+        )
+    assert syncs == ["sync", "sync"]
+    with image.open("rb") as stream:
+        stream.seek(40 * 1024)
+        marker = stream.read(1024)
+    assert struct.unpack_from(">III", marker, 0) == (0xC03B3998, 3, 0)
+    assert struct.unpack_from(">II", marker, 24) == (0, 0)
