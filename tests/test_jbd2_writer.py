@@ -6,8 +6,10 @@ import pytest
 
 from mountfile.ext3_reader import NativeExt3Image
 from mountfile.jbd2_writer import (
+    JBD2JournalState,
     JBD2WriteProfileError,
     encode_classic_jbd2_transaction,
+    parse_classic_jbd2_superblock,
     plan_classic_jbd2_ring_transaction,
 )
 
@@ -401,3 +403,52 @@ def test_rejects_unsupported_or_unsafe_transaction_shapes(kwargs):
     options.update(kwargs)
     with pytest.raises(JBD2WriteProfileError):
         encode_classic_jbd2_transaction(**options)
+
+
+def _superblock(*, block_size=1024, max_length=64, first=1, sequence=17, start=0):
+    raw = bytearray(block_size)
+    struct.pack_into(">III", raw, 0, _MAGIC, 3, sequence)
+    struct.pack_into(">IIIII", raw, 12, block_size, max_length, first, sequence, start)
+    raw[48:64] = _UUID
+    return bytes(raw)
+
+
+def test_parse_classic_jbd2_superblock_validates_empty_ring_state():
+    state = parse_classic_jbd2_superblock(
+        _superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=_UUID,
+        journal_blocks=64,
+    )
+    assert state == JBD2JournalState(
+        block_size=1024,
+        max_length=64,
+        first=1,
+        sequence=17,
+        start=0,
+        uuid=_UUID,
+        empty=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "mutates, message",
+    [
+        (lambda raw: struct.pack_into(">I", raw, 12, 2048), "block size"),
+        (lambda raw: struct.pack_into(">I", raw, 16, 63), "ring length"),
+        (lambda raw: struct.pack_into(">I", raw, 8, 0), "sequence"),
+        (lambda raw: raw.__setitem__(slice(48, 64), b"x" * 16), "UUID"),
+        (lambda raw: struct.pack_into(">I", raw, 36, 1), "feature"),
+        (lambda raw: struct.pack_into(">I", raw, 28, 64), "start"),
+    ],
+)
+def test_parse_classic_jbd2_superblock_rejects_unsafe_state(mutates, message):
+    raw = bytearray(_superblock())
+    mutates(raw)
+    with pytest.raises(JBD2WriteProfileError, match=message):
+        parse_classic_jbd2_superblock(
+            raw,
+            filesystem_block_size=1024,
+            filesystem_uuid=_UUID,
+            journal_blocks=64,
+        )

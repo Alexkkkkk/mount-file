@@ -110,8 +110,12 @@ def _fixture_evidence(
             size_bytes = int(size_raw)
         except (TypeError, ValueError):
             size_bytes = 0
+
         def valid_hash(value: object) -> bool:
-            return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+            return (
+                isinstance(value, str)
+                and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+            )
 
         is_direct_reader = checker == "pytsk3"
         case_valid = (
@@ -125,7 +129,12 @@ def _fixture_evidence(
             and source_unchanged == "true"
         )
         if is_direct_reader:
-            case_valid = case_valid and not copy_before and not copy_after and copy_unchanged == "not_applicable"
+            case_valid = (
+                case_valid
+                and not copy_before
+                and not copy_after
+                and copy_unchanged == "not_applicable"
+            )
         else:
             case_valid = (
                 case_valid

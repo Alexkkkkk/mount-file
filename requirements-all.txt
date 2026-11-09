@@ -3,3 +3,6 @@
 # Run from the repository root: python -m pip install -r requirements-all.txt
 -e .[api,ai,dfir,dev,legacy-tsk,fuzz,images]
 -r requirements-docs.txt
+# Optional test/contributor tooling not required by the application runtime.
+pre-commit>=3.0
+Pillow>=12.3.0

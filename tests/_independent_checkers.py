@@ -188,15 +188,15 @@ def _run_on_copy(
             returncode=None,
             stdout="",
             stderr=f"{tool} not found on PATH",
-                verdict=CheckerVerdict.UNAVAILABLE,
-                timed_out=False,
-                source_unchanged=True,
-                copy_unchanged=None,
-                source_sha256_before=None,
-                source_sha256_after=None,
-                copy_sha256_before=None,
-                copy_sha256_after=None,
-            )
+            verdict=CheckerVerdict.UNAVAILABLE,
+            timed_out=False,
+            source_unchanged=True,
+            copy_unchanged=None,
+            source_sha256_before=None,
+            source_sha256_after=None,
+            copy_sha256_before=None,
+            copy_sha256_after=None,
+        )
 
     source_digest = _sha256(source)
     with tempfile.TemporaryDirectory(prefix="mountfile-checker-") as directory:
@@ -320,9 +320,7 @@ def record_fixture_evidence(
         "mountfile.checker.copy_sha256_after": copy_sha256_after or "",
         "mountfile.checker.source_unchanged": str(source_unchanged).lower(),
         "mountfile.checker.copy_unchanged": (
-            "not_applicable"
-            if copy_unchanged is None
-            else str(copy_unchanged).lower()
+            "not_applicable" if copy_unchanged is None else str(copy_unchanged).lower()
         ),
     }
     for name, value in properties.items():

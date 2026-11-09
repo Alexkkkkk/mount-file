@@ -165,8 +165,7 @@ def _platform_adapter_evidence(
                         isinstance(item, dict)
                         and isinstance(item.get("sha256"), str)
                         and len(item["sha256"]) == 64
-                        and set(item["sha256"].lower())
-                        <= set("0123456789abcdef")
+                        and set(item["sha256"].lower()) <= set("0123456789abcdef")
                         for item in files
                     )
                 )

@@ -2,11 +2,7 @@
 
 from pathlib import Path
 
-from scripts.checker_acceptance import (
-    _fixture_evidence,
-    _fixture_nodes,
-    _junit_results,
-)
+from scripts.checker_acceptance import _fixture_evidence, _fixture_nodes, _junit_results
 
 
 def test_fixture_nodes_resolve_declared_test_functions():
@@ -63,7 +59,9 @@ def test_fixture_evidence_requires_matching_source_and_checker_copy_hashes():
         "mountfile.checker.source_unchanged": "true",
         "mountfile.checker.copy_unchanged": "true",
     }
-    results = [{"status": "passed", "case_name": "checker-test", "properties": properties}]
+    results = [
+        {"status": "passed", "case_name": "checker-test", "properties": properties}
+    ]
 
     images, status = _fixture_evidence("ext2-native-rw", "e2fsck", results)
 

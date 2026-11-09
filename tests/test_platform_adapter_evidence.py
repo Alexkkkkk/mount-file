@@ -45,8 +45,7 @@ def _windows_artifact(*, include_dry_runs=True):
         "checks": checks,
         "check_count": len(checks),
         "files": [
-            {"path": f"installer-{index}.ps1", "sha256": "a" * 64}
-            for index in range(3)
+            {"path": f"installer-{index}.ps1", "sha256": "a" * 64} for index in range(3)
         ],
         "system_changes_performed": False,
     }

@@ -109,7 +109,9 @@ def test_real_exfat_unicode_write_and_rename_pass_read_only_fsck(
         copy_unchanged=copy_before == copy_after,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert copy_before == copy_after, "fsck.exfat -n unexpectedly modified its disposable copy"
+    assert (
+        copy_before == copy_after
+    ), "fsck.exfat -n unexpectedly modified its disposable copy"
     assert source_before == source_after, "checker invocation modified its source image"
 
 
@@ -158,10 +160,10 @@ def test_real_exfat_root_directory_growth_passes_read_only_fsck(tmp_path):
         reader.close()
 
     result, source_before, source_after, copy_before, copy_after = (
-        _assert_read_only_fsck(
-            fsck, image, tmp_path / "root-growth-checker-copy.img"
-        )
+        _assert_read_only_fsck(fsck, image, tmp_path / "root-growth-checker-copy.img")
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert copy_before == copy_after, "fsck.exfat -n unexpectedly modified its disposable copy"
+    assert (
+        copy_before == copy_after
+    ), "fsck.exfat -n unexpectedly modified its disposable copy"
     assert source_before == source_after, "checker invocation modified its source image"

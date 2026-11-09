@@ -157,9 +157,9 @@ def test_successful_checker_that_changes_copy_is_not_accepted(tmp_path, monkeypa
     assert result.source_sha256_before == before
     assert result.source_sha256_after == before
     assert result.copy_sha256_before == before
-    assert result.copy_sha256_after == sha256(
-        b"checker changed only the copy"
-    ).hexdigest()
+    assert (
+        result.copy_sha256_after == sha256(b"checker changed only the copy").hexdigest()
+    )
     assert _digest(image) == before
 
 
@@ -308,9 +308,7 @@ def test_native_fat32_mutation_passes_fsck_on_disposable_copy(
     assert _digest(image) == before
 
 
-def test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix(
-    tmp_path, record_property
-):
+def test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix(tmp_path, record_property):
     _require_tools("mkfs.ntfs", "ntfsfix")
     image = tmp_path / "fresh.ntfs"
     _blank_image(image)
