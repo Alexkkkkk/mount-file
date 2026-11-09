@@ -103,7 +103,8 @@ def parse_classic_jbd2_superblock(
         raise JBD2WriteProfileError("JBD2 ring length is outside journal inode bounds")
     if not 1 <= first < max_length:
         raise JBD2WriteProfileError("JBD2 ring first block is outside bounds")
-    if sequence == 0 or _sb_sequence == 0 or _sb_sequence != sequence:
+    empty = sequence == 0 and _sb_sequence == 0 and start == 0
+    if not empty and (sequence == 0 or _sb_sequence == 0 or _sb_sequence != sequence):
         raise JBD2WriteProfileError("JBD2 journal sequence must be nonzero")
     if journal_uuid != expected_uuid:
         raise JBD2WriteProfileError("JBD2 journal UUID does not match filesystem")
@@ -118,7 +119,7 @@ def parse_classic_jbd2_superblock(
         sequence=sequence,
         start=start,
         uuid=journal_uuid,
-        empty=start == 0,
+        empty=empty or start == 0,
     )
 
 

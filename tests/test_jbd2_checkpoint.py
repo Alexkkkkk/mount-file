@@ -1,0 +1,98 @@
+import struct
+
+import pytest
+
+from mountfile.jbd2_checkpoint import plan_classic_jbd2_checkpoint
+from mountfile.jbd2_writer import (
+    JBD2WriteProfileError,
+    parse_classic_jbd2_superblock,
+)
+
+UUID = b"0123456789abcdef"
+
+
+def journal_superblock(*, sequence=17, start=5, block_size=1024):
+    raw = bytearray(block_size)
+    struct.pack_into(">III", raw, 0, 0xC03B3998, 3, sequence)
+    struct.pack_into(">IIIII", raw, 12, block_size, 32, 1, sequence, start)
+    raw[48:64] = UUID
+    return bytes(raw)
+
+
+def make_plan(**kwargs):
+    options = dict(
+        superblock=journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+        filesystem_blocks=100,
+        journal_physical_blocks=[40, 41, 42, 43],
+        data_writes={8: b"A" * 1024, 12: b"B" * 1024},
+        journal_superblock_physical_block=40,
+    )
+    options.update(kwargs)
+    return plan_classic_jbd2_checkpoint(**options)
+
+
+def test_checkpoint_orders_data_before_single_clean_superblock():
+    plan = make_plan()
+
+    assert [write.phase for write in plan.writes] == [
+        "data",
+        "data",
+        "journal-superblock",
+    ]
+    assert [write.block for write in plan.writes] == [8, 12, 40]
+    assert plan.flush_boundaries == (2,)
+    assert struct.unpack_from(">III", plan.clean_superblock, 0) == (
+        0xC03B3998,
+        3,
+        0,
+    )
+    assert struct.unpack_from(">I", plan.clean_superblock, 24)[0] == 0
+    assert struct.unpack_from(">I", plan.clean_superblock, 28)[0] == 0
+    clean_state = parse_classic_jbd2_superblock(
+        plan.clean_superblock,
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    assert clean_state.empty is True
+    assert clean_state.sequence == 0
+
+
+def test_checkpoint_is_deterministic_and_does_not_mutate_input():
+    raw = bytearray(journal_superblock())
+    before = bytes(raw)
+
+    plan = make_plan(superblock=raw, data_writes={8: bytearray(b"X" * 1024)})
+
+    assert bytes(raw) == before
+    assert plan.writes[0].data == b"X" * 1024
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"data_writes": {40: b"X" * 1024}}, "overlaps journal"),
+        ({"journal_superblock_physical_block": 9}, "outside journal"),
+        ({"data_writes": {8: b"short"}}, "wrong size"),
+        ({"data_writes": {0: b"X" * 1024}}, "outside filesystem"),
+    ],
+)
+def test_checkpoint_rejects_unsafe_write_shapes(kwargs, message):
+    with pytest.raises(JBD2WriteProfileError, match=message):
+        make_plan(**kwargs)
+
+
+def test_checkpoint_rejects_clean_or_empty_journal():
+    with pytest.raises(JBD2WriteProfileError, match="already-clean"):
+        make_plan(superblock=journal_superblock(start=0))
+
+
+def test_checkpoint_rejects_unknown_journal_features():
+    raw = bytearray(journal_superblock())
+    struct.pack_into(">I", raw, 40, 1)
+
+    with pytest.raises(JBD2WriteProfileError, match="feature"):
+        make_plan(superblock=raw)
