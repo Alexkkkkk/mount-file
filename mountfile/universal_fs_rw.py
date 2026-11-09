@@ -2557,7 +2557,9 @@ class LibguestfsRW(RWBackend):
         self.volume_size = int(volume_size) if volume_size is not None else None
         self.fs_type = str(fs_type).lower()
         self._g = guestfs.GuestFS(python_return_dict=True)
+        self._device = None
         self._mounted = False
+        self._shutdown = False
         try:
             self._g.add_drive_opts(str(self.image), format="raw", readonly=0)
             self._g.launch()
@@ -2581,11 +2583,66 @@ class LibguestfsRW(RWBackend):
                         "to a partition"
                     )
                 device = selected
-            self._g.mount(device, "/")
-            self._mounted = True
+            self._device = device
+            try:
+                self.mount_options("")
+            except RuntimeError:
+                if not self.fs_type.startswith("ntfs"):
+                    raise
+                # Some libguestfs builds need the explicit ntfs-3g helper.
+                self.umount_all()
+                self.mount_options("ntfs-3g")
         except BaseException:
             self.close()
             raise
+
+    def mount_options(self, options: str = "", mountpoint: str = "/") -> None:
+        """Mount the selected image filesystem inside the libguestfs VM."""
+        if self._mounted:
+            return
+        if self._device is None:
+            raise RuntimeError("libguestfs device is not available")
+        try:
+            self._g.mount_options(str(options), self._device, mountpoint)
+        except Exception as exc:
+            raise RuntimeError(
+                "libguestfs mount failed for %s: %s" % (self._device, exc)
+            ) from exc
+        self._mounted = True
+
+    def mount(self, mountpoint: str = "/") -> None:
+        """Mount with filesystem-driver defaults inside the isolated VM."""
+        self.mount_options("", mountpoint)
+
+    def unmount(self, path_or_device: str = "/") -> None:
+        """Unmount one libguestfs mountpoint without touching the host system."""
+        if not self._mounted:
+            return
+        try:
+            self._g.umount(path_or_device)
+        except Exception as exc:
+            raise RuntimeError("libguestfs unmount failed: %s" % exc) from exc
+        self._mounted = False
+
+    def umount_all(self) -> None:
+        """Unmount all filesystems currently mounted in the VM."""
+        if not self._mounted:
+            return
+        try:
+            self._g.umount_all()
+        except Exception as exc:
+            raise RuntimeError("libguestfs umount_all failed: %s" % exc) from exc
+        self._mounted = False
+
+    def shutdown(self) -> None:
+        """Flush guestfs caches and shut down the appliance."""
+        if self._shutdown:
+            return
+        if self._mounted:
+            self.umount_all()
+        self._g.sync()
+        self._g.shutdown()
+        self._shutdown = True
 
     @staticmethod
     def _path(path: str) -> str:
@@ -2663,11 +2720,7 @@ class LibguestfsRW(RWBackend):
         if guest is None:
             return
         try:
-            if self._mounted:
-                guest.umount_all()
-                self._mounted = False
-            guest.sync()
-            guest.shutdown()
+            self.shutdown()
         except Exception as exc:
             log.warning("libguestfs shutdown failed: %s", exc)
         finally:
@@ -3283,6 +3336,35 @@ class UniversalFSRW:
     def close(self) -> None:
         if self.backend:
             self.backend.close()
+
+    def mount(self, options: str = "", mountpoint: str = "/") -> None:
+        """Mount an external backend filesystem inside its isolated runtime."""
+        method = getattr(self.backend, "mount_options", None)
+        if not callable(method):
+            raise RuntimeError("selected backend does not expose isolated mounting")
+        method(options, mountpoint)
+
+    def unmount(self, path_or_device: str = "/") -> None:
+        """Unmount one filesystem from the backend runtime, never the host OS."""
+        method = getattr(self.backend, "unmount", None)
+        if not callable(method):
+            raise RuntimeError("selected backend does not expose isolated unmounting")
+        method(path_or_device)
+
+    def umount_all(self) -> None:
+        """Unmount all filesystems in the backend runtime."""
+        method = getattr(self.backend, "umount_all", None)
+        if not callable(method):
+            raise RuntimeError("selected backend does not expose isolated unmounting")
+        method()
+
+    def shutdown(self) -> None:
+        """Flush and stop the backend runtime before closing its handle."""
+        method = getattr(self.backend, "shutdown", None)
+        if not callable(method):
+            self.flush()
+            return
+        method()
 
     # ---- read/write -------------------------------------------------------
     def info(self) -> FSInfo:
