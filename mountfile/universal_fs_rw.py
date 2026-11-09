@@ -560,7 +560,9 @@ class RWBackend(ABC):
     def rename(self, src: str, dst: str) -> None: ...
 
     # ---- bounded range I/O (generic fallback) ------------------------------
-    def read_range(self, path: str, offset: int = 0, length: int | None = None) -> bytes:
+    def read_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
         """Read ``length`` bytes starting at ``offset`` inside a regular file.
 
         This default implementation is correct for every backend; providers
@@ -1667,9 +1669,7 @@ class Fat32RW(RWBackend):
         raw = self._read_dir_raw(parent_cluster)
         parent_path, _ = _image_path_parent_name(path)
         entries = self._parse_dir_raw(raw, parent_path)
-        entry = next(
-            (e for e in entries if e.name.casefold() == name.casefold()), None
-        )
+        entry = next((e for e in entries if e.name.casefold() == name.casefold()), None)
         if entry is None:
             raise FileNotFoundError(path)
         if entry.is_dir:
@@ -1753,7 +1753,9 @@ class Fat32RW(RWBackend):
             while gap < offset:
                 index = gap // self.cluster_size
                 if index >= len(chain):
-                    raise ValueError("FAT cluster chain is shorter than the write range")
+                    raise ValueError(
+                        "FAT cluster chain is shorter than the write range"
+                    )
                 cluster_offset = index * self.cluster_size
                 gap_end = min(offset, cluster_offset + self.cluster_size)
                 current = bytearray(self._read_cluster(chain[index]))
@@ -4045,19 +4047,11 @@ class UniversalFSRW:
         self.backend.link(source, destination)
 
     # ---- byte-range read/write -------------------------------------------
-    def read_range(
-        self, path: str, offset: int = 0, length: int | None = None
-    ) -> bytes:
-        """Read a bounded byte range without materialising the whole file."""
-        return self.backend.read_range(path, offset, length)
-
     def write_range(self, path: str, offset: int, data: bytes) -> None:
         """Write bytes at an offset inside an existing file (grows if needed)."""
         self._require_operation("write_file")
         payload = bytes(data)
-        op = WriteOperation(
-            "write", path, {"size": len(payload), "offset": offset}
-        )
+        op = WriteOperation("write", path, {"size": len(payload), "offset": offset})
         self._audit_and_backup(op)
         self.backend.write_range(path, offset, payload)
 
@@ -4065,9 +4059,7 @@ class UniversalFSRW:
         """Append bytes to an existing file."""
         self._require_operation("write_file")
         payload = bytes(data)
-        op = WriteOperation(
-            "write", path, {"size": len(payload), "offset": "append"}
-        )
+        op = WriteOperation("write", path, {"size": len(payload), "offset": "append"})
         self._audit_and_backup(op)
         self.backend.append(path, payload)
 

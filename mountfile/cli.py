@@ -333,9 +333,7 @@ def _selected_writer(image, offset, args):
     )
 
 
-def _open_write(
-    image, offset, backup=False, volume_size=None, allow_libguestfs=False
-):
+def _open_write(image, offset, backup=False, volume_size=None, allow_libguestfs=False):
     """Open the explicitly bounded native writer selected for this volume."""
     if backup:
         image = os.fspath(image)
@@ -356,14 +354,15 @@ def _open_write(
     try:
         if volume_size is None:
             volume_size = volume_size_for_offset(image, offset)
-        return UniversalFSRW(
-            image,
-            offset=offset,
-            volume_size=volume_size,
-            auto_backup=bool(allow_libguestfs),
-            allow_legacy_mount=False,
-            allow_libguestfs=allow_libguestfs,
-        )
+        kwargs = {
+            "offset": offset,
+            "volume_size": volume_size,
+            "auto_backup": bool(allow_libguestfs),
+            "allow_legacy_mount": False,
+        }
+        if allow_libguestfs:
+            kwargs["allow_libguestfs"] = True
+        return UniversalFSRW(image, **kwargs)
     except (OSError, RuntimeError, ValueError) as exc:
         raise Fat32Error(str(exc)) from exc
 
@@ -580,8 +579,7 @@ def cmd_write_range(args):
                 "file; create it with `put` first)" % target
             )
         print(
-            "Wrote %d bytes at offset %d in %s"
-            % (len(data), args.file_offset, target)
+            "Wrote %d bytes at offset %d in %s" % (len(data), args.file_offset, target)
         )
     finally:
         fs.close()
