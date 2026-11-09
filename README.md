@@ -144,6 +144,9 @@ python -m pip install '.[ai]'        # MCP and AI backends
 python -m pip install '.[dfir]'      # dateutil and YARA support
 python -m pip install '.[legacy-tsk]'# explicit pytsk3 compatibility fallback
 python -m pip install '.[dev]'       # tests, formatters and build tools
+python -m pip install '.[images]'    # Pillow-based image checks
+python -m pip install '.[fuzz]'      # Linux fuzzing tools
+python -m pip install -r requirements-all.txt  # all optional features and contributor tools
 ```
 
 `pytsk3` is not an automatic fallback for a recognized but unsupported or dirty

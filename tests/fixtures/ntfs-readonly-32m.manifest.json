@@ -1,0 +1,31 @@
+{
+  "schema": "mountfile.filesystem-fixture/v1",
+  "fixture": "ntfs-readonly-32m.img.gz",
+  "filesystem": "NTFS",
+  "kind": "real-prebuilt",
+  "compression": "gzip",
+  "compressed_size_bytes": 161507,
+  "compressed_sha256": "bb66068f8e0fde7c4d7fb31c14d965c6a82057a5c65f85ce13818ad438658bbc",
+  "image_size_bytes": 33554432,
+  "image_sha256": "42a2fca7986e78ca0b2b9cc69250249386001e1bbd939c54649aa9fb9f465087",
+  "generator": {
+    "package": "ntfs-3g",
+    "version": "1:2022.10.3-1.2ubuntu3.2",
+    "tools": [
+      "mkfs.ntfs -F -Q -c512",
+      "ntfscp -q"
+    ]
+  },
+  "expected_files": [
+    {
+      "path": "/HELLO.TXT",
+      "size_bytes": 33,
+      "sha256": "b25b9d115ca1accb115ff950c951098e3a28f7eeb0b2d9c618b0e6e16d55acad"
+    }
+  ],
+  "purpose": "Portable real-format image for read-only native NTFS reader tests on runners without mkfs.ntfs.",
+  "limitations": [
+    "NTFS is read-only in MountFile; this fixture does not enable or test NTFS mutations.",
+    "ntfsfix is not an authoritative NTFS oracle; the cross-platform reader report does not claim independent NTFS parity."
+  ]
+}

@@ -44,6 +44,10 @@ class CheckerResult:
     source_unchanged: bool
     copy_unchanged: bool | None
     exit_flags: tuple[str, ...] = ()
+    source_sha256_before: str | None = None
+    source_sha256_after: str | None = None
+    copy_sha256_before: str | None = None
+    copy_sha256_after: str | None = None
 
     @property
     def is_clean(self) -> bool:
@@ -188,6 +192,10 @@ def _run_on_copy(
             timed_out=False,
             source_unchanged=True,
             copy_unchanged=None,
+            source_sha256_before=None,
+            source_sha256_after=None,
+            copy_sha256_before=None,
+            copy_sha256_after=None,
         )
 
     source_digest = _sha256(source)
@@ -205,8 +213,10 @@ def _run_on_copy(
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
-            source_unchanged = _sha256(source) == source_digest
-            copy_unchanged = _sha256(disposable) == copy_digest
+            source_after = _sha256(source)
+            copy_after = _sha256(disposable)
+            source_unchanged = source_after == source_digest
+            copy_unchanged = copy_after == copy_digest
             return CheckerResult(
                 tool=tool,
                 available=True,
@@ -218,10 +228,16 @@ def _run_on_copy(
                 timed_out=True,
                 source_unchanged=source_unchanged,
                 copy_unchanged=copy_unchanged,
+                source_sha256_before=source_digest,
+                source_sha256_after=source_after,
+                copy_sha256_before=copy_digest,
+                copy_sha256_after=copy_after,
             )
 
-        source_unchanged = _sha256(source) == source_digest
-        copy_unchanged = _sha256(disposable) == copy_digest
+        source_after = _sha256(source)
+        copy_after = _sha256(disposable)
+        source_unchanged = source_after == source_digest
+        copy_unchanged = copy_after == copy_digest
         flags = exit_flags(completed.returncode) if exit_flags else ()
         if completed.returncode == 0 and source_unchanged and copy_unchanged:
             verdict = successful_verdict
@@ -239,6 +255,10 @@ def _run_on_copy(
             source_unchanged=source_unchanged,
             copy_unchanged=copy_unchanged,
             exit_flags=flags,
+            source_sha256_before=source_digest,
+            source_sha256_after=source_after,
+            copy_sha256_before=copy_digest,
+            copy_sha256_after=copy_after,
         )
 
 
@@ -248,6 +268,63 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def record_checker_fixture(
+    record_property,
+    *,
+    profile: str,
+    image: str | Path,
+    result: CheckerResult,
+) -> None:
+    """Attach content-addressed source/copy evidence to a pytest JUnit case."""
+    source = Path(image)
+    record_fixture_evidence(
+        record_property,
+        profile=profile,
+        image_size_bytes=source.stat().st_size,
+        source_sha256_before=result.source_sha256_before,
+        source_sha256_after=result.source_sha256_after,
+        checker_tool=result.tool,
+        checker_verdict=result.verdict.value,
+        copy_sha256_before=result.copy_sha256_before,
+        copy_sha256_after=result.copy_sha256_after,
+        source_unchanged=result.source_unchanged,
+        copy_unchanged=result.copy_unchanged,
+    )
+
+
+def record_fixture_evidence(
+    record_property,
+    *,
+    profile: str,
+    image_size_bytes: int,
+    source_sha256_before: str | None,
+    source_sha256_after: str | None,
+    checker_tool: str,
+    checker_verdict: str,
+    copy_sha256_before: str | None,
+    copy_sha256_after: str | None,
+    source_unchanged: bool,
+    copy_unchanged: bool | None,
+) -> None:
+    """Attach stable fields for either external-copy checks or direct readers."""
+    properties = {
+        "mountfile.fixture.profile": profile,
+        "mountfile.fixture.image_size_bytes": str(image_size_bytes),
+        "mountfile.fixture.sha256_before_checker": source_sha256_before or "",
+        "mountfile.fixture.sha256_after_checker": source_sha256_after or "",
+        "mountfile.checker.tool": checker_tool,
+        "mountfile.checker.verdict": checker_verdict,
+        "mountfile.checker.copy_sha256_before": copy_sha256_before or "",
+        "mountfile.checker.copy_sha256_after": copy_sha256_after or "",
+        "mountfile.checker.source_unchanged": str(source_unchanged).lower(),
+        "mountfile.checker.copy_unchanged": (
+            "not_applicable" if copy_unchanged is None else str(copy_unchanged).lower()
+        ),
+    }
+    for name, value in properties.items():
+        record_property(name, value)
 
 
 def _as_text(value: str | bytes | None) -> str:

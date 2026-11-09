@@ -14,6 +14,7 @@ import json
 import platform
 import shutil
 import subprocess
+from importlib import metadata
 from pathlib import Path
 
 MATRIX = (
@@ -84,7 +85,7 @@ def _discover_fixture_tests(tests_root: Path) -> set[str]:
         discovered.update(
             node.name
             for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
         )
     return discovered
 
@@ -95,7 +96,12 @@ def _tool_version(item: dict, executable: str | None) -> str | None:
         return None
     if item.get("checker_kind") == "python_module":
         module = importlib.util.find_spec(item["checker"])
-        return getattr(module, "version", None) if module else None
+        if module is None:
+            return None
+        try:
+            return metadata.version(item.get("checker_package", item["checker"]))
+        except metadata.PackageNotFoundError:
+            return getattr(module, "version", None)
     for flag in ("--version", "-V"):
         try:
             result = subprocess.run(

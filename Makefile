@@ -4,11 +4,13 @@
 
 PY ?= python3
 
-.PHONY: help install test test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
+.PHONY: help install tools tools-check test test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
         sync sync-status sync-check sync-pr sync-watch
 
 help:
 	@echo "make install    - install runtime dependencies"
+	@echo "make tools      - install the complete Linux checker and Python toolchain"
+	@echo "make tools-check - verify all optional tools are available"
 	@echo "make test       - run the test suite"
 	@echo "make test-standalone - run the standalone mountfile.py tests"
 	@echo "make lint       - ruff static check (E9,F63,F7,F82)"
@@ -28,6 +30,12 @@ help:
 
 install:
 	$(PY) -m pip install -e ".[api,ai,dfir]"
+
+tools:
+	bash scripts/bootstrap-tools.sh
+
+tools-check:
+	$(PY) scripts/bootstrap-tools.py
 
 test:
 	$(PY) -m pytest tests/ -v

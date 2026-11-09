@@ -3,12 +3,15 @@
 
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from mountfile.universal_fs_rw import Fat1216RW
-from tests._independent_checkers import CheckerVerdict, check_fat_image
+from tests._independent_checkers import (
+    CheckerVerdict,
+    check_fat_image,
+    record_checker_fixture,
+)
 from tests.test_fat_reader import _make_fat1216_image
 
 
@@ -65,7 +68,7 @@ def test_fat1216_short_write_rolls_back_and_preserves_sentinels(tmp_path, monkey
     [(12, 1440 * 1024), (16, 32 * 1024 * 1024)],
 )
 def test_real_fat1216_mutations_pass_fsck_on_disposable_copy(
-    tmp_path, fat_type, image_size
+    tmp_path, record_property, fat_type, image_size
 ):
     mkfs = shutil.which("mkfs.fat")
     fsck = shutil.which("fsck.fat")
@@ -97,6 +100,12 @@ def test_real_fat1216_mutations_pass_fsck_on_disposable_copy(
         writer.close()
 
     result = check_fat_image(image, timeout=60)
+    record_checker_fixture(
+        record_property,
+        profile=f"fat{fat_type}-native-rw",
+        image=image,
+        result=result,
+    )
     assert result.available
     assert result.verdict is CheckerVerdict.CLEAN, result.diagnostics()
     assert result.source_unchanged
