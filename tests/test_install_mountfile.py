@@ -60,6 +60,26 @@ def test_linux_system_failure_is_propagated_without_install_command():
     assert run.call_args.args[0] == ["apt-get", "update", "-qq"]
 
 
+def test_linux_system_install_includes_exfat_checker_tools():
+    """The default Linux install includes the exFAT checker/tooling package."""
+
+    with (
+        patch.object(installer, "have", return_value=True),
+        patch.object(installer, "is_admin", return_value=True),
+        patch.object(installer, "run", return_value=0) as run,
+    ):
+        assert installer.install_system_linux() == 0
+
+    assert run.call_count == 2
+    install_command = run.call_args_list[1].args[0]
+    assert install_command[:4] == ["apt-get", "install", "-y", "-qq"]
+    assert "dosfstools" in install_command
+    assert "mtools" in install_command
+    assert "e2fsprogs" in install_command
+    assert "exfatprogs" in install_command
+    assert "ntfs-3g" in install_command
+
+
 def test_dry_run_never_starts_a_subprocess_or_creates_venv(tmp_path):
     """Dry-run only prints planned commands, including the Windows dispatcher."""
 
