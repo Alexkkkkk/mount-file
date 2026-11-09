@@ -1,0 +1,111 @@
+{
+  "capability_matrix_version": 6,
+  "entries": [
+    {
+      "blocking_cells": [
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "evidence": "capability_contract",
+      "filesystem": "FAT12",
+      "parity": "not_claimed",
+      "power_loss": "unsupported",
+      "profile_id": "fat12-16-native-rw",
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_proven",
+        "quarantine": "not_proven",
+        "rollback": "tested_on_failure"
+      },
+      "required_cells": [
+        "rollback",
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "strategy": "native-fat12-16",
+      "verdict": "blocked"
+    },
+    {
+      "blocking_cells": [
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "evidence": "capability_contract",
+      "filesystem": "FAT32",
+      "parity": "not_claimed",
+      "power_loss": "unsupported",
+      "profile_id": "fat32-native-rw",
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_proven",
+        "quarantine": "not_proven",
+        "rollback": "tested_on_failure"
+      },
+      "required_cells": [
+        "rollback",
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "strategy": "native",
+      "verdict": "blocked"
+    },
+    {
+      "blocking_cells": [
+        "power_loss"
+      ],
+      "evidence": "capability_contract",
+      "filesystem": "ext2",
+      "parity": "not_claimed",
+      "power_loss": "unsupported",
+      "profile_id": "ext2-native-rw",
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "tested_with_recovery_sidecar",
+        "quarantine": "tested_on_recovery_failure",
+        "rollback": "tested_on_failure"
+      },
+      "required_cells": [
+        "rollback",
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "strategy": "native-ext2",
+      "verdict": "blocked"
+    },
+    {
+      "blocking_cells": [
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "evidence": "capability_contract",
+      "filesystem": "exFAT",
+      "parity": "not_claimed",
+      "power_loss": "unsupported",
+      "profile_id": "exfat-native-rw",
+      "recovery": {
+        "power_loss": "unsupported",
+        "process_kill": "not_proven",
+        "quarantine": "not_proven",
+        "rollback": "tested_on_failure"
+      },
+      "required_cells": [
+        "rollback",
+        "process_kill",
+        "power_loss",
+        "quarantine"
+      ],
+      "strategy": "native-exfat-phase1",
+      "verdict": "blocked"
+    }
+  ],
+  "production_ready": false,
+  "production_ready_reason": "A profile is not production-ready until every required recovery cell has reproducible evidence; power-loss remains unsupported.",
+  "report": "mountfile-writer-recovery-acceptance",
+  "schema": 1
+}

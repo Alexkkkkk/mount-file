@@ -706,9 +706,21 @@ class NativeExfatRW(RWBackend):
             raise ValueError("read length must be a non-negative integer or None")
         if length == 0:
             return b""
-        return self._reader.read_file_range(
-            path, offset=offset, length=min(length, self.max_read_range_bytes)
-        )
+        chunks: list[bytes] = []
+        remaining = length
+        cursor = offset
+        while remaining:
+            chunk = self._reader.read_file_range(
+                path,
+                offset=cursor,
+                length=min(remaining, self.max_read_range_bytes),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            cursor += len(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     max_read_range_bytes = 16 * 1024 * 1024
 
@@ -2444,6 +2456,13 @@ class Ext234RW(RWBackend):
             return tmp.read_bytes()
         finally:
             tmp.unlink(missing_ok=True)
+
+    def read_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
+        if self._native is not None:
+            return self._native.read_file_range(path, offset, length)
+        return super().read_range(path, offset, length)
 
     def write_file(self, path: str, data: bytes) -> None:
         if self._native is not None:

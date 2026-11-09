@@ -1,0 +1,136 @@
+{
+  "entries": [
+    {
+      "availability": "available",
+      "checker": "e2fsck",
+      "checker_authoritative": true,
+      "checker_package": "e2fsprogs",
+      "checker_path": "/usr/sbin/e2fsck",
+      "checker_version": "e2fsck 1.47.0 (5-Feb-2023)",
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_native_ext2_mutation_passes_e2fsck_on_disposable_copy"
+      ],
+      "fixture_tests_found": [
+        "test_native_ext2_mutation_passes_e2fsck_on_disposable_copy"
+      ],
+      "fixture_tests_missing": [],
+      "native": true,
+      "parity": "not_claimed",
+      "profile": "ext2-native-rw",
+      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
+    },
+    {
+      "availability": "unavailable",
+      "checker": "fsck.fat",
+      "checker_authoritative": true,
+      "checker_package": "dosfstools",
+      "checker_path": null,
+      "checker_version": null,
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_real_fat1216_mutations_pass_fsck_on_disposable_copy"
+      ],
+      "fixture_tests_found": [
+        "test_real_fat1216_mutations_pass_fsck_on_disposable_copy"
+      ],
+      "fixture_tests_missing": [],
+      "native": true,
+      "parity": "not_claimed",
+      "profile": "fat12-16-native-rw",
+      "reason": "required checker/runtime is unavailable on this runner"
+    },
+    {
+      "availability": "unavailable",
+      "checker": "fsck.fat",
+      "checker_authoritative": true,
+      "checker_package": "dosfstools",
+      "checker_path": null,
+      "checker_version": null,
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_native_fat32_mutation_passes_fsck_on_disposable_copy"
+      ],
+      "fixture_tests_found": [
+        "test_native_fat32_mutation_passes_fsck_on_disposable_copy"
+      ],
+      "fixture_tests_missing": [],
+      "native": true,
+      "parity": "not_claimed",
+      "profile": "fat32-native-rw",
+      "reason": "required checker/runtime is unavailable on this runner"
+    },
+    {
+      "availability": "unavailable",
+      "checker": "fsck.exfat",
+      "checker_authoritative": true,
+      "checker_package": "exfatprogs",
+      "checker_path": null,
+      "checker_version": null,
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck"
+      ],
+      "fixture_tests_found": [
+        "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck"
+      ],
+      "fixture_tests_missing": [],
+      "native": true,
+      "parity": "not_claimed",
+      "profile": "exfat-native-rw",
+      "reason": "required checker/runtime is unavailable on this runner"
+    },
+    {
+      "availability": "unavailable",
+      "checker": "ntfsfix",
+      "checker_authoritative": false,
+      "checker_package": "ntfs-3g",
+      "checker_path": null,
+      "checker_version": null,
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+      ],
+      "fixture_tests_found": [
+        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+      ],
+      "fixture_tests_missing": [],
+      "native": false,
+      "parity": "not_claimed",
+      "profile": "ntfs-native-ro",
+      "reason": "required checker/runtime is unavailable on this runner"
+    },
+    {
+      "availability": "unavailable",
+      "checker": "pytsk3",
+      "checker_authoritative": false,
+      "checker_kind": "python_module",
+      "checker_package": "pytsk3",
+      "checker_path": null,
+      "checker_version": null,
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_real_ext2_benchmark_requires_identical_pytsk3_file_content"
+      ],
+      "fixture_tests_found": [
+        "test_real_ext2_benchmark_requires_identical_pytsk3_file_content"
+      ],
+      "fixture_tests_missing": [],
+      "native": true,
+      "parity": "not_claimed",
+      "profile": "all-native-readers",
+      "reason": "required checker/runtime is unavailable on this runner"
+    }
+  ],
+  "platform": "linux",
+  "platform_release": "6.18.38+",
+  "python": "3.12.3",
+  "report": "mountfile-external-checker-matrix",
+  "schema": 1
+}
