@@ -187,6 +187,9 @@ COMMANDS = (
     "autopick",
     "get",
     "put",
+    "write-range",
+    "append",
+    "truncate",
     "mkdir",
     "mv",
     "rm",
@@ -414,9 +417,26 @@ def cmd_read_range(args):
     offset, _fstype, _desc = _select(args.image, args)
     provider, _backend = _provider(args.image, offset)
     try:
-        data = provider.read_file_range(
-            _abs_path(args.path), offset=args.file_offset, length=args.length
-        )
+        target = _abs_path(args.path)
+        reader = getattr(provider, "read_file_range", None)
+        if callable(reader):
+            data = reader(target, offset=args.file_offset, length=args.length)
+        else:
+            from .universal_fs_rw import UniversalFSRW
+
+            fallback = UniversalFSRW(
+                args.image,
+                offset=offset,
+                volume_size=volume_size_for_offset(args.image, offset),
+                auto_backup=False,
+                allow_legacy_mount=False,
+            )
+            try:
+                data = fallback.read_range(
+                    target, offset=args.file_offset, length=args.length
+                )
+            finally:
+                fallback.close()
     finally:
         if hasattr(provider, "close"):
             provider.close()
@@ -462,6 +482,87 @@ def cmd_put(args):
             target = posixpath.join(dest, name)
             fs.write_file(target, data)
             print("Wrote %s (%d bytes) -> %s" % (src, len(data), target))
+    finally:
+        fs.close()
+    return OK
+
+
+def _read_payload(path, length=None):
+    if not os.path.isfile(path):
+        raise Fat32Error("no such local file: %s" % path)
+    with open(path, "rb") as stream:
+        data = stream.read()
+    if length is not None:
+        if length < 0:
+            raise ValueError("length must be non-negative")
+        data = data[:length]
+    return data
+
+
+def cmd_write_range(args):
+    """Write local bytes at an offset inside a file that already exists."""
+    if not args.yes:
+        _warn(args.image)
+        return NEED_CONFIRM
+    if args.file_offset < 0:
+        raise ValueError("file offset must be non-negative")
+    data = _read_payload(args.input, args.length)
+    offset, _fstype, _desc = _select(args.image, args)
+    target = _abs_path(args.path)
+    fs = _open_write(args.image, offset, backup=args.backup)
+    try:
+        try:
+            fs.write_range(target, args.file_offset, data)
+        except FileNotFoundError:
+            raise Fat32Error(
+                "no such file in the image: %s (write-range needs an existing "
+                "file; create it with `put` first)" % target
+            )
+        print(
+            "Wrote %d bytes at offset %d in %s"
+            % (len(data), args.file_offset, target)
+        )
+    finally:
+        fs.close()
+    return OK
+
+
+def cmd_append(args):
+    """Append local bytes to a file that already exists."""
+    if not args.yes:
+        _warn(args.image)
+        return NEED_CONFIRM
+    data = _read_payload(args.input, args.length)
+    offset, _fstype, _desc = _select(args.image, args)
+    target = _abs_path(args.path)
+    fs = _open_write(args.image, offset, backup=args.backup)
+    try:
+        try:
+            fs.append(target, data)
+        except FileNotFoundError:
+            raise Fat32Error("no such file in the image: %s" % target)
+        print("Appended %d bytes to %s" % (len(data), target))
+    finally:
+        fs.close()
+    return OK
+
+
+def cmd_truncate(args):
+    """Resize an existing file to exactly --size bytes."""
+    if not args.yes:
+        _warn(args.image)
+        return NEED_CONFIRM
+    if args.size < 0:
+        raise ValueError("size must be non-negative")
+    offset, _fstype, _desc = _select(args.image, args)
+    target = _abs_path(args.path)
+    fs = _open_write(args.image, offset, backup=args.backup)
+    try:
+        try:
+            fs.truncate(target, args.size)
+        except FileNotFoundError:
+            raise Fat32Error("no such file in the image: %s" % target)
+        print("Resized %s to %d bytes" % (target, args.size))
     finally:
         fs.close()
     return OK
@@ -1041,6 +1142,36 @@ def build_parser():
     sp.add_argument("--dest", default="/", help="directory inside the image")
     sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_put)
+
+    sp = sub.add_parser(
+        "write-range", help="write local bytes at an offset inside an existing file"
+    )
+    _add_target(sp)
+    sp.add_argument("path", help="file inside the image, e.g. /config/settings.ini")
+    sp.add_argument("--input", required=True, help="local file holding the bytes")
+    sp.add_argument(
+        "--file-offset", type=int, default=0, help="offset inside the image file"
+    )
+    sp.add_argument(
+        "--length", type=int, default=None, help="use at most this many input bytes"
+    )
+    sp.add_argument("--yes", action="store_true", help="confirm the write")
+    sp.set_defaults(func=cmd_write_range)
+
+    sp = sub.add_parser("append", help="append local bytes to an existing file")
+    _add_target(sp)
+    sp.add_argument("path", help="file inside the image")
+    sp.add_argument("--input", required=True, help="local file holding the bytes")
+    sp.add_argument("--length", type=int, default=None, help="append at most N bytes")
+    sp.add_argument("--yes", action="store_true", help="confirm the write")
+    sp.set_defaults(func=cmd_append)
+
+    sp = sub.add_parser("truncate", help="resize an existing image file")
+    _add_target(sp)
+    sp.add_argument("path", help="file inside the image")
+    sp.add_argument("--size", type=int, required=True, help="new size in bytes")
+    sp.add_argument("--yes", action="store_true", help="confirm the write")
+    sp.set_defaults(func=cmd_truncate)
 
     sp = sub.add_parser("mkdir", help="create a directory in a supported profile")
     _add_target(sp)

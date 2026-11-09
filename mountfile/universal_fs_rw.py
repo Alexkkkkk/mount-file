@@ -273,6 +273,19 @@ def _imdisk_unmount(drive: str) -> None:
         raise RuntimeError("ImDisk could not safely detach %s: %s" % (drive, detail))
 
 
+def _splice_range(current: bytes, offset: int, data: bytes) -> bytes:
+    """Return ``current`` with ``data`` written at ``offset`` (POSIX write)."""
+    payload = bytes(data)
+    if not payload:
+        return current
+    if offset > len(current):
+        current = current + b"\x00" * (offset - len(current))
+    end = offset + len(payload)
+    if end <= len(current):
+        return current[:offset] + payload + current[end:]
+    return current[:offset] + payload
+
+
 def _image_path_parent_name(path: str) -> tuple[str, str]:
     """Split a filesystem-in-image path using FAT/POSIX separators on every OS."""
     image_path = PurePosixPath(str(path).replace("\\", "/"))
@@ -523,6 +536,61 @@ class RWBackend(ABC):
     @abstractmethod
     def rename(self, src: str, dst: str) -> None: ...
 
+    # ---- bounded range I/O (generic fallback) ------------------------------
+    def read_range(self, path: str, offset: int = 0, length: int | None = None) -> bytes:
+        """Read ``length`` bytes starting at ``offset`` inside a regular file.
+
+        This default implementation is correct for every backend; providers
+        with a native cluster/extent reader override it to avoid buffering the
+        whole file.
+        """
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError("read offset must be a non-negative integer")
+        if length is not None and (
+            not isinstance(length, int) or isinstance(length, bool) or length < 0
+        ):
+            raise ValueError("read length must be a non-negative integer or None")
+        data = self.read(path)
+        if length is None:
+            return data[offset:]
+        return data[offset : offset + length]
+
+    def write_range(self, path: str, offset: int, data: bytes) -> None:
+        """Write ``data`` at ``offset`` inside an existing regular file.
+
+        Bytes are not automatically appended: writing past the current end
+        grows the file and zero-fills the gap, exactly like a POSIX write.
+        """
+        self._check_write_range_arguments(offset, data)
+        current = self.read(path)
+        self.write_file(path, _splice_range(current, offset, data))
+
+    def append(self, path: str, data: bytes) -> None:
+        """Append ``data`` to the end of an existing regular file."""
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("append payload must be bytes-like")
+        payload = bytes(data)
+        self.write_range(path, len(self.read(path)), payload)
+
+    def truncate(self, path: str, size: int) -> None:
+        """Resize a regular file to ``size`` bytes (zero-filling when growing)."""
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError("truncate size must be a non-negative integer")
+        current = self.read(path)
+        if size == len(current):
+            return
+        if size < len(current):
+            self.write_file(path, current[:size])
+        else:
+            self.write_file(path, current + b"\x00" * (size - len(current)))
+
+    @staticmethod
+    def _check_write_range_arguments(offset: int, data: bytes) -> None:
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError("write offset must be a non-negative integer")
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("write payload must be bytes-like")
+
     # ---- helpers ----------------------------------------------------------
     def exists(self, path: str) -> bool:
         # ``stat`` returns None for a missing path instead of raising, so the
@@ -625,6 +693,24 @@ class NativeExfatRW(RWBackend):
 
     def read(self, path: str) -> bytes:
         return self._reader.read_file(path)
+
+    def read_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError("read offset must be a non-negative integer")
+        if length is None:
+            size = self._reader.file_size(path)
+            length = max(0, size - offset)
+        if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+            raise ValueError("read length must be a non-negative integer or None")
+        if length == 0:
+            return b""
+        return self._reader.read_file_range(
+            path, offset=offset, length=min(length, self.max_read_range_bytes)
+        )
+
+    max_read_range_bytes = 16 * 1024 * 1024
 
     def _mutate(self, operation: str, *args, **kwargs) -> None:
         """Release the source handle for Windows replace, then refresh the reader."""
@@ -744,6 +830,14 @@ class Fat32RW(RWBackend):
                 actual = verifier.read(path)
                 if actual != expected:
                     raise OSError("staged FAT read-back did not match written data")
+            elif operation == "write_range":
+                path, offset, payload, expected_size = arguments
+                if verifier.stat(path) is None:
+                    raise OSError("staged FAT read-back lost the written file")
+                if verifier.stat(path).size != expected_size:
+                    raise OSError("staged FAT read-back size did not match the write")
+                if verifier.read_range(path, offset, len(payload)) != payload:
+                    raise OSError("staged FAT read-back did not match the range write")
             elif operation == "mkdir":
                 (path,) = arguments
                 entry = verifier.stat(path)
@@ -1527,8 +1621,112 @@ class Fat32RW(RWBackend):
             raise IsADirectoryError(path)
         return self._read_chain(entry.inode, entry.size)
 
+    def _entry_for(self, path: str):
+        """Resolve one FAT path to ``(parent_cluster, entry, raw_dir, base)``."""
+        parent_cluster, name = self._walk_to(path)
+        raw = self._read_dir_raw(parent_cluster)
+        parent_path, _ = _image_path_parent_name(path)
+        entries = self._parse_dir_raw(raw, parent_path)
+        entry = next(
+            (e for e in entries if e.name.casefold() == name.casefold()), None
+        )
+        if entry is None:
+            raise FileNotFoundError(path)
+        if entry.is_dir:
+            raise IsADirectoryError(path)
+        return parent_cluster, entry, raw, parent_path
+
+    def read_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
+        """Read one bounded range straight from the cluster chain."""
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError("read offset must be a non-negative integer")
+        if length is not None and (
+            not isinstance(length, int) or isinstance(length, bool) or length < 0
+        ):
+            raise ValueError("read length must be a non-negative integer or None")
+        _parent, entry, _raw, _base = self._entry_for(path)
+        size = entry.size
+        if offset >= size or length == 0:
+            return b""
+        end = size if length is None else min(size, offset + length)
+        chain = self._cluster_chain(entry.inode)
+        if not chain:
+            raise ValueError("non-empty FAT file has no cluster chain")
+        first = offset // self.cluster_size
+        last = (end - 1) // self.cluster_size
+        if last >= len(chain):
+            raise ValueError("FAT cluster chain is shorter than the declared size")
+        buffer = b"".join(self._read_cluster(chain[i]) for i in range(first, last + 1))
+        start = offset - first * self.cluster_size
+        return buffer[start : start + (end - offset)]
+
     def write_file(self, path: str, data: bytes) -> None:
         self._mutate_staged("write_file", path, data)
+
+    def write_range(self, path: str, offset: int, data: bytes) -> None:
+        self._check_write_range_arguments(offset, data)
+        payload = bytes(data)
+        if not payload:
+            # An empty write is still a presence check, not a silent success.
+            self._entry_for(path)
+            return
+        expected_size = max(self._entry_for(path)[1].size, offset + len(payload))
+        self._mutate_staged("write_range", path, offset, payload, expected_size)
+
+    def _write_range_inplace(
+        self, path: str, offset: int, data: bytes, expected_size: int | None = None
+    ) -> None:
+        """Splice ``data`` into an existing file, growing its chain if needed.
+
+        ``expected_size`` is carried through only so the staged read-back can
+        compare the resulting file size; it is not used for the mutation.
+        """
+        parent_cluster, entry, raw, parent_path = self._entry_for(path)
+        chain = self._cluster_chain(entry.inode) if entry.size else []
+        if entry.size and not chain:
+            raise ValueError("non-empty FAT file has no cluster chain")
+        new_size = max(entry.size, offset + len(data))
+        clusters_needed = (new_size + self.cluster_size - 1) // self.cluster_size
+        if clusters_needed > len(chain):
+            extra = self._allocate_chain(clusters_needed - len(chain))
+            try:
+                if chain:
+                    # Link the tail of the old chain before the new clusters so
+                    # a partially grown file is still a valid chain.
+                    self._fat_set(chain[-1], extra[0])
+                    chain = chain + extra
+                else:
+                    chain = extra
+            except Exception:
+                self._free_chain(extra[0])
+                raise
+        first = offset // self.cluster_size
+        last = (offset + len(data) - 1) // self.cluster_size
+        for index in range(first, last + 1):
+            cluster_offset = index * self.cluster_size
+            chunk_start = max(offset, cluster_offset)
+            chunk_end = min(offset + len(data), cluster_offset + self.cluster_size)
+            current = bytearray(self._read_cluster(chain[index]))
+            local = chunk_start - cluster_offset
+            current[local : local + (chunk_end - chunk_start)] = data[
+                chunk_start - offset : chunk_end - offset
+            ]
+            self._write_cluster(chain[index], bytes(current))
+        index_in_dir = self._find_entry_index(raw, entry, parent_path)
+        if index_in_dir is None:
+            raise RuntimeError("directory entry not found while extending %s" % path)
+        buffer = bytearray(raw)
+        first_cluster = chain[0] if chain else 0
+        struct.pack_into("<H", buffer, index_in_dir + 26, first_cluster & 0xFFFF)
+        if self.fat_type == 32:
+            struct.pack_into(
+                "<H", buffer, index_in_dir + 20, (first_cluster >> 16) & 0xFFFF
+            )
+        struct.pack_into("<I", buffer, index_in_dir + 28, new_size)
+        self._write_dir_raw(parent_cluster, bytes(buffer))
+        self.sync_fsinfo()
 
     def _write_file_inplace(self, path: str, data: bytes) -> None:
         parent_cluster, name = self._walk_to(path)
@@ -3063,6 +3261,40 @@ class UniversalFSRW:
         op = WriteOperation("rename", src, {"dst": dst})
         self._audit_and_backup(op)
         self.backend.rename(src, dst)
+
+    # ---- byte-range read/write -------------------------------------------
+    def read_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
+        """Read a bounded byte range without materialising the whole file."""
+        return self.backend.read_range(path, offset, length)
+
+    def write_range(self, path: str, offset: int, data: bytes) -> None:
+        """Write bytes at an offset inside an existing file (grows if needed)."""
+        self._require_operation("write_file")
+        payload = bytes(data)
+        op = WriteOperation(
+            "write", path, {"size": len(payload), "offset": offset}
+        )
+        self._audit_and_backup(op)
+        self.backend.write_range(path, offset, payload)
+
+    def append(self, path: str, data: bytes) -> None:
+        """Append bytes to an existing file."""
+        self._require_operation("write_file")
+        payload = bytes(data)
+        op = WriteOperation(
+            "write", path, {"size": len(payload), "offset": "append"}
+        )
+        self._audit_and_backup(op)
+        self.backend.append(path, payload)
+
+    def truncate(self, path: str, size: int) -> None:
+        """Resize an existing file to exactly ``size`` bytes."""
+        self._require_operation("write_file")
+        op = WriteOperation("write", path, {"size": int(size), "offset": "truncate"})
+        self._audit_and_backup(op)
+        self.backend.truncate(path, size)
 
     # ---- maintenance ------------------------------------------------------
     def flush(self) -> dict:
