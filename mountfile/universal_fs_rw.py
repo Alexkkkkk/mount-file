@@ -2529,7 +2529,154 @@ class Ext234RW(RWBackend):
 
 
 # =============================================================================
-# 6. NTFS via subprocess (ntfs-3g / ntfsclone)
+# 6. Optional libguestfs writer for NTFS and ext2/3/4
+# =============================================================================
+class LibguestfsRW(RWBackend):
+    """Explicit libguestfs writer for filesystems outside native profiles.
+
+    The dependency is imported lazily and this backend is never selected unless
+    the caller passes ``allow_libguestfs=True``.  The image is opened directly
+    by libguestfs; callers should keep the normal UniversalFSRW backup enabled
+    when using this compatibility backend.
+    """
+
+    def __init__(
+        self,
+        image: Path,
+        offset: int = 0,
+        volume_size: int | None = None,
+        fs_type: str = "external",
+    ):
+        super().__init__(image, offset)
+        try:
+            import guestfs
+        except ImportError as exc:
+            raise RuntimeError(
+                "libguestfs Python bindings are required; install python3-libguestfs"
+            ) from exc
+        self.volume_size = int(volume_size) if volume_size is not None else None
+        self.fs_type = str(fs_type).lower()
+        self._g = guestfs.GuestFS(python_return_dict=True)
+        self._mounted = False
+        try:
+            self._g.add_drive_opts(str(self.image), format="raw", readonly=0)
+            self._g.launch()
+            devices = self._g.list_devices()
+            if not devices:
+                raise RuntimeError("libguestfs found no block device in the image")
+            device = devices[0]
+            if self.offset:
+                selected = None
+                for part in self._g.part_list(device):
+                    start = int(part["part_start"]) * 512
+                    end = (int(part["part_end"]) + 1) * 512
+                    if start == self.offset and (
+                        self.volume_size is None or end - start >= self.volume_size
+                    ):
+                        selected = f"{device}{part['part_num']}"
+                        break
+                if selected is None:
+                    raise RuntimeError(
+                        "libguestfs could not map the selected filesystem offset "
+                        "to a partition"
+                    )
+                device = selected
+            self._g.mount(device, "/")
+            self._mounted = True
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def _path(path: str) -> str:
+        value = "/" + str(path or "/").lstrip("/")
+        parts = value.split("/")
+        if value != "/" and any(
+            part in ("", ".", "..") or "\x00" in part for part in parts[1:]
+        ):
+            raise ValueError("unsafe path for libguestfs: %r" % path)
+        return value
+
+    def _download(self, path: str) -> bytes:
+        with tempfile.NamedTemporaryFile(prefix="mountfile-guestfs-") as tmp:
+            self._g.download(self._path(path), tmp.name)
+            tmp.flush()
+            return Path(tmp.name).read_bytes()
+
+    def info(self) -> FSInfo:
+        return FSInfo(
+            fs_type=self.fs_type,
+            offset=self.offset,
+            backend="libguestfs-rw",
+            total_size=self.volume_size or self.image.stat().st_size,
+            writable=True,
+            write_strategy="libguestfs",
+        )
+
+    def list(self, path: str = "/") -> list[FSEntry]:
+        parent = self._path(path)
+        entries: list[FSEntry] = []
+        for item in self._g.readdir(parent):
+            name = item.get("name", "")
+            if name in ("", ".", ".."):
+                continue
+            child = parent.rstrip("/") + "/" + name
+            try:
+                meta = self._g.statns(child)
+                size = int(meta.get("size", 0))
+                mode = int(meta.get("mode", 0))
+                is_dir = bool(mode & stat.S_IFDIR)
+            except Exception:
+                size, mode, is_dir = 0, None, False
+            entries.append(FSEntry(name, child, size, is_dir, mode=mode))
+        return entries
+
+    def read(self, path: str) -> bytes:
+        return self._download(path)
+
+    def write_file(self, path: str, data: bytes) -> None:
+        target = self._path(path)
+        parent = str(PurePosixPath(target).parent)
+        self._g.mkdir_p(parent)
+        with tempfile.NamedTemporaryFile(prefix="mountfile-guestfs-") as tmp:
+            tmp.write(bytes(data))
+            tmp.flush()
+            self._g.upload(tmp.name, target)
+
+    def mkdir(self, path: str) -> None:
+        self._g.mkdir_p(self._path(path))
+
+    def delete(self, path: str, recursive: bool = False) -> None:
+        target = self._path(path)
+        if recursive:
+            self._g.rm_rf(target)
+        elif self._g.is_dir(target):
+            self._g.rmdir(target)
+        else:
+            self._g.rm(target)
+
+    def rename(self, src: str, dst: str) -> None:
+        self._g.mv(self._path(src), self._path(dst))
+
+    def close(self) -> None:
+        guest = getattr(self, "_g", None)
+        if guest is None:
+            return
+        try:
+            if self._mounted:
+                guest.umount_all()
+                self._mounted = False
+            guest.sync()
+            guest.shutdown()
+        except Exception as exc:
+            log.warning("libguestfs shutdown failed: %s", exc)
+        finally:
+            guest.close()
+            self._g = None
+
+
+# =============================================================================
+# 7. NTFS via subprocess (ntfs-3g / ntfsclone)
 # =============================================================================
 class NtfsRW(RWBackend):
     """NTFS reader via pytsk3; writes via ntfs-3g or Windows ImDisk."""
@@ -2679,7 +2826,7 @@ class NtfsRW(RWBackend):
 
 
 # =============================================================================
-# 7. LOOP-MOUNT fallback (любая ФС)
+# 8. LOOP-MOUNT fallback (любая ФС)
 # =============================================================================
 class LoopMountRW(RWBackend):
     """Write via Linux loop-mount or Windows ImDisk for native Windows filesystems."""
@@ -2816,7 +2963,7 @@ class LoopMountRW(RWBackend):
 
 
 # =============================================================================
-# 8. REBUILD fallback (распаковать → mkfs → залить → заменить)
+# 9. REBUILD fallback (распаковать → mkfs → залить → заменить)
 # =============================================================================
 class RebuildRW(RWBackend):
     """Fallback: полная пересборка образа через mkfs + копирование."""
@@ -2943,7 +3090,7 @@ class RebuildRW(RWBackend):
 
 
 # =============================================================================
-# 9. ФАСАД: UniversalFSRW
+# 10. ФАСАД: UniversalFSRW
 # =============================================================================
 class UniversalFSRW:
     """
@@ -2962,6 +3109,7 @@ class UniversalFSRW:
         auto_backup: bool = True,
         allow_legacy_mount: bool = False,
         volume_size: int | None = None,
+        allow_libguestfs: bool = False,
     ):
         self.image = Path(image)
         self.offset = offset
@@ -2970,6 +3118,7 @@ class UniversalFSRW:
         self.backup = ImageBackup(self.image)
         self._auto_backup = auto_backup
         self.allow_legacy_mount = bool(allow_legacy_mount)
+        self.allow_libguestfs = bool(allow_libguestfs)
         self._requested_volume_size = volume_size
         self._backup_path: Path | None = None
         self._open()
@@ -3044,6 +3193,20 @@ class UniversalFSRW:
         # ``NTFS`` while the backend table is lowercase, so the match below
         # must be case-insensitive.
         fs_type_lower = str(fs_type).lower()
+        if self.allow_libguestfs and fs_type_lower.startswith(("ntfs", "ext")):
+            try:
+                self.backend = LibguestfsRW(
+                    self.image,
+                    off,
+                    volume_size=volume_size,
+                    fs_type=fs_type_lower,
+                )
+                return
+            except Exception as exc:
+                raise RuntimeError(
+                    "explicit libguestfs backend was requested but could not open "
+                    "%s: %s" % (fs_type, exc)
+                ) from exc
         writer_types = [
             (NativeExfatRW, ("exfat",)),
             (Fat1216RW, ("fat12", "fat16")),

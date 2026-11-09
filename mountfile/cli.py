@@ -300,7 +300,7 @@ def _provider(image, offset, volume_size=None):
         return Fat32Provider(image, offset=offset), "fat32"
 
 
-def _open_write(image, offset, backup=False):
+def _open_write(image, offset, backup=False, allow_libguestfs=False):
     """Open the explicitly bounded native writer selected for this volume."""
     if backup:
         bak = image + ".bak"
@@ -312,11 +312,21 @@ def _open_write(image, offset, backup=False):
             image,
             offset=offset,
             volume_size=volume_size,
-            auto_backup=False,
+            auto_backup=bool(allow_libguestfs),
             allow_legacy_mount=False,
+            allow_libguestfs=allow_libguestfs,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise Fat32Error(str(exc)) from exc
+
+
+def _open_write_for_args(args, offset):
+    return _open_write(
+        args.image,
+        offset,
+        backup=args.backup,
+        allow_libguestfs=args.allow_libguestfs,
+    )
 
 
 def _warn(path):
@@ -473,7 +483,7 @@ def cmd_put(args):
     for src in args.local:
         if not os.path.isfile(src):
             raise Fat32Error("no such local file: %s" % src)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         for src in args.local:
             with open(src, "rb") as f:
@@ -509,7 +519,7 @@ def cmd_write_range(args):
     data = _read_payload(args.input, args.length)
     offset, _fstype, _desc = _select(args.image, args)
     target = _abs_path(args.path)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         try:
             fs.write_range(target, args.file_offset, data)
@@ -535,7 +545,7 @@ def cmd_append(args):
     data = _read_payload(args.input, args.length)
     offset, _fstype, _desc = _select(args.image, args)
     target = _abs_path(args.path)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         try:
             fs.append(target, data)
@@ -556,7 +566,7 @@ def cmd_truncate(args):
         raise ValueError("size must be non-negative")
     offset, _fstype, _desc = _select(args.image, args)
     target = _abs_path(args.path)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         try:
             fs.truncate(target, args.size)
@@ -573,7 +583,7 @@ def cmd_mkdir(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         fs.mkdir(_abs_path(args.path))
         print("Created directory %s" % _abs_path(args.path))
@@ -594,7 +604,7 @@ def cmd_mv(args):
             "(use: mv IMAGE /old/path NEW_NAME)" % args.new_name
         )
     destination = posixpath.join(posixpath.dirname(source), args.new_name)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         fs.rename(source, destination)
         print("Renamed %s -> %s" % (source, destination))
@@ -608,7 +618,7 @@ def cmd_rm(args):
         _warn(args.image)
         return NEED_CONFIRM
     offset, _, _ = _select(args.image, args)
-    fs = _open_write(args.image, offset, backup=args.backup)
+    fs = _open_write_for_args(args, offset)
     try:
         try:
             fs.delete(_abs_path(args.path), recursive=args.recursive)
@@ -903,6 +913,11 @@ def _add_target(sp):
         "--backup",
         action="store_true",
         help="copy the image to <image>.bak before writing",
+    )
+    sp.add_argument(
+        "--allow-libguestfs",
+        action="store_true",
+        help="explicitly enable the optional libguestfs writer for NTFS/ext2/3/4",
     )
 
 
