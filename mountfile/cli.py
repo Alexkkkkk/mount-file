@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .ai import SCHEMAS, build_backend, collect, local_reader, max_bytes, scan
 from .autopick import auto_select, format_candidates, format_choice
 from .capabilities import get_native_capability_matrix
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
@@ -1153,6 +1154,129 @@ def cmd_live_diff(args):
     return OK
 
 
+def _ai_settings_from_env():
+    """Build a backend settings mapping from the environment.
+
+    The GUI keeps these values in ``~/.mountfile/settings.json``; the CLI must
+    not depend on that file, so it reads explicit environment variables and
+    falls back to the same defaults.  The API key is never printed.
+    """
+    try:
+        limit = int(os.environ.get("MOUNTFILE_AI_MAX_BYTES") or 262144)
+    except ValueError:
+        limit = 262144
+    return {
+        "ai_backend": os.environ.get("MOUNTFILE_AI_BACKEND") or "none",
+        "ai_base_url": os.environ.get("MOUNTFILE_AI_URL")
+        or "http://127.0.0.1:11434",
+        "ai_base_url_openai": os.environ.get("MOUNTFILE_AI_URL_OPENAI") or "",
+        "ai_model": os.environ.get("MOUNTFILE_AI_MODEL") or "",
+        "ai_api_key": os.environ.get("MOUNTFILE_AI_KEY") or "",
+        "ai_max_bytes": limit,
+    }
+
+
+def cmd_ai_guard(args):
+    """Score one file for prompt-injection patterns without any network call."""
+    try:
+        data, _truncated = collect(
+            local_reader(args.path), max_bytes=min(max_bytes({}), 1 << 20)
+        )
+    except OSError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    report = scan(data)
+    if args.json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print("%s: %s" % (args.path, report.summary()))
+        for hit in report.hits:
+            print("  строка %d [%s] %s" % (hit.line, hit.rule, hit.preview))
+    return OK
+
+
+def cmd_ai_schemas(args):
+    """List the JSON-Schema contracts a model answer can be validated against."""
+    if args.json:
+        print(json.dumps(SCHEMAS, ensure_ascii=False, indent=2, sort_keys=True))
+        return OK
+    for name in sorted(SCHEMAS):
+        required = ", ".join(SCHEMAS[name].get("required") or ())
+        print("%-22s required: %s" % (name, required or "-"))
+    return OK
+
+
+def cmd_ai_analyze(args):
+    """Send a bounded, fenced file preview to the configured backend."""
+    settings = _ai_settings_from_env()
+    if args.backend:
+        settings["ai_backend"] = args.backend
+    if args.model:
+        settings["ai_model"] = args.model
+    backend = build_backend(settings)
+    if not backend.available():
+        print(
+            "error: AI-бэкенд не настроен (задайте MOUNTFILE_AI_BACKEND и "
+            "MOUNTFILE_AI_MODEL, см. docs/ai.md)",
+            file=sys.stderr,
+        )
+        return ERROR
+    try:
+        data, truncated = collect(local_reader(args.path), max_bytes=max_bytes(settings))
+    except OSError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return ERROR
+    report = scan(data)
+    if report.risk == "high" and not args.force:
+        print(
+            "отказ: в файле найдены признаки промпт-инъекции (%s).\n"
+            "Содержимое не отправлено. Повторите с --force, если это ожидаемо."
+            % ", ".join(report.rules),
+            file=sys.stderr,
+        )
+        return ERROR
+    schema = SCHEMAS.get(args.schema) if args.schema else None
+    if args.schema and schema is None:
+        print("error: неизвестная схема %s" % args.schema, file=sys.stderr)
+        return ERROR
+    if schema:
+        obj, errors, result = backend.analyze_json(
+            os.path.basename(args.path),
+            data,
+            schema,
+            prompt=args.prompt,
+            truncated=truncated,
+        )
+    else:
+        result = backend.analyze(
+            os.path.basename(args.path),
+            data,
+            prompt=args.prompt,
+            truncated=truncated,
+        )
+        obj, errors = None, []
+    if not result.ok:
+        print("error: %s" % result.error, file=sys.stderr)
+        return ERROR
+    if args.json:
+        payload = result.to_dict()
+        payload["guard"] = report.to_dict()
+        if schema:
+            payload["data"] = obj
+            payload["violations"] = errors
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        if report.risk != "none":
+            print("внимание: %s" % report.summary(), file=sys.stderr)
+        if schema and obj is not None:
+            print(json.dumps(obj, ensure_ascii=False, indent=2))
+            for item in errors:
+                print("schema: %s" % item, file=sys.stderr)
+        else:
+            print(result.text)
+    return OK
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="python -m mountfile",
@@ -1519,6 +1643,36 @@ def build_parser():
         "-o", "--output", default=None, help="Markdown path (stdout when omitted)"
     )
     sp.set_defaults(func=cmd_live_diff)
+
+    sp = sub.add_parser(
+        "ai-guard", help="score a file for prompt-injection patterns (offline)"
+    )
+    sp.add_argument("path")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_ai_guard)
+
+    sp = sub.add_parser(
+        "ai-schemas", help="list JSON-Schema contracts for structured AI answers"
+    )
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_ai_schemas)
+
+    sp = sub.add_parser(
+        "ai-analyze",
+        help="send a bounded, fenced file preview to the configured AI backend",
+    )
+    sp.add_argument("path")
+    sp.add_argument("--schema", default=None, help="validate the answer against a schema")
+    sp.add_argument("--prompt", default=None, help="additional instruction")
+    sp.add_argument("--backend", default=None, choices=["none", "ollama", "openai"])
+    sp.add_argument("--model", default=None)
+    sp.add_argument(
+        "--force",
+        action="store_true",
+        help="send content that the injection guard rates as high risk",
+    )
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_ai_analyze)
 
     return p
 
