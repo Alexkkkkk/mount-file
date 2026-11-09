@@ -199,6 +199,23 @@ def test_verification_engine_accepts_a_freshly_written_image(tmp_path):
     assert report.checks["fat32_label"] is True
 
 
+def test_ext4_verification_fails_closed_without_independent_checker(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "ext4.img"
+    image.write_bytes(b"\0" * 2048)
+    with image.open("r+b") as handle:
+        handle.seek(0x438)
+        handle.write(b"\x53\xef")
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    report = VerificationEngine().verify(image, FsType.EXT4)
+
+    assert report.checks["ext4_magic"] is True
+    assert report.checks["ext4_fsck"] is False
+    assert report.ok is False
+
+
 @pytest.mark.skipif(shutil.which("fsck.fat") is None, reason="dosfstools not installed")
 def test_written_image_passes_the_external_fat_checker(tmp_path):
     image = _write(tmp_path, "/EVIDENCE.TXT", b"evidence")
