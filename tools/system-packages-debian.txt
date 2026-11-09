@@ -1,0 +1,12 @@
+# System tools used by the full MountFile test/smoke/checker matrix.
+# Install with: sudo apt-get install $(grep -vE '^(#|$)' tools/system-packages-debian.txt)
+dosfstools
+mtools
+e2fsprogs
+exfatprogs
+ntfs-3g
+libgl1
+libegl1
+libxkbcommon-x11-0
+libdbus-1-3
+libxcb-cursor0
