@@ -4,4 +4,4 @@
 -r requirements-docs.txt
 # Optional test/contributor tooling not required by the application runtime.
 pre-commit>=3.0
-Pillow>=10.0
+Pillow>=12.3.0
