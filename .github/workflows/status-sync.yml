@@ -1,0 +1,99 @@
+name: Verify repository status
+
+# Validation only. An earlier revision committed generated data straight into
+# the pull request head with a skip-CI trailer, which left the head without any
+# check runs: the required status checks could never be reported and every
+# internal pull request became permanently unmergeable. The generator is still
+# executed from the trusted default branch, but the result is compared with the
+# committed data and the workflow fails instead of pushing.
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: repository-status-sync-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    # Fork PRs are validated the same way as same-repository PRs: the trusted
+    # generator reads the PR tree as data only, so no PR Python code is
+    # executed and nothing is written back.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Generate status from PR tree as data
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "pull/$PR_NUMBER/head"
+          rm -rf /tmp/mountfile-pr /tmp/mountfile-status
+          mkdir -p /tmp/mountfile-pr /tmp/mountfile-status
+          git archive FETCH_HEAD | tar -x -C /tmp/mountfile-pr
+          mkdir -p /tmp/mountfile-committed
+          for name in capability-matrix.json checker-matrix.json recovery-matrix.json product-status.json; do
+            git show "FETCH_HEAD:docs/generated/${name}" > "/tmp/mountfile-committed/${name}"
+          done
+          # These are trusted scripts from the default branch. The PR checkout
+          # is passed only as a data root; no PR Python code is executed.
+          python scripts/sync_repository_status.py \
+            --repo-root /tmp/mountfile-pr \
+            --output-dir /tmp/mountfile-status
+          git rev-parse FETCH_HEAD > /tmp/mountfile-head-sha
+
+      - name: Generate status on trusted default branch
+        if: github.event_name != 'pull_request_target'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/mountfile-status
+          mkdir -p /tmp/mountfile-status
+          python scripts/sync_repository_status.py --output-dir /tmp/mountfile-status
+
+      - name: Verify committed status data
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mountfile-committed
+          for name in capability-matrix.json checker-matrix.json recovery-matrix.json product-status.json; do
+            if [ ! -f "/tmp/mountfile-committed/${name}" ]; then
+              cp "docs/generated/${name}" "/tmp/mountfile-committed/${name}"
+            fi
+          done
+          python scripts/verify_generated_status.py \
+            --expected-dir /tmp/mountfile-status \
+            --committed-dir /tmp/mountfile-committed
+
+      - name: Report stale generated README block
+        if: github.event_name == 'pull_request_target'
+        run: |
+          set -euo pipefail
+          head_sha="$(cat /tmp/mountfile-head-sha)"
+          git show "${head_sha}:README.md" > /tmp/README.committed
+          python scripts/generate_readme.py \
+            --repo-root /tmp/mountfile-pr \
+            --output /tmp/README.generated
+          # The block is informational and version-derived only, so a stale copy
+          # is reported without failing the pull request.
+          if ! diff -q /tmp/README.committed /tmp/README.generated > /dev/null; then
+            echo "::warning file=README.md::Generated README block is stale. Run 'python scripts/generate_readme.py' to refresh it."
+          else
+            echo "Generated README block matches the committed file."
+          fi

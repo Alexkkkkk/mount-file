@@ -1,9 +1,5 @@
 {
-  "blockers": [
-    "README advertises an unsupported native write profile",
-    "Unreleased changelog lacks conservative writer/recovery status",
-    "status documentation is missing conservative recovery markers"
-  ],
+  "blockers": [],
   "capability_matrix_version": 6,
   "checker_acceptance_verdict": "not_run",
   "checker_entry_count": 6,
@@ -21,8 +17,8 @@
   "surface_contract": {
     "cli_canonical_capabilities": true,
     "gui_capability_driven_write_controls": true,
-    "readme_native_write_table": false,
-    "unreleased_conservative_status": false
+    "readme_native_write_table": true,
+    "unreleased_conservative_status": true
   },
-  "verdict": "blocked"
+  "verdict": "pass"
 }

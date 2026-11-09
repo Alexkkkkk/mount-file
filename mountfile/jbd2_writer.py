@@ -17,6 +17,7 @@ _JBD2_MAGIC_BYTES = struct.pack(">I", _JBD2_MAGIC)
 _JBD2_DESCRIPTOR = 1
 _JBD2_COMMIT = 2
 _JBD2_REVOKE = 5
+_JBD2_TAG_ESCAPE = 0x00000001
 _JBD2_TAG_LAST = 0x00000008
 _JBD2_TAG_SAME_UUID = 0x00000002
 _U32_MAX = 0xFFFFFFFF
@@ -35,6 +36,90 @@ class JBD2RingPlan:
     next_head: int
     used_blocks: int
     free_blocks: int
+
+
+@dataclass(frozen=True)
+class JBD2JournalState:
+    """Validated classic JBD2 superblock state for a bounded journal ring.
+
+    This is deliberately a state-only parser.  It does not authorize an image
+    mutation: checksum features, durable ordering, checkpointing and recovery
+    evidence remain separate requirements for an ext3/ext4 writer.
+    """
+
+    block_size: int
+    max_length: int
+    first: int
+    sequence: int
+    start: int
+    uuid: bytes
+    empty: bool
+
+
+def parse_classic_jbd2_superblock(
+    raw: bytes | bytearray | memoryview,
+    *,
+    filesystem_block_size: int,
+    filesystem_uuid: bytes,
+    journal_blocks: int,
+) -> JBD2JournalState:
+    """Validate and decode a classic internal JBD2 journal superblock.
+
+    Only the no-checksum, 32-bit-tag profile used by the bounded serializer is
+    accepted.  The journal's declared ring must fit inside the journal inode;
+    ``s_start == 0`` is the only accepted empty-ring representation.  The
+    returned state can feed a later durable writer, but this function never
+    writes the image or claims ext3/ext4 write support.
+    """
+    if not isinstance(raw, bytes | bytearray | memoryview):
+        raise JBD2WriteProfileError("JBD2 superblock must be bytes-like")
+    raw = bytes(raw)
+    if len(raw) < 64:
+        raise JBD2WriteProfileError("short JBD2 journal superblock")
+    if filesystem_block_size not in _SUPPORTED_BLOCK_SIZES:
+        raise JBD2WriteProfileError("unsupported filesystem block size")
+    if not isinstance(journal_blocks, int) or isinstance(journal_blocks, bool):
+        raise JBD2WriteProfileError("journal block count must be an integer")
+    if journal_blocks < 2:
+        raise JBD2WriteProfileError("journal inode is too small for a ring")
+    try:
+        expected_uuid = bytes(filesystem_uuid)
+    except (TypeError, ValueError) as exc:
+        raise JBD2WriteProfileError("filesystem UUID must be bytes-like") from exc
+    if len(expected_uuid) != 16:
+        raise JBD2WriteProfileError("filesystem UUID must be exactly 16 bytes")
+
+    magic, block_type, sequence = struct.unpack_from(">III", raw, 0)
+    block_size, max_length, first, _sb_sequence, start = struct.unpack_from(
+        ">IIIII", raw, 12
+    )
+    feature_compat, feature_incompat, feature_ro = struct.unpack_from(">III", raw, 36)
+    journal_uuid = raw[48:64]
+    if magic != _JBD2_MAGIC or block_type not in (3, 4):
+        raise JBD2WriteProfileError("invalid JBD2 journal superblock header")
+    if block_size != filesystem_block_size:
+        raise JBD2WriteProfileError("JBD2 block size disagrees with filesystem")
+    if max_length != journal_blocks or max_length <= first + 1:
+        raise JBD2WriteProfileError("JBD2 ring length is outside journal inode bounds")
+    if not 1 <= first < max_length:
+        raise JBD2WriteProfileError("JBD2 ring first block is outside bounds")
+    if sequence == 0 or _sb_sequence == 0 or _sb_sequence != sequence:
+        raise JBD2WriteProfileError("JBD2 journal sequence must be nonzero")
+    if journal_uuid != expected_uuid:
+        raise JBD2WriteProfileError("JBD2 journal UUID does not match filesystem")
+    if feature_compat or feature_incompat or feature_ro:
+        raise JBD2WriteProfileError("unsupported or unchecked JBD2 journal feature")
+    if start != 0 and not first <= start < max_length:
+        raise JBD2WriteProfileError("JBD2 journal start is outside ring bounds")
+    return JBD2JournalState(
+        block_size=block_size,
+        max_length=max_length,
+        first=first,
+        sequence=sequence,
+        start=start,
+        uuid=journal_uuid,
+        empty=start == 0,
+    )
 
 
 def _validate_target(target: int, filesystem_blocks: int, forbidden: set[int]) -> None:
@@ -71,9 +156,9 @@ def encode_classic_jbd2_transaction(
     """Encode one classic transaction as descriptor, data, revokes, commit.
 
     The first descriptor tag carries the validated 16-byte ``journal_uuid``;
-    only later tags use SAME_UUID. Data beginning with the JBD2 magic is rejected
-    because this profile does not implement ESCAPE records. Checksums, 64-bit
-    block tags, and unknown journal profiles remain unsupported. A single
+    only later tags use SAME_UUID. Data beginning with the JBD2 magic is zeroed
+    in the journal and marked with ESCAPE in its descriptor tag. Checksums,
+    64-bit block tags, and unknown journal profiles remain unsupported. A single
     descriptor block is permitted; oversized write sets fail closed. The caller
     remains responsible for ring capacity, transaction ordering, durable writes,
     checkpointing, recovery, and independent filesystem validation.
@@ -125,16 +210,14 @@ def encode_classic_jbd2_transaction(
             raise JBD2WriteProfileError("JBD2 data blocks must be bytes-like") from exc
         if len(normalized_data) != block_size:
             raise JBD2WriteProfileError("JBD2 data block has the wrong size")
-        if normalized_data.startswith(_JBD2_MAGIC_BYTES):
-            raise JBD2WriteProfileError(
-                "JBD2 data block requires unsupported ESCAPE handling"
-            )
-        normalized_writes.append((target, normalized_data))
+        escaped = normalized_data.startswith(_JBD2_MAGIC_BYTES)
+        journal_data = b"\x00" * 4 + normalized_data[4:] if escaped else normalized_data
+        normalized_writes.append((target, journal_data, escaped))
 
     for target in revoke_items:
         _validate_target(target, filesystem_blocks, forbidden)
 
-    write_targets = {target for target, _data in normalized_writes}
+    write_targets = {target for target, _data, _escaped in normalized_writes}
     if len(set(revoke_items)) != len(revoke_items):
         raise JBD2WriteProfileError("duplicate JBD2 revoke target")
     if write_targets.intersection(revoke_items):
@@ -155,8 +238,10 @@ def encode_classic_jbd2_transaction(
         struct.pack_into(">III", descriptor, 0, _JBD2_MAGIC, _JBD2_DESCRIPTOR, sequence)
         cursor = 12
         data_blocks = []
-        for index, (target, data) in enumerate(normalized_writes):
-            flags = 0 if index == 0 else _JBD2_TAG_SAME_UUID
+        for index, (target, data, escaped) in enumerate(normalized_writes):
+            flags = _JBD2_TAG_ESCAPE if escaped else 0
+            if index:
+                flags |= _JBD2_TAG_SAME_UUID
             if index == len(normalized_writes) - 1:
                 flags |= _JBD2_TAG_LAST
             struct.pack_into(">II", descriptor, cursor, target, flags)
@@ -211,15 +296,19 @@ def _validate_transaction_records(records: Sequence[bytes], block_size: int) -> 
         cursor = 12
         tag_count = 0
         last = False
+        escaped_data_flags = []
         while cursor + 8 <= block_size:
             target, flags = struct.unpack_from(">II", records[0], cursor)
             cursor += 8
             tag_count += 1
-            if target == 0 or flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+            if target == 0 or flags & ~(
+                _JBD2_TAG_ESCAPE | _JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID
+            ):
                 raise JBD2WriteProfileError("JBD2 descriptor contains an invalid tag")
             if target in write_targets:
                 raise JBD2WriteProfileError("JBD2 descriptor target is duplicated")
             write_targets.add(target)
+            escaped_data_flags.append(bool(flags & _JBD2_TAG_ESCAPE))
             if tag_count == 1:
                 if flags & _JBD2_TAG_SAME_UUID or cursor + 16 > block_size:
                     raise JBD2WriteProfileError("JBD2 first tag lacks its journal UUID")
@@ -234,10 +323,14 @@ def _validate_transaction_records(records: Sequence[bytes], block_size: int) -> 
         index = 1 + tag_count
         if index >= len(records):
             raise JBD2WriteProfileError("JBD2 descriptor is missing data or commit")
-        for data in records[1:index]:
-            if data.startswith(_JBD2_MAGIC_BYTES):
+        for escaped, data in zip(escaped_data_flags, records[1:index], strict=True):
+            if escaped and data[:4] != b"\x00" * 4:
                 raise JBD2WriteProfileError(
-                    "JBD2 data block requires unsupported ESCAPE handling"
+                    "JBD2 escaped data block has an invalid zero prefix"
+                )
+            if not escaped and data.startswith(_JBD2_MAGIC_BYTES):
+                raise JBD2WriteProfileError(
+                    "JBD2 data block magic prefix lacks ESCAPE flag"
                 )
 
     revoke_targets: set[int] = set()

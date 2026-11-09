@@ -182,17 +182,23 @@ def _fat_geometry(buf):
     fatsz16 = struct.unpack_from("<H", buf, 22)[0]
     total32 = struct.unpack_from("<I", buf, 32)[0]
     fatsz32 = struct.unpack_from("<I", buf, 36)[0]
-    total = total32 or total16
+    total = total16 or total32
     if not total:
         return None
-    if fatsz32 and not fatsz16:
+    fat_sectors = fatsz16 or fatsz32
+    root_sectors = (root_entries * 32 + bps - 1) // bps
+    data_sectors = total - reserved - nfats * fat_sectors - root_sectors
+    if not fat_sectors or data_sectors <= 0:
+        return None
+    clusters = data_sectors // spc
+    if clusters >= 65525 and not fatsz16 and not root_entries:
         if struct.unpack_from("<I", buf, 44)[0] < 2:  # root cluster
             return None
         kind, label_at = "FAT32", 71
-    elif fatsz16 and not fatsz32:
+    elif clusters < 65525 and fatsz16:
         if root_entries == 0 or root_entries % 16:
             return None
-        kind, label_at = ("FAT16" if root_entries > 512 else "FAT12"), 43
+        kind, label_at = ("FAT12" if clusters < 4085 else "FAT16"), 43
     else:
         return None
     label = buf[label_at : label_at + 11].decode("latin-1").strip()
@@ -210,7 +216,7 @@ def _validate_at(f, offset, extent_size=None):
         if available_size <= 0 or available_size > image_remaining:
             return None
         f.seek(offset)
-        head = f.read(min(0x8006, available_size))
+        head = f.read(min(0x8054, available_size))
     except (OSError, ValueError):
         return None
     if len(head) < 512:
@@ -274,16 +280,16 @@ def _validate_at(f, offset, extent_size=None):
                 return "ext2/3/4", "", size
 
     # --- HFS+ ----------------------------------------------------------
-    if len(head) >= 1048 and head[1024:1026] == b"H+":
-        block_size = struct.unpack_from("<I", head, 1040)[0]
-        total_blocks = struct.unpack_from("<I", head, 1044)[0]
+    if len(head) >= 1072 and head[1024:1026] in (b"H+", b"HX"):
+        block_size = struct.unpack_from(">I", head, 1064)[0]
+        total_blocks = struct.unpack_from(">I", head, 1068)[0]
         if block_size and not block_size & (block_size - 1) and total_blocks:
             size = block_size * total_blocks
             if bounded(size):
                 return "HFS+", "", size
 
     # --- ISO9660 -------------------------------------------------------
-    if len(head) >= 0x8006 and head[0x8000] == 1 and head[0x8001:0x8006] == b"CD001":
+    if len(head) >= 0x8054 and head[0x8000] == 1 and head[0x8001:0x8006] == b"CD001":
         size = struct.unpack_from("<I", head, 0x8050)[0]
         size = size * 2048 if size else None
         return ("ISO9660", "", size) if bounded(size) else None
@@ -340,7 +346,7 @@ def _scan_range(f, start, end, *, extent_end=None):
             while pos >= 0:
                 cand = buf_base + pos - back
                 if start <= cand < end and cand >= 0 and cand % align == 0:
-                    if cand not in seen:
+                    if cand not in seen and len(offsets) < MAX_VALIDATE:
                         seen.add(cand)
                         offsets.append(cand)
                 pos = buf.find(magic, pos + 1)
@@ -381,7 +387,16 @@ def _volume_candidates(path, udev=None, scan_limit=DEFAULT_SCAN_LIMIT):
             from .rt809 import parse_udev
 
             for part in parse_udev(udev):
-                out.append(Candidate(part.offset, "raw", source="udev", name=part.name))
+                out.append(
+                    Candidate(
+                        part.offset,
+                        "raw",
+                        source="udev",
+                        name=part.name,
+                        size=part.length,
+                        extent_size=part.length,
+                    )
+                )
         except Exception as exc:
             logging.getLogger(__name__).debug(
                 "best-effort operation failed", exc_info=exc
@@ -438,7 +453,11 @@ def scan_candidates(
         image_size = f.tell()
         # 1. сигнатуры в начале образа
         for offset, fstype, label, size in _scan_range(f, 0, scan_limit):
-            extent_size = image_size - offset if offset + size == image_size else None
+            extent_size = (
+                image_size - offset
+                if size is not None and offset + size == image_size
+                else None
+            )
             add(
                 Candidate(
                     offset,
@@ -527,54 +546,24 @@ def _score_alignment(cand, path):
 
 
 def verify_mount(path, offset, fstype=None, volume_size=None):
-    """Реально открыть том. Возвращает ``(backend, entries, error)``.
-
-    ``backend`` — ``"native-fat12"``, ``"native-fat16"``, ``"native-fat32"``,
-    ``"tsk"`` или None. Это единственная проверка, которая ловит ошибки
-    ``FS_Info_Con`` до показа их пользователю.
-    """
-    errors = []
-    if str(fstype or "").lower().startswith("fat"):
-        try:
-            from .fat_reader import NativeFatImage
-
-            provider = NativeFatImage(path, offset=offset, volume_size=volume_size)
-            try:
-                entries = len(provider.list_dir("/"))
-                return "native-fat%d" % provider.fat_type, entries, None
-            finally:
-                provider.close()
-        except Exception as e:
-            errors.append("native FAT: %s" % e)
-            return None, 0, " | ".join(errors)
-
+    """Open the selected extent through the same fail-closed VFS as the CLI."""
     try:
-        from .vfs import TskImage
+        from .vfs import open_image_provider, volume_size_for_offset
 
-        img = TskImage(path, offset=offset)
-        try:
-            entries = len(img.list_dir("/"))
-        finally:
-            if hasattr(img, "close"):
-                img.close()
-        return "tsk", entries, None
-    except Exception as e:  # TskError, отсутствие pytsk3 и т.п.
-        errors.append("The Sleuth Kit: %s" % e)
-
-    try:
-        from .fat32 import Fat32Provider
-
-        provider = Fat32Provider(path, offset=offset)
+        if volume_size is None:
+            volume_size = volume_size_for_offset(path, offset)
+        provider = open_image_provider(path, offset=offset, volume_size=volume_size)
         try:
             entries = len(provider.list_dir("/"))
+            backend = getattr(provider, "backend_name", "read-only")
+            if hasattr(provider, "fat_type"):
+                backend = "native-fat%d" % provider.fat_type
+            return ("tsk" if backend == "pytsk3" else backend), entries, None
         finally:
             if hasattr(provider, "close"):
                 provider.close()
-        return "fat32", entries, None
     except Exception as e:
-        errors.append("FAT32: %s" % e)
-
-    return None, 0, " | ".join(errors)
+        return None, 0, str(e)
 
 
 def _match_hint(cand, hint):
@@ -637,8 +626,6 @@ def auto_select(
             continue
         best = cand
         break
-    if best is None and candidates:
-        best = candidates[0]
     return best, candidates
 
 

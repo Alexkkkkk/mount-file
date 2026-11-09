@@ -1,25 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
-# Licensed under the MIT License - see the LICENSE file for details.
-#
-# Linux x86-64 one-file build. The window icon is the bundled artwork in
-# mountfile/data (icon.png is also looked up at runtime by
-# mountfile/appicon.py through sys._MEIPASS, hence --add-data below).
+# Linux x86-64 one-file build; paths are rooted at this spec, not the CWD.
 
 import os
 import sys
+
 from PyInstaller.utils.hooks import collect_data_files
 
-ICON_DIR = os.path.join('mountfile', 'data')
+ROOT = os.path.abspath(SPECPATH)
+sys.path.insert(0, ROOT)
+ICON_DIR = os.path.join(ROOT, 'mountfile', 'data')
 ICON_FILE = os.path.join(ICON_DIR, 'icon.ico' if sys.platform.startswith('win') else 'icon.png')
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
+    [os.path.join(ROOT, 'main.py')],
+    pathex=[ROOT],
     binaries=[],
     datas=collect_data_files('mountfile'),
-    hiddenimports=[],
+    hiddenimports=['mountfile_dfir_tools'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

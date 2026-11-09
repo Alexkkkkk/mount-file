@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -223,13 +222,22 @@ class UniversalRW(ABC):
 
     def restore_from_backup(self) -> None:
         """Восстанавливает образ из полного backup (если он есть)."""
+        self._require_rw()
         full_backup = self.image_path.with_suffix(
             self.image_path.suffix + ".full-backup"
         )
-        if full_backup.exists():
+        if not full_backup.is_file() or full_backup.is_symlink():
+            raise RWError("Полный backup не найден или небезопасен.")
+        reopen = self._backend_open
+        if reopen:
+            self._close_backend()
+            self._backend_open = False
+        try:
             shutil.copy2(full_backup, self.image_path)
-        else:
-            raise RWError("Полный backup не найден.")
+        finally:
+            if reopen:
+                self._open_backend()
+                self._backend_open = True
 
     # --- внутренние --------------------------------------------------------
 
@@ -380,54 +388,97 @@ class Fat32RW(UniversalRW):
 
 
 class Ext4RW(UniversalRW):
-    def _debugfs(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        cmd = ["debugfs", "-w", str(self.image_path), *args]
-        try:
-            return subprocess.run(cmd, capture_output=True, text=True, check=check)
-        except FileNotFoundError:
-            raise StrategyUnavailable("debugfs не найден. Установите e2fsprogs.")
+    """Compatibility API backed by validated native ext reads/writes.
+
+    The historic name also covers clean ext2. Unsupported ext3/ext4 writes
+    remain refused by the native profile gate; no command-string emulation or
+    invented stat result can turn a failed mutation into success.
+    """
+
+    atomic_mutations = True
+
+    def __init__(self, image_path: Path, mode: Mode = Mode.RO):
+        super().__init__(image_path, mode)
+        self._fs = None
 
     def _open_backend(self) -> None:
-        self._debugfs("-R", "stats", check=False)
+        from mountfile.universal_fs_rw import UniversalFSRW
+        from mountfile.vfs import open_image_provider, volume_size_for_offset
+
+        extent = volume_size_for_offset(self.image_path, 0)
+        if self.mode == Mode.RW:
+            self._fs = UniversalFSRW(
+                self.image_path, offset=0, volume_size=extent, auto_backup=False
+            )
+        else:
+            self._fs = open_image_provider(
+                self.image_path, offset=0, volume_size=extent
+            )
 
     def _close_backend(self) -> None:
-        pass
+        if self._fs is not None:
+            self._fs.close()
+            self._fs = None
+
+    def _backend(self):
+        if self._fs is None:
+            raise StrategyUnavailable("ext backend is not open; call open()")
+        return self._fs
+
+    def _read(self, path: str) -> bytes:
+        backend = self._backend()
+        return backend.read(path) if self.mode == Mode.RW else backend.read_file(path)
 
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
-        raw = data.read()
-        tmp = Path(f".tmp_{uuid.uuid4().hex}")
-        tmp.write_bytes(raw)
         try:
-            self._debugfs("-R", f"write {tmp} {path}")
-        finally:
-            tmp.unlink(missing_ok=True)
+            existing = self._stat(path)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if existing.is_dir:
+                raise IsADirectoryError(path)
+            if not overwrite:
+                raise FileExistsError(path)
+        self._backend().write_file(path, data.read())
 
     def _create_dir(self, path: str) -> None:
-        self._debugfs("-R", f"mkdir {path}")
+        self._backend().mkdir(path)
 
     def _delete(self, path: str, recursive: bool) -> None:
-        if recursive:
-            self._debugfs("-R", f"rm -r {path}")
-        else:
-            self._debugfs("-R", f"rm {path}")
+        self._backend().delete(path, recursive=recursive)
 
     def _rename(self, src: str, dst: str) -> None:
-        # debugfs не имеет rename; делаем link + unlink
-        self._debugfs("-R", f"link {src} {dst}")
-        self._debugfs("-R", f"unlink {src}")
+        try:
+            self._stat(dst)
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError(dst)
+        self._backend().rename(src, dst)
 
     def _write_file(self, path: str, data: BinaryIO, offset: int) -> None:
-        raw = data.read()
-        tmp = Path(f".tmp_{uuid.uuid4().hex}")
-        tmp.write_bytes(raw)
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise RWError("write offset must be a non-negative integer")
+        payload = data.read()
         try:
-            self._debugfs("-R", f"write {tmp} {path}")
-        finally:
-            tmp.unlink(missing_ok=True)
+            current = bytearray(self._read(path))
+        except FileNotFoundError:
+            current = bytearray()
+        end = offset + len(payload)
+        if end > len(current):
+            current.extend(b"\x00" * (end - len(current)))
+        current[offset:end] = payload
+        self._backend().write_file(path, bytes(current))
 
     def _stat(self, path: str) -> FileStat:
-        # заглушка
-        return FileStat(path=path, size=0, mtime=time.time(), is_dir=False)
+        entry = self._backend().stat(path)
+        if entry is None:
+            raise FileNotFoundError(path)
+        if isinstance(entry, dict):
+            return FileStat(
+                entry["path"], entry["size"], entry.get("mtime") or 0.0, entry["is_dir"]
+            )
+        return FileStat(entry.path, entry.size, entry.mtime or 0.0, entry.is_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +527,9 @@ class NtfsRW(UniversalRW):
     def _path(self, p: str) -> Path:
         if not self._mnt:
             raise RWError("NTFS не смонтирован в RW.")
-        return self._mnt / p.lstrip("/")
+        from mountfile.universal_fs_rw import _safe_mounted_path
+
+        return _safe_mounted_path(self._mnt, p)
 
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
         target = self._path(path)

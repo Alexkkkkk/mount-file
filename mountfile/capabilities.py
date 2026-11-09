@@ -5,7 +5,7 @@ The matrix describes operations exposed by the current VFS and RW APIs.  It is
 not a claim of full filesystem-format parity: a profile is available only after
 its parser/writer validates the selected image and all profile-specific gates.
 
-Schema v5 retains the v4 interface-specific capability lists for compatibility,
+Schema v6 retains the v4 interface-specific capability lists for compatibility,
 and adds a common operation/status projection.  Clients can therefore render a
 single profile × operation × refusal view without guessing whether the selected
 backend was opened through VFS or :class:`UniversalFSRW`.
@@ -18,7 +18,7 @@ from types import MappingProxyType
 
 from mountfile.safety import RefusalCode, RefusalError
 
-CAPABILITY_MATRIX_VERSION = 5
+CAPABILITY_MATRIX_VERSION = 6
 
 # Read-only providers surfaced through the public VFS API.  These legacy names
 # are kept unchanged in the versioned JSON payload.
@@ -27,7 +27,7 @@ VFS_WRITE_CAPABILITIES: tuple[str, ...] = ()
 
 # Operations surfaced by UniversalFSRW.  These are also retained as its
 # interface-specific API vocabulary.
-RW_READ_CAPABILITIES = ("list", "read", "extract")
+RW_READ_CAPABILITIES = ("list", "stat", "read", "read_range", "extract")
 RW_WRITE_CAPABILITIES = ("write_file", "mkdir", "delete", "rename")
 
 # Canonical, transport-neutral operation identifiers.  Each profile publishes
@@ -43,6 +43,7 @@ CANONICAL_OPERATIONS = (
     "mkdir",
     "delete",
     "rename",
+    "hard-link",
 )
 
 _INTERFACE_OPERATION_ALIASES = MappingProxyType(
@@ -59,12 +60,15 @@ _INTERFACE_OPERATION_ALIASES = MappingProxyType(
         "universal-fs-rw": MappingProxyType(
             {
                 "list": "list",
+                "stat": "stat",
                 "read-file": "read",
+                "read-range": "read_range",
                 "extract": "extract",
                 "write-file": "write_file",
                 "mkdir": "mkdir",
                 "delete": "delete",
                 "rename": "rename",
+                "hard-link": "link",
             }
         ),
     }
@@ -117,6 +121,11 @@ class CapabilityProfile:
     def gates(self) -> tuple[CapabilityGate, ...]:
         return _PROFILE_GATES[self.profile_id]
 
+    @property
+    def recovery_contract(self) -> dict[str, str]:
+        """Return evidence-bounded crash and rollback claims for this profile."""
+        return dict(_RECOVERY_CONTRACTS[self.profile_id])
+
     def operation_matrix(
         self, *, write_enabled: bool | None = None
     ) -> dict[str, dict[str, object]]:
@@ -166,6 +175,7 @@ class CapabilityProfile:
         value["constraints"] = list(_PROFILE_CONSTRAINTS[self.profile_id])
         value["constraint_ids"] = list(self.constraint_ids)
         value["gates"] = [gate.to_dict() for gate in self.gates]
+        value["recovery"] = self.recovery_contract
         value["operations"] = self.operation_matrix()
         return value
 
@@ -265,7 +275,7 @@ _WRITE_PROFILES = (
         "universal-fs-rw",
         "read-write",
         RW_READ_CAPABILITIES,
-        RW_WRITE_CAPABILITIES,
+        (*RW_WRITE_CAPABILITIES, "link"),
         "native-ext2",
     ),
     CapabilityProfile(
@@ -300,8 +310,8 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         "ext3-native-ro": (
             "Read-only ext3; only validated supported JBD2 states are exposed.",
             "No writes or complete crash-recovery guarantee.",
-            "Explicit replay accepts classic 32-bit revoke records in a validated "
-            "no-checksum JBD2 overlay.",
+            "Explicit replay accepts classic 32-bit descriptor/revoke records and "
+            "escaped data blocks in a validated no-checksum JBD2 overlay.",
         ),
         "ext4-native-ro": (
             "Bounded classic/accepted extent profile only.",
@@ -309,8 +319,9 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "flex_bg, bigalloc, and metadata_csum profiles fail closed.",
         ),
         "ntfs-native-ro": (
-            "Bounded metadata/tree profile only; ATTRIBUTE_LIST and unsupported streams "
-            "are refused.",
+            "Bounded metadata/tree profile only; resident and bounded nonresident "
+            "ATTRIBUTE_LIST resolution is supported for files and directories, while "
+            "$MFT bootstrap extension records and unsupported streams are refused.",
             "No $LogFile replay, sparse, compressed, or encrypted stream support.",
         ),
         "exfat-native-ro": (
@@ -338,6 +349,56 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
             "Unsupported metadata layouts are refused.",
             "A single root volume label is validated and exposed through FSInfo.label.",
         ),
+    }
+)
+
+# These are claims about the evidence committed to the repository, not claims
+# that a filesystem format is generally crash-safe. In particular, no native
+# writer in this matrix claims power-loss atomicity.
+_RECOVERY_CONTRACTS = MappingProxyType(
+    {
+        **{
+            profile_id: {
+                "rollback": "not_applicable",
+                "process_kill": "not_applicable",
+                "power_loss": "unsupported",
+                "quarantine": "not_applicable",
+            }
+            for profile_id in (
+                "fat12-native-ro",
+                "fat16-native-ro",
+                "fat32-native-ro",
+                "ext2-native-ro",
+                "ext3-native-ro",
+                "ext4-native-ro",
+                "ntfs-native-ro",
+                "exfat-native-ro",
+            )
+        },
+        "fat12-16-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "not_proven",
+        },
+        "fat32-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "not_proven",
+        },
+        "ext2-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "tested_with_recovery_sidecar",
+            "power_loss": "unsupported",
+            "quarantine": "tested_on_recovery_failure",
+        },
+        "exfat-native-rw": {
+            "rollback": "tested_on_failure",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "not_proven",
+        },
     }
 )
 
@@ -570,7 +631,9 @@ NATIVE_WRITE_CAPABILITIES_BY_STRATEGY = MappingProxyType(
 NATIVE_WRITE_PROFILES_BY_STRATEGY = MappingProxyType(
     {profile.write_strategy: profile for profile in _WRITE_PROFILES}
 )
-_WRITE_CANONICAL_OPERATIONS = frozenset(("write-file", "mkdir", "delete", "rename"))
+_WRITE_CANONICAL_OPERATIONS = frozenset(
+    ("write-file", "mkdir", "delete", "rename", "hard-link")
+)
 
 
 def _refusal_payload(code: RefusalCode, message: str) -> dict[str, str]:
@@ -587,6 +650,19 @@ def canonical_operation_for_api_operation(
         if candidate == api_operation:
             return canonical
     return None
+
+
+def api_operation_for_canonical_operation(
+    interface: str, canonical_operation: str
+) -> str | None:
+    """Map one canonical operation to its interface-specific API name.
+
+    Returning ``None`` for unknown interfaces or operations keeps capability
+    consumers fail-closed: a missing mapping is never mistaken for a callable
+    method on a provider.
+    """
+
+    return _INTERFACE_OPERATION_ALIASES.get(interface, {}).get(canonical_operation)
 
 
 def get_native_capability_matrix() -> dict[str, object]:
@@ -663,4 +739,5 @@ def get_native_capability_status(
         ),
         "write_rejection": rejection,
         "operations": profile.operation_matrix(write_enabled=effective_write),
+        "recovery": profile.recovery_contract,
     }

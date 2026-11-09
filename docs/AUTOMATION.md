@@ -14,6 +14,7 @@
 | CI Guardian | workflow completion | deduplicated incident issue, recovery close | issues only | нет |
 | mfsync | daily/manual/PR | secret scan, version parity, sync status, optional explicit sync | только manual write mode | нет |
 | External mirror | weekly/tag/manual on main | SSH push of branch and tag refs to a configured mirror | только внешний Git remote | нет |
+| Repository status sync | push main/PR/manual | README + capability/checker/recovery/product-status artifacts | same-repository PR/main only | нет |
 | Release | successful tested main | version PR/tag/build/release assets | PR/tag | только ruleset |
 
 ## Автоисправления
@@ -27,7 +28,7 @@
 
 ## CI Guardian
 
-`ci-guardian.yml` слушает завершение trusted workflow для `main`. При `failure`, `cancelled` или `timed_out` он создаёт одну deduplicated issue с labels `automation` и `ci-failure`, добавляет ссылку на run и commit, а повторные падения добавляет комментариями. После успешного запуска того же workflow открытая incident issue закрывается с указанием recovery commit.
+`ci-guardian.yml` слушает завершение trusted workflow для `main`. При `failure` или `timed_out` он создаёт одну deduplicated issue с labels `automation` и `ci-failure`, добавляет ссылку на run и commit, а повторные падения добавляет комментариями. Отменённые запуски не считаются инцидентами: их обычно отменяет concurrency-группа после нового push, поэтому они не должны создавать ложные issue. После успешного запуска того же workflow открытая incident issue закрывается с указанием recovery commit.
 
 Guardian не редактирует исходники и не закрывает PR. Это операционный контур обнаружения, а не скрытая самопочинка.
 
@@ -45,6 +46,19 @@ GitHub Actions не видит несохранённые файлы на ком
 - scheduled GitHub `mfsync` проверяет состояние, версии и секреты;
 - запись в remote через GitHub Actions возможна только явным `workflow_dispatch` после успешного Verify;
 - при divergence выполняется PR, а не force-push.
+
+`status-sync.yml` — единая проверка README и всех canonical status artifacts. Он запускается на
+каждом push в `main`, на открытие/обновление PR и вручную. Для PR workflow checkout-ит trusted default
+branch, передаёт PR tree только как данные генераторам и не выполняет Python-код из PR. Workflow ничего
+не коммитит и не пушит: он перегенерирует данные и падает, если закоммиченные JSON расходятся с деревом PR.
+Расхождение исправляется в самом PR командами `python scripts/sync_repository_status.py` и
+`python scripts/generate_readme.py`.
+
+Автоматический write-back убран намеренно. Коммит в head PR-ветки с трейлером `[skip ci]` не создаёт ни
+одного check run, поэтому обязательные проверки (`quality-gate`, `dependency-review`) на новой голове
+никогда не появляются и PR становится невозможно смержить. Дополнительно generated README больше не
+содержит имя ветки: строка «Source revision: `<branch>`» делала данные уникальными для каждой ветки и
+порождала конфликты README между PR.
 
 Это предотвращает ложное обещание «GitHub сам увидит любой файл на компьютере» и защищает forensic-данные от случайного попадания в Git.
 

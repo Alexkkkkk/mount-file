@@ -16,7 +16,7 @@ Function keys (real shortcuts, also clickable buttons at the bottom):
         else in the hex viewer
     F4  edit a text file in the built-in bounded editor: a local file is saved
         atomically, a file inside the image is written through the volume
-        writer (FAT32 or ext2/3/4 via ``debugfs``) after an explicit
+        writer (only a supported bounded native profile) after an explicit
         confirmation and a fresh, non-overwriting image backup
     F5  copy between panels (image -> local = extract,
         local -> image = import via the selected filesystem writer)
@@ -44,11 +44,13 @@ import shutil
 import stat
 import tempfile
 import threading
+import unicodedata
 import webbrowser
 from pathlib import PurePosixPath
 
 from . import ai, autopick, components, tc_style, text_editor
 from .dfir import detect_timestomp, grep_image, read_timeline_csv, sha256_file
+from .extract import ExtractError, ExtractionLimits, extract_file, extract_path
 from .hexview import HexView
 from .partition import list_partitions
 from .qt_compat import (
@@ -141,24 +143,48 @@ COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")
 DIR_SIZE_TEXT = "<Папка>"
 
 
+def _entry_name(name):
+    """Accept one filename, never an image/host path supplied as a name."""
+    name = str(name)
+    if (
+        name in ("", ".", "..")
+        or any(character in name for character in ("/", "\\", "\x00", ":"))
+        or not name.rstrip(" .")
+    ):
+        raise ValueError("unsafe file name: %r" % name)
+    return name
+
+
+def _supports_write(panel, operation):
+    if panel.mode != "img":
+        return True
+    writer = panel.writer
+    if writer is None:
+        return False
+    capabilities = getattr(writer, "write_capabilities", None)
+    return capabilities is None or operation in capabilities
+
+
 class _UniversalImageWriter:
     """Adapt :class:`UniversalFSRW` to the GUI's legacy writer contract.
 
     The panel UI historically called the native FAT32 writer with
     ``(directory, name, data)`` arguments.  The package RW facade uses one
     POSIX path instead.  Keeping this adapter in the GUI avoids changing the
-    tested FAT32 engine while enabling the same commands for ext2/3/4, NTFS,
-    and an available loop-mount backend.
+    tested FAT32 engine while routing supported native profiles through the
+    same bounded capability checks as the CLI. Legacy mounts remain opt-in
+    library features, never enabled implicitly by the desktop UI.
     """
 
-    def __init__(self, filesystem, provider=None):
+    def __init__(self, filesystem, provider=None, mutation_callback=None):
         self.filesystem = filesystem
         self.provider = provider
+        self.mutation_callback = mutation_callback
         info = filesystem.info()
         self.total_bytes = int(info.total_size or 0)
         self.fs_type = info.fs_type
         self.write_strategy = info.write_strategy
-        self.writable = bool(info.writable)
+        self.writable = bool(info.writable and info.write_capabilities)
         self.write_capabilities = tuple(info.write_capabilities)
         self.write_rejection_reason = info.write_rejection_reason
 
@@ -171,9 +197,11 @@ class _UniversalImageWriter:
         return str(PurePosixPath(directory) / name)
 
     def _mutate(self, operation):
+        if self.mutation_callback is not None:
+            return self.mutation_callback(operation)
         close = getattr(self.provider, "close", None)
         reopen = getattr(self.provider, "reopen", None)
-        release_reader = self.write_strategy == "imdisk-rw" and callable(close)
+        release_reader = callable(close) and callable(reopen)
         if release_reader:
             close()
         try:
@@ -373,6 +401,9 @@ class HexEditorPage(QWidget):
         super().__init__(parent)
         self._save_callback = save_callback
         self._close_callback = close_callback
+        # Последняя причина отказа записи: без неё сохранение «молча» оставляло
+        # кнопку активной, а пользователь не понимал, почему файл не изменился.
+        self.last_error = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         top = QHBoxLayout()
@@ -436,13 +467,20 @@ class HexEditorPage(QWidget):
             )
 
     def save(self):
+        """Записать правку в образ. Возвращает True только при успехе."""
         if not self.hex_view.isModified() or self._save_callback is None:
-            return
+            return False
+        self.last_error = ""
         try:
             if self._save_callback(self.hex_view.data()):
                 self.hex_view.setData(self.hex_view.data())
+                return True
+            return False
         except Exception as exc:
+            self.last_error = str(exc)
+            self.status.setText("Не сохранено: %s" % exc)
             QMessageBox.critical(self, "Сохранение HEX не удалось", str(exc))
+            return False
 
     def find(self):
         value, ok = QInputDialog.getText(self, "Поиск байтов", "HEX или текст:")
@@ -671,6 +709,49 @@ def _atomic_write_local(path, data, expected_data=None, expected_identity=None):
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def _copy_local_entry(src, dst, *, is_dir, delete_src):
+    """Stage a local copy before replacing an existing file/directory/link.
+
+    A failed source read leaves the old destination untouched. Symlinks inside
+    local directory copies are copied as links rather than followed. The source
+    of a move is removed only after the complete destination is installed.
+    """
+    parent = os.path.dirname(os.path.abspath(dst))
+    stage = tempfile.mkdtemp(prefix=".mountfile-copy-", dir=parent)
+    copied = os.path.join(stage, "new")
+    previous = os.path.join(stage, "previous")
+    preserve_stage = False
+    try:
+        if is_dir and not os.path.islink(src):
+            shutil.copytree(src, copied, symlinks=True)
+        else:
+            shutil.copy2(src, copied, follow_symlinks=False)
+        had_previous = os.path.lexists(dst)
+        if had_previous:
+            os.replace(dst, previous)
+        try:
+            os.replace(copied, dst)
+        except BaseException as install_error:
+            if had_previous:
+                try:
+                    os.replace(previous, dst)
+                except OSError as restore_error:
+                    preserve_stage = True
+                    raise RuntimeError(
+                        "copy installation failed; original destination is preserved "
+                        "for recovery at %s: %s" % (previous, restore_error)
+                    ) from install_error
+            raise
+        if delete_src:
+            if is_dir and not os.path.islink(src):
+                shutil.rmtree(src)
+            else:
+                os.unlink(src)
+    finally:
+        if not preserve_stage:
+            shutil.rmtree(stage)
 
 
 class ForensicTriageDialog(QDialog):
@@ -1261,12 +1342,22 @@ class TcPanel(QWidget):
             self.win.facts["F6"].isEnabled(),
         )
         add(
-            "Переименовать", self.win.rename_selected, is_real_entry and can_write_image
+            "Переименовать",
+            self.win.rename_selected,
+            is_real_entry and can_write_image and _supports_write(self, "rename"),
         )
-        add("Удалить (F8)", self.win.f8_delete, is_real_entry and can_write_image)
+        add(
+            "Удалить (F8)",
+            self.win.f8_delete,
+            is_real_entry and can_write_image and _supports_write(self, "delete"),
+        )
         add("Копировать путь", self.copy_selected_path, is_real_entry)
         menu.addSeparator()
-        add("Новая папка (F7)", self.win.f7_mkdir, can_write_image)
+        add(
+            "Новая папка (F7)",
+            self.win.f7_mkdir,
+            can_write_image and _supports_write(self, "mkdir"),
+        )
         add("Обновить", self.refresh)
         menu.addSeparator()
         add("Выделить всё (Ctrl+A)", self.mark_all)
@@ -1315,6 +1406,8 @@ class TcPanel(QWidget):
             return
         self._clear_navigation_state()
         self.tabs.pop(idx)
+        if idx < self.tab_index:
+            self.tab_index -= 1
         self.tab_index = max(0, min(self.tab_index, len(self.tabs) - 1))
         self.path = self.tabs[self.tab_index]
         self._rebuild_tabs()
@@ -2558,7 +2651,7 @@ class MainWindow(QMainWindow):
         act_closetab.setShortcut(QKeySequence("Ctrl+W"))
         act_closetab.triggered.connect(lambda: self.active_panel().close_tab())
         self.addAction(act_closetab)
-        self._action(
+        self.act_filter = self._action(
             "Фильтр каталога",
             lambda: self.active_panel().search_edit.setFocus(),
             "Ctrl+F",
@@ -2651,12 +2744,25 @@ class MainWindow(QMainWindow):
             self.workspace_stack.removeWidget(current)
             current.deleteLater()
         self.workspace_stack.setCurrentWidget(self.splitter)
-        self.workspace_hint.setText("Образы дисков · просмотр и извлечение")
+        self.cmdline.setEnabled(True)
+        self.act_filter.setEnabled(True)
+        self._sync_actions()
+        self._update_cmd_prompt()
 
     def _show_hex_page(self, page):
+        current = self.workspace_stack.currentWidget()
+        if isinstance(current, HexEditorPage):
+            current.request_close()
+            if self.workspace_stack.currentWidget() is current:
+                page.deleteLater()
+                return False
         self.workspace_stack.addWidget(page)
         self.workspace_stack.setCurrentWidget(page)
+        self.cmdline.setEnabled(False)
+        self.act_filter.setEnabled(False)
+        self._sync_actions()
         self.workspace_hint.setText("HEX-редактор · Ctrl+S сохраняет изменения")
+        return True
 
     def _press_fkey(self, key):
         slot = {
@@ -2877,7 +2983,8 @@ class MainWindow(QMainWindow):
             self,
             "Установить компоненты Windows",
             "Будет открыт отдельный PowerShell-установщик для записи образов:\n"
-            "• отдельный WSL/Ubuntu-дистрибутив MountFileTools для debugfs и ext2/3/4 "
+            "• отдельный WSL/Ubuntu-дистрибутив MountFileTools для e2fsprogs/debugfs "
+            "(explicit unjournaled ext2 compatibility; journaled ext3/ext4 остаются read-only) "
             "(около 325 МБ загрузки и место на диске);\n"
             "• подписанный драйвер ImDisk для поддерживаемых Windows-томов.\n\n"
             "Нужны интернет и подтверждение прав администратора (UAC). После установки "
@@ -3473,7 +3580,7 @@ class MainWindow(QMainWindow):
             return True
         backup = self.image_path + ".bak"
         suffix = 1
-        while os.path.exists(backup):
+        while os.path.lexists(backup):
             backup = self.image_path + ".bak.%d" % suffix
             suffix += 1
         answer = QMessageBox.question(
@@ -3486,9 +3593,41 @@ class MainWindow(QMainWindow):
         if answer != MB_Yes:
             self.log_msg("Запись отменена: резервная копия не создана")
             return False
+        created = False
         try:
-            shutil.copy2(self.image_path, backup)
-        except OSError as exc:
+            # Reserve a new pathname atomically: a concurrent backup process or
+            # dangling symlink must never be overwritten after the prompt.
+            while True:
+                try:
+                    output = open(backup, "xb")
+                    created = True
+                    break
+                except FileExistsError:
+                    backup = self.image_path + ".bak.%d" % suffix
+                    suffix += 1
+            before = _local_file_identity(
+                os.stat(self.image_path, follow_symlinks=False)
+            )
+            with output, open(self.image_path, "rb") as source:
+                shutil.copyfileobj(source, output, length=1 << 20)
+                output.flush()
+                os.fsync(output.fileno())
+                after = _local_file_identity(
+                    os.stat(self.image_path, follow_symlinks=False)
+                )
+                if before != after:
+                    raise RuntimeError(
+                        "образ изменился во время создания резервной копии"
+                    )
+        except (OSError, RuntimeError) as exc:
+            if created:
+                try:
+                    os.unlink(backup)
+                except OSError as cleanup_error:
+                    self.log_msg(
+                        "Не удалось удалить неполную резервную копию: %s"
+                        % cleanup_error
+                    )
             QMessageBox.critical(
                 self,
                 "Резервная копия не создана",
@@ -3536,16 +3675,25 @@ class MainWindow(QMainWindow):
 
     def swap_panels(self):
         left, right = self.panelL, self.panelR
-        if left.mode != right.mode:
-            self.log_msg(
-                "Смена панелей: панели показывают разные источники "
-                "(образ и локальные файлы) — переключите диски в списке"
+        # Swap complete sources, not just path strings: two image panels may
+        # browse different volumes, and a local path is not an image path.
+        for attribute in (
+            "mode",
+            "path",
+            "provider",
+            "writer",
+            "writer_fh",
+            "write_reason",
+            "volume_offset",
+            "volume_label",
+            "tabs",
+            "tab_index",
+        ):
+            before_left, before_right = getattr(left, attribute), getattr(
+                right, attribute
             )
-            return
-        l_path, r_path = left.path, right.path
-        left.tabs[left.tab_index] = r_path
-        right.tabs[right.tab_index] = l_path
-        left.path, right.path = r_path, l_path
+            setattr(left, attribute, before_right)
+            setattr(right, attribute, before_left)
         left._clear_navigation_state()
         right._clear_navigation_state()
         left._rebuild_tabs()
@@ -3593,15 +3741,18 @@ class MainWindow(QMainWindow):
         entry = panel.selected_entry()
         available = panel.mode == "local" or panel.provider is not None
         writable = available and (panel.mode == "local" or panel.writer is not None)
-        destination = other.mode == "local" or other.writer is not None
+        destination = other.mode == "local" or _supports_write(other, "write_file")
         entries = panel.marked_entries() if available else []
         can_copy = (
             bool(entries) and destination and not (panel.mode == other.mode == "img")
         )
+        if other.mode == "img" and any(entry["is_dir"] for entry in entries):
+            can_copy = can_copy and _supports_write(other, "mkdir")
         is_file = bool(entry and not entry.get("is_dir") and not entry.get("up"))
         editable = (
             is_file
             and writable
+            and _supports_write(panel, "write_file")
             and (
                 (panel.mode == "local" and text_editor.is_text_file(entry["name"]))
                 or (
@@ -3616,8 +3767,8 @@ class MainWindow(QMainWindow):
             "F4": editable,
             "F5": can_copy,
             "F6": can_copy and panel.mode == "local",
-            "F7": writable,
-            "F8": bool(entries) and writable,
+            "F7": writable and _supports_write(panel, "mkdir"),
+            "F8": bool(entries) and writable and _supports_write(panel, "delete"),
         }
         reasons = {
             "F3": "Выберите файл для просмотра",
@@ -3629,6 +3780,10 @@ class MainWindow(QMainWindow):
         }
         for index, (key, label) in enumerate(FKEYS):
             action = self.facts[key]
+            editor_active = hasattr(self, "workspace_stack") and isinstance(
+                self.workspace_stack.currentWidget(), HexEditorPage
+            )
+            states[key] = states[key] and not editor_active
             action.setEnabled(bool(states[key]))
             tip = "%s (%s)" % (label, key) if states[key] else reasons[key]
             action.setToolTip(tip)
@@ -3636,8 +3791,10 @@ class MainWindow(QMainWindow):
             if index < len(getattr(self, "fbtns", [])):
                 self.fbtns[index].setEnabled(bool(states[key]))
                 self.fbtns[index].setToolTip(tip)
-        self.act_up.setEnabled(available and panel.up_path() is not None)
-        self.act_reload.setEnabled(available)
+        self.act_up.setEnabled(
+            available and panel.up_path() is not None and not editor_active
+        )
+        self.act_reload.setEnabled(available and not editor_active)
 
     def eventFilter(self, obj, e):
         if e.type() == QEvent_KeyPress and e.key() == Key_Tab:
@@ -3648,7 +3805,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- image mount
     def open_image(self, path=None):
         """Open a raw image: an explicit path, or the file dialog."""
-        if path is None:
+        if path is None or isinstance(path, bool):
             path, _ = QFileDialog.getOpenFileName(
                 self, "Открыть образ диска", "", IMAGE_FILTER
             )
@@ -3660,18 +3817,30 @@ class MainWindow(QMainWindow):
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Открыть образ", "Файл не найден:\n%s" % path)
             return False
+        page = getattr(self, "workspace_stack", None)
+        page = page.currentWidget() if page is not None else None
+        if isinstance(page, HexEditorPage):
+            page.request_close()
+            if self.workspace_stack.currentWidget() is page:
+                return False
         self.image_path = path
         for panel in self.panels.values():
             panel._clear_navigation_state()
         self.release_volume(self.panelL)
         self.release_volume(self.panelR)
+        if self.panelR.mode == "img":
+            self.panelR.mode = "local"
+            self.panelR.path = os.path.expanduser("~")
+            self.panelR.tabs = [self.panelR.path]
+            self.panelR.tab_index = 0
+            self.panelR.marked.clear()
+            self.panelR._rebuild_tabs()
+            self.panelR.refresh()
         # The volume list is only a convenience: a broken partition table
         # must not stop the image itself from opening.
         self.volumes = self.scan_volumes(path)
         self.panelL.populate_drives()
         self.panelR.populate_drives()
-        if self.panelR.mode == "img":
-            self.panelR.mode = "local"
         # Mount the first partition when the image has a partition table,
         # otherwise treat the whole file as one volume (offset 0).
         offset = self.volumes[0].offset if self.volumes else 0
@@ -3735,10 +3904,16 @@ class MainWindow(QMainWindow):
         )
         if volume_size is None:
             image_size = os.path.getsize(self.image_path)
+            # Only partition-table rows delimit a volume. Signature scanning
+            # also reports filesystem headers found *inside* an existing
+            # filesystem; using those offsets as boundaries cut the real volume
+            # short and made a whole-image NTFS/exFAT open fail with
+            # "declared size exceeds the selected volume bounds".
             next_offsets = [
                 int(getattr(volume, "offset"))
                 for volume in (self.volumes or [])
                 if getattr(volume, "offset", -1) > offset
+                and getattr(volume, "source", "table") == "table"
             ]
             next_boundary = min(next_offsets) if next_offsets else image_size
             volume_size = max(0, next_boundary - offset)
@@ -3800,188 +3975,71 @@ class MainWindow(QMainWindow):
                 % recognized_error,
             )
             return False
-        except TskError as tsk_error:
-            from .fat32 import Fat32Error, Fat32Provider
-
-            try:
-                panel.provider = Fat32Provider(self.image_path, offset=offset)
-            except (Fat32Error, OSError, ValueError) as fat_error:
-                panel.provider = None
-                self.log_msg(
-                    "Том @ offset %d не открылся — The Sleuth Kit: %s; FAT32: %s"
-                    % (offset, tsk_error, fat_error)
-                )
-                panel.refresh()
-                # A partition table (or a udev offset) that does not point at a
-                # filesystem is the normal case in NAND/eMMC dumps: pick the
-                # working volume automatically instead of stopping on an error.
-                if getattr(self, "_autopick_busy", False):
-                    QMessageBox.warning(
-                        self,
-                        "Не удалось смонтировать том",
-                        "The Sleuth Kit: %s\nFAT32: %s" % (tsk_error, fat_error),
-                    )
-                    return False
-                if self._auto_pick(panel, quiet=True):
-                    return True
-                QMessageBox.warning(
-                    self,
-                    "Не удалось смонтировать том",
-                    "The Sleuth Kit: %s\nFAT32: %s\n\n"
-                    "Авто-подбор не нашёл рабочий том — подробности в журнале."
-                    % (tsk_error, fat_error),
-                )
-                return False
+        except (TskError, OSError, ValueError) as error:
+            panel.provider = None
+            panel.refresh()
+            self.log_msg("Том @ offset %d не открылся: %s" % (offset, error))
+            if not getattr(self, "_autopick_busy", False) and self._auto_pick(
+                panel, quiet=True
+            ):
+                return True
+            QMessageBox.warning(self, "Не удалось смонтировать том", str(error))
+            return False
 
         panel.mode = "img"
         panel.volume_offset = offset
         panel.volume_label = "ofs %d" % offset
 
-        from .fat32 import Fat32, Fat32Error
-
         legacy_readonly = getattr(panel.provider, "backend_name", "") in (
             "pytsk3",
             "pytsk3-fallback",
         )
-        fat_writer_ready = legacy_readonly
         if legacy_readonly:
-            panel.writer = None
-            panel.writer_fh = None
             panel.write_reason = "Legacy filesystem reader is explicitly read-only."
-            self.log_msg(
-                "Том @ offset %d открыт legacy-reader только для чтения" % offset
-            )
         else:
+            filesystem = None
             try:
-                fh = open(self.image_path, "r+b")
-            except OSError as e:
-                fh = None
-                fat_error = e
-            else:
-                try:
-                    panel.writer = Fat32(fh, offset=offset)
-                    panel.writer_fh = fh
-                    panel.volume_label = "FAT32 ofs %d" % offset
-                    self.log_msg(
-                        "Том @ offset %d смонтирован — запись в FAT32 включена" % offset
-                    )
-                    fat_writer_ready = True
-                except Fat32Error as e:
-                    fh.close()
-                    fat_error = e
+                from .universal_fs_rw import UniversalFSRW
 
-        # FAT32 keeps its native writer. The ordinary GUI enables writes only
-        # for MountFile's in-process clean-ext2 profile; legacy debugfs is a
-        # library-only explicit compatibility backend.
-        if not fat_writer_ready:
-            ext_writer = None
-            try:
-                from .ext_debugfs_writer import Ext234ImageWriter
-
-                ext_writer = Ext234ImageWriter(
-                    self.image_path, offset=offset, volume_size=volume_size
+                filesystem = UniversalFSRW(
+                    self.image_path,
+                    offset=offset,
+                    volume_size=volume_size,
+                    auto_backup=False,
+                    allow_legacy_mount=False,
                 )
-            except Exception as ext_error:
-                fat_error = "%s; ext: %s" % (fat_error, ext_error)
-            if ext_writer is not None and not ext_writer.writable:
+                adapter = _UniversalImageWriter(
+                    filesystem,
+                    panel.provider,
+                    mutation_callback=getattr(self, "_mutate_image", None),
+                )
+                if not adapter.writable:
+                    panel.write_reason = adapter.write_rejection_reason or (
+                        "Выбранный native-профиль не поддерживает запись."
+                    )
+                    adapter.close()
+                else:
+                    panel.writer = adapter
+                    panel.writer_fh = adapter
+                    panel.volume_label = "%s ofs %d" % (adapter.fs_type, offset)
+                    self.log_msg(
+                        "Том @ offset %d — native-запись (%s): %s"
+                        % (
+                            offset,
+                            adapter.write_strategy,
+                            ", ".join(adapter.write_capabilities),
+                        )
+                    )
+            except Exception as exc:
+                if filesystem is not None:
+                    filesystem.close()
                 panel.writer = None
                 panel.writer_fh = None
-                panel.write_reason = (
-                    "Запись заблокирована проверкой безопасности ext2: "
-                    + ext_writer.native_unsafe_error
-                    if ext_writer.native_unsafe_error
-                    else "Запись доступна только для поддерживаемого чистого "
-                    "native-ext2 профиля; legacy debugfs отключён по умолчанию."
-                )
-                self.log_msg(panel.write_reason)
-            elif ext_writer is not None:
-                adapter = _ExtPanelWriter(ext_writer, panel.provider)
-                panel.writer = adapter
-                panel.writer_fh = adapter
-                panel.volume_label = "%s ofs %d" % (ext_writer.fs_type, offset)
-                if ext_writer.write_strategy == "native-ext2":
-                    self.log_msg(
-                        "Том @ offset %d открыт — встроенная запись чистого ext2 включена"
-                        % offset
-                    )
-                else:
-                    self.log_msg(
-                        "Том @ offset %d смонтирован — включена запись %s"
-                        % (offset, ext_writer.fs_type)
-                    )
-            else:
-                try:
-                    from .universal_fs_rw import UniversalFSRW
-
-                    filesystem = UniversalFSRW(
-                        self.image_path, offset=offset, auto_backup=False
-                    )
-                    adapter = _UniversalImageWriter(filesystem, panel.provider)
-                    if not adapter.writable:
-                        adapter.close()
-                        panel.writer = None
-                        panel.writer_fh = None
-                        if adapter.write_strategy == "read-only-platform":
-                            fs_name = str(adapter.fs_type).lower()
-                            if fs_name.startswith(("ext2", "ext3", "ext4", "ext")):
-                                panel.write_reason = (
-                                    "Для записи ext2/3/4 нужен debugfs/e2fsprogs. "
-                                    + components.installation_hint()
-                                )
-                            else:
-                                panel.write_reason = (
-                                    "Windows не поддерживает запись этого типа "
-                                    "файловой системы (%s) через ImDisk. Поддерживаются "
-                                    "NTFS, exFAT и FAT12/16; раздел открыт только "
-                                    "для чтения." % adapter.fs_type
-                                )
-                        elif adapter.write_strategy == "read-only-mount-tools":
-                            panel.write_reason = (
-                                "Для записи через loop-mount не найдены системные "
-                                "утилиты mount/umount; образ открыт только для чтения."
-                            )
-                        elif adapter.write_strategy == "read-only-imdisk-tools":
-                            panel.write_reason = (
-                                "Для записи в Windows установите ImDisk Virtual Disk "
-                                "Driver. "
-                                + components.installation_hint()
-                                + " После установки перезапустите MountFile от имени "
-                                "администратора."
-                            )
-                        elif adapter.write_strategy == "read-only-admin":
-                            panel.write_reason = (
-                                "Для записи через ImDisk перезапустите MountFile "
-                                "от имени администратора."
-                            )
-                        else:
-                            panel.write_reason = (
-                                "Выбранный backend не поддерживает запись "
-                                "в этот образ."
-                            )
-                        self.log_msg(
-                            "Том @ offset %d — только чтение (%s)"
-                            % (offset, panel.write_reason)
-                        )
-                        adapter = None
-                except Exception as e:
-                    panel.writer = None
-                    panel.write_reason = str(e)
-                    self.log_msg(
-                        "Том @ offset %d — только чтение (FAT32: %s; RW: %s)"
-                        % (offset, fat_error, e)
-                    )
-                else:
-                    if adapter is not None:
-                        panel.writer = adapter
-                        panel.writer_fh = adapter
-                        panel.volume_label = "%s ofs %d" % (
-                            adapter.fs_type.upper(),
-                            offset,
-                        )
-                        self.log_msg(
-                            "Том @ offset %d смонтирован — запись включена (%s)"
-                            % (offset, adapter.write_strategy)
-                        )
+                panel.write_reason = str(exc)
+        if panel.writer is None:
+            self.log_msg(
+                "Том @ offset %d — только чтение: %s" % (offset, panel.write_reason)
+            )
 
         panel.path = "/"
         panel.tabs = ["/"]
@@ -3995,16 +4053,56 @@ class MainWindow(QMainWindow):
 
     def release_volume(self, panel):
         """Drop the mounted volume (and its write handle) of one panel."""
-        if panel.writer_fh is not None:
-            try:
-                panel.writer_fh.close()
-            except OSError:
-                pass
+        writer, handle = panel.writer, panel.writer_fh
         panel.writer_fh = None
         panel.writer = None
         provider, panel.provider = panel.provider, None
-        if provider is not None and hasattr(provider, "close"):
-            provider.close()
+        seen = set()
+        for resource in (handle, writer, provider):
+            if resource is None or id(resource) in seen:
+                continue
+            seen.add(id(resource))
+            close = getattr(resource, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    self.log_msg("Не удалось закрыть ресурс образа: %s" % exc)
+
+    def _mutate_image(self, operation):
+        """Release all GUI readers before a staged image replacement.
+
+        Both panels can browse different volumes of the same image. Keeping
+        either read handle open prevents replacement on Windows; on POSIX it
+        would keep showing the old inode. Reopen the same provider objects so
+        editor callbacks retain their source identity and reload metadata.
+        """
+        providers = []
+        for panel in self.panels.values():
+            provider = panel.provider
+            if provider is not None and provider not in providers:
+                if not callable(getattr(provider, "reopen", None)):
+                    raise RuntimeError("reader cannot be safely reopened after writing")
+                providers.append(provider)
+        released = []
+        try:
+            for provider in providers:
+                released.append(provider)
+                provider.close()
+            return operation()
+        finally:
+            for provider in released:
+                try:
+                    provider.reopen()
+                except Exception as exc:
+                    message = "Не удалось обновить reader после операции: %s" % exc
+                    self.log_msg(message)
+                    for panel in self.panels.values():
+                        if panel.provider is provider:
+                            self.release_volume(panel)
+                            panel.write_reason = message
+                    QMessageBox.warning(self, "Обновление образа не удалось", message)
+            self.refresh_all()
 
     def _close_writer(self, panel=None):
         """Close write handles (all panels when called without arguments)."""
@@ -4020,6 +4118,19 @@ class MainWindow(QMainWindow):
 
     def try_cd(self, panel, target):
         """Change directory with validation; returns True when it worked."""
+        target = str(target)
+        if panel.mode == "img":
+            target = target.replace("\\", "/")
+            if not target.startswith("/"):
+                target = panel.join(target)
+            import posixpath
+
+            target = posixpath.normpath(target)
+        else:
+            target = os.path.expanduser(target)
+            if not os.path.isabs(target):
+                target = panel.join(target)
+            target = os.path.abspath(target)
         ok = False
         try:
             if panel.mode == "img":
@@ -4035,6 +4146,7 @@ class MainWindow(QMainWindow):
             self.log_msg("cd %s" % target)
         else:
             self.log_msg("cd: каталог не найден: %s" % target)
+            panel.update_header()
         return ok
 
     # ------------------------------------------------------------- commands
@@ -4045,8 +4157,6 @@ class MainWindow(QMainWindow):
         p = self.active_panel()
         low = text.lower()
         target = text[3:].strip() if low.startswith("cd ") else text
-        if p.mode == "img" and not target.startswith("/"):
-            target = p.join(target)
         if not self.try_cd(p, target):
             self.log_msg("Команда «%s» не найдена. Доступно: cd <путь>" % text)
         self.cmdline.clear()
@@ -4111,7 +4221,7 @@ class MainWindow(QMainWindow):
                 target, prepared_encoding = text_editor.prepare_image_text(
                     panel.provider,
                     full,
-                    self._text_temp_dir(),
+                    tempfile.mkdtemp(prefix="edit-", dir=self._text_temp_dir()),
                     data=original,
                 )
                 if prepared_encoding != encoding:
@@ -4166,6 +4276,10 @@ class MainWindow(QMainWindow):
     def _import_image_text_copy(self, panel, entry, target, original, encoding):
         """Safely import the confirmed external-editor copy into its image."""
         try:
+            if text_editor.has_active_editors(os.path.dirname(target)):
+                raise RuntimeError(
+                    "текстовый редактор ещё открыт; закройте его перед импортом"
+                )
             before = os.stat(target)
             if before.st_size > MAX_EDIT_BYTES:
                 raise ValueError("редактор сохранил файл больше лимита 2 MiB")
@@ -4262,6 +4376,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Просмотр", str(e))
             return
 
+        source_mode = p.mode
+        source_provider = p.provider if source_mode == "img" else None
+        source_writer = p.writer if source_mode == "img" else None
+        source_image_path = self.image_path if source_mode == "img" else None
+
         def save_edited(updated):
             nonlocal data, local_identity
             answer = QMessageBox.warning(
@@ -4274,14 +4393,34 @@ class MainWindow(QMainWindow):
             )
             if answer != MB_Yes:
                 return False
-            if p.mode == "img":
-                if p.writer is None:
+            if source_mode == "img":
+                if (
+                    p.mode != "img"
+                    or p.provider is not source_provider
+                    or p.writer is not source_writer
+                    or self.image_path != source_image_path
+                ):
+                    raise RuntimeError("образ изменился после открытия HEX-редактора")
+                if source_writer is None:
                     raise RuntimeError("том открыт только для чтения")
+                if source_provider.read_file(full) != data:
+                    raise RuntimeError(
+                        "файл в образе изменился после открытия HEX-редактора"
+                    )
                 if not self._backup_before_write(p):
                     return False
+                if source_provider.read_file(full) != data:
+                    raise RuntimeError(
+                        "файл в образе изменился во время резервного копирования"
+                    )
                 parent = str(PurePosixPath(full).parent)
-                p.writer.write_file(parent, entry["name"], updated)
+                source_writer.write_file(parent, entry["name"], updated)
+                data = bytes(updated)
             else:
+                if p.mode != source_mode:
+                    raise RuntimeError(
+                        "источник изменился после открытия HEX-редактора"
+                    )
                 _atomic_write_local(
                     full,
                     updated,
@@ -4296,7 +4435,11 @@ class MainWindow(QMainWindow):
             self.log_msg("HEX: записаны изменения %s (%d байт)" % (full, len(updated)))
             return True
 
-        save_callback = save_edited if p.mode != "img" or p.writer is not None else None
+        save_callback = (
+            save_edited
+            if source_mode != "img" or _supports_write(p, "write_file")
+            else None
+        )
         page = HexEditorPage(
             self,
             entry["name"],
@@ -4305,7 +4448,8 @@ class MainWindow(QMainWindow):
             save_callback=save_callback,
             close_callback=self._show_panels,
         )
-        self._show_hex_page(page)
+        if self._show_hex_page(page) is False:
+            return
         self._maybe_advise(full, size=entry.get("size"))
         self.log_msg("HEX-редактор: %s" % entry["name"])
 
@@ -4356,6 +4500,10 @@ class MainWindow(QMainWindow):
                 "Файл бинарный или больше 2 MiB; редактирование отменено.",
             )
             return
+        source_mode = p.mode
+        source_provider = p.provider if source_mode == "img" else None
+        source_writer = p.writer if source_mode == "img" else None
+        source_image_path = self.image_path if source_mode == "img" else None
         text, encoding, bom, newline = decoded
         dialog = TextEditorDialog(self, name, text)
         if exec_dialog(dialog) != DialogAccepted:
@@ -4372,7 +4520,7 @@ class MainWindow(QMainWindow):
         if updated == data:
             self.log_msg("Изменений нет: %s" % name)
             return
-        if p.mode == "img":
+        if source_mode == "img":
             answer = QMessageBox.warning(
                 self,
                 "Подтвердите запись",
@@ -4380,10 +4528,29 @@ class MainWindow(QMainWindow):
                 "Перед записью будет создана резервная копия образа." % full,
                 MB_Yes | MB_No,
             )
-            if answer != MB_Yes or not self._backup_before_write(p):
+            if answer != MB_Yes:
                 return
             try:
-                p.writer.write_file(p.path, name, updated)
+                if (
+                    p.mode != source_mode
+                    or p.provider is not source_provider
+                    or p.writer is not source_writer
+                    or self.image_path != source_image_path
+                ):
+                    raise RuntimeError(
+                        "образ изменился после открытия текстового редактора"
+                    )
+                if source_provider.read_file(full) != data:
+                    raise RuntimeError(
+                        "файл в образе изменился после открытия текстового редактора"
+                    )
+                if not self._backup_before_write(p):
+                    return
+                if source_provider.read_file(full) != data:
+                    raise RuntimeError(
+                        "файл в образе изменился во время резервного копирования"
+                    )
+                source_writer.write_file(str(PurePosixPath(full).parent), name, updated)
                 p.refresh()
             except Exception as exc:
                 QMessageBox.critical(self, "Сохранение не удалось", str(exc))
@@ -4440,9 +4607,11 @@ class MainWindow(QMainWindow):
         if not entries:
             return
         if p.mode == "img" and other.mode == "local":
-            self._copy_img_to_local(p, other, entries)
-            self.log_msg(
-                "Источник в образе не удалён: движок FAT32 не поддерживает удаление"
+            QMessageBox.information(
+                self,
+                "Перемещение из образа недоступно",
+                "Используйте F5 для извлечения, затем F8 для удаления из образа "
+                "с отдельным подтверждением и резервной копией.",
             )
         elif p.mode == "local" and other.mode == "img":
             self._copy_local_to_img(p, other, entries, delete_src=True)
@@ -4452,70 +4621,100 @@ class MainWindow(QMainWindow):
             self.log_msg("Перемещение внутри образа не поддерживается")
 
     def _image_tree(self, provider, path, rel=""):
-        """[(image_path, relative_path, is_dir)] for a subtree of the image."""
-        out = []
-        try:
-            entries = provider.list_dir(path)
-        except Exception as e:
-            self.log_msg("Пропущен каталог %s: %s" % (path, e))
-            return out
-        for entry in entries:
-            child = (
-                (path.rstrip("/") + "/" + entry["name"])
-                if path != "/"
-                else "/" + entry["name"]
-            )
-            r = (rel + "/" + entry["name"]) if rel else entry["name"]
-            out.append((child, r, entry["is_dir"]))
-            if entry["is_dir"]:
-                out.extend(self._image_tree(provider, child, r))
+        """Bounded, fail-closed preflight for extraction and overwrite prompts."""
+        limits = ExtractionLimits()
+        out, stack = [], [(path, rel, 0)]
+        while stack:
+            current, relative, depth = stack.pop()
+            seen = set()
+            for entry in provider.list_dir(current):
+                name = _entry_name(entry["name"])
+                key = unicodedata.normalize("NFKC", name).casefold().rstrip(" .")
+                if key in seen:
+                    raise ExtractError("destination name collision in %s" % current)
+                seen.add(key)
+                if len(out) >= limits.max_entries:
+                    raise ExtractError("directory tree exceeds the entry-count limit")
+                child = str(PurePosixPath(current) / name)
+                child_relative = str(PurePosixPath(relative) / name)
+                out.append((child, child_relative, bool(entry["is_dir"])))
+                if entry["is_dir"]:
+                    if depth >= limits.max_depth:
+                        raise ExtractError("directory tree exceeds the depth limit")
+                    stack.append((child, child_relative, depth + 1))
         return out
 
     def _copy_img_to_local(self, panel, other, entries):
         if panel.provider is None:
             return
         target_dir = other.path
-        files, dirs = [], 0
-        for e in entries:
-            if e["is_dir"]:
-                tree = self._image_tree(panel, panel.join(e["name"]), e["name"])
-                for _src, rel, is_dir in tree:
-                    if is_dir:
-                        dirs += 1
-                    else:
-                        files.append((_src, os.path.join(target_dir, rel)))
-            else:
-                files.append(
-                    (panel.join(e["name"]), os.path.join(target_dir, e["name"]))
+        planned, collisions = [], []
+        seen = set()
+        try:
+            for entry in entries:
+                name = _entry_name(entry["name"])
+                key = unicodedata.normalize("NFKC", name).casefold().rstrip(" .")
+                if key in seen:
+                    raise ExtractError("destination name collision: %s" % name)
+                seen.add(key)
+                src = panel.join(name)
+                tree = [(src, name, bool(entry["is_dir"]))]
+                if entry["is_dir"]:
+                    tree.extend(self._image_tree(panel.provider, src, name))
+                for _src, relative, is_dir in tree:
+                    destination = os.path.join(
+                        target_dir, *PurePosixPath(relative).parts
+                    )
+                    if os.path.lexists(destination) and (
+                        not is_dir or not os.path.isdir(destination)
+                    ):
+                        collisions.append(destination)
+                planned.append(
+                    (src, name, bool(entry["is_dir"]), sum(row[2] for row in tree))
                 )
-        total = sum(1 for _s, d in files if os.path.exists(d))
-        if total:
-            ret = QMessageBox.question(
+        except Exception as exc:
+            QMessageBox.critical(self, "Извлечение отменено", str(exc))
+            self.log_msg("Извлечение не удалось: %s" % exc)
+            return
+        if collisions:
+            answer = QMessageBox.question(
                 self,
                 "Копирование",
-                "%d файл(ов) уже есть в папке назначения и будет перезаписан(о).\n\n"
-                "Продолжить?" % total,
+                "%d объект(ов) уже есть в назначении. Перезаписать файлы?"
+                % len(collisions),
                 MB_Yes | MB_No,
+                MB_No,
             )
-            if ret != MB_Yes:
+            if answer != MB_Yes:
                 return
-        written = 0
-        for src, dst in files:
+        written, directories, failed = 0, 0, 0
+        for src, name, is_dir, count_dirs in planned:
             try:
-                d = os.path.dirname(dst)
-                if d and not os.path.isdir(d):
-                    os.makedirs(d)
-                with open(dst, "wb") as f:
-                    f.write(panel.provider.read_file(src))
-                written += 1
-            except Exception as e:
-                self.log_msg("Ошибка извлечения %s: %s" % (src, e))
+                if is_dir:
+                    written += extract_path(panel.provider, src, target_dir)
+                    directories += count_dirs
+                else:
+                    extract_file(panel.provider, src, os.path.join(target_dir, name))
+                    written += 1
+            except Exception as exc:
+                failed += 1
+                self.log_msg("Извлечение не удалось (%s): %s" % (src, exc))
         other.refresh()
         self.log_msg(
-            "Извлечено: файлов %d, папок %d -> %s" % (written, dirs, target_dir)
+            "Извлечено: файлов %d, папок %d; не удалось: %d -> %s"
+            % (written, directories, failed, target_dir)
         )
 
     def _import_path(self, writer, src, dst_dir, name, counter):
+        _entry_name(name)
+        metadata = os.stat(src, follow_symlinks=False)
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or getattr(metadata, "st_file_attributes", 0) & 0x400
+        ):
+            raise ValueError("refusing to import a symlink/reparse point: %s" % src)
+        if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+            raise ValueError("refusing to import a non-regular file: %s" % src)
         if os.path.isdir(src):
             writer.mkdir(dst_dir, name)
             counter["dirs"] += 1
@@ -4532,16 +4731,62 @@ class MainWindow(QMainWindow):
             writer.write_file(dst_dir, name, data)
             counter["files"] += 1
 
+    def _preflight_import(self, panel, entries, other):
+        """Reject links/special files/self-import before the first mutation."""
+        image = os.path.realpath(self.image_path) if self.image_path else None
+        limits = ExtractionLimits()
+        stack = [(panel.join(_entry_name(entry["name"])), 0) for entry in entries]
+        count, total = 0, 0
+        while stack:
+            source, depth = stack.pop()
+            count += 1
+            if count > limits.max_entries or depth > limits.max_depth:
+                raise ValueError("source tree exceeds the configured import limits")
+            metadata = os.stat(source, follow_symlinks=False)
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or getattr(metadata, "st_file_attributes", 0) & 0x400
+            ):
+                raise ValueError(
+                    "refusing to import a symlink/reparse point: %s" % source
+                )
+            if image and os.path.realpath(source) == image:
+                raise ValueError("refusing to import the image into itself")
+            if stat.S_ISDIR(metadata.st_mode):
+                if not _supports_write(other, "mkdir"):
+                    raise ValueError(
+                        "the selected profile does not support directory creation"
+                    )
+                for name in os.listdir(source):
+                    stack.append((os.path.join(source, _entry_name(name)), depth + 1))
+            elif stat.S_ISREG(metadata.st_mode):
+                total += metadata.st_size
+                if (
+                    metadata.st_size > limits.max_file_size
+                    or total > limits.max_total_size
+                ):
+                    raise ValueError(
+                        "source files exceed the configured import size limits"
+                    )
+            else:
+                raise ValueError("refusing to import a non-regular file: %s" % source)
+
     def _copy_local_to_img(self, panel, other, entries, delete_src):
-        if other.writer is None:
+        if not _supports_write(other, "write_file"):
             QMessageBox.warning(
                 self,
                 "Копирование в образ",
-                "Целевой том открыт только для чтения: нужен доступный "
-                "backend записи его файловой системы (FAT32 встроен, ext2/3/4 "
-                "требует debugfs, NTFS — ntfs-3g на Linux или ImDisk на Windows).\n\n%s"
+                "Целевой том открыт только для чтения: операция не поддерживается "
+                "выбранным безопасным native-профилем. Установка legacy-инструментов "
+                "не включает запись автоматически.\n\n%s"
                 % (getattr(other, "write_reason", "") or "Причина не указана."),
             )
+            return
+        try:
+            self._preflight_import(panel, entries, other)
+        except Exception as exc:
+            QMessageBox.warning(self, "Импорт отменён", str(exc))
+            self.log_msg("Импорт не удался: %s" % exc)
             return
         target_dir = other.path
         listing = "\n".join(
@@ -4562,11 +4807,13 @@ class MainWindow(QMainWindow):
         if not self._backup_before_write(other):
             return
         counter = {"files": 0, "dirs": 0}
+        failed = 0
         for e in entries:
             src = panel.join(e["name"])
             try:
                 self._import_path(other.writer, src, target_dir, e["name"], counter)
             except Exception as exc:
+                failed += 1
                 self.log_msg("Запись не удалась (%s): %s" % (e["name"], exc))
                 continue
             if delete_src:
@@ -4580,8 +4827,8 @@ class MainWindow(QMainWindow):
         panel.refresh()
         other.refresh()
         self.log_msg(
-            "Записано в образ: файлов %d, папок %d -> %s"
-            % (counter["files"], counter["dirs"], target_dir)
+            "Записано в образ: файлов %d, папок %d; не удалось: %d -> %s"
+            % (counter["files"], counter["dirs"], failed, target_dir)
         )
 
     def _copy_local_to_local(self, panel, other, entries, delete_src):
@@ -4593,7 +4840,11 @@ class MainWindow(QMainWindow):
             source, destination = os.path.realpath(src), os.path.realpath(dst)
             same = source == destination
             if os.path.exists(dst):
-                same = same or os.path.samefile(src, dst)
+                try:
+                    same = same or os.path.samefile(src, dst)
+                except OSError as exc:
+                    QMessageBox.warning(self, "Копирование отменено", str(exc))
+                    return
             nested = False
             if entry["is_dir"]:
                 try:
@@ -4628,30 +4879,29 @@ class MainWindow(QMainWindow):
             )
             if answer != MB_Yes:
                 return
+        completed, failed = 0, 0
         for e in entries:
             src = panel.join(e["name"])
             dst = os.path.join(target_dir, e["name"])
             try:
-                if e["is_dir"]:
-                    if os.path.isdir(dst):
-                        shutil.rmtree(dst)
-                    if delete_src:
-                        shutil.move(src, dst)
-                    else:
-                        shutil.copytree(src, dst)
-                elif delete_src:
-                    shutil.move(src, dst)
-                else:
-                    shutil.copy2(src, dst)
+                _entry_name(e["name"])
+                _copy_local_entry(src, dst, is_dir=e["is_dir"], delete_src=delete_src)
+                completed += 1
             except Exception as exc:
+                failed += 1
                 self.log_msg("Ошибка %s: %s" % (e["name"], exc))
         if delete_src:
             panel.marked.clear()
         panel.refresh()
         other.refresh()
         self.log_msg(
-            "%s: %d объект(ов) -> %s"
-            % ("Перемещено" if delete_src else "Скопировано", len(entries), target_dir)
+            "%s: %d объект(ов); не удалось: %d -> %s"
+            % (
+                "Перемещено" if delete_src else "Скопировано",
+                completed,
+                failed,
+                target_dir,
+            )
         )
 
     def f7_mkdir(self):
@@ -4661,8 +4911,9 @@ class MainWindow(QMainWindow):
             return
         name = name.strip()
         try:
+            _entry_name(name)
             if p.mode == "img":
-                if p.writer is None:
+                if not _supports_write(p, "mkdir"):
                     raise RuntimeError("том открыт только для чтения")
                 if not self._backup_before_write(p):
                     return
@@ -4686,7 +4937,7 @@ class MainWindow(QMainWindow):
         entry = p.selected_entry()
         if not entry or entry.get("up"):
             return
-        if p.mode == "img" and p.writer is None:
+        if p.mode == "img" and not _supports_write(p, "rename"):
             QMessageBox.information(
                 self,
                 "Переименование",
@@ -4708,6 +4959,7 @@ class MainWindow(QMainWindow):
             )
             return
         try:
+            _entry_name(new_name)
             if p.mode == "img":
                 if not self._backup_before_write(p):
                     return
@@ -4727,7 +4979,7 @@ class MainWindow(QMainWindow):
         if not entries:
             return
         if p.mode == "img":
-            if p.writer is None:
+            if not _supports_write(p, "delete"):
                 QMessageBox.information(
                     self,
                     "Удалить",
@@ -4846,7 +5098,8 @@ class MainWindow(QMainWindow):
             e.ignore()
             return
         self._closing = True
-        self._close_writer()
+        for panel in self.panels.values():
+            self.release_volume(panel)
         self._cleanup_text_temp()
         tc_style.save_settings()
         self._detach_updater()

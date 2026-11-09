@@ -161,3 +161,68 @@ def test_match_blob_keeps_offset_unknown_when_api_has_no_occurrence():
 
     hit = yara_scan.match_blob(BlobRules(), b"x")
     assert hit[0].offset is None
+
+
+def test_rule_file_path_is_compiled_not_used_as_source(tmp_path):
+    """A Path has its own match(); it must be loaded as a rule file anyway."""
+    image = tmp_path / "evidence.img"
+    image.write_bytes(b"evidence")
+    rules_file = tmp_path / "rules.yar"
+    rules_file.write_text("rule r { condition: true }", encoding="utf-8")
+    rules = FakeRules([SimpleNamespace(rule="r", tags=(), meta={}, strings=[])])
+    yara = FakeYara(rules)
+
+    scan_yara(image, rules_file, yara_module=yara)
+
+    assert yara.calls == [{"filepath": str(rules_file)}]
+
+
+def test_scan_files_skips_unreadable_entries_instead_of_aborting(monkeypatch):
+    """A FAT volume label is a regular-file record without readable extents."""
+
+    class FakeMeta:
+        def __init__(self, size):
+            self.size = size
+            self.type = 1
+
+    class FakeEntry:
+        def __init__(self, size, payload=None, error=None):
+            self.info = SimpleNamespace(meta=FakeMeta(size))
+            self._payload = payload
+            self._error = error
+
+        def read_random(self, _offset, _size):
+            if self._error is not None:
+                raise self._error
+            return self._payload
+
+    label = FakeEntry(11, error=RuntimeError("Invalid file offset"))
+    real = FakeEntry(4, payload=b"data")
+    entries = [("/SMOKE", label), ("/real.txt", real)]
+    monkeypatch.setattr(yara_scan, "iter_file_entries", lambda _fs: iter(entries))
+
+    rules = FakeRules([])
+    rules.match = lambda *, data: [
+        SimpleNamespace(rule="hit", tags=(), meta={}, strings=[])
+    ]
+    hits = yara_scan.scan_files_from_fs(SimpleNamespace(), rules)
+
+    assert [hit.path for hit in hits] == ["/real.txt"]
+
+
+def test_unallocated_scan_uses_explicit_image_path(monkeypatch, tmp_path):
+    """pytsk3 objects reject attributes, so the source path must be passed in."""
+    image = tmp_path / "evidence.img"
+    image.write_bytes(b"A" * 64)
+    seen = {}
+
+    class Rules:
+        def match(self, *, filepath):
+            seen["length"] = len(open(filepath, "rb").read())
+            return []
+
+    monkeypatch.setattr(yara_scan, "unallocated_ranges", lambda fs, size: [(0, 64)])
+
+    yara_scan.scan_unallocated_from_fs(SimpleNamespace(), Rules(), 64, image_path=image)
+
+    assert seen["length"] == 64

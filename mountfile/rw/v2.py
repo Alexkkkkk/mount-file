@@ -20,6 +20,7 @@ mountfile_rw_v2.py — финальные патчи к Mount File Universal RW 
 
 from __future__ import annotations
 
+import struct
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -63,30 +64,27 @@ class VerifiedFat32Adapter(Fat32Adapter):
     """
 
     dry_run: bool = False
+    # The native mutation may commit successfully before an extra verifier
+    # refuses it. Keep a full outer snapshot to roll back that later failure.
+    atomic_mutations = False
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
         # Перекрываем журнал на v2
+        self.journal.close()
         self.journal = JournalV2(image_path)
         self.verifier = VerificationEngine()
 
     def _create_file(self, path: str, data: BinaryIO, overwrite: bool) -> None:
         if self.dry_run:
             return
-        if hasattr(self._fs, "last_touched"):
-            off, length = self._fs.last_touched()
-            self.journal.backup_region(off, length)
-        raw = data.read()
-        self._fs.create_file(path, raw, overwrite=overwrite)
+        super()._create_file(path, data, overwrite)
         self._verify_after("create_file", path)
 
     def _write_file(self, path: str, data: BinaryIO, offset: int) -> None:
         if self.dry_run:
             return
-        if hasattr(self._fs, "last_touched"):
-            off, length = self._fs.last_touched()
-            self.journal.backup_region(off, length)
-        self._fs.write_file(path, data.read(), offset=offset)
+        super()._write_file(path, data, offset)
         self._verify_after("write_file", path)
 
     def _backup_structural_region(self) -> None:
@@ -103,33 +101,31 @@ class VerifiedFat32Adapter(Fat32Adapter):
     def _create_dir(self, path: str) -> None:
         if self.dry_run:
             return
-        self._backup_structural_region()
         super()._create_dir(path)
         self._verify_after("mkdir", path)
 
     def _delete(self, path: str, recursive: bool) -> None:
         if self.dry_run:
             return
-        self._backup_structural_region()
         super()._delete(path, recursive)
         self._verify_after("delete", path)
 
     def _rename(self, src: str, dst: str) -> None:
         if self.dry_run:
             return
-        self._backup_structural_region()
         super()._rename(src, dst)
         self._verify_after("rename", "%s -> %s" % (src, dst))
 
     def _verify_after(self, op: str, path: str) -> None:
         report = self.verifier.verify(self.image_path, FsType.FAT32)
         if not report.ok:
-            self.journal.rollback()
             raise RWError(f"verify провалился после {op}({path}): {report.details}")
 
 
 class VerifiedExt4RW(Ext4RW):
     """Ext4RW + verify после каждой транзакции."""
+
+    atomic_mutations = False
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
@@ -203,93 +199,67 @@ class MountFileBridge:
 
     # --- нативный RO-путь (приоритетный) ------------------------------------
 
+    @contextmanager
     def _native(self):
-        """Открывает нативный движок FAT32 на чтение (RO)."""
-        from mountfile.fat32 import Fat32
+        """Open one bounded provider and release it on every operation."""
+        from mountfile.firmware import detect_volumes
+        from mountfile.vfs import open_image_provider, volume_size_for_offset
 
-        return Fat32(open(self.image_path, "rb"))
+        volumes = detect_volumes(self.image_path)
+        selected = next((volume for volume in volumes if volume.fstype != "raw"), None)
+        offset = selected.offset if selected is not None else 0
+        provider = open_image_provider(
+            self.image_path,
+            offset=offset,
+            volume_size=volume_size_for_offset(self.image_path, offset),
+            allow_legacy_fallback=self.allow_legacy_tsk,
+        )
+        try:
+            yield provider
+        finally:
+            provider.close()
 
     # --- публичные операции -------------------------------------------------
 
     def list_files(self, path: str) -> list[dict]:
         if self._api and hasattr(self._api, "list_files"):
             return self._api.list_files(str(self.image_path), path)
-        try:
-            fs = self._native()
+        with self._native() as fs:
             return [
-                {"name": e.name, "type": "dir" if e.is_dir else "file", "size": e.size}
-                for e in fs.list_dir(fs.find_dir(path))
+                {
+                    "name": entry["name"],
+                    "type": "dir" if entry["is_dir"] else "file",
+                    "size": entry["size"],
+                }
+                for entry in fs.list_dir(path)
             ]
-        except ImportError:
-            if not self.allow_legacy_tsk:
-                raise
-            return self._tsk_list(path)
-        except Exception:
-            if not self.allow_legacy_tsk:
-                raise
-            return self._tsk_list(path)
 
     def extract_file(self, path: str, dst: Path) -> None:
         if self._api and hasattr(self._api, "extract_file"):
             self._api.extract_file(str(self.image_path), path, str(dst))
             return
-        try:
-            Path(dst).write_bytes(self._native().read_file(path))
-            return
-        except ImportError:
-            if not self.allow_legacy_tsk:
-                raise
-            self._tsk_extract(path, dst)
-        except Exception:
-            if not self.allow_legacy_tsk:
-                raise
-            self._tsk_extract(path, dst)
+        from mountfile.extract import extract_file
+
+        with self._native() as fs:
+            extract_file(fs, path, dst)
 
     def stat(self, path: str) -> dict:
         if self._api and hasattr(self._api, "stat"):
             return self._api.stat(str(self.image_path), path)
-        try:
-            _, entry = self._native().entry(path)
-            return {"size": entry.size, "is_dir": entry.is_dir}
-        except ImportError:
-            if not self.allow_legacy_tsk:
-                raise
-            return self._tsk_stat(path)
-        except Exception as exc:
-            raise RWError(f"stat failed: {exc}")
+        with self._native() as fs:
+            entry = fs.stat(path)
+            return {"size": entry["size"], "is_dir": entry["is_dir"]}
 
     # --- pytsk3 fallback ----------------------------------------------------
 
-    def _tsk(self):
-        try:
-            import pytsk3  # type: ignore
-        except ImportError as e:
-            raise StrategyUnavailable(f"pytsk3 не установлен: {e}")
-        img = pytsk3.Img_Info(str(self.image_path))
-        fs = pytsk3.FS_Info(img)
-        return fs
-
     def _tsk_list(self, path: str) -> list[dict]:
-        fs = self._tsk()
-        d = fs.open_dir(path)
-        return [
-            {
-                "name": e.info.name.name.decode("utf-8", "replace"),
-                "type": "dir" if e.info.meta.type == 2 else "file",
-            }
-            for e in d
-        ]
+        return self.list_files(path)
 
     def _tsk_extract(self, path: str, dst: Path) -> None:
-        fs = self._tsk()
-        f = fs.open(path)
-        with open(dst, "wb") as out:
-            out.write(f.read_random(0, f.info.meta.size))
+        self.extract_file(path, dst)
 
     def _tsk_stat(self, path: str) -> dict:
-        fs = self._tsk()
-        f = fs.open(path)
-        return {"size": f.info.meta.size, "is_dir": f.info.meta.type == 2}
+        return self.stat(path)
 
 
 # ===========================================================================
@@ -298,19 +268,63 @@ class MountFileBridge:
 
 
 def _make_fake_image(tmp: Path) -> Path:
-    """Минимальный валидный FAT32-загрузочный сектор (для in-memory тестов)."""
+    """Минимальный валидный FAT32-образ (без внешних зависимостей)."""
     img = tmp / "test.img"
-    boot = bytearray(512)
-    boot[0:3] = b"\xEB\x3C\x90"
-    boot[3:11] = b"MSWIN4.1"
-    boot[11:13] = (512).to_bytes(2, "little")
-    boot[13] = 1
-    boot[14:16] = (32).to_bytes(2, "little")  # reserved sectors
-    boot[16] = 2  # num FATs
-    boot[21] = 0xF8
-    boot[82:90] = b"FAT32   "
-    boot[510:512] = b"\x55\xaa"
-    img.write_bytes(bytes(boot) + b"\0" * (1024 * 512))
+    total = 70000
+    bps, spc, reserved, nfats, rootc = 512, 1, 32, 2, 2
+    spf = 600
+    while True:
+        clusters = total - (reserved + nfats * spf)
+        if (clusters + 2) * 4 <= spf * bps and clusters >= 65525:
+            break
+        spf += 1
+    free_clusters = clusters - 1
+    with open(img, "wb") as f:
+        f.truncate(total * bps)
+        bpb = bytearray(bps)
+        bpb[0:3] = b"\xeb\x58\x90"
+        bpb[3:11] = b"MSWIN4.1"
+        struct.pack_into("<H", bpb, 11, bps)
+        bpb[13] = spc
+        struct.pack_into("<H", bpb, 14, reserved)
+        bpb[16] = nfats
+        bpb[21] = 0xF8
+        struct.pack_into("<I", bpb, 32, total)
+        struct.pack_into("<I", bpb, 36, spf)
+        struct.pack_into("<I", bpb, 44, rootc)
+        struct.pack_into("<H", bpb, 48, 1)
+        struct.pack_into("<H", bpb, 50, 6)
+        bpb[64] = 0x80
+        bpb[66] = 0x29
+        struct.pack_into("<I", bpb, 67, 0x20261018)
+        bpb[71:82] = b"TESTVOL    "
+        bpb[82:90] = b"FAT32   "
+        bpb[510:512] = b"\x55\xaa"
+        f.seek(0)
+        f.write(bpb)
+        fsinfo = bytearray(bps)
+        struct.pack_into("<I", fsinfo, 0, 0x41615252)
+        struct.pack_into("<I", fsinfo, 484, 0x61417272)
+        struct.pack_into("<I", fsinfo, 488, free_clusters)
+        struct.pack_into("<I", fsinfo, 492, 3)
+        struct.pack_into("<I", fsinfo, 508, 0xAA550000)
+        f.seek(bps)
+        f.write(fsinfo)
+        f.seek(6 * bps)
+        f.write(bpb)
+        fat = bytearray(spf * bps)
+        struct.pack_into("<I", fat, 0, 0x0FFFFFF8)
+        struct.pack_into("<I", fat, 4, 0xFFFFFFFF)
+        struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
+        f.seek(reserved * bps)
+        f.write(fat)
+        f.seek((reserved + spf) * bps)
+        f.write(fat)
+        root = bytearray(bps)
+        root[:11] = b"TESTVOL    "
+        root[11] = 0x08
+        f.seek((reserved + nfats * spf) * bps)
+        f.write(root)
     return img
 
 
@@ -529,7 +543,7 @@ def build_parser():
     return p
 
 
-def main(argv):
+def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

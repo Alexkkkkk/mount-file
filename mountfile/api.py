@@ -88,7 +88,11 @@ class ServiceRegistry(Protocol):
     def filesystem_status(self, image: str, offset: int = 0) -> Any: ...
 
     def timeline(
-        self, image: Optional[str] = None, limit: int = 100, path: Optional[str] = None
+        self,
+        image: Optional[str] = None,
+        limit: int = 100,
+        path: Optional[str] = None,
+        offset: int = 0,
     ) -> Any: ...
 
 
@@ -272,7 +276,12 @@ def _canonical_parameter(name: str) -> Optional[str]:
     return None
 
 
-def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> Any:
+def _invoke(
+    operation: Any,
+    values: Mapping[str, Any],
+    operation_name: str,
+    required_parameters: Sequence[str] = (),
+) -> Any:
     """Call a registry operation using its declared parameter names.
 
     This avoids a broad TypeError retry, which could accidentally execute a
@@ -301,6 +310,17 @@ def _invoke(operation: Any, values: Mapping[str, Any], operation_name: str) -> A
     accepts_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters
     )
+    supported_parameters = {
+        canonical
+        for parameter in parameters
+        if (canonical := _canonical_parameter(parameter.name)) is not None
+    }
+    unsupported_required = set(required_parameters) - supported_parameters
+    if unsupported_required and not accepts_kwargs:
+        raise ServiceUnavailableError(
+            "service operation %r does not support required parameter(s): %s"
+            % (operation_name, ", ".join(sorted(unsupported_required)))
+        )
     kwargs: dict[str, Any] = {}
     positional: list[Any] = []
     positional_index = 0
@@ -393,6 +413,8 @@ def _resolve_image(raw: Any, roots: Sequence[Path]) -> Path:
         raise APIPathError("image is outside the configured image roots")
     # A path can occur under two overlapping roots.  The resolved path is the
     # same; selecting the first does not weaken the boundary check.
+    if len(set(matches)) > 1:
+        raise APIPathError("image id is ambiguous across configured image roots")
     resolved = matches[0]
     if resolved.exists() and not resolved.is_file():
         raise APIPathError("image must be a file")
@@ -540,7 +562,9 @@ def create_app(
         # compare_digest avoids making token equality observable through timing.
         import secrets
 
-        if not secrets.compare_digest(supplied, configured_token):
+        if len(supplied) > MAX_AUTH_TOKEN_LENGTH or not secrets.compare_digest(
+            supplied.encode("utf-8"), configured_token.encode("utf-8")
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid bearer token",
@@ -613,7 +637,14 @@ def create_app(
             )
         values = {"image": image_path, "path": virtual_path, "offset": partition_offset}
         try:
-            return _json_value(_invoke(operation, values, "ls"))
+            return _json_value(
+                _invoke(
+                    operation,
+                    values,
+                    "ls",
+                    required_parameters=("offset",) if partition_offset else (),
+                )
+            )
         except Exception as exc:
             raise _http_error(exc)
 
@@ -666,10 +697,19 @@ def create_app(
             "length": length,
         }
         try:
-            value = _invoke(operation, values, "read")
+            value = _invoke(
+                operation,
+                values,
+                "read",
+                required_parameters=("offset",) if partition_offset else (),
+            )
         except Exception as exc:
             raise _http_error(exc)
         if isinstance(value, (bytes, bytearray, memoryview)):
+            if len(value) > length:
+                raise HTTPException(
+                    status_code=413, detail="reader exceeded requested length"
+                )
             return Response(content=bytes(value), media_type="application/octet-stream")
         return JSONResponse(content=_json_value(value))
 
@@ -697,6 +737,7 @@ def create_app(
                     operation,
                     {"image": image_path, "offset": partition_offset},
                     "status",
+                    required_parameters=("offset",) if partition_offset else (),
                 )
             )
         except Exception as exc:
@@ -815,7 +856,14 @@ def create_app(
             "offset": offset,
         }
         try:
-            return _json_value(_invoke(operation, values, "timeline"))
+            return _json_value(
+                _invoke(
+                    operation,
+                    values,
+                    "timeline",
+                    required_parameters=("offset",) if offset else (),
+                )
+            )
         except Exception as exc:
             raise _http_error(exc)
 

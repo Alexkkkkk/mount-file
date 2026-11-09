@@ -44,12 +44,16 @@ Unicode-сравнения, если её bounded stream доступен; ин�
 В capability matrix токен `read-file` означает чтение всего файла методом
 `read_file`, а `read-range` — отдельный bounded вызов `read_file_range`; ни один
 из них не подразумевается наличием другого. Добавление этих операций в
-сериализуемую матрицу повышает её schema version до 5. Schema v5 сохраняет
+сериализуемую матрицу повышает её schema version до 6. Schema v6 сохраняет
 прежние `read_capabilities` и `write_capabilities`, а также публикует общий
 словарь `operations`: у каждой canonical операции есть `state`, точное
 `api_operation` для данного интерфейса либо structured `refusal` с code и
 category. `constraint_ids` и `gates` описывают подтверждённые image-state и
 feature gates профиля; они не заменяют фактическую validation конкретного образа.
+Для `UniversalFSRW` canonical `read-range` теперь отображается на
+`read_range(path, offset, length)` с лимитом 1 MiB и fail-closed проверкой границ;
+совместимые backends без прямого range-reader используют уже существующий
+whole-file read только после той же проверки диапазона.
 Внутренний `mountfile.image_source.ImageSource` задаёт read-only positioned
 контракт без метода записи. `FileImageSource` выполняет точные чтения без общего
 курсорного состояния, а `BoundedImageSource` отказывает при любом чтении за
@@ -65,9 +69,13 @@ feature gates профиля; они не заменяют фактическу�
 `write_rejection_code` содержит стабильный refusal code для profile-level отказа
 или `null`, когда выбранный профиль разрешает запись. Человекочитаемый
 `write_rejection_reason` не следует разбирать приложениям.
-В schema v5 status также содержит `write_rejection` и полную карту `operations`;
-клиенты должны использовать их, а не выводить доступность записи из одного
-булевого `writable`.
+В schema v6 status также содержит `write_rejection`, полную карту `operations`
+и `recovery`. Поле `recovery` содержит evidence-bounded значения для
+`rollback`, `process_kill`, `power_loss` и `quarantine`; значение
+`unsupported`/`not_proven` не следует трактовать как best-effort разрешение
+на запись. В частности, native writers не объявляют power-loss atomicity.
+Клиенты должны использовать эти поля, а не выводить доступность записи из
+одного булевого `writable`.
 Распознанный malformed/unsupported volume завершается ошибкой и не подменяется
 другим parser-ом. Обычная маршрутизация не выполняет replay/recovery. Для
 проверенного classic JBD2 существует только явный `open_native_ext3(...,
@@ -77,12 +85,13 @@ checksum, неизвестные feature flags, повреждённые или 
 Revoke targets проверяются на границы образа, дубликаты, пересечение с journal
 data и конфликт с записями той же транзакции.
 
-NTFS reader разрешает resident `$ATTRIBUTE_LIST` и extension FILE records для
-обычных файлов и каталогов только после проверки sequence-bearing MFT reference,
-ссылки extension record на базовую запись и точного совпадения атрибута. Он
-объединяет только непрерывные VCN extents и возвращает нули за `ValidDataLength`.
-Nonresident `$ATTRIBUTE_LIST` и `$MFT`, которому нужны extension records для
-bootstrap, отвергаются; NTFS остаётся read-only и `$LogFile` не проигрывается.
+NTFS reader разрешает bounded resident и nonresident `$ATTRIBUTE_LIST` и
+extension FILE records для обычных файлов и каталогов только после проверки
+sequence-bearing MFT reference, ссылки extension record на базовую запись и
+точного совпадения атрибута. Nonresident list ограничен 1 MiB. Reader объединяет
+только непрерывные VCN extents и возвращает нули за `ValidDataLength`. `$MFT`,
+которому нужны extension records для bootstrap, отвергается; NTFS остаётся
+read-only и `$LogFile` не проигрывается.
 
 ### Метаданные NTFS
 
@@ -110,7 +119,10 @@ timestamps вместе с сырым DOS attribute mask; NTFS в текущем
 нельзя использовать как нормализованный UTC timeline timestamp.
 
 Общий VFS contract не предоставляет owner/group, POSIX permissions/ACL,
-xattrs, число или семантику hard links и все timestamps. NTFS reader открывает
+xattrs, полный link graph и все timestamps. Bounded native ext2 writer
+поддерживает создание hard link для regular file, increment/decrement inode link
+count и освобождение данных только после удаления последнего имени; каталоги и
+специальные файлы отвергаются. NTFS reader открывает
 только unnamed `$DATA`; alternate data streams не перечисляются и не извлекаются
 через этот API. ext2 может обозначить тип записи как `symlink`, но это не
 обещание следования по ссылке: callers не должны трактовать имя/`kind` как

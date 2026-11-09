@@ -8,7 +8,7 @@ Integration layer for https://github.com/Alexkkkkk/mount-file that adds:
   • neuro-symbolic gates that reject unverifiable LLM claims
   • 4-role orchestration (Planner → Executor → Analyst → Skeptic)
   • append-only hash-chained audit log (chain of custody)
-  • XOR auto-decrypt for MStar/MediaTek dumps
+  • RT809 MTK/MST dump decoding through the supported mountfile decoder
   • optional MCP server for Claude Desktop / Cursor / Open WebUI
 
 Install
@@ -117,6 +117,16 @@ class Config:
         if p not in self.allowlist:
             raise PermissionError(f"image {p} not in allowlist")
         return p
+
+    def workspace_path(self, path: str | Path) -> Path:
+        root = self.workspace.expanduser().resolve()
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(root):
+            raise PermissionError("artifact path is outside the configured workspace")
+        return resolved
 
 
 class Audit:
@@ -241,7 +251,7 @@ class InvestigationReport(BaseModel):
 
 
 # =============================================================================
-# 3. CORE: pytsk3 wrappers, signatures, XOR, recovery
+# 3. CORE: pytsk3 wrappers, signatures, RT809 decoding, recovery
 # =============================================================================
 def _require_tsk() -> None:
     if pytsk3 is None:
@@ -340,29 +350,56 @@ def search_files(
     start: str = "/",
     include_deleted: bool = True,
 ) -> list[FileEntry]:
-    if not isinstance(pattern, str) or not pattern or len(pattern) > 256:
-        raise ValueError("pattern must be a non-empty regex of at most 256 characters")
-    if re.search(r"(?:\\([^)]*)[+*]|\\([^)]*\\)[+*])", pattern):
-        raise ValueError("pattern uses a potentially catastrophic regex form")
-    rx = re.compile(pattern, re.IGNORECASE)
-    matches: list[FileEntry] = []
-    stack, seen = [start], set()
-    visits = 0
-    while stack and visits < 10000 and len(matches) < 1000:
-        cur = stack.pop()
-        if cur in seen:
-            continue
-        seen.add(cur)
-        visits += 1
-        entries = list_directory(image, offset, cur)
-        for e in entries:
-            if e.deleted and not include_deleted:
-                continue
-            if rx.search(e.name):
-                matches.append(e)
-            if e.is_directory and not e.deleted:
-                stack.append(e.path)
-    return matches
+    from mountfile.ai.mcp_server import DefaultBackend, _require_integer, _virtual_path
+
+    class LegacySearchBackend(DefaultBackend):
+        def list_directory(self, image, offset, path):
+            return [
+                dict(entry.model_dump(), is_dir=entry.is_directory)
+                for entry in list_directory(image, offset, path)
+            ]
+
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError("pattern must be a non-empty regex")
+    hits = LegacySearchBackend(CONFIG.workspace).search_files(
+        image,
+        _require_integer(offset, "offset"),
+        pattern,
+        _virtual_path(start),
+        include_deleted,
+    )
+    return [FileEntry(**hit) for hit in hits]
+
+
+def _output_destination(image: Path, output: Path) -> Path:
+    destination = Path(output).expanduser().resolve()
+    if destination == image.resolve() or (
+        destination.exists() and os.path.samefile(destination, image)
+    ):
+        raise PermissionError("output must not overwrite the source image")
+    if destination.exists():
+        raise FileExistsError("output already exists; refusing to overwrite")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
+def _stream_file(file_obj: Any, destination: Path) -> tuple[int, str]:
+    size = int(file_obj.info.meta.size)
+    if size < 0:
+        raise ValueError("file size must be non-negative")
+    digest, recovered = hashlib.sha256(), 0
+    with destination.open("xb") as stream:
+        while recovered < size:
+            want = min(1 << 20, size - recovered)
+            chunk = file_obj.read_random(recovered, want)
+            if not chunk:
+                break
+            if len(chunk) > want:
+                raise RuntimeError("filesystem reader exceeded requested length")
+            stream.write(chunk)
+            digest.update(chunk)
+            recovered += len(chunk)
+    return recovered, digest.hexdigest()
 
 
 def get_file(image: Path, offset: int, path: str, output: Path | None = None) -> Path:
@@ -370,17 +407,22 @@ def get_file(image: Path, offset: int, path: str, output: Path | None = None) ->
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
     fs = _open_fs(image, offset)
     f = fs.open(path=path)
-    data = f.read_random(0, f.info.meta.size)
-    dest = output or (CONFIG.workspace / Path(path).name)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    if f.info.meta is None:
+        raise RuntimeError("file has no metadata")
+    dest = _output_destination(
+        image, output if output is not None else CONFIG.workspace_path(Path(path).name)
+    )
+    recovered, sha = _stream_file(f, dest)
+    if recovered != f.info.meta.size:
+        dest.unlink()
+        raise RuntimeError("file extraction returned partial data")
     AUDIT.write(
         "extract",
         image=str(image),
         offset=offset,
         path=path,
         dest=str(dest),
-        sha256=hashlib.sha256(data).hexdigest(),
+        sha256=sha,
     )
     return dest
 
@@ -398,26 +440,35 @@ def recover_deleted_file(
     f = fs.open_meta(inode=inode)
     if f.info.meta is None:
         raise RuntimeError(f"inode {inode} not found")
-    size = f.info.meta.size
-    data = f.read_random(0, size)
-    dest = output or (CONFIG.workspace / f"recovered_{inode}.bin")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
-    sha = hashlib.sha256(data).hexdigest()
-    complete = original_size is None or len(data) == original_size
+    if not int(getattr(f.info.meta, "flags", 0)) & pytsk3.TSK_FS_META_FLAG_UNALLOC:
+        raise ValueError("inode is allocated, not a deleted file")
+    size = int(f.info.meta.size)
+    expected = size if original_size is None else original_size
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+        raise ValueError("original_size must be a non-negative integer")
+    dest = _output_destination(
+        image,
+        (
+            output
+            if output is not None
+            else CONFIG.workspace_path(f"recovered_{inode}.bin")
+        ),
+    )
+    recovered, sha = _stream_file(f, dest)
+    complete = recovered == expected
     AUDIT.write(
         "recover",
         image=str(image),
         inode=inode,
-        recovered_size=len(data),
+        recovered_size=recovered,
         complete=complete,
         sha256=sha,
     )
     return RecoveryResult(
         inode=inode,
         path=str(dest),
-        recovered_size=len(data),
-        original_size=original_size or size,
+        recovered_size=recovered,
+        original_size=expected,
         complete=complete,
         sha256=sha,
     )
@@ -427,58 +478,56 @@ def hash_file(path: Path) -> str:
     return Audit.sha256_file(path)
 
 
-# !!! REPLACE with real keys from mount-file resources/XOR_MST_*.bin !!!
-XOR_KEYS: dict[str, bytes] = {
-    "identity": b"\x00" * 16,
-    "mstar_a": b"\xa5" * 16,
-    "mtk_a": b"\x5a" * 16,
-}
-
-
-def _xor(data: bytes, key: bytes) -> bytes:
-    if not key:
-        return data
-    k = (key * (len(data) // len(key) + 1))[: len(data)]
-    return bytes(a ^ b for a, b in zip(data, k))
+def _record_rt809_decode(image: Path, kind: str, output: Path) -> dict:
+    hits = detect_signatures(output)
+    serialized_hits = [h.model_dump() for h in hits]
+    AUDIT.write(
+        "rt809_decode",
+        image=str(image),
+        kind=kind,
+        output=str(output),
+        hits=serialized_hits,
+    )
+    return {"output": str(output), "key": kind, "signatures": serialized_hits}
 
 
 def try_xor_decrypt(image: Path, key_name: str, output: Path) -> dict:
+    """Decode a marked RT809 dump of the explicitly requested MTK/MST kind.
+
+    Kept under its historical tool name for compatibility; this no longer
+    performs generic XOR or uses the former placeholder keys.
+    """
+
     if CONFIG.read_only:
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
-    if key_name not in XOR_KEYS:
-        raise KeyError(f"unknown key {key_name}; known={list(XOR_KEYS)}")
-    key = XOR_KEYS[key_name]
-    with image.open("rb") as src, output.open("wb") as dst:
-        while chunk := src.read(1 << 20):
-            dst.write(_xor(chunk, key))
-    hits = detect_signatures(output)
-    AUDIT.write(
-        "xor",
-        image=str(image),
-        key=key_name,
-        output=str(output),
-        hits=[h.model_dump() for h in hits],
-    )
-    return {
-        "output": str(output),
-        "key": key_name,
-        "signatures": [h.model_dump() for h in hits],
-    }
+    if not isinstance(key_name, str) or key_name.upper() not in ("MTK", "MST"):
+        raise ValueError(
+            "unsupported decoder %r; supported RT809 dump kinds are MTK and MST"
+            % (key_name,)
+        )
+    kind = key_name.upper()
+    from mountfile.rt809 import decode_dump
+
+    output = _output_destination(image, output)
+    result = decode_dump(str(image), out_path=str(output), kind=kind)
+    if result is None:
+        raise RuntimeError("the RT809 image is recognised but is not encrypted")
+    return _record_rt809_decode(image, kind, Path(result))
 
 
 def auto_decrypt(image: Path) -> dict | None:
     if CONFIG.read_only:
         raise PermissionError("read-only; set MOUNTFILE_READONLY=0")
-    for name in XOR_KEYS:
-        out = CONFIG.workspace / f"{image.stem}.{name}.bin"
-        try:
-            res = try_xor_decrypt(image, name, out)
-        except Exception as exc:
-            log.debug("XOR key %s failed for %s", name, image, exc_info=exc)
-            continue
-        if any(h["kind"] != "mbr" for h in res["signatures"]):
-            return res
-    return None
+    from mountfile.rt809 import decode_dump, detect
+
+    kind, _encrypted = detect(str(image))
+    output = _output_destination(
+        image, CONFIG.workspace_path(f"{image.stem}.decoded.bin")
+    )
+    result = decode_dump(str(image), out_path=str(output))
+    if result is None:
+        return None
+    return _record_rt809_decode(image, kind, Path(result))
 
 
 # =============================================================================
@@ -742,7 +791,7 @@ def _t_detect_signatures(image_path: str) -> list[dict]:
 
 @register_tool(
     "try_xor_decrypt",
-    "Decrypt with a named XOR key; reports signatures on output.",
+    "Decode an RT809 MTK or MST dump with the supported decoder; reports output signatures.",
     {
         "type": "object",
         "properties": {
@@ -754,13 +803,13 @@ def _t_detect_signatures(image_path: str) -> list[dict]:
     },
 )
 def _t_try_xor(image_path: str, key_name: str, output: str) -> dict:
-    destination = (CONFIG.workspace / Path(output).name).resolve()
+    destination = CONFIG.workspace_path(output)
     return try_xor_decrypt(CONFIG.check(image_path), key_name, destination)
 
 
 @register_tool(
     "auto_decrypt",
-    "Iterate XOR keys; return first producing a valid FS signature.",
+    "Auto-detect and decode an encrypted RT809 MTK or MST dump.",
     {
         "type": "object",
         "properties": {"image_path": {"type": "string"}},
@@ -781,7 +830,7 @@ def _t_auto_decrypt(image_path: str) -> dict | None:
     },
 )
 def _t_hash_file(path: str) -> dict:
-    p = (CONFIG.workspace / Path(path).name).resolve()
+    p = CONFIG.workspace_path(path)
     if not p.is_file():
         raise FileNotFoundError(p)
     return {"path": str(p), "sha256": hash_file(p), "size": p.stat().st_size}
@@ -793,9 +842,29 @@ def _t_hash_file(path: str) -> dict:
 def _client() -> Any:
     if OpenAI is None:
         raise RuntimeError("pip install openai")
+    from mountfile.ai.backend import _api_key_transport_error
+
+    base_url = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    error = _api_key_transport_error(base_url)
+    if error:
+        raise RuntimeError(error)
+    api_key = os.getenv("OPENAI_API_KEY") or ""
+    if not api_key:
+        import ipaddress
+        from urllib.parse import urlsplit
+
+        hostname = urlsplit(base_url).hostname or ""
+        is_local = hostname.lower().rstrip(".") == "localhost"
+        try:
+            is_local = is_local or ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            pass
+        if not is_local:
+            raise RuntimeError("remote AI requires an explicitly configured API key")
+        api_key = "ollama"
     return OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY", "ollama"),
-        base_url=os.getenv("OPENAI_BASE_URL") or None,
+        api_key=api_key,
+        base_url=base_url,
     )
 
 

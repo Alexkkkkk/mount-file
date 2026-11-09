@@ -200,11 +200,13 @@ engine.close()
   игнорирует, всё ещё может изменить image одновременно с commit/recovery; проверки
   read-back обнаруживают многие такие изменения, но не устраняют все race conditions.
   directory fsync применяется там, где ОС его поддерживает.
-  Для ext2 вне этого профиля и ext3/ext4 автоматического fallback нет: legacy
-  `debugfs -w` доступен только прямому library caller с
-  `allow_legacy_debugfs=True`, с явным `volume_size` для каждого nonzero offset.
-  Он staging-копирует и commit-ит ровно filesystem extent; `chmod`/`chown`/
-  `symlink` остаются за этим compatibility API.
+  Для ext2 вне native профиля автоматического fallback нет: unjournaled ext2
+  compatibility writer через `debugfs -w` доступен только прямому library caller
+  с `allow_legacy_debugfs=True` и явным `volume_size` для каждого nonzero offset.
+  Journaled ext3/ext4 отклоняются даже при явном opt-in: `debugfs -w` меняет
+  metadata в обход журнала, а native ordering/checkpoint/recovery протокол не
+  реализован. Такие профили read-only; `chmod`/`chown`/`symlink` остаются за
+  legacy ext2 compatibility API.
 
 * NTFS — native bounded reader is available through the VFS, but native NTFS
   writes are not implemented. The `UniversalFSRW` facade refuses NTFS writes by
@@ -235,6 +237,11 @@ engine.close()
   writes fail with an explicit unsupported-profile reason; they do not invoke a
   subprocess or fall back to a legacy writer. A read-only backend reports an
   empty write capability list and a human-readable rejection reason.
+  Capability/status schema v6 also publishes a `recovery` contract. It records
+  tested failure rollback and the ext2 recovery-sidecar process-kill evidence,
+  while FAT/exFAT process-kill and quarantine remain `not_proven`; all native
+  writers report `power_loss: unsupported`. This is an explicit refusal of
+  unstated durability claims, not a promise of filesystem-wide crash safety.
 * Если backend, драйвер или права отсутствуют, операция завершается явной
   ошибкой; фасад не сообщает об успешной записи после молчаливого RO-mount.
 * Вне области действия: физические устройства, таблицы разделов, шифрованные

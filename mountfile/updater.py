@@ -41,14 +41,18 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 
@@ -63,22 +67,42 @@ except Exception:
 
 def _safe_download(url, *, timeout=30.0, max_size=512 * 1024 * 1024):
     if _olma_dl is None:
-        import urllib.request
-
-        return urllib.request.urlopen(url, timeout=timeout).read()
+        data = bytearray()
+        with _request(url, timeout) as response:
+            while True:
+                chunk = response.read(min(CHUNK, max_size - len(data) + 1))
+                if not chunk:
+                    return bytes(data)
+                data.extend(chunk)
+                if len(data) > max_size:
+                    raise OSError("обновление превышает лимит размера")
     return _olma_dl(url, timeout=timeout, max_size=max_size)
 
 
 def _verify_sha256(data, expected):
     if _olma_sha is None:
-        return True
+        return (
+            isinstance(expected, str)
+            and bool(re.fullmatch(r"[0-9a-fA-F]{64}", expected))
+            and hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected.lower())
+        )
     return _olma_sha(data, expected)
 
 
 def _atomic_write(path, data):
     if _OlmaTx is None:
-        with open(path, "wb") as f:
-            f.write(data)
+        fd, partial = tempfile.mkstemp(
+            prefix=".mountfile-", dir=os.path.dirname(os.path.abspath(path))
+        )
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(partial, path)
+        finally:
+            if os.path.exists(partial):
+                os.unlink(partial)
         return
     with _OlmaTx(path) as tx:
         tx.write_all(data)
@@ -92,26 +116,66 @@ try:  # Qt нужен только фоновым классам внизу фа
 except Exception:  # pragma: no cover - проверки/тесты работают и без Qt
     HAVE_QT = False
 
-    class _NoQtSignal:
-        """Заглушка сигнала: позволяет импортировать модуль без PyQt."""
-
-        def __init__(self, *args, **kwargs):
-            # Сохраняем подключённые слоты и вызываем их при emit(),
-            # чтобы фоновые классы работали по-настоящему и без Qt
-            # (так делают тесты CI, где PyQt не установлен).
+    class _BoundSignal:
+        def __init__(self):
             self._slots = []
 
         def connect(self, slot):
-            self._slots.append(slot)
+            self._slots.append(slot.emit if hasattr(slot, "emit") else slot)
 
         def emit(self, *args, **kwargs):
             for slot in list(self._slots):
                 slot(*args, **kwargs)
 
+    class _NoQtSignal:
+        """A signal descriptor with separate subscribers for every worker."""
+
+        def __set_name__(self, owner, name):
+            self._name = "_headless_signal_" + name
+
+        def __get__(self, instance, owner):
+            if instance is None:
+                return self
+            return instance.__dict__.setdefault(self._name, _BoundSignal())
+
     def pyqtSignal(*args, **kwargs):
         return _NoQtSignal()
 
-    QThread = object
+    class QThread:
+        """Small finite-worker implementation for manual headless callers."""
+
+        finished = _NoQtSignal()
+
+        def __init__(self, parent=None):
+            self._parent = parent
+            self._thread = None
+
+        def parent(self):
+            return self._parent
+
+        def start(self):
+            if self.isRunning():
+                raise RuntimeError("worker is already running")
+
+            def execute():
+                try:
+                    self.run()
+                finally:
+                    self.finished.emit()
+
+            self._thread = threading.Thread(target=execute, daemon=True)
+            self._thread.start()
+
+        def isRunning(self):
+            return self._thread is not None and self._thread.is_alive()
+
+        def isFinished(self):
+            return self._thread is not None and not self._thread.is_alive()
+
+        def wait(self, timeout=3000):
+            if self._thread is not None:
+                self._thread.join(timeout / 1000)
+            return not self.isRunning()
 
 
 DEFAULT_REPO = "Alexkkkkk/mount-file"
@@ -198,14 +262,49 @@ def _on_windows7():
 def _asset_score(name):
     """Чем больше очков, тем лучше сборка подходит этой системе."""
     low = name.lower()
-    if low.endswith((".sha256", ".txt", ".zip", ".json")):
+    if low.endswith(
+        (
+            ".sha256",
+            ".txt",
+            ".zip",
+            ".json",
+            ".dmg",
+            ".pkg",
+            ".gz",
+            ".xz",
+            ".deb",
+            ".rpm",
+        )
+    ):
+        return -1
+    machine = platform.machine().lower()
+    local_arch = {
+        "amd64": "x64",
+        "x86_64": "x64",
+        "x64": "x64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+        "x86": "x86",
+        "i386": "x86",
+        "i686": "x86",
+    }.get(machine)
+    asset_arch = None
+    if re.search(r"(?:^|[-_.])(arm64|aarch64)(?:$|[-_.])", low):
+        asset_arch = "arm64"
+    elif re.search(r"(?:^|[-_.])(x86[-_]64|amd64|x64)(?:$|[-_.])", low):
+        asset_arch = "x64"
+    elif re.search(r"(?:^|[-_.])(i[36]86|x86)(?:$|[-_.])", low):
+        asset_arch = "x86"
+    if not local_arch or (asset_arch and asset_arch != local_arch):
         return -1
     if sys.platform.startswith("win"):
         if not low.endswith(".exe"):
             return -1
-        if _on_windows7():
+        if _on_windows7() or "win7" in low or "win-7" in low:
             # Current releases require Python 3.10/PyQt6 and cannot run on Win7.
             return -1
+        if asset_arch is None and local_arch != "x64":
+            return -1  # the project's generic Windows release is an x64 build
         score = 100 if low == "mountfile.exe" else 60
         if any(marker in low for marker in ("win10", "win-10", "windows10")):
             # Keep the generic binary preferred on modern Windows; it is the
@@ -213,13 +312,13 @@ def _asset_score(name):
             score += 20
         return score
     if sys.platform == "darwin":
-        return 80 if any(k in low for k in ("macos", "darwin", "osx", "mac")) else -1
-    if sys.platform.startswith("linux"):
-        if any(k in low for k in ("win", ".exe")):
-            return -1
         return (
-            80 if any(k in low for k in ("linux", "x86_64", "x86-64", "amd64")) else 20
+            80
+            if asset_arch and any(k in low for k in ("macos", "darwin", "osx"))
+            else -1
         )
+    if sys.platform.startswith("linux"):
+        return 80 if asset_arch and "linux" in low and not low.endswith(".exe") else -1
     return -1
 
 
@@ -236,6 +335,9 @@ def select_asset(release):
 def _request(url, timeout=TIMEOUT):
     if not url:
         raise ValueError("пустой URL обновления")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
+        raise ValueError("URL обновления должен использовать HTTP(S)")
     req = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
     )
@@ -307,19 +409,28 @@ def sha256_file(path):
 
 def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT):
     """Скачивает asset во временный каталог. Возвращает (путь, размер)."""
-    name = os.path.basename(asset.get("name") or "MountFile-update")
+    name = asset.get("name") or "MountFile-update"
+    # Treat both path syntaxes as untrusted even when downloaded on POSIX.
+    if (
+        not isinstance(name, str)
+        or name in (".", "..")
+        or re.search(r'[\\/:\x00-\x1f"<>|]', name)
+    ):
+        raise ValueError("некорректное имя файла обновления")
     dest_dir = dest_dir or tempfile.mkdtemp(prefix="mountfile-update-")
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, name)
     total = int(asset.get("size") or 0)
-    if total > MAX_DOWNLOAD_SIZE:
+    if total < 0 or total > MAX_DOWNLOAD_SIZE:
         raise OSError("обновление слишком большое: %d байт" % total)
-    partial = dest + ".part"
+    fd, partial = tempfile.mkstemp(
+        prefix=".mountfile-download-", suffix=".part", dir=dest_dir
+    )
     got = 0
     try:
         with (
+            os.fdopen(fd, "wb") as fh,
             _request(asset.get("browser_download_url"), timeout) as resp,
-            open(partial, "wb") as fh,
         ):
             while True:
                 chunk = resp.read(CHUNK)
@@ -333,6 +444,8 @@ def download_asset(asset, dest_dir=None, progress=None, timeout=DOWNLOAD_TIMEOUT
                     # -1 = размер неизвестен (нет Content-Length): индикатор
                     # переходит в режим «занят» вместо процентов
                     progress(min(99, int(got * 100 / total)) if total else -1)
+            fh.flush()
+            os.fsync(fh.fileno())
         if total and got != total:
             raise OSError("скачано %d из %d байт" % (got, total))
         os.replace(partial, dest)
@@ -361,7 +474,8 @@ WINDOWS_WAIT_TRIES = 60
 WINDOWS_MOVE_TRIES = 10
 
 _WINDOWS_SWAP_TEMPLATE = """@echo off
-setlocal
+chcp 65001 >nul
+setlocal DisableDelayedExpansion
 set "LOG=__LOG__"
 set /a TRIES=0
 :wait
@@ -388,7 +502,7 @@ echo %DATE% %TIME% restart >> "%LOG%"
 start "" "__TARGET__"
 goto done
 :failed
-echo %DATE% %TIME% update FAILED, new file left at __NEW__ >> "%LOG%"
+echo %DATE% %TIME% update FAILED, new file left at "__NEW__" >> "%LOG%"
 :done
 del "%~f0"
 """
@@ -396,16 +510,28 @@ del "%~f0"
 
 def _windows_swap_script(new_file, target, pid, log_file):
     """Пишет .cmd, который дождётся выхода процесса и подменит exe."""
-    path = os.path.join(tempfile.gettempdir(), "mountfile-update-%d.cmd" % pid)
-    script = (
-        _WINDOWS_SWAP_TEMPLATE.replace("__LOG__", log_file)
-        .replace("__PID__", str(pid))
-        .replace("__WAIT_TRIES__", str(WINDOWS_WAIT_TRIES))
-        .replace("__MOVE_TRIES__", str(WINDOWS_MOVE_TRIES))
-        .replace("__NEW__", new_file)
-        .replace("__TARGET__", target)
+
+    def batch_path(value):
+        value = os.fspath(value)
+        if any(char in value for char in ('"', "\r", "\n", "\x00")):
+            raise ValueError("некорректный путь для скрипта обновления")
+        return value.replace("%", "%%")
+
+    replacements = {
+        "__LOG__": batch_path(log_file),
+        "__PID__": str(int(pid)),
+        "__WAIT_TRIES__": str(WINDOWS_WAIT_TRIES),
+        "__MOVE_TRIES__": str(WINDOWS_MOVE_TRIES),
+        "__NEW__": batch_path(new_file),
+        "__TARGET__": batch_path(target),
+    }
+    script = re.sub(
+        r"__(?:LOG|PID|WAIT_TRIES|MOVE_TRIES|NEW|TARGET)__",
+        lambda match: replacements[match.group()],
+        _WINDOWS_SWAP_TEMPLATE,
     )
-    with open(path, "w", encoding="utf-8", newline="\r\n") as fh:
+    fd, path = tempfile.mkstemp(prefix="mountfile-update-%d-" % pid, suffix=".cmd")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\r\n") as fh:
         fh.write(script)
     return path
 
@@ -445,17 +571,26 @@ def install_and_restart(new_file):
         return "restart"
 
     mode = os.stat(target).st_mode
-    staged = target + ".new"
-    shutil.copy2(new_file, staged)
-    os.chmod(staged, mode | 0o111)
-    os.replace(staged, target)
+    fd, staged = tempfile.mkstemp(
+        prefix=".mountfile-update-", dir=os.path.dirname(target)
+    )
+    os.close(fd)
+    try:
+        shutil.copy2(new_file, staged)
+        os.chmod(staged, mode | 0o111)
+        os.replace(staged, target)
+    finally:
+        if os.path.exists(staged):
+            os.unlink(staged)
     os.execv(target, [target] + sys.argv[1:])
     return "restart"  # pragma: no cover - execv не возвращается
 
 
 def git_upgrade(root):
     """``git pull --ff-only`` в чекауте (только если разрешено явно)."""
-    if not _flag("MOUNTFILE_GIT_PULL") or not os.path.isdir(os.path.join(root, ".git")):
+    if not _flag("MOUNTFILE_GIT_PULL") or not os.path.exists(
+        os.path.join(root, ".git")
+    ):
         return None
     proc = subprocess.run(
         ["git", "-C", root, "pull", "--ff-only"],
@@ -463,6 +598,11 @@ def git_upgrade(root):
         text=True,
         timeout=120,
     )
+    if proc.returncode:
+        raise RuntimeError(
+            "git pull не удался: %s"
+            % _short(proc.stderr or proc.stdout or proc.returncode)
+        )
     return (proc.stdout or proc.stderr or "").strip()[:1000]
 
 
@@ -540,6 +680,23 @@ class Installer(QThread):
 
     def run(self):  # pragma: no cover - требует Qt-цикла
         try:
+            if not is_frozen():
+                # Source installs do not use a platform binary or its digest.
+                # Never download hundreds of MB just to open the release page.
+                self.stage.emit("Обновление исходников…")
+                for root in (
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    os.getcwd(),
+                ):
+                    note = git_upgrade(root)
+                    if note is not None:
+                        self.status.emit(note)
+                        return
+                if self.info.get("url"):
+                    webbrowser.open(self.info["url"])
+                    self.status.emit("Запуск из исходников: файлы не меняются")
+                    return
+                raise RuntimeError("режим исходников: нет ссылки на релиз")
             asset = self.info.get("asset")
             if not asset:
                 if self.info.get("url"):
@@ -563,27 +720,6 @@ class Installer(QThread):
                 raise RuntimeError("контрольная сумма не совпала (файл повреждён)")
             self.status.emit("Контрольная сумма совпала")
             self.status.emit("Скачано %d байт" % size)
-
-            if not is_frozen():
-                self.stage.emit("Обновление исходников…")
-                note = None
-                if self.info.get("url"):
-                    for root in (
-                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        os.getcwd(),
-                    ):
-                        try:
-                            note = git_upgrade(root)
-                        except Exception as exc:
-                            note = "git pull не удался: %s" % _short(exc)
-                        if note is not None:
-                            break
-                if note:
-                    self.status.emit(note)
-                elif self.info.get("url"):
-                    webbrowser.open(self.info["url"])
-                self.status.emit("Запуск из исходников: файлы не меняются")
-                return
 
             self.progress.emit(100)
             self.stage.emit("Установка обновления…")
@@ -630,7 +766,7 @@ class StartupUpdater(Updater):
             self.install(info, self.parent())
 
     def install(self, info, parent=None):
-        if self._installer is not None:
+        if self._installer is not None and self._installer.isRunning():
             return self._installer
         self._installer = self._installer_factory(info, parent or self.parent())
         self._installer.status.connect(self.status)

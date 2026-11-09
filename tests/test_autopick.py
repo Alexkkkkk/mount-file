@@ -285,11 +285,13 @@ class TestAutoSelect:
 
     def test_picks_the_real_filesystem(self):
         best, cands = auto_select(self.dump, udev=self.udev, verify=True)
-        assert best is not None
-        assert best.offset == 0x180000
-        assert best.fstype == "FAT32"
-        assert best.backend is None
-        assert "explicit FAT volume_size" in best.error
+        # A signature inside a larger image is not an authoritative extent.
+        # The old implementation returned this unopenable candidate as a winner.
+        assert best is None
+        candidate = next(c for c in cands if c.offset == 0x180000)
+        assert candidate.fstype == "FAT32"
+        assert candidate.backend is None
+        assert candidate.error
         # every udev offset is present but none of them is a mountable volume
         raw = [c.offset for c in cands if c.fstype == "raw"]
         assert 0x00A5A000 in raw and 0x00E5A000 in raw
@@ -305,7 +307,7 @@ class TestAutoSelect:
         with open(self.dump, "r+b") as f:
             _fat32_at(f, 0x100000)
         udev = _write_udev(
-            os.path.join(self.tmp, "udev2.txt"), ["0x100000,0x00100000,system"]
+            os.path.join(self.tmp, "udev2.txt"), ["0x100000,0x%X,system" % FAT32_BYTES]
         )
         best, _ = auto_select(self.dump, udev=udev, hint="system", verify=True)
         assert best.offset == 0x100000

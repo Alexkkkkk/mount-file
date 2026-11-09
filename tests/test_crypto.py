@@ -109,7 +109,7 @@ def test_luks_password_is_stdin_only(monkeypatch, tmp_path):
     command, kwargs = calls[0]
     assert result == "/dev/mapper/mountfile_test"
     assert "secret-not-in-argv" not in command
-    assert kwargs["input"] == b"secret-not-in-argv\n"
+    assert kwargs["input"] == b"secret-not-in-argv"
     assert kwargs["stdout"] is crypto.subprocess.PIPE
     assert kwargs["stderr"] is crypto.subprocess.PIPE
 

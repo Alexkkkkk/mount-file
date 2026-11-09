@@ -1,0 +1,68 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "type": "local",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "tools": ["fetch"]
+    },
+    "git": {
+      "type": "local",
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "."],
+      "tools": ["git_status", "git_diff", "git_log", "git_show", "git_branch"]
+    },
+    "time": {
+      "type": "local",
+      "command": "uvx",
+      "args": ["mcp-server-time", "--local-timezone", "UTC"],
+      "tools": ["get_current_time", "convert_time"]
+    },
+    "filesystem": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "tools": [
+        "read_file",
+        "read_multiple_files",
+        "list_directory",
+        "directory_tree",
+        "search_files",
+        "get_file_info",
+        "list_allowed_directories"
+      ]
+    },
+    "sequential-thinking": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "tools": ["*"]
+    },
+    "memory": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "tools": ["*"]
+    },
+    "deepwiki": {
+      "type": "http",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "tools": ["read_wiki_structure", "read_wiki_contents", "ask_question"]
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "tools": ["resolve-library-id", "query-docs"]
+    },
+    "microsoft_learn": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "tools": ["*"]
+    },
+    "cloudflare_docs": {
+      "type": "http",
+      "url": "https://docs.mcp.cloudflare.com/mcp",
+      "tools": ["*"]
+    }
+  }
+}

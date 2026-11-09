@@ -10,6 +10,8 @@ from mountfile.ext_debugfs_writer import (
     Ext234Provider,
     ExtWriteError,
 )
+from mountfile.safety import RefusalCode
+from mountfile.universal_fs_rw import Ext234RW
 
 DEBUGFS = shutil.which("debugfs")
 MKE2FS = shutil.which("mke2fs")
@@ -24,9 +26,22 @@ def _make_ext4(path, size=16 * 1024 * 1024):
     subprocess.run([MKE2FS, "-q", "-F", "-t", "ext4", str(path)], check=True)
 
 
-def test_ext4_create_overwrite_and_verify_at_nonzero_offset(tmp_path):
-    partition = tmp_path / "partition.ext4"
-    _make_ext4(partition)
+def _make_ext2(path, size=16 * 1024 * 1024):
+    with open(path, "wb") as stream:
+        stream.truncate(size)
+    subprocess.run([MKE2FS, "-q", "-F", "-t", "ext2", str(path)], check=True)
+
+
+def _force_legacy_backend(monkeypatch):
+    monkeypatch.setattr(Ext234ImageWriter, "_try_native_ext2", lambda _self: False)
+
+
+def test_ext2_legacy_create_overwrite_and_verify_at_nonzero_offset(
+    tmp_path, monkeypatch
+):
+    partition = tmp_path / "partition.ext2"
+    _make_ext2(partition)
+    _force_legacy_backend(monkeypatch)
     prefix = b"IMAGE-HEADER" * 341
     offset = len(prefix)
     suffix = b"NEXT-PARTITION-SENTINEL"
@@ -65,9 +80,10 @@ def test_ext4_create_overwrite_and_verify_at_nonzero_offset(tmp_path):
         assert stream.read() == suffix
 
 
-def test_invalid_image_paths_never_change_image(tmp_path):
-    image = tmp_path / "filesystem.ext4"
-    _make_ext4(image)
+def test_invalid_image_paths_never_change_image(tmp_path, monkeypatch):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    _force_legacy_backend(monkeypatch)
     writer = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     before = image.read_bytes()
 
@@ -101,8 +117,9 @@ def test_unsupported_ext_profile_does_not_auto_enable_debugfs(tmp_path, monkeypa
 
 
 def test_failure_before_commit_keeps_original_image_unchanged(tmp_path, monkeypatch):
-    image = tmp_path / "filesystem.ext4"
-    _make_ext4(image)
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    _force_legacy_backend(monkeypatch)
     writer = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     before = image.read_bytes()
 
@@ -116,9 +133,10 @@ def test_failure_before_commit_keeps_original_image_unchanged(tmp_path, monkeypa
     assert image.read_bytes() == before
 
 
-def test_free_space_and_delete_round_trip(tmp_path):
-    image = tmp_path / "filesystem.ext4"
-    _make_ext4(image)
+def test_free_space_and_delete_round_trip(tmp_path, monkeypatch):
+    image = tmp_path / "filesystem.ext2"
+    _make_ext2(image)
+    _force_legacy_backend(monkeypatch)
     writer = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
     assert writer.free_space() is None or writer.free_space() > 0
 
@@ -141,3 +159,29 @@ def test_free_space_and_delete_round_trip(tmp_path):
     writer.delete("/solo.ini")
     names = [entry["name"] for entry in writer.list_dir("/") if not entry["is_dir"]]
     assert names == []
+
+
+@pytest.mark.parametrize("filesystem", ["ext3", "ext4"])
+@pytest.mark.parametrize("entrypoint", ["image_writer", "provider", "rw_facade"])
+def test_journaled_ext_legacy_writer_refuses_before_debugfs_discovery(
+    tmp_path, monkeypatch, filesystem, entrypoint
+):
+    image = tmp_path / f"filesystem.{filesystem}"
+    with image.open("wb") as stream:
+        stream.truncate(16 * 1024 * 1024)
+    subprocess.run([MKE2FS, "-q", "-F", "-t", filesystem, str(image)], check=True)
+    before = image.read_bytes()
+    monkeypatch.setattr(
+        "mountfile.ext_debugfs_writer._find_debugfs",
+        lambda *_args, **_kwargs: pytest.fail("debugfs must not be discovered"),
+    )
+    with pytest.raises(RuntimeError, match="refused for journaled ext3/ext4") as error:
+        if entrypoint == "image_writer":
+            Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
+        elif entrypoint == "provider":
+            Ext234Provider(str(image), allow_legacy_debugfs=True)
+        else:
+            Ext234RW(image, allow_legacy_debugfs=True)
+
+    assert error.value.code is RefusalCode.UNSUPPORTED_PROFILE
+    assert image.read_bytes() == before

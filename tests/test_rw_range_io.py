@@ -95,6 +95,22 @@ def test_write_range_past_end_grows_and_zero_fills(tmp_path):
         fs.close()
 
 
+def test_write_range_zeroes_stale_slack_before_extension(tmp_path):
+    _, fs = _fat(tmp_path)
+    try:
+        fs.write_file("/grow.bin", b"AB")
+        _parent, entry, _raw, _path = fs._entry_for("/grow.bin")
+        cluster = bytearray(fs._read_cluster(entry.inode))
+        cluster[2:5] = b"OLD"
+        fs._write_cluster(entry.inode, bytes(cluster))
+
+        fs.write_range("/grow.bin", 5, b"ZZ")
+
+        assert fs.read("/grow.bin") == b"AB\x00\x00\x00ZZ"
+    finally:
+        fs.close()
+
+
 def test_write_range_grows_across_clusters(tmp_path):
     _, fs = _fat(tmp_path)
     try:

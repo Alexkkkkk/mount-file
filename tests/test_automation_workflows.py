@@ -59,7 +59,7 @@ def test_ci_gate_accounts_for_every_build_and_test_stage():
         "gui-import",
         "gui",
     ):
-        assert "needs.%s.result" % job in text
+        assert f"needs.{job}.result" in text
     assert "exit 1" in text
 
 
@@ -175,6 +175,23 @@ def test_quality_is_a_lint_gate_and_ci_owns_test_execution():
     assert "needs.test.result" not in text
 
 
+def test_status_sync_validates_instead_of_rewriting_the_pull_request_head():
+    """A write-back commit carrying "[skip ci]" left the PR head without checks."""
+    text = workflow("status-sync.yml")
+    assert "pull_request_target:" in text
+    assert "python scripts/sync_repository_status.py" in text
+    assert "python scripts/generate_readme.py" in text
+    assert "python scripts/verify_generated_status.py" in text
+    assert "--repo-root /tmp/mountfile-pr" in text
+    assert "no PR Python code is executed" in text
+    assert "git push" not in text
+    assert "git commit" not in text
+    assert "[skip ci]" not in text
+    assert "Verify committed status data" in text
+    assert "permissions:\n  contents: read" in text
+    assert not (ROOT / ".github" / "workflows" / "readme-sync.yml").exists()
+
+
 def test_release_assets_and_production_deploy_have_one_owner_each():
     deploy = workflow("deploy.yml")
     release = workflow("release.yml")
@@ -241,21 +258,22 @@ def test_ci_guardian_deduplicates_incidents_and_closes_on_recovery():
     assert "issues.create" in text
     assert "ci-failure" in text
     assert "issues.update" in text
+    assert "if (conclusion === 'cancelled')" in text
+    assert "conclusion === 'failure' || conclusion === 'timed_out'" in text
     assert "does not modify source code" in text
 
 
-def test_external_mirror_is_opt_in_and_verifies_ssh_host_key():
+def test_external_mirror_is_opt_in_and_verifies_remote_refs():
     text = workflow("mirror.yml")
     assert "vars.MIRROR_ENABLED == 'true'" in text
     assert "github.ref == 'refs/heads/main'" in text
-    assert "MIRROR_SSH: ${{ secrets.MIRROR_SSH }}" in text
-    assert "MIRROR_KNOWN_HOSTS: ${{ vars.MIRROR_KNOWN_HOSTS }}" in text
+    assert "MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}" in text
+    assert "MIRROR_REPOSITORY: ${{ vars.MIRROR_REPOSITORY }}" in text
+    assert "https://x-access-token:${MIRROR_TOKEN}@" in text
     assert "persist-credentials: false" in text
-    assert "ssh-keygen -F" in text
-    assert "StrictHostKeyChecking=yes" in text
-    assert "ssh-keyscan" not in text
-    assert "git push mirror --tags" in text
-    assert 'git push mirror "$remote_ref:refs/heads/$branch"' in text
+    assert "DRY_RUN" in text
+    assert "git push mirror --tags" not in text
+    assert 'git push mirror "$1:$2"' in text
     assert "--force" not in text
     assert "pull-requests: write" not in text
 

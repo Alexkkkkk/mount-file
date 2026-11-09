@@ -132,6 +132,41 @@ _RISKY_REGEX = re.compile(
 )
 
 
+def _stdlib_regex_is_bounded(pattern: str) -> bool:
+    """Return whether ``pattern`` is in a small, non-backtracking subset.
+
+    Python's stdlib regex engine has no per-match timeout. When the optional
+    ``regex`` package is absent, only fixed-width atoms are accepted: literals,
+    character classes, anchors and single-character escapes. Groups,
+    alternation, repetition and backreferences are rejected because their
+    matching cost is difficult to bound reliably.
+    """
+
+    in_character_class = False
+    escaped = False
+    safe_alphabetic_escapes = frozenset("dDsSwWAbBZtnrfva")
+    for char in pattern:
+        if escaped:
+            if char.isdigit() or char in "gkN":
+                return False
+            if char.isalpha() and char not in safe_alphabetic_escapes:
+                return False
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_character_class:
+            if char == "]":
+                in_character_class = False
+            continue
+        if char == "[":
+            in_character_class = True
+        elif char in "()|*+?{}":
+            return False
+    return not escaped and not in_character_class
+
+
 def _json_value(value: Any) -> Any:
     """Convert common mount-file result objects into JSON-compatible values."""
 
@@ -281,6 +316,12 @@ class DefaultBackend:
             raise ValueError(
                 "search pattern uses a potentially catastrophic regex form"
             )
+        if _timeout_regex is None and not _stdlib_regex_is_bounded(pattern):
+            raise ValueError(
+                "search pattern cannot be safely evaluated without the optional "
+                "'regex' package; install regex or use a simple pattern without "
+                "groups, alternation, or repetition"
+            )
         regex_engine = _timeout_regex or re
         try:
             regex = regex_engine.compile(pattern, regex_engine.IGNORECASE)
@@ -320,9 +361,8 @@ class DefaultBackend:
                     if supports_timeout:
                         matched = regex.search(value, timeout=_SEARCH_REGEX_TIMEOUT)
                     else:
-                        # The stdlib fallback is intentionally limited to the
-                        # already-rejected-safe pattern subset above and to
-                        # bounded directory-entry names. Global visit/result
+                        # The stdlib fallback only sees fixed-width patterns
+                        # and bounded directory-entry names. Global visit/result
                         # limits remain active when ``regex`` is not installed.
                         matched = regex.search(value[:256])
                 except TimeoutError as exc:
@@ -372,6 +412,8 @@ class DefaultBackend:
             meta = file_obj.info.meta
             if meta is None:
                 raise ValueError("inode %d has no metadata" % inode)
+            if not int(getattr(meta, "flags", 0)) & pytsk3.TSK_FS_META_FLAG_UNALLOC:
+                raise ValueError("inode %d is allocated, not a deleted file" % inode)
             size = int(meta.size)
             recovered = 0
             digest = hashlib.sha256()
@@ -429,7 +471,11 @@ class DefaultBackend:
     def auto_decrypt(self, image: Path) -> Any:
         from mountfile.rt809 import decode_dump
 
-        output = self.workspace / (image.stem + ".decoded.bin")
+        output = (self.workspace / (image.stem + ".decoded.bin")).resolve()
+        if not _is_within(output, self.workspace.resolve()):
+            raise PathValidationError("output is outside the configured workspace")
+        if output.exists():
+            raise PathValidationError("output already exists; refusing to overwrite")
         result = decode_dump(str(image), out_path=str(output))
         if result is None:
             return None
@@ -534,6 +580,16 @@ class MountFileMcpServer:
             )
         return resolved
 
+    def _output_path(self, value: Any, *, image: Path, default: Path) -> Path:
+        destination = self._workspace_path(value, default=default)
+        if destination == image or (
+            destination.exists() and os.path.samefile(destination, image)
+        ):
+            raise PathValidationError("output must not overwrite the source image")
+        if destination.exists():
+            raise PathValidationError("output already exists; refusing to overwrite")
+        return destination
+
     def _call(self, operation: str, *args: Any) -> Any:
         method = getattr(self.backend, operation, None)
         if not callable(method):
@@ -632,9 +688,7 @@ class MountFileMcpServer:
             raise ValueError("extract_file requires a file path, not the image root")
         image = self._image_path(image_path)
         default = self.workspace / Path(source_path).name
-        destination = self._workspace_path(output, default=default)
-        if destination == image:
-            raise PathValidationError("output must not overwrite the source image")
+        destination = self._output_path(output, image=image, default=default)
         result = self._call("extract_file", image, offset, source_path, destination)
         return self._artifact_result(result, destination)
 
@@ -651,11 +705,9 @@ class MountFileMcpServer:
         if original_size is not None:
             original_size = _require_integer(original_size, "original_size")
         image = self._image_path(image_path)
-        destination = self._workspace_path(
-            output, default=self.workspace / ("recovered_%d.bin" % inode)
+        destination = self._output_path(
+            output, image=image, default=self.workspace / ("recovered_%d.bin" % inode)
         )
-        if destination == image:
-            raise PathValidationError("output must not overwrite the source image")
         result = self._call(
             "recover_deleted_file", image, offset, inode, original_size, destination
         )
@@ -678,9 +730,7 @@ class MountFileMcpServer:
             raise ValueError("key_name contains unsafe characters")
         image = self._image_path(image_path)
         default = self.workspace / (image.stem + "." + key_name + ".bin")
-        destination = self._workspace_path(output, default=default)
-        if destination == image:
-            raise PathValidationError("output must not overwrite the source image")
+        destination = self._output_path(output, image=image, default=default)
         result = self._call("try_xor_decrypt", image, key_name, destination)
         return self._artifact_result(result, destination)
 

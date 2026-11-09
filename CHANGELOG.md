@@ -6,6 +6,43 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Filesystem support status:** GUI write actions and CLI capability output are
+  governed by the canonical profile matrix. Native ext3/ext4/NTFS writes remain
+  unsupported, and power-loss safety is unsupported. See the capability matrix
+  and `docs/issue-182-status.md`; benchmark evidence does not imply parity or
+  production readiness.
+
+- **YARA CLI**: `python -m mountfile yara --rules <файл>` передавал путь как
+  YARA-исходник, поэтому каждая команда завершалась `syntax error`. Теперь
+  компилируется сам файл правил, а `mountfile/dfir_yara.py` не принимает
+  `pathlib.Path` за скомпилированные правила (у `Path` есть собственный
+  `match()`).
+
+- **`yara-scan` по образу**: скан больше не прерывается на первой нечитаемой
+  записи — метка тома FAT отдавалась как обычный файл, и `File_read_random`
+  возвращал ошибку. Пустые и нечитаемые записи пропускаются с предупреждением в
+  журнале. Путь образа теперь передаётся в сканирование unallocated явно: раньше
+  он записывался атрибутом в pytsk3-объект, который такие атрибуты не принимает,
+  и скан падал с `image source is unavailable`.
+
+- **Ограниченный том в GUI**: граница тома вычислялась по всем найденным
+  сигнатурам, включая заголовки файловых систем *внутри* тома. Из-за этого образ
+  NTFS/exFAT целиком (без таблицы разделов) открывался только для чтения с
+  отказом «declared size exceeds the selected volume bounds». Границы берутся
+  из таблицы разделов, а для образа без таблицы extent равен размеру файла.
+
+- **HEX-редактор**: `HexEditorPage.save()` возвращает результат и показывает
+  причину отказа в строке состояния вместо молчаливого «ничего не произошло».
+
+- **Standalone `LinuxBackend`**: на платформе без `os.geteuid` (Windows)
+  монтирование падало `AttributeError`; теперь это человеческий `MountError`.
+
+- **Кроссплатформенная матрица тестов**: Linux-only loop/udisksctl сценарии
+  пропускаются без `os.geteuid`, `.cmd`-скрипт обновления читается как UTF-8,
+  выбор сборки в тестах автообновления не зависит от архитектуры раннера
+  (ARM64), offline-сборка wheel пропускается с явной причиной, если в окружении
+  нет setuptools.
+
 - **Issue #182 quality gate**: устранено 51 correctness-lint нарушение по всему
   репозиторию (`S110`, `S112`, `F841`), включая 42 в filesystem/DFIR package/tests;
   best-effort failures теперь диагностируются через debug-логи. Полный Ruff gate
@@ -47,12 +84,11 @@ file only tracks the releases themselves.
   в `docs/structure.md` добавлен раздел про устаревший обязательный чек
   `Tests (ubuntu-latest, py3.8)`.
 
-- Total Commander mode: F4 now edits bounded text files and saves changes into
-  writable FAT32 or ext2/3/4 volumes. ext writes use a temporary filesystem
-  extent, read-back/SHA-256 verification, a rollback snapshot, and a persistent
-  image backup; ext browse/write fallback requires `debugfs` when pytsk3 is
-  absent. Existing image backups are not overwritten, and declining a backup
-  cancels the write.
+- Total Commander mode: F4 edits bounded files only through the currently
+  enabled writer profile. Historical references below to ext3/ext4 writes are
+  superseded: journaled ext3/ext4 remain read-only, and only validated clean
+  ext2 is eligible for the bounded native writer. Backups and read-back checks
+  do not imply power-loss safety.
 
 - **Поиск файлов в образе**: меню «Инструменты → Поиск файла в образе…» и
   `Ctrl+Shift+F` рекурсивно ищут имена/маски файлов во всех найденных томах,
@@ -65,13 +101,10 @@ file only tracks the releases themselves.
   обнаружения. Двойной клик открывает выбранный том целиком в активной панели;
   одинаковые сигнатуры одного физического тома больше не дублируются в списке.
 
-- **Non-FAT image writes in the GUI**: the Total Commander window now keeps
-  native FAT32 writes and falls back to `UniversalFSRW` for ext2/3/4 via
-  `debugfs`, NTFS via `ntfs-3g`, and supported loop-mounted filesystems.
-  Import, mkdir, overwrite, rename, and delete use the same explicit backup
-  confirmation. EXT4 `debugfs` listing and file rename are covered by new
-  regression tests; unsupported system helpers remain read-only with a clear
-  log message.
+- **GUI image-write controls:** the Total Commander window enables mutation
+  actions from the selected backend's capability status. Native ext3/ext4 and
+  NTFS mutations are unsupported; legacy `debugfs` or `ntfs-3g` availability
+  does not advertise them as native writer profiles.
 
 - **macOS: `$MOUNTFILE_EDITOR` / `$VISUAL` / `$EDITOR` снова учитываются**:
   в `text_editor.editor_command` ветка `open -t` проверялась раньше

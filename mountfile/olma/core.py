@@ -99,8 +99,11 @@ class OlmaHandle:
         if offset < 0:
             raise OlmaBoundsError("negative offset")
         self._fh.seek(offset)
-        self._fh.write(data)
+        written = self._fh.write(data)
+        if written != len(data):
+            raise OlmaIntegrityError("short write")
         self._fh.flush()
+        self._size = max(self._size, offset + written)
         if self._tracer:
             self._tracer.on_write(self._path, offset, len(data))
 
@@ -396,15 +399,19 @@ class OlmaXorDecoder:
     def table_size(self):
         return len(self._t)
 
-    def decode(self, data):
+    def decode(self, data, *, offset=0):
+        if offset < 0:
+            raise OlmaBoundsError("negative XOR offset")
         n = len(self._t)
-        return bytes(b ^ self._t[i % n] for i, b in enumerate(data))
+        return bytes(b ^ self._t[(offset + i) % n] for i, b in enumerate(data))
 
     def decode_file(self, src, dst, chunk=DEFAULT_CHUNK):
+        if isinstance(chunk, bool) or not isinstance(chunk, int) or chunk <= 0:
+            raise OlmaBoundsError("chunk must be a positive integer")
         total, off, written = src.size, 0, 0
         while off < total:
             n = min(chunk, total - off)
-            dst.write_at(off, self.decode(src.read_at(off, n)))
+            dst.write_at(off, self.decode(src.read_at(off, n), offset=off))
             off += n
             written += n
         return written

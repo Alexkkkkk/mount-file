@@ -807,11 +807,16 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
             return ""
         nanoseconds = 0
         if extra is not None:
-            epoch = (extra >> 30) & 0x03
-            nanoseconds = extra & 0x3FFFFFFF
+            # ext4 stores epoch in the low two bits, nanoseconds above them.
+            epoch = extra & 0x03
+            nanoseconds = extra >> 2
             if nanoseconds >= 1_000_000_000:
                 raise Ext2ReadError("ext4 inode timestamp nanoseconds are invalid")
-            seconds |= epoch << 32
+            seconds = (seconds if seconds < 0x80000000 else seconds - (1 << 32)) + (
+                epoch << 32
+            )
+        elif seconds >= 0x80000000:
+            seconds -= 1 << 32
         try:
             value = _dt.datetime.fromtimestamp(seconds, _dt.timezone.utc)
         except (OverflowError, OSError, ValueError) as exc:
@@ -844,7 +849,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         ):
             if extra_size >= required_size and offset + 4 <= len(raw):
                 value = struct.unpack_from("<I", raw, offset)[0]
-                if name.endswith("_extra") and (value & 0x3FFFFFFF) >= 1_000_000_000:
+                if name.endswith("_extra") and (value >> 2) >= 1_000_000_000:
                     raise Ext2ReadError("ext4 inode timestamp nanoseconds are invalid")
                 fields[name] = value
         return fields

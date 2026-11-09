@@ -85,11 +85,18 @@ def collect(reader, max_bytes=DEFAULT_MAX_BYTES, chunk=CHUNK):
     Returns ``(data, truncated)``. ``reader`` works for both a local file and
     a file inside a mounted image, so the two paths stay identical.
     """
+    for value, label in ((max_bytes, "max_bytes"), (chunk, "chunk")):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("%s must be a positive integer" % label)
     out = bytearray()
     offset = 0
     while len(out) < max_bytes:
         want = min(chunk, max_bytes - len(out))
         part = reader(offset, want)
+        if not isinstance(part, (bytes, bytearray, memoryview)):
+            raise TypeError("reader must return bytes")
+        if len(part) > want:
+            raise ValueError("reader exceeded requested length")
         if not part:
             break
         out += part
@@ -178,12 +185,12 @@ def _post_json(
     url, payload, headers=None, timeout=DEFAULT_TIMEOUT, allow_redirects=True
 ):
     """POST ``payload`` as JSON; return ``(data, error)``, never raise."""
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/json")
-    for key, value in (headers or {}).items():
-        req.add_header(key, value)
     try:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
         with _open_request(req, timeout, allow_redirects=allow_redirects) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
@@ -314,6 +321,15 @@ def _api_key_transport_error(base_url):
         parsed = urlsplit(base_url)
         scheme = parsed.scheme.lower()
         host = parsed.hostname
+        parsed.port  # validate a malformed/out-of-range port before any request
+        if (
+            not host
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("invalid endpoint")
     except ValueError:
         return "Некорректный адрес OpenAI-совместимого эндпоинта."
     if scheme == "https":
@@ -369,7 +385,8 @@ class OllamaBackend(AiBackend):
                 bytes_read=len(data or b""),
                 truncated=truncated,
             )
-        text = (body.get("response") or "").strip()
+        response = body.get("response") if isinstance(body, dict) else None
+        text = response.strip() if isinstance(response, str) else ""
         if not text:
             return AiResult(
                 ok=False,
@@ -413,8 +430,14 @@ class OpenAiCompatBackend(AiBackend):
 
     def analyze(self, name, data, prompt=None, truncated=False, size=None):
         transport_error = _api_key_transport_error(self.base_url)
-        parsed = urlsplit(self.base_url)
-        is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+        is_loopback = False
+        try:
+            host = urlsplit(self.base_url).hostname or ""
+            is_loopback = host.lower().rstrip(".") == "localhost"
+            if not is_loopback:
+                is_loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            pass
         if (not is_loopback and not self.api_key) or transport_error:
             return AiResult(
                 ok=False,
@@ -441,8 +464,11 @@ class OpenAiCompatBackend(AiBackend):
                 },
             ],
         }
+        endpoint = self.base_url
+        if not endpoint.endswith("/v1"):
+            endpoint += "/v1"
         body, err = _post_json(
-            self.base_url + "/v1/chat/completions",
+            endpoint + "/chat/completions",
             payload,
             headers=headers,
             timeout=self.timeout,
@@ -453,7 +479,7 @@ class OpenAiCompatBackend(AiBackend):
                 ok=False,
                 backend=self.name,
                 model=self.model,
-                error=err,
+                error=err.replace(self.api_key, "[REDACTED]") if self.api_key else err,
                 bytes_read=len(data or b""),
                 truncated=truncated,
             )

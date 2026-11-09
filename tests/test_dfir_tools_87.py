@@ -465,13 +465,13 @@ def test_timestomp_analyse_fs_reads_pytsk3_like_metadata():
 
 # ---------------------------------------------------------------------- slack
 def test_slack_region_offset_is_absolute():
-    # 4 blocks of 512 allocated, real size 1000 -> slack 1048 bytes,
-    # last run ends at block 20 -> byte 10240, so slack starts at 10240-1048
+    # Logical EOF is in the second block of the first run (physical block 11),
+    # despite a later fragmented run. Only that block's 24-byte tail is slack.
     region = slack.slack_region_for("/big.bin", 1000, [(10, 2), (18, 2)], 512)
     assert region is not None
     assert region.allocated_size == 2048
-    assert region.length == 1048
-    assert region.offset == 20 * 512 - 1048
+    assert region.length == 24
+    assert region.offset == 11 * 512 + (1000 % 512)
 
 
 def test_slack_region_none_when_cluster_aligned():

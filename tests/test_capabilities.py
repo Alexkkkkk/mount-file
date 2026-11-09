@@ -15,10 +15,17 @@ from mountfile.capabilities import (
     RW_WRITE_CAPABILITIES,
     VFS_READ_CAPABILITIES,
     VFS_WRITE_CAPABILITIES,
+    api_operation_for_canonical_operation,
+    canonical_operation_for_api_operation,
     get_native_capability_matrix,
 )
 from mountfile.exfat_reader import ExfatReadError, NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
+from mountfile.ext2_reader import NativeExt2Image
+from mountfile.ext3_reader import NativeExt3Image, NativeExt4Image
+from mountfile.fat_reader import NativeFatImage
+from mountfile.ntfs_reader import NativeNtfsMetadataImage
+from mountfile.safety import RefusalCode, RefusalError, RefusalRuntimeError
 from mountfile.universal_fs_rw import FSInfo, UniversalFSRW
 
 
@@ -58,11 +65,14 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
             assert profile.interface == "universal-fs-rw"
             assert profile.mode == "read-write"
             assert profile.read_capabilities == RW_READ_CAPABILITIES
-            assert profile.write_capabilities == RW_WRITE_CAPABILITIES
+            if profile.profile_id == "ext2-native-rw":
+                assert profile.write_capabilities == (*RW_WRITE_CAPABILITIES, "link")
+            else:
+                assert profile.write_capabilities == RW_WRITE_CAPABILITIES
 
 
 def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
-    assert CAPABILITY_MATRIX_VERSION == 5
+    assert CAPABILITY_MATRIX_VERSION == 6
     assert VFS_READ_CAPABILITIES == (
         "list",
         "stat",
@@ -76,7 +86,29 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
             assert "read-range" in profile.read_capabilities
 
 
-def test_v5_matrix_publishes_complete_operation_and_gate_contract():
+@pytest.mark.parametrize(
+    ("interface", "api_operation", "canonical"),
+    [
+        ("vfs", "list", "list"),
+        ("vfs", "read-file", "read-file"),
+        ("vfs", "read-range", "read-range"),
+        ("universal-fs-rw", "read", "read-file"),
+        ("universal-fs-rw", "read_range", "read-range"),
+        ("universal-fs-rw", "write_file", "write-file"),
+        ("universal-fs-rw", "rename", "rename"),
+        ("universal-fs-rw", "link", "hard-link"),
+    ],
+)
+def test_operation_aliases_round_trip_to_canonical_cells(
+    interface, api_operation, canonical
+):
+    assert api_operation_for_canonical_operation(interface, canonical) == api_operation
+    assert canonical_operation_for_api_operation(interface, api_operation) == canonical
+    assert api_operation_for_canonical_operation(interface, "unknown-operation") is None
+    assert canonical_operation_for_api_operation(interface, "unknown-operation") is None
+
+
+def test_v6_matrix_publishes_complete_operation_and_gate_contract():
     snapshot = get_native_capability_matrix()
     assert snapshot["operations"] == [
         "list",
@@ -88,6 +120,7 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         "mkdir",
         "delete",
         "rename",
+        "hard-link",
     ]
     for profile in snapshot["profiles"]:
         assert profile["constraint_ids"]
@@ -111,8 +144,9 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         for constraint in profiles["ext2-native-rw"]["constraints"]
     )
     assert (
-        "Explicit replay accepts classic 32-bit revoke records in a validated "
-        "no-checksum JBD2 overlay." in profiles["ext3-native-ro"]["constraints"]
+        "Explicit replay accepts classic 32-bit descriptor/revoke records and "
+        "escaped data blocks in a validated no-checksum JBD2 overlay."
+        in profiles["ext3-native-ro"]["constraints"]
     )
     assert (
         "Bounded 64BIT group-descriptor ext4 profiles are supported."
@@ -128,6 +162,126 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         "api_operation": "write_file",
         "refusal": None,
     }
+
+
+def test_rw_facade_exposes_bounded_read_range_without_mutating_backend():
+    class Backend:
+        _reader = None
+
+        @staticmethod
+        def stat(_path):
+            return SimpleNamespace(size=6, is_dir=False)
+
+        @staticmethod
+        def read(_path):
+            return b"abcdef"
+
+    facade = UniversalFSRW.__new__(UniversalFSRW)
+    facade.backend = Backend()
+    facade._closed = False
+
+    assert facade.read_range("/file", 1, 3) == b"bcd"
+    assert facade.read_range("/file", 6, 3) == b""
+    with pytest.raises(RefusalError):
+        facade.read_range("/file", 0, (1 << 20) + 1)
+
+
+def test_advertised_operations_have_callable_interface_endpoints():
+    # Matrix api_operation values are interface vocabulary; compare each value
+    # to the actual public endpoint, not just to another matrix projection.
+    interface_types = {
+        "vfs": (
+            NativeFatImage,
+            NativeExt2Image,
+            NativeExt3Image,
+            NativeExt4Image,
+            NativeExfatImage,
+            NativeNtfsMetadataImage,
+        ),
+        "universal-fs-rw": UniversalFSRW,
+    }
+    endpoint_names = {
+        "vfs": {
+            "list": "list_dir",
+            "stat": "stat",
+            "read-file": "read_file",
+            "read-range": "read_file_range",
+            "extract": "extract",
+        },
+        "universal-fs-rw": {
+            "list": "list",
+            "stat": "stat",
+            "read-file": "read",
+            "read-range": "read_range",
+            "extract": "extract",
+            "write-file": "write_file",
+            "mkdir": "mkdir",
+            "delete": "delete",
+            "rename": "rename",
+            "hard-link": "link",
+        },
+    }
+    for profile in NATIVE_CAPABILITY_MATRIX:
+        api = interface_types[profile.interface]
+        names = endpoint_names[profile.interface]
+        implementations = api if isinstance(api, tuple) else (api,)
+        for operation, cell in profile.operation_matrix().items():
+            if cell["state"] != "available":
+                continue
+            assert all(
+                callable(getattr(provider, names[operation], None))
+                for provider in implementations
+            ), (profile.profile_id, operation, cell["api_operation"])
+
+
+@pytest.mark.parametrize("operation", ["write_file", "mkdir", "delete", "rename"])
+def test_read_only_profile_mutations_share_typed_refusal(operation):
+    class ReadOnlyBackend:
+        @staticmethod
+        def info():
+            return FSInfo(
+                fs_type="ext3",
+                offset=0,
+                backend="native-ext3-ro",
+                writable=False,
+                write_strategy="read-only",
+            )
+
+    facade = UniversalFSRW.__new__(UniversalFSRW)
+    facade.backend = ReadOnlyBackend()
+    facade._closed = False
+    with pytest.raises(RefusalRuntimeError) as caught:
+        facade._require_operation(operation)
+    assert caught.value.code is RefusalCode.OPERATION_NOT_SUPPORTED
+    assert caught.value.to_dict()["code"] == "operation_not_supported"
+
+
+def test_v5_matrix_publishes_evidence_bounded_recovery_contracts():
+    profiles = {
+        item["profile_id"]: item for item in get_native_capability_matrix()["profiles"]
+    }
+    for profile in profiles.values():
+        recovery = profile["recovery"]
+        assert set(recovery) == {
+            "rollback",
+            "process_kill",
+            "power_loss",
+            "quarantine",
+        }
+        assert recovery["power_loss"] == "unsupported"
+    assert profiles["ext2-native-rw"]["recovery"] == {
+        "rollback": "tested_on_failure",
+        "process_kill": "tested_with_recovery_sidecar",
+        "power_loss": "unsupported",
+        "quarantine": "tested_on_recovery_failure",
+    }
+    for profile_id in (
+        "fat12-16-native-rw",
+        "fat32-native-rw",
+        "exfat-native-rw",
+    ):
+        assert profiles[profile_id]["recovery"]["process_kill"] == "not_proven"
+        assert profiles[profile_id]["recovery"]["quarantine"] == "not_proven"
 
 
 def test_exfat_matrix_matches_single_fat_and_volume_flag_gates(tmp_path, monkeypatch):
@@ -278,9 +432,14 @@ def test_native_writer_status_matches_machine_readable_profile_matrix(
         "api_operation": "write_file",
         "refusal": None,
     }
-    assert status["operations"]["stat"]["state"] == "refused"
+    assert status["operations"]["stat"] == {
+        "state": "available",
+        "api_operation": "stat",
+        "refusal": None,
+    }
     assert status["constraint_ids"]
     assert status["gates"]
+    assert status["recovery"] == profile.recovery_contract
     assert (
         tuple(status["write_capabilities"])
         == NATIVE_WRITE_PROFILES_BY_STRATEGY[strategy].write_capabilities

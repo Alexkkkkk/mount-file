@@ -241,7 +241,10 @@ def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy(tmp_path):
     _format_ext2(image)
     writer = NativeExt2ImageWriter(image)
     writer.mkdir("/evidence")
-    writer.write_file("/evidence/checker.bin", b"native writer output")
+    # Cross the 1 KiB-block limit of 12 direct plus 256 single-indirect blocks.
+    payload = b"D" * (300 * 1024 + 17)
+    writer.write_file("/evidence/checker.bin", payload)
+    assert writer.read_file("/evidence/checker.bin") == payload
     before = _digest(image)
 
     result = checkers.check_ext_image(image, timeout=60)

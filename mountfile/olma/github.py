@@ -15,11 +15,14 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+
+from mountfile.ai.backend import _api_key_transport_error, _open_request
 
 DEFAULT_API = "https://api.github.com"
 
@@ -46,13 +49,20 @@ class OlmaGitHub:
         dry_run: bool = False,
         user_agent: str = "MountFile-OLMA",
     ) -> None:
-        if not repo or "/" not in repo:
+        if (
+            not isinstance(repo, str)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
+            or any(part in {".", ".."} for part in repo.split("/"))
+        ):
             raise OlmaGitHubError(f"неверный repo: {repo!r} (нужно owner/name)")
         if not token and not dry_run:
             raise OlmaGitHubError("нужен GITHUB_TOKEN")
         self.token = token
         self.repo = repo
-        self.api = api_base or DEFAULT_API
+        self.api = (api_base or DEFAULT_API).rstrip("/")
+        transport_error = _api_key_transport_error(self.api)
+        if transport_error:
+            raise OlmaGitHubError(transport_error)
         self.dry_run = dry_run
         self.ua = user_agent
 
@@ -81,14 +91,21 @@ class OlmaGitHub:
             }
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with _open_request(req, timeout=30, allow_redirects=False) as resp:
                 txt = resp.read().decode("utf-8") or "{}"
-                return json.loads(txt)
+                result = json.loads(txt)
+                if not isinstance(result, dict):
+                    raise ValueError("expected JSON object")
+                return result
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")[:500]
+            if self.token:
+                detail = detail.replace(self.token, "[REDACTED]")
             raise OlmaGitHubError(f"HTTP {e.code} {method} {path}: {detail}") from e
         except urllib.error.URLError as e:
             raise OlmaGitHubError(f"network error: {e}") from e
+        except (ValueError, UnicodeError) as e:
+            raise OlmaGitHubError("GitHub returned an invalid JSON response") from e
 
     # --- reads ---
     def get_repo(self) -> dict:
@@ -158,8 +175,8 @@ class OlmaGitHub:
             )
             return True
         except OlmaGitHubError:
-            # ветка может уже существовать — считаем успехом
-            return True
+            # Failure is not evidence that the branch exists or has this SHA.
+            return False
 
     def upsert_file(
         self, path: str, content_bytes: bytes, message: str, branch: str
@@ -243,10 +260,20 @@ class OlmaGitHub:
             return GhResult(ok=False, action="create_pr", error=str(e))
 
         branch = f"{branch_prefix}-{int(time.time())}"
-        self.create_branch(branch, base_sha)
+        if not self.create_branch(branch, base_sha):
+            return GhResult(
+                ok=False, action="create_pr", error="could not create fixes branch"
+            )
 
         for path, content in changes.items():
-            self.upsert_file(path, content, f"olma: apply fixes to {path}", branch)
+            if not self.upsert_file(
+                path, content, f"olma: apply fixes to {path}", branch
+            ):
+                return GhResult(
+                    ok=False,
+                    action="create_pr",
+                    error="could not upload all fixes; no PR created",
+                )
 
         body = self._format_pr_body(fixes)
         title = f"[OLMA] auto-fixes: {len(fixes)} change(s)"

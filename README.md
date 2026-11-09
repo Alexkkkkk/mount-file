@@ -31,11 +31,25 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.73.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Current package version | `1.81.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
 | Platforms | Windows 10/11, Linux and macOS |
+
+<!-- MOUNTFILE-AUTO-STATUS:START -->
+## Generated project status
+
+This block is generated from the canonical status data in this repository. Package version: `1.81.0`.
+
+Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
+
+Canonical status data: `docs/generated/capability-matrix.json`, `checker-matrix.json`, `recovery-matrix.json` and `product-status.json`.
+
+Capability profiles currently declared: capability matrix available.
+
+This generated summary is informational: unsupported, dirty, ambiguous and recovery-required profiles remain fail-closed; benchmark and fixture evidence do not claim full filesystem parity or power-loss safety.
+<!-- MOUNTFILE-AUTO-STATUS:END -->
 
 ## What is supported today
 
@@ -55,6 +69,11 @@ layout accepted by a filesystem specification:
 | ext2 | Yes | Limited | Allowlisted metadata and bounded direct/indirect capacity |
 | ext3/ext4 | Read-only | No | Conservative profiles; journal/recovery and unsupported features fail closed |
 | NTFS | Read-only | No | Bounded reader; native writer is intentionally disabled |
+
+Native ext3/ext4 and NTFS writes are unsupported; power-loss safety is
+unsupported. Limited writes are available only through the explicitly enabled
+bounded profiles above. Backup, rollback and benchmark evidence do not imply
+power-loss safety or full filesystem parity.
 
 The versioned machine-readable matrix is the source of truth for operations,
 state gates and refusal codes:
@@ -225,8 +244,12 @@ silently falling back:
 python -m mountfile put dump.img ./hello.txt --dest /docs --backup --yes
 python -m mountfile mkdir dump.img /docs/new --backup --yes
 python -m mountfile mv dump.img /hello.txt renamed.txt --backup --yes
+python -m mountfile ln dump.img /hello.txt /docs/hello-link.txt --yes
 python -m mountfile rm dump.img /docs/new --recursive --backup --yes
 ```
+
+The `ln` hard-link operation is available only for the validated native ext2
+write profile; other filesystems refuse it through the capability gate.
 
 `--backup` creates a neighboring `<image>.bak`; it is not a transaction. The
 usual exit codes are `0` for success, `1` for an error, `2` when confirmation is
@@ -329,6 +352,7 @@ Useful targets:
 | `make fmt` | apply Ruff, isort and Black |
 | `make sample` | build sample images when `dosfstools` and `mtools` are available |
 | `make all-in-one` | run the broad no-GUI smoke flow |
+| `make smoke-images` | end-to-end CLI and GUI checks on freshly built images, verified by `mtools`, `fsck.vfat`, `fsck.exfat` and `e2fsck` |
 | `make exe` | build the main PyInstaller binary |
 | `make mountfile-exe` | build the standalone binary |
 
@@ -341,6 +365,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md),
 [`docs/structure.md`](docs/structure.md),
 [`docs/quality.md`](docs/quality.md) and [`docs/sync.md`](docs/sync.md) before
 opening a pull request.
+
+Проверка исправленных пользовательских сценариев, команды повторного тестирования
+и оставшиеся ограничения описаны в
+[`docs/functional-validation.md`](docs/functional-validation.md).
 
 ## Repository map
 
@@ -388,3 +416,19 @@ for the full safety note.
 ## License
 
 Mount File is distributed under the [MIT License](LICENSE).
+
+## Copilot coding agent: MCP servers
+
+Free, no-API-key MCP servers for the [GitHub Copilot coding agent](https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers)
+are pre-configured in [`.github/copilot-mcp-config.json`](.github/copilot-mcp-config.json)
+(GitHub and Playwright MCP servers are built in and are not duplicated).
+
+Setup: open **Settings → Copilot → MCP servers** in this repository, paste the
+JSON from that file into the "MCP configuration" field and click
+**Save MCP configuration**. No secrets are required — every server below works
+without an API key.
+
+Added no-key reasoning helpers (`sequential-thinking`, `memory`), the Context7
+docs server, and switched `cloudflare_docs` to its current Streamable HTTP
+endpoint (`https://docs.mcp.cloudflare.com/mcp`; the legacy `/sse` URL is
+retired).

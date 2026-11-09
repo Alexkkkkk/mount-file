@@ -1,50 +1,46 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Alexkkkkk
-# Licensed under the MIT License - see the LICENSE file for details.
-# Build a standalone Linux x86-64 binary with PyInstaller.
-#
-# Usage:
-#   ./build_exe.sh                  (uses python3 from PATH)
-#   PYTHON=python3.12 ./build_exe.sh
-#   NAME=MountFile ./build_exe.sh   (custom output name)
-#
-# pytsk3 is optional: when it is missing the binary still browses and writes
-# FAT32 images through the built-in engine, so the build continues.
-set -e
+# Build a standalone Linux/macOS binary with the selected Python environment.
+# Usage: PYTHON=python3.12 NAME=MountFile-linux-x86-64 ./build_exe.sh
+set -euo pipefail
 cd "$(dirname "$0")"
-
 PYTHON="${PYTHON:-python3}"
-NAME="${NAME:-MountFile-linux-x86-64}"
-
-"$PYTHON" -m pip install --quiet --upgrade pyinstaller
-
-EXTRA=()
-if "$PYTHON" -c "import pytsk3" >/dev/null 2>&1; then
+if [ -z "${NAME:-}" ]; then
+    case "$(uname -s):$(uname -m)" in
+        Linux:x86_64) NAME=MountFile-linux-x86-64 ;;
+        Linux:aarch64|Linux:arm64) NAME=MountFile-linux-arm64 ;;
+        Darwin:arm64) NAME=MountFile-macos-arm64 ;;
+        Darwin:x86_64) NAME=MountFile-macos-x86-64 ;;
+        *) echo "Unsupported build platform; set NAME explicitly." >&2; exit 2 ;;
+    esac
+fi
+case "$NAME" in
+    *[!a-zA-Z0-9._-]*|''|.|..) echo "NAME must be a plain output filename." >&2; exit 2 ;;
+esac
+# Namespace-only imports do not detect missing Qt shared libraries. Fail
+# before building a binary that cannot create its mandatory interface.
+"$PYTHON" -c 'from PyQt6 import QtCore, QtGui, QtWidgets; import mountfile'
+# Reuse an installed builder: repeat/offline builds must not require a network
+# connection just to upgrade tooling that already works.
+if ! "$PYTHON" -c 'import PyInstaller' >/dev/null 2>&1; then
+    "$PYTHON" -m pip install 'pyinstaller>=6.22.3'
+fi
+EXTRA=(--hidden-import mountfile_dfir_tools)
+if "$PYTHON" -c 'import pytsk3' >/dev/null 2>&1; then
     EXTRA+=(--collect-submodules pytsk3)
 else
-    echo "Note: pytsk3 not installed - building with the built-in FAT32 engine only."
+    echo 'Note: pytsk3 is absent; native readers remain available, legacy fallback is not bundled.'
 fi
-
-# App icon: platform-specific file, taken from the bundled artwork
-# (mountfile/data). icon.png is also what the window/taskbar icon uses at
-# run time. Collecting package data also ships the XOR tables required by
-# RT809H decoding in frozen builds.
-ICON="$("$PYTHON" -m mountfile.appicon 2>/dev/null || true)"
+ICON="$("$PYTHON" -m mountfile.appicon)"
 if [ -n "$ICON" ] && [ -f "$ICON" ]; then
     EXTRA+=(--icon "$ICON")
-    echo "Icon: $ICON"
-else
-    echo "Note: no app icon found - building with the default PyInstaller icon."
 fi
-
-"$PYTHON" -m PyInstaller --onefile --windowed --name "$NAME" \
-    --collect-data mountfile \
-    "${EXTRA[@]}" main.py
-
-if [ -f "dist/$NAME" ]; then
-    echo "Done: dist/$NAME"
-else
-    echo "Build failed, see messages above." >&2
+# Keep generated specs out of the repository's hand-maintained root spec.
+"$PYTHON" -m PyInstaller --noconfirm --clean --onefile --windowed --name "$NAME" \
+    --specpath build/spec --collect-data mountfile "${EXTRA[@]}" main.py
+if [ ! -s "dist/$NAME" ]; then
+    echo 'Build did not produce a nonempty executable.' >&2
     exit 1
 fi
+echo "Done: dist/$NAME"

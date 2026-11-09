@@ -28,6 +28,28 @@
   - сравнение backend'ов публикуется только при побайтовом совпадении
     содержимого (размер + SHA-256 каждого файла против эталонного прогона);
     при расхождении сравнение производительности скрывается.
+  - каждый отчёт содержит `capability_contract` с версией общей matrix,
+    проверенными операциями и явными значениями `evidence=benchmark_observed_only`
+    и `parity=not_claimed`; каждый backend также получает вложенный
+    `capability_status`. Benchmark не превращает измерение скорости или совпадение
+    содержимого в доказательство полной filesystem parity.
+
+Сохранённый отчёт можно проверить перед публикацией:
+
+```bash
+python scripts/benchmark_artifact.py /tmp/vfs-bench/bench_report.json \
+  --json-out /tmp/vfs-bench/benchmark-validation.json
+```
+
+Validator требует schema v2, bounded image/workload, полный набор операций,
+ровно заявленное число повторов, clean source provenance и консервативные
+`evidence=benchmark_observed_only`/`parity=not_claimed`. Это проверка качества
+артефакта, а не заявление filesystem parity; `write_operations` всегда false.
+Report фиксирует обнаруженные версии `mke2fs` и `debugfs` вместе с жесткими
+resource limits: image до 2 GiB, до 256 путей, совокупное извлечение до 256 MiB
+на итерацию, range-read до 1 MiB на файл, до 100 измеряемых повторов и 20
+warmups. Перед extraction harness сначала проверяет суммарный размер выбранных
+файлов, чтобы превысивший лимит workload завершился до записи временных файлов.
 
 ## 2. Фикстура: синтетический ext2-образ
 
@@ -111,6 +133,24 @@ INCLUDE_10M=1 scripts/run_vfs_benchmarks.sh /tmp/vfs-bench-10m
 scripts/run_vfs_benchmarks.sh /tmp/vfs-bench
 # отчёт: /tmp/vfs-bench/bench_report.json (schema v2, полные выборки)
 ```
+
+В обязательном Linux integration CI выполняется тот же read-only runner с
+опцией `INCLUDE_10M=1`: он строит детерминированный 32 MiB ext2 образ с файлом
+10 MiB, измеряет `list_dir`, `stat`, range-read (до 1 MiB на файл) и полное
+извлечение для native и pytsk3, а затем валидирует JSON через
+`scripts/benchmark_artifact.py`. Raw report содержит commit, состояние source
+worktree, версии Python/pytsk3 и инструментов `mke2fs`/`debugfs`, объявленные
+resource limits, размер и SHA-256 fixture, workload и метрики;
+GitHub Actions сохраняет report и validation summary как artifact
+`vfs-benchmark-linux`. Изменение benchmark contract или невалидный report
+проваливает integration gate.
+
+CI предоставляет воспроизводимый Linux baseline, но не заявляет cross-platform
+performance: Windows/macOS benchmark provenance и fixture/checker matrix ещё
+не готовы. Write workload в этом read-only harness отсутствует; его нельзя
+считать выполненным или поддержанным. Для локального acceptance report запускайте
+из чистого checkout, иначе validator закономерно отвергнет dirty source
+provenance.
 
 ## 4. Результаты
 

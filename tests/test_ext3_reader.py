@@ -36,6 +36,8 @@ from tests.test_ext2_reader import (
     _set_inode_flags,
 )
 
+_JBD2_MAGIC_BYTES = struct.pack(">I", 0xC03B3998)
+
 
 def _extent_root_for_block(block):
     root = bytearray(60)
@@ -82,11 +84,11 @@ def _make_ext4_extent_image(path):
         "<III",
         image,
         inode_offset + 132,
-        123_456_789,
-        (1 << 30) | 987_654_321,
-        1,
+        123_456_789 << 2,
+        (987_654_321 << 2) | 1,
+        1 << 2,
     )
-    struct.pack_into("<II", image, inode_offset + 144, 1_700_000_000, 500_000_000)
+    struct.pack_into("<II", image, inode_offset + 144, 1_700_000_000, 500_000_000 << 2)
 
     root_directory = _dir_block([(".", 2, 2), ("..", 2, 2), ("hello.txt", 11, 1)])
     root_start = ROOT_DIR_BLOCK * BLOCK_SIZE
@@ -207,6 +209,9 @@ def _make_revoke_journal_image(
                 if len(data) != BLOCK_SIZE:
                     raise ValueError("synthetic journal data must fill one block")
                 flags = 0x00000002
+                if data.startswith(_JBD2_MAGIC_BYTES):
+                    flags |= 0x00000001
+                    data = b"\x00" * 4 + data[4:]
                 if index == len(writes) - 1:
                     flags |= 0x00000008
                 struct.pack_into(
@@ -573,6 +578,74 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
         assert image_path.read_bytes()[3 * 1024 : 4 * 1024] != payload
     finally:
         provider.close()
+
+
+def test_jbd2_replay_restores_escaped_data_in_memory_only(tmp_path):
+    image_path = tmp_path / "escaped-replay-journal.img"
+    payload = _JBD2_MAGIC_BYTES + b"\xA7" * (BLOCK_SIZE - 4)
+    _make_revoke_journal_image(
+        image_path,
+        [(7, [(3, payload)], [])],
+        journal_block_count=5,
+    )
+    original = image_path.read_bytes()
+    escaped_record = original[42 * BLOCK_SIZE : 43 * BLOCK_SIZE]
+
+    provider = NativeExt3Image(
+        image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+    )
+    try:
+        assert escaped_record == b"\x00" * 4 + payload[4:]
+        assert provider.journal_replayed is True
+        assert provider._journal_overlay[3] == payload
+        assert provider._read_at(3 * BLOCK_SIZE, BLOCK_SIZE) == payload
+        assert image_path.read_bytes() == original
+    finally:
+        provider.close()
+
+
+def test_clean_jbd2_scan_accepts_escaped_data_block(tmp_path):
+    image_path = tmp_path / "escaped-clean-journal.img"
+    payload = _JBD2_MAGIC_BYTES + b"\xC1" * (BLOCK_SIZE - 4)
+    _make_revoke_journal_image(
+        image_path,
+        [(7, [(3, payload)], [])],
+        journal_block_count=5,
+        journal_start=0,
+    )
+
+    provider = NativeExt3Image(image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE)
+    try:
+        assert provider.journal_replayed is False
+        assert provider._journal_overlay == {}
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("damage", ["escaped-prefix", "missing-flag"])
+def test_jbd2_replay_rejects_inconsistent_escape_encoding(tmp_path, damage):
+    image_path = tmp_path / f"invalid-escape-{damage}.img"
+    payload = _JBD2_MAGIC_BYTES + b"\xD2" * (BLOCK_SIZE - 4)
+    _make_revoke_journal_image(
+        image_path,
+        [(7, [(3, payload)], [])],
+        journal_block_count=5,
+    )
+    image = bytearray(image_path.read_bytes())
+    data_offset = 42 * BLOCK_SIZE
+    if damage == "escaped-prefix":
+        image[data_offset : data_offset + 4] = b"BAD!"
+        expected_error = "escaped data block"
+    else:
+        struct.pack_into(">I", image, 41 * BLOCK_SIZE + 16, 0x0000000A)
+        image[data_offset : data_offset + 4] = _JBD2_MAGIC_BYTES
+        expected_error = "lacks ESCAPE"
+    image_path.write_bytes(image)
+
+    with pytest.raises(Ext3ReadError, match=expected_error):
+        NativeExt3Image(
+            image_path, volume_size=BLOCKS_COUNT * BLOCK_SIZE, replay_journal=True
+        )
 
 
 def test_jbd2_revoke_suppresses_earlier_transaction_overlay(tmp_path):
@@ -1308,7 +1381,7 @@ def test_ext4_stat_rejects_malformed_extended_timestamps(tmp_path, corruption):
     if corruption == "extra_isize":
         struct.pack_into("<H", image, inode_offset + 128, 132)
     else:
-        struct.pack_into("<I", image, inode_offset + 136, 1_000_000_000)
+        struct.pack_into("<I", image, inode_offset + 136, 1_000_000_000 << 2)
     image_path.write_bytes(image)
 
     provider = NativeExt4Image(image_path, volume_size=len(image))

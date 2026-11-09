@@ -17,6 +17,8 @@ import os
 import sys
 import urllib.error
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import updater
@@ -86,7 +88,13 @@ def test_is_newer_numeric_not_lexicographic():
 
 
 # ----------------------------------------------------------- выбор сборки
-def test_asset_score_prefers_plain_exe_on_windows(monkeypatch):
+@pytest.fixture
+def x86_64_machine(monkeypatch):
+    """Published assets are x86-64 builds; pin arch so ARM runners behave too."""
+    monkeypatch.setattr(updater.platform, "machine", lambda: "AMD64")
+
+
+def test_asset_score_prefers_plain_exe_on_windows(monkeypatch, x86_64_machine):
     monkeypatch.setattr(updater.sys, "platform", "win32")
     assert updater._asset_score("MountFile.exe") > updater._asset_score(
         "MountFile-win10-x64.exe"
@@ -95,7 +103,7 @@ def test_asset_score_prefers_plain_exe_on_windows(monkeypatch):
     assert updater._asset_score("MountFile.exe.sha256") == -1
 
 
-def test_asset_score_linux(monkeypatch):
+def test_asset_score_linux(monkeypatch, x86_64_machine):
     monkeypatch.setattr(updater.sys, "platform", "linux")
     assert updater._asset_score("MountFile-linux-x86-64") > 0
     assert updater._asset_score("MountFile.exe") == -1
@@ -129,7 +137,7 @@ def test_select_asset_returns_none_without_match(monkeypatch):
 
 
 # ------------------------------------------------------------- проверка
-def test_check_reports_newer_release(monkeypatch):
+def test_check_reports_newer_release(monkeypatch, x86_64_machine):
     payload = b"new-binary"
     release = _release(
         "v1.2.0", [("MountFile.exe", payload), ("MountFile.exe.sha256", b"x")]
@@ -216,6 +224,7 @@ def test_download_detects_truncated_file(tmp_path, monkeypatch):
 
 
 def test_installer_fails_closed_without_valid_sha256(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
     downloads = []
     installs = []
     monkeypatch.setattr(

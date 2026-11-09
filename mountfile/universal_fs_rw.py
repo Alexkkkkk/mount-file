@@ -7,7 +7,7 @@ mountfile/universal_fs_rw.py — Universal Read/Write Layer (single file)
 
   1. NativeFat32Writer  — bounded native FAT32 writer (FAT, LFN, каталоги)
   2. NativeExt2Writer   — ограниченный clean ext2 profile, in-process Python
-  3. ExtDebugfsWriter   — явный legacy ext2/3/4 compatibility backend через `debugfs -w`
+  3. ExtDebugfsWriter   — явный legacy unjournaled ext2 compatibility backend через `debugfs -w`
   4. NtfsWriter         — NTFS через `ntfs-3g` (Linux) или ImDisk (Windows)
   5. LoopMountWriter    — Linux loop-mount или Windows ImDisk для NTFS/FAT/exFAT
   6. RebuildWriter      — fallback: unpack → mkfs → repack
@@ -66,6 +66,7 @@ except ImportError:
     pytsk3 = None
 
 log = logging.getLogger("mountfile.universal_fs_rw")
+RW_READ_RANGE_LIMIT = 1 << 20
 
 
 @contextlib.contextmanager
@@ -422,19 +423,41 @@ class ImageBackup:
         self.image = Path(image)
         self.dir = Path.home() / ".mountfile" / "backups"
         self.dir.mkdir(parents=True, exist_ok=True)
+        if not isinstance(keep, int) or isinstance(keep, bool) or keep < 1:
+            raise ValueError("backup keep count must be a positive integer")
         self.keep = keep
+        identity = hashlib.sha256(os.fsencode(self.image.resolve())).hexdigest()[:16]
+        self._prefix = f"{self.image.name}.{identity}."
 
     def create(self) -> Path:
-        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        dst = self.dir / f"{self.image.name}.{ts}.bak"
+        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        descriptor, name = tempfile.mkstemp(
+            prefix=self._prefix + ts + ".", suffix=".bak", dir=self.dir
+        )
+        os.close(descriptor)
+        dst = Path(name)
         log.info("backup → %s", dst)
-        shutil.copy2(self.image, dst)
+        try:
+            shutil.copy2(self.image, dst)
+            _fsync_file(dst)
+        except BaseException:
+            dst.unlink(missing_ok=True)
+            raise
         self._rotate()
         return dst
 
+    def _backups(self) -> list[Path]:
+        return sorted(
+            path
+            for path in self.dir.iterdir()
+            if path.name.startswith(self._prefix)
+            and path.name.endswith(".bak")
+            and path.is_file()
+            and not path.is_symlink()
+        )
+
     def _rotate(self) -> None:
-        prefix = f"{self.image.name}."
-        backups = sorted(self.dir.glob(f"{prefix}*.bak"))
+        backups = self._backups()
         for old in backups[: -self.keep]:
             try:
                 old.unlink()
@@ -444,8 +467,7 @@ class ImageBackup:
                 )
 
     def latest(self) -> Path | None:
-        prefix = f"{self.image.name}."
-        backups = sorted(self.dir.glob(f"{prefix}*.bak"))
+        backups = self._backups()
         return backups[-1] if backups else None
 
 
@@ -463,6 +485,7 @@ class _RWBackendExtractionProvider:
 
     def __init__(self, backend: RWBackend):
         self._backend = backend
+        self.image_path = backend.image
         reader = getattr(backend, "_reader", None)
         file_size = getattr(reader, "file_size", None)
         read_range = getattr(reader, "read_file_range", None)
@@ -597,10 +620,12 @@ class RWBackend(ABC):
         # old truthiness shortcut reported *every* path as present.
         try:
             return self.stat(path) is not None
-        except Exception:
+        except (FileNotFoundError, NotADirectoryError):
             return False
 
     def stat(self, path: str) -> FSEntry | None:
+        if str(path).replace("\\", "/").strip("/") == "":
+            return FSEntry("/", "/", 0, True)
         parent, name = _image_path_parent_name(path)
         for e in self.list(parent):
             if e.name == name:
@@ -640,10 +665,7 @@ class RWBackend(ABC):
         return dest
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
-        try:
-            entries = self.list(path)
-        except Exception:
-            return
+        entries = self.list(path)
         for e in entries:
             yield e
             if e.is_dir:
@@ -662,7 +684,13 @@ class NativeExfatRW(RWBackend):
         from mountfile.exfat_writer import NativeExfatWriter
 
         self._reader = NativeExfatImage(image, offset=offset, volume_size=volume_size)
-        self._writer = NativeExfatWriter(image, offset=offset, volume_size=volume_size)
+        try:
+            self._writer = NativeExfatWriter(
+                image, offset=offset, volume_size=volume_size
+            )
+        except BaseException:
+            self._reader.close()
+            raise
         self.volume_size = int(volume_size)
 
     def close(self) -> None:
@@ -1699,7 +1727,13 @@ class Fat32RW(RWBackend):
         chain = self._cluster_chain(entry.inode) if entry.size else []
         if entry.size and not chain:
             raise ValueError("non-empty FAT file has no cluster chain")
-        new_size = max(entry.size, offset + len(data))
+        old_size = entry.size
+        existing_clusters = (old_size + self.cluster_size - 1) // self.cluster_size
+        if len(chain) < existing_clusters:
+            raise ValueError("FAT cluster chain is shorter than the declared size")
+        new_size = max(old_size, offset + len(data))
+        if new_size > 0xFFFFFFFF:
+            raise ValueError("FAT file size exceeds the 32-bit directory limit")
         clusters_needed = (new_size + self.cluster_size - 1) // self.cluster_size
         if clusters_needed > len(chain):
             extra = self._allocate_chain(clusters_needed - len(chain))
@@ -1714,6 +1748,19 @@ class Fat32RW(RWBackend):
             except Exception:
                 self._free_chain(extra[0])
                 raise
+        if offset > old_size:
+            gap = old_size
+            while gap < offset:
+                index = gap // self.cluster_size
+                if index >= len(chain):
+                    raise ValueError("FAT cluster chain is shorter than the write range")
+                cluster_offset = index * self.cluster_size
+                gap_end = min(offset, cluster_offset + self.cluster_size)
+                current = bytearray(self._read_cluster(chain[index]))
+                local = gap - cluster_offset
+                current[local : local + (gap_end - gap)] = b"\x00" * (gap_end - gap)
+                self._write_cluster(chain[index], bytes(current))
+                gap = gap_end
         first = offset // self.cluster_size
         last = (offset + len(data) - 1) // self.cluster_size
         for index in range(first, last + 1):
@@ -2214,13 +2261,15 @@ NativeFat1216Writer = Fat1216RW
 
 
 # =============================================================================
-# 5. EXT2/3/4 (native ext2 phase 1; explicit debugfs compatibility)
+# 5. EXT2/3/4 (native ext2; journaled ext3/ext4 read-only; explicit ext2 compatibility)
 # =============================================================================
 class Ext234RW(RWBackend):
     """
     ext2 uses MountFile's bounded in-process writer when its clean feature
     profile is supported. The e2fsprogs debugfs compatibility path is disabled
-    unless the library caller explicitly sets ``allow_legacy_debugfs=True``.
+    unless the library caller explicitly sets ``allow_legacy_debugfs=True``; it
+    remains unavailable for journaled ext3/ext4 profiles because debugfs bypasses
+    their journal ordering and recovery protocol.
     """
 
     def __init__(
@@ -2258,6 +2307,12 @@ class Ext234RW(RWBackend):
                     "native ext2 profile rejected this volume; legacy debugfs "
                     "compatibility requires allow_legacy_debugfs=True: %s"
                     % self._native_rejection
+                )
+            if self.is_ext3 or self.is_ext4:
+                raise RefusalRuntimeError(
+                    "legacy debugfs writes are refused for journaled ext3/ext4; "
+                    "native journal ordering and recovery are not implemented",
+                    RefusalCode.UNSUPPORTED_PROFILE,
                 )
             self._require_debugfs()
         else:
@@ -2483,6 +2538,11 @@ class Ext234RW(RWBackend):
             return self._native.mkdir(path)
         self._debugfs(f"mkdir {path}", write=True)
         self._flush_tmp()
+
+    def link(self, source: str, destination: str) -> None:
+        if self._native is None:
+            raise NotImplementedError("hard links require the native ext2 profile")
+        return self._native.link(source, destination)
 
     def delete(self, path: str, recursive: bool = False) -> None:
         if self._native is not None:
@@ -2731,7 +2791,159 @@ class LibguestfsRW(RWBackend):
 # =============================================================================
 # 7. NTFS via subprocess (ntfs-3g / ntfsclone)
 # =============================================================================
-class NtfsRW(RWBackend):
+def _legacy_relative_path(path: str, *, allow_root: bool = False) -> str:
+    """Validate before normalization can hide traversal or host drive syntax."""
+    raw = str(path).replace("\\", "/")
+    parts = raw.strip("/").split("/")
+    if raw in ("", "/") and allow_root:
+        return ""
+    if any(part in ("", ".", "..") or ":" in part or "\x00" in part for part in parts):
+        raise ValueError("unsafe path in legacy filesystem: %r" % path)
+    return "/".join(parts)
+
+
+def _legacy_path(root: Path, path: str, *, allow_root: bool = False) -> Path:
+    relative = _legacy_relative_path(path, allow_root=allow_root)
+    root = Path(root)
+    root_info = root.lstat()
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or getattr(root_info, "st_file_attributes", 0) & 0x400
+    ):
+        raise PermissionError("legacy root must be a real directory: %s" % root)
+    target = _safe_mounted_path(root, relative)
+    current = root.resolve()
+    for part in PurePosixPath(relative).parts:
+        current /= part
+        if current.exists() and current.is_dir() and os.path.ismount(current):
+            raise PermissionError("refusing nested mount point: %s" % current)
+    return target
+
+
+@contextlib.contextmanager
+def _legacy_regular_file(
+    root: Path, path: str, *, write: bool = False, exclusive: bool = False
+):
+    """Open beneath a pinned POSIX root; refuse links and special/hardlinked files."""
+    target = _legacy_path(root, path)
+    flags = (os.O_WRONLY | os.O_CREAT) if write else os.O_RDONLY
+    if exclusive:
+        flags |= os.O_EXCL
+    flags |= (
+        getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    directories = []
+    descriptor = None
+    try:
+        if os.open in os.supports_dir_fd:
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            directories.append(os.open(root, directory_flags))
+            for part in PurePosixPath(_legacy_relative_path(path)).parts[:-1]:
+                directories.append(
+                    os.open(part, directory_flags, dir_fd=directories[-1])
+                )
+            descriptor = os.open(target.name, flags, 0o600, dir_fd=directories[-1])
+        else:
+            descriptor = os.open(target, flags, 0o600)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise PermissionError(
+                "legacy file must be regular and non-linked: %s" % target
+            )
+        if write:
+            os.ftruncate(descriptor, 0)
+        with os.fdopen(descriptor, "wb" if write else "rb") as handle:
+            descriptor = None
+            yield handle
+            if write:
+                handle.flush()
+                os.fsync(handle.fileno())
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        for directory in reversed(directories):
+            os.close(directory)
+
+
+def _legacy_read_file(root: Path, path: str) -> bytes:
+    with _legacy_regular_file(root, path) as handle:
+        return handle.read()
+
+
+def _legacy_write_file(
+    root: Path, path: str, data: bytes, *, exclusive: bool = False
+) -> None:
+    if not isinstance(data, bytes):
+        raise TypeError("legacy write data must be bytes")
+    with _legacy_regular_file(root, path, write=True, exclusive=exclusive) as handle:
+        if handle.write(data) != len(data):
+            raise OSError("short write in legacy filesystem: %s" % path)
+
+
+def _legacy_tree(root: Path, path: str = "/") -> Iterator[Path]:
+    """Only ordinary files/directories; do not follow links or nested mounts."""
+    target = _legacy_path(root, path, allow_root=True)
+    info = target.lstat()
+    if stat.S_ISREG(info.st_mode):
+        yield target
+    elif stat.S_ISDIR(info.st_mode):
+        yield target
+        for child in target.iterdir():
+            relative = child.relative_to(root).as_posix()
+            yield from _legacy_tree(root, relative)
+    else:
+        raise PermissionError("unsupported special file in legacy tree: %s" % target)
+
+
+class _LegacyMountSafety:
+    """Detach must succeed before non-recursive mount-directory cleanup."""
+
+    def _check_pending_mount(self) -> None:
+        if getattr(self, "_retained_mount_point", None) is not None:
+            raise RuntimeError(
+                "previous mount requires manual inspection at %s: %s"
+                % (self._retained_mount_point, getattr(self, "_mount_failure", ""))
+            )
+
+    def _retain_mount(self, mp: Path, error: BaseException) -> None:
+        self._retained_mount_point = mp
+        self._mount_failure = repr(error)
+        log.error("legacy mount retained at %s: %s", mp, error)
+
+    def _unmount(self, mp: Path) -> None:
+        self._retained_mount_point = mp
+        try:
+            if sys.platform.startswith("win"):
+                drive = getattr(self, "_imdisk_drive", None)
+                if not drive:
+                    raise RuntimeError("no ImDisk drive recorded for %s" % mp)
+                _imdisk_unmount(drive)
+                self._imdisk_drive = None
+            else:
+                result = subprocess.run(
+                    ["umount", str(mp)], capture_output=True, text=True, timeout=120
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "umount failed for %s: %s"
+                        % (mp, (result.stderr or result.stdout).strip())
+                    )
+                if os.path.ismount(mp):
+                    raise RuntimeError("mount point is still attached: %s" % mp)
+                # Never recursively remove a mount point, even after success.
+                mp.rmdir()
+        except BaseException as error:
+            self._retain_mount(mp, error)
+            raise RuntimeError(
+                "mount detach/cleanup failed; retained %s: %s" % (mp, error)
+            ) from error
+        self._retained_mount_point = None
+        self._mount_failure = ""
+
+
+class NtfsRW(_LegacyMountSafety, RWBackend):
     """NTFS reader via pytsk3; writes via ntfs-3g or Windows ImDisk."""
 
     def __init__(self, image: Path, offset: int = 0):
@@ -2761,6 +2973,7 @@ class NtfsRW(RWBackend):
                     )
 
     def _mount_point(self) -> Path:
+        self._check_pending_mount()
         if sys.platform.startswith("win"):
             strategy, issue = _imdisk_status("ntfs")
             if strategy != "imdisk-rw":
@@ -2774,19 +2987,14 @@ class NtfsRW(RWBackend):
         mp = Path(tempfile.mkdtemp(prefix="mnt_"))
         cmd = ["ntfs-3g", "-o", f"loop,offset={self.offset},rw"]
         cmd += [str(self.image), str(mp)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"ntfs-3g mount failed: {r.stderr}")
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                raise RuntimeError(f"ntfs-3g mount failed: {r.stderr}")
+        except BaseException as error:
+            self._retain_mount(mp, error)
+            raise
         return mp
-
-    def _unmount(self, mp: Path) -> None:
-        if sys.platform.startswith("win"):
-            if self._imdisk_drive:
-                drive, self._imdisk_drive = self._imdisk_drive, None
-                _imdisk_unmount(drive)
-            return
-        subprocess.run(["umount", str(mp)], capture_output=True)
-        shutil.rmtree(mp, ignore_errors=True)
 
     def info(self) -> FSInfo:
         if sys.platform.startswith("win"):
@@ -2846,26 +3054,33 @@ class NtfsRW(RWBackend):
             finally:
                 self._unmount(mp)
         finally:
-            if release_reader:
+            if release_reader and getattr(self, "_retained_mount_point", None) is None:
                 self._open_reader()
 
     def write_file(self, path: str, data: bytes) -> None:
+        _legacy_relative_path(path)
+
         def _do(mp: Path):
-            dst = _safe_mounted_path(mp, path)
+            dst = _legacy_path(mp, path)
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(data)
+            _legacy_write_file(mp, path, data)
 
         self._do_mounted(_do)
 
     def mkdir(self, path: str) -> None:
+        _legacy_relative_path(path)
         self._do_mounted(
-            lambda mp: _safe_mounted_path(mp, path).mkdir(parents=True, exist_ok=True)
+            lambda mp: _legacy_path(mp, path).mkdir(parents=True, exist_ok=True)
         )
 
     def delete(self, path: str, recursive: bool = False) -> None:
+        _legacy_relative_path(path)
+
         def _do(mp: Path):
-            p = _safe_mounted_path(mp, path)
+            p = _legacy_path(mp, path)
             if p.is_dir():
+                if recursive:
+                    list(_legacy_tree(mp, path))
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
                 p.unlink()
@@ -2873,15 +3088,15 @@ class NtfsRW(RWBackend):
         self._do_mounted(_do)
 
     def rename(self, src: str, dst: str) -> None:
-        self._do_mounted(
-            lambda mp: _safe_mounted_path(mp, src).rename(_safe_mounted_path(mp, dst))
-        )
+        _legacy_relative_path(src)
+        _legacy_relative_path(dst)
+        self._do_mounted(lambda mp: _legacy_path(mp, src).rename(_legacy_path(mp, dst)))
 
 
 # =============================================================================
 # 8. LOOP-MOUNT fallback (любая ФС)
 # =============================================================================
-class LoopMountRW(RWBackend):
+class LoopMountRW(_LegacyMountSafety, RWBackend):
     """Write via Linux loop-mount or Windows ImDisk for native Windows filesystems."""
 
     def __init__(self, image: Path, offset: int, fs_type: str):
@@ -2914,6 +3129,7 @@ class LoopMountRW(RWBackend):
         return "loop-mount", ""
 
     def _mount_point(self) -> Path:
+        self._check_pending_mount()
         strategy, issue = self._runtime_status()
         if issue:
             raise RuntimeError(issue)
@@ -2926,19 +3142,14 @@ class LoopMountRW(RWBackend):
             cmd = ["mount", "-t", self.fs_type, "-o", opts, str(self.image), str(mp)]
         else:
             cmd = ["mount", "-t", self.fs_type, "-o", opts, str(self.image), str(mp)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"mount failed: {r.stderr}")
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                raise RuntimeError(f"mount failed: {r.stderr}")
+        except BaseException as error:
+            self._retain_mount(mp, error)
+            raise
         return mp
-
-    def _unmount(self, mp: Path) -> None:
-        if sys.platform.startswith("win"):
-            if getattr(self, "_imdisk_drive", None):
-                drive, self._imdisk_drive = self._imdisk_drive, None
-                _imdisk_unmount(drive)
-            return
-        subprocess.run(["umount", str(mp)], capture_output=True)
-        shutil.rmtree(mp, ignore_errors=True)
 
     def _do(self, fn) -> None:
         mp = self._mount_point()
@@ -2961,13 +3172,18 @@ class LoopMountRW(RWBackend):
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
+        _legacy_relative_path(path, allow_root=True)
+
         def _do(mp: Path) -> list[FSEntry]:
-            p = _safe_mounted_path(mp, path)
+            p = _legacy_path(mp, path, allow_root=True)
             if not p.exists():
                 return []
             entries: list[FSEntry] = []
             for child in p.iterdir():
-                st = child.stat()
+                child = _legacy_path(mp, child.relative_to(mp).as_posix())
+                st = child.lstat()
+                if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+                    raise PermissionError("unsupported special file: %s" % child)
                 entries.append(
                     FSEntry(
                         name=child.name,
@@ -2984,24 +3200,30 @@ class LoopMountRW(RWBackend):
         return result
 
     def read(self, path: str) -> bytes:
+        _legacy_relative_path(path)
         result: list[bytes] = []
-        self._do(lambda mp: result.append(_safe_mounted_path(mp, path).read_bytes()))
+        self._do(lambda mp: result.append(_legacy_read_file(mp, path)))
         return result[0]
 
     def write_file(self, path: str, data: bytes) -> None:
         self._assert_writable()
-        self._do(lambda mp: _safe_mounted_path(mp, path).write_bytes(data))
+        _legacy_relative_path(path)
+        self._do(lambda mp: _legacy_write_file(mp, path, data))
 
     def mkdir(self, path: str) -> None:
         self._assert_writable()
-        self._do(lambda mp: _safe_mounted_path(mp, path).mkdir(parents=True))
+        _legacy_relative_path(path)
+        self._do(lambda mp: _legacy_path(mp, path).mkdir(parents=True))
 
     def delete(self, path: str, recursive: bool = False) -> None:
         self._assert_writable()
+        _legacy_relative_path(path)
 
         def _do(mp: Path):
-            p = _safe_mounted_path(mp, path)
+            p = _legacy_path(mp, path)
             if p.is_dir():
+                if recursive:
+                    list(_legacy_tree(mp, path))
                 shutil.rmtree(p) if recursive else p.rmdir()
             else:
                 p.unlink()
@@ -3010,16 +3232,20 @@ class LoopMountRW(RWBackend):
 
     def rename(self, src: str, dst: str) -> None:
         self._assert_writable()
-        self._do(
-            lambda mp: _safe_mounted_path(mp, src).rename(_safe_mounted_path(mp, dst))
-        )
+        _legacy_relative_path(src)
+        _legacy_relative_path(dst)
+        self._do(lambda mp: _legacy_path(mp, src).rename(_legacy_path(mp, dst)))
 
 
 # =============================================================================
 # 9. REBUILD fallback (распаковать → mkfs → залить → заменить)
 # =============================================================================
-class RebuildRW(RWBackend):
-    """Fallback: полная пересборка образа через mkfs + копирование."""
+class RebuildRW(_LegacyMountSafety, RWBackend):
+    """Explicit, whole-image legacy rebuild; never a native-profile fallback.
+
+    This lossy strategy does not preserve filesystem metadata or free space.
+    A reader without a reopen() API must be reconstructed after a commit.
+    """
 
     MKFS = {
         "ext2": ["mkfs.ext2", "-F"],
@@ -3029,117 +3255,352 @@ class RebuildRW(RWBackend):
         "vfat": ["mkfs.vfat", "-F", "32"],
         "fat32": ["mkfs.vfat", "-F", "32"],
     }
+    MAX_ENTRIES = 100_000
+    MAX_DEPTH = 128
 
     def __init__(self, reader: RWBackend, fs_type: str):
         self.reader = reader
-        self.fs_type = fs_type
-        self.image = reader.image
+        self.fs_type = str(fs_type).lower()
+        self.image = Path(reader.image)
         self.offset = reader.offset
         self._fh = None
+        self._reader_stale = False
+        self._retained_workspace: Path | None = None
+        self._quarantine_marker = Path(str(self.image) + ".mountfile-quarantined")
+
+    def _require_reader(self) -> None:
+        if self._reader_stale:
+            raise RuntimeError(
+                "rebuild reader is closed/stale; reconstruct the backend"
+            )
+
+    def _assert_profile(self) -> None:
+        self._require_reader()
+        self._check_pending_mount()
+        if self._retained_workspace is not None or self._quarantine_marker.exists():
+            raise RuntimeError(
+                "rebuild evidence requires manual inspection before retry"
+            )
+        if self.fs_type not in self.MKFS:
+            raise RuntimeError("no mkfs for %s" % self.fs_type)
+        if self.offset != 0:
+            raise ValueError("legacy rebuild requires a whole image at offset zero")
+        info = self.reader.info()
+        if _normalise_mount_fs(info.fs_type) != _normalise_mount_fs(self.fs_type):
+            raise ValueError("rebuild filesystem does not match the reader profile")
+        if info.total_size != self.image.stat().st_size:
+            raise ValueError("legacy rebuild requires an exact whole-image extent")
+        if not sys.platform.startswith("linux"):
+            raise RuntimeError("legacy rebuild requires Linux; no ImDisk fallback")
 
     def info(self) -> FSInfo:
+        self._require_reader()
         info = self.reader.info()
+        supported = (
+            self.fs_type in self.MKFS
+            and self.offset == 0
+            and info.total_size == self.image.stat().st_size
+            and _normalise_mount_fs(info.fs_type) == _normalise_mount_fs(self.fs_type)
+            and sys.platform.startswith("linux")
+        )
         return FSInfo(
             fs_type=info.fs_type,
             offset=self.offset,
             backend="rebuild-rw",
             label=info.label,
             total_size=info.total_size,
-            writable=True,
-            write_strategy="rebuild",
+            writable=supported,
+            write_strategy="rebuild" if supported else "read-only-rebuild-profile",
         )
 
     def list(self, path: str = "/") -> list[FSEntry]:
+        self._require_reader()
+        _legacy_relative_path(path, allow_root=True)
         return self.reader.list(path)
 
     def read(self, path: str) -> bytes:
+        self._require_reader()
+        _legacy_relative_path(path)
         return self.reader.read(path)
 
+    def close(self) -> None:
+        self.reader.close()
+        self._reader_stale = True
+
+    @staticmethod
+    def _identity(image: Path) -> tuple:
+        metadata = image.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("legacy rebuild requires a regular, non-linked image")
+        return (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+
+    def _unpack(self, stage: Path, image_size: int) -> None:
+        pending = [("/", 0)]
+        seen: set[str] = set()
+        directory_inodes: set[int] = set()
+        total_bytes = 0
+        while pending:
+            parent, depth = pending.pop()
+            if depth > self.MAX_DEPTH:
+                raise ValueError("rebuild tree exceeds the directory depth limit")
+            for entry in self.reader.list(parent):
+                name = _legacy_relative_path(entry.name)
+                if "/" in name:
+                    raise ValueError("unsafe rebuild entry name: %r" % entry.name)
+                relative = _legacy_relative_path(entry.path)
+                expected = (parent.rstrip("/") + "/" + name).lstrip("/")
+                if relative != expected or relative in seen:
+                    raise ValueError(
+                        "inconsistent/duplicate rebuild entry path: %r" % entry.path
+                    )
+                if len(seen) >= self.MAX_ENTRIES:
+                    raise ValueError("rebuild tree exceeds the entry limit")
+                seen.add(relative)
+                if entry.deleted:
+                    raise ValueError("rebuild refuses deleted entries: %s" % entry.path)
+                if entry.mode is not None:
+                    kind = stat.S_IFMT(entry.mode)
+                    expected_kind = stat.S_IFDIR if entry.is_dir else stat.S_IFREG
+                    if kind not in (0, expected_kind):
+                        raise PermissionError(
+                            "rebuild refuses links/special entries: %s" % entry.path
+                        )
+                destination = _legacy_path(stage, relative)
+                if entry.is_dir:
+                    if entry.inode and entry.inode in directory_inodes:
+                        raise ValueError(
+                            "rebuild directory cycle/alias: %s" % entry.path
+                        )
+                    if entry.inode:
+                        directory_inodes.add(entry.inode)
+                    destination.mkdir()
+                    pending.append(("/" + relative, depth + 1))
+                else:
+                    if (
+                        not isinstance(entry.size, int)
+                        or isinstance(entry.size, bool)
+                        or entry.size < 0
+                    ):
+                        raise ValueError("invalid rebuild file size: %s" % entry.path)
+                    total_bytes += entry.size
+                    if total_bytes > image_size:
+                        raise ValueError(
+                            "rebuild contents exceed the image-size budget"
+                        )
+                    try:
+                        data = self.reader.read(entry.path)
+                    except Exception as error:
+                        raise OSError(
+                            "rebuild could not read %s: %s" % (entry.path, error)
+                        ) from error
+                    if not isinstance(data, bytes) or len(data) != entry.size:
+                        raise OSError("rebuild short/invalid read for %s" % entry.path)
+                    _legacy_write_file(stage, relative, data, exclusive=True)
+
+    def _refresh_reader(self) -> None:
+        reopen = getattr(self.reader, "reopen", None)
+        if callable(reopen):
+            reopen()
+            self._reader_stale = False
+
     def _rebuild_with(self, fn) -> None:
-        stage = Path(tempfile.mkdtemp(prefix="rebuild_"))
-        try:
-            # распаковать всё
-            for e in self.reader.walk("/"):
-                dst = stage / e.path.lstrip("/")
-                if e.is_dir:
-                    dst.mkdir(parents=True, exist_ok=True)
+        self._assert_profile()
+        original = self.image
+        parent = original.parent.resolve()
+        with _exclusive_image_lock(original):
+            identity = self._identity(original)
+            original_hash = _sha256_file(original)
+            workspace = Path(tempfile.mkdtemp(prefix=".mountfile-rebuild-", dir=parent))
+            stage = workspace / "tree"
+            stage.mkdir()
+            new_img = workspace / "staged.img"
+            rollback = workspace / "original.img"
+            preserve_workspace = False
+            try:
+                self._unpack(stage, identity[2])
+                fn(stage)
+                list(_legacy_tree(stage))
+                with new_img.open("xb") as handle:
+                    handle.truncate(identity[2])
+                result = subprocess.run(
+                    self.MKFS[self.fs_type] + [str(new_img)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "mkfs failed: %s" % (result.stderr or result.stdout)
+                    )
+                self._fill(stage, new_img)
+                if new_img.stat().st_size != identity[2]:
+                    raise OSError("mkfs changed the staged image size")
+                shutil.copystat(original, new_img)
+                _fsync_file(new_img)
+                # Cleanup failures, just like detach/read/copy failures, precede commit.
+                shutil.rmtree(stage)
+                if (
+                    self._identity(original) != identity
+                    or _sha256_file(original) != original_hash
+                ):
+                    raise RuntimeError(
+                        "source image changed during rebuild; refusing replacement"
+                    )
+                shutil.copy2(original, rollback)
+                _fsync_file(rollback)
+                if _sha256_file(rollback) != original_hash:
+                    raise OSError("rebuild rollback snapshot does not match the source")
+                if (
+                    self._identity(original) != identity
+                    or _sha256_file(original) != original_hash
+                ):
+                    raise RuntimeError(
+                        "source image changed while creating rollback snapshot"
+                    )
+                self._reader_stale = True
+                self.reader.close()
+                committed = False
+                try:
+                    os.replace(new_img, original)
+                    committed = True
+                    _fsync_directory(parent)
+                    self._refresh_reader()
+                except BaseException as commit_error:
+                    if committed:
+                        try:
+                            os.replace(rollback, original)
+                            _fsync_directory(parent)
+                            if _sha256_file(original) != original_hash:
+                                raise OSError("restored rebuild image hash mismatch")
+                        except BaseException as rollback_error:
+                            preserve_workspace = True
+                            self._quarantine_marker.write_text(
+                                "workspace=%s\ncommit_error=%r\nrollback_error=%r\n"
+                                % (workspace, commit_error, rollback_error),
+                                encoding="utf-8",
+                            )
+                            raise RuntimeError(
+                                "rebuild commit/rollback failed; evidence retained at %s"
+                                % workspace
+                            ) from rollback_error
+                    self._refresh_reader()
+                    raise
+            finally:
+                preserve_workspace = (
+                    preserve_workspace
+                    or getattr(self, "_retained_mount_point", None) is not None
+                )
+                if preserve_workspace:
+                    self._retained_workspace = workspace
+                    log.error("rebuild evidence retained at %s", workspace)
                 else:
                     try:
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        dst.write_bytes(self.reader.read(e.path))
-                    except Exception as ex:
-                        log.warning("skip %s: %s", e.path, ex)
-            # применить операцию
-            fn(stage)
-            # mkfs + залить
-            new_img = Path(tempfile.mkstemp(suffix=".img")[1])
-            size = self.image.stat().st_size
-            new_img.write_bytes(b"\x00" * min(size, 4096))
-            with new_img.open("r+b") as f:
-                f.truncate(size)
-            mkfs = self.MKFS.get(self.fs_type)
-            if not mkfs:
-                raise RuntimeError(f"no mkfs for {self.fs_type}")
-            r = subprocess.run(
-                mkfs + [str(new_img)],
-                capture_output=True,
-                text=True,
-            )
-            if r.returncode != 0:
-                raise RuntimeError(f"mkfs failed: {r.stderr}")
-            self._fill(stage, new_img)
-            new_img.replace(self.image)
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
+                        shutil.rmtree(workspace)
+                    except Exception as error:
+                        self._retained_workspace = workspace
+                        log.error(
+                            "rebuild workspace cleanup failed at %s: %s",
+                            workspace,
+                            error,
+                        )
+                        raise
 
     def _fill(self, stage: Path, image: Path) -> None:
+        # Preflight before mounting. Revalidate every copied component as well.
+        paths = list(_legacy_tree(stage))
         mp = Path(tempfile.mkdtemp(prefix="mnt_"))
         try:
-            r = subprocess.run(
-                ["mount", "-o", "loop", str(image), str(mp)],
+            result = subprocess.run(
+                ["mount", "-o", "loop,rw", str(image), str(mp)],
                 capture_output=True,
                 text=True,
+                timeout=120,
             )
-            if r.returncode != 0:
-                raise RuntimeError(f"mount failed: {r.stderr}")
-            for item in stage.iterdir():
-                dst = mp / item.name
-                if item.is_dir():
-                    shutil.copytree(item, dst, dirs_exist_ok=True)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "mount failed: %s" % (result.stderr or result.stdout)
+                )
+        except BaseException as error:
+            self._retain_mount(mp, error)
+            raise
+        try:
+            for item in paths:
+                if item == stage:
+                    continue
+                relative = item.relative_to(stage).as_posix()
+                source = _legacy_path(stage, relative)
+                destination = _legacy_path(mp, relative)
+                if stat.S_ISDIR(source.lstat().st_mode):
+                    destination.mkdir(exist_ok=True)
                 else:
-                    shutil.copy2(item, dst)
-            subprocess.run(["sync"])
+                    data = _legacy_read_file(stage, relative)
+                    _legacy_write_file(mp, relative, data, exclusive=True)
+                    if _legacy_read_file(mp, relative) != data:
+                        raise OSError(
+                            "rebuild mounted read-back mismatch: %s" % relative
+                        )
+            result = subprocess.run(
+                ["sync"], capture_output=True, text=True, timeout=120
+            )
+            if result.returncode != 0:
+                raise RuntimeError("sync failed: %s" % (result.stderr or result.stdout))
         finally:
-            subprocess.run(["umount", str(mp)], capture_output=True)
-            shutil.rmtree(mp, ignore_errors=True)
+            self._unmount(mp)
 
     def write_file(self, path: str, data: bytes) -> None:
-        target = path
+        relative = _legacy_relative_path(path)
 
-        def _do(stage: Path):
-            dst = stage / target.lstrip("/")
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(data)
+        def apply(stage: Path):
+            destination = _legacy_path(stage, relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _legacy_write_file(stage, relative, data)
 
-        self._rebuild_with(_do)
+        self._rebuild_with(apply)
 
     def mkdir(self, path: str) -> None:
-        self._rebuild_with(lambda stage: (stage / path.lstrip("/")).mkdir(parents=True))
+        relative = _legacy_relative_path(path)
+        self._rebuild_with(
+            lambda stage: _legacy_path(stage, relative).mkdir(parents=True)
+        )
 
     def delete(self, path: str, recursive: bool = False) -> None:
-        def _do(stage: Path):
-            p = stage / path.lstrip("/")
-            if p.is_dir():
-                shutil.rmtree(p) if recursive else p.rmdir()
-            else:
-                p.unlink()
+        relative = _legacy_relative_path(path)
 
-        self._rebuild_with(_do)
+        def apply(stage: Path):
+            target = _legacy_path(stage, relative)
+            if target.is_dir():
+                if recursive:
+                    list(_legacy_tree(stage, relative))
+                shutil.rmtree(target) if recursive else target.rmdir()
+            else:
+                target.unlink()
+
+        self._rebuild_with(apply)
 
     def rename(self, src: str, dst: str) -> None:
-        self._rebuild_with(
-            lambda stage: (stage / src.lstrip("/")).rename(stage / dst.lstrip("/"))
-        )
+        source = _legacy_relative_path(src)
+        destination = _legacy_relative_path(dst)
+
+        def apply(stage: Path):
+            old = _legacy_path(stage, source)
+            new = _legacy_path(stage, destination)
+            if old == new:
+                return
+            if old.is_dir() and old in new.parents:
+                raise ValueError(
+                    "cannot move a rebuild directory into itself/descendant"
+                )
+            if new.exists():
+                raise FileExistsError(new)
+            old.rename(new)
+
+        self._rebuild_with(apply)
 
 
 # =============================================================================
@@ -3174,6 +3635,7 @@ class UniversalFSRW:
         self.allow_libguestfs = bool(allow_libguestfs)
         self._requested_volume_size = volume_size
         self._backup_path: Path | None = None
+        self._closed = False
         self._open()
 
     def _open(self) -> None:
@@ -3334,8 +3796,13 @@ class UniversalFSRW:
         self.close()
 
     def close(self) -> None:
-        if self.backend:
+        if not self._closed and self.backend:
             self.backend.close()
+        self._closed = True
+
+    def _require_open(self) -> None:
+        if getattr(self, "_closed", False) or self.backend is None:
+            raise RuntimeError("filesystem facade is closed")
 
     def mount(self, options: str = "", mountpoint: str = "/") -> None:
         """Mount an external backend filesystem inside its isolated runtime."""
@@ -3368,6 +3835,7 @@ class UniversalFSRW:
 
     # ---- read/write -------------------------------------------------------
     def info(self) -> FSInfo:
+        self._require_open()
         info = self.backend.info()
         # Keep the backend's identity, while making operation support explicit
         # to CLI, GUI, and WriteEngine callers.  Browsability never implies RW.
@@ -3458,6 +3926,7 @@ class UniversalFSRW:
 
     def capability_status(self) -> dict:
         """Expose the selected backend's bounded operation support."""
+        self._require_open()
         return self.backend_status(self.backend.info())
 
     def _require_operation(self, operation: str) -> None:
@@ -3480,10 +3949,51 @@ class UniversalFSRW:
             )
 
     def list(self, path: str = "/") -> list[FSEntry]:
+        self._require_open()
         return self.backend.list(path)
 
     def read(self, path: str) -> bytes:
+        self._require_open()
         return self.backend.read(path)
+
+    def read_range(
+        self, path: str, offset: int = 0, length: int = RW_READ_RANGE_LIMIT
+    ) -> bytes:
+        """Read a bounded byte range through the RW facade.
+
+        Native readers may provide a direct range method; compatibility backends
+        fall back to their existing whole-file read and slice the validated
+        result.  The public contract is still bounded and never mutates an
+        image.
+        """
+        self._require_open()
+        entry = self.backend.stat(path)
+        if entry is None:
+            raise FileNotFoundError(path)
+        if entry.is_dir:
+            raise IsADirectoryError(path)
+        size = int(entry.size)
+        checked_range(offset, 0, upper=size, context="RW file read offset")
+        checked_range(
+            0, length, upper=RW_READ_RANGE_LIMIT, context="RW file read length"
+        )
+        length = min(length, size - offset)
+        _, end = checked_range(offset, length, upper=size, context="RW file read range")
+        if offset >= size:
+            return b""
+        reader = getattr(self.backend, "_reader", None)
+        direct = getattr(reader, "read_file_range", None)
+        if callable(direct):
+            return direct(path, offset, end - offset)
+        return self.backend.read(path)[offset:end]
+
+    def stat(self, path: str) -> FSEntry | None:
+        self._require_open()
+        return self.backend.stat(path)
+
+    def exists(self, path: str) -> bool:
+        self._require_open()
+        return self.backend.exists(path)
 
     def extract(
         self,
@@ -3492,9 +4002,11 @@ class UniversalFSRW:
         *,
         limits: ExtractionLimits | None = None,
     ) -> Path:
+        self._require_open()
         return self.backend.extract(path, dest, limits=limits)
 
     def walk(self, path: str = "/") -> Iterator[FSEntry]:
+        self._require_open()
         yield from self.backend.walk(path)
 
     def _audit_and_backup(self, op: WriteOperation) -> None:
@@ -3525,6 +4037,12 @@ class UniversalFSRW:
         op = WriteOperation("rename", src, {"dst": dst})
         self._audit_and_backup(op)
         self.backend.rename(src, dst)
+
+    def link(self, source: str, destination: str) -> None:
+        self._require_operation("link")
+        op = WriteOperation("hard-link", source, {"dst": destination})
+        self._audit_and_backup(op)
+        self.backend.link(source, destination)
 
     # ---- byte-range read/write -------------------------------------------
     def read_range(
@@ -3562,29 +4080,28 @@ class UniversalFSRW:
 
     # ---- maintenance ------------------------------------------------------
     def flush(self) -> dict:
-        """fsck + sync. Возвращает статус."""
+        """Read-only integrity check + sync; never repair image bytes implicitly."""
         result = {"fsck": None, "sync": None}
         info = self.info()
         fs_type = info.fs_type
         offset = self.offset if self.offset is not None else info.offset
-        if getattr(info, "write_strategy", "") == "native-ext2":
+        if getattr(info, "write_strategy", "").startswith("native-"):
             result["fsck"] = {
-                "skipped": "native ext2 metadata was validated after each staged "
+                "skipped": "native metadata was validated after each staged "
                 "mutation; no external repair tool was run"
             }
         elif fs_type.startswith(("ext",)) and shutil.which("e2fsck"):
-            command = ["e2fsck"]
             if offset:
-                # e2fsck's documented offset extended option confines repair
-                # to the filesystem embedded at this byte offset.
-                command.extend(["-E", "offset=%d" % offset])
-            command.extend(["-f", "-y", str(self.image)])
-            r = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-            )
-            result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
+                result["fsck"] = {
+                    "skipped": "e2fsck cannot enforce selected partition bounds"
+                }
+            else:
+                r = subprocess.run(
+                    ["e2fsck", "-f", "-n", str(self.image)],
+                    capture_output=True,
+                    text=True,
+                )
+                result["fsck"] = {"exit": r.returncode, "out": r.stdout[-1000:]}
         elif fs_type.startswith("fat") and shutil.which("fsck.fat"):
             if offset:
                 result["fsck"] = {
@@ -3592,7 +4109,7 @@ class UniversalFSRW:
                 }
             else:
                 r = subprocess.run(
-                    ["fsck.fat", "-a", str(self.image)],
+                    ["fsck.fat", "-n", str(self.image)],
                     capture_output=True,
                     text=True,
                 )
@@ -3603,10 +4120,30 @@ class UniversalFSRW:
         return result
 
     def restore_from_backup(self) -> bool:
+        self._require_open()
         latest = self.backup.latest()
         if not latest:
             return False
-        shutil.copy2(latest, self.image)
+        with _exclusive_image_lock(self.image):
+            self.backend.close()
+            self.backend = None
+            self._closed = True
+            descriptor, name = tempfile.mkstemp(
+                prefix=f".{self.image.name}.", suffix=".restore", dir=self.image.parent
+            )
+            os.close(descriptor)
+            staged = Path(name)
+            try:
+                shutil.copy2(latest, staged)
+                _fsync_file(staged)
+                if _sha256_file(staged) != _sha256_file(latest):
+                    raise OSError("restored backup bytes did not match")
+                os.replace(staged, self.image)
+                _fsync_directory(self.image.parent)
+                self._open()
+                self._closed = False
+            finally:
+                staged.unlink(missing_ok=True)
         log.info("restored from %s", latest)
         return True
 

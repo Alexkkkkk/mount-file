@@ -149,6 +149,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Emit external-checker inventory for this platform
+        if: always()
+        run: python scripts/checker_matrix.py --json-out checker-matrix.json
+
+      - name: Upload platform checker inventory
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: external-checker-matrix-${{ matrix.os }}-py${{ matrix.python }}
+          path: checker-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify installable AI surface
         shell: bash
         run: |
@@ -220,13 +233,13 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y dosfstools mtools build-essential exfatprogs ntfs-3g \
+          sudo apt-get install -y dosfstools mtools build-essential exfatprogs ntfs-3g e2fsprogs \
             libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
 
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov hypothesis 'setuptools>=68' wheel
+          python -m pip install pytest pytest-cov hypothesis pytsk3 'setuptools>=68' wheel
           python -m pip install -r requirements.txt
 
       - name: Run the full suite with pytsk3 available
@@ -234,11 +247,89 @@ jobs:
           python -m pytest tests/ -v --cov=mountfile --cov-report=term
           --cov-fail-under=20
 
+      - name: Emit external-checker capability matrix
+        run: python scripts/checker_matrix.py --json-out checker-matrix.json
+
+      - name: Upload external-checker capability matrix
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: external-checker-matrix-linux
+          path: checker-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Execute checker fixture acceptance matrix
+        run: >-
+          python scripts/checker_acceptance.py
+          --json-out checker-acceptance.json
+          --junitxml checker-acceptance-junit.xml
+
+      - name: Upload checker fixture acceptance artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: checker-fixture-acceptance-linux
+          path: |
+            checker-acceptance.json
+            checker-acceptance-junit.xml
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Execute writer recovery acceptance fixtures
+        run: >-
+          python scripts/recovery_acceptance.py
+          --json-out recovery-acceptance.json
+          --junitxml recovery-acceptance-junit.xml
+
+      - name: Upload writer recovery acceptance artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: writer-recovery-acceptance-linux
+          path: |
+            recovery-acceptance.json
+            recovery-acceptance-junit.xml
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate conservative product status contract
+        run: python scripts/product_status_contract.py --json-out product-status.json
+
+      - name: Upload product status contract
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: product-status-contract-linux
+          path: product-status.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Entry-point and GUI import diagnostics
         run: |
           python main.py --version
           python main.py --diag
           python -c "from mountfile.mainwindow import MainWindow; from mountfile.hexview import HexView; print('GUI import OK')"
+
+      - name: Run reproducible read-only VFS benchmark
+        env:
+          PYTHON_BIN: python
+          INCLUDE_10M: "1"
+        run: |
+          rm -f checker-matrix.json checker-acceptance.json checker-acceptance-junit.xml
+          rm -f recovery-acceptance.json recovery-acceptance-junit.xml product-status.json
+          output_dir="${RUNNER_TEMP}/mountfile-vfs-benchmark"
+          scripts/run_vfs_benchmarks.sh "${output_dir}"
+          python scripts/benchmark_artifact.py \
+            "${output_dir}/bench_report.json" \
+            --json-out "${output_dir}/benchmark-validation.json"
+
+      - name: Upload reproducible benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vfs-benchmark-linux
+          path: |
+            ${{ runner.temp }}/mountfile-vfs-benchmark/bench_report.json
+            ${{ runner.temp }}/mountfile-vfs-benchmark/benchmark-validation.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   build:
     if: ${{ github.event_name != 'schedule' }}
@@ -357,7 +448,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller pytest wheel
+          python -m pip install pyinstaller pytest hypothesis wheel
           python -m pip install -r requirements.txt
           python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0'
 

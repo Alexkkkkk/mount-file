@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import struct
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +103,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         self.offset = offset
         self._volume_size = volume_size
         self._stream = None
+        self._lock = threading.RLock()
         self.volume_label = ""
         self._open()
 
@@ -168,8 +170,9 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             context="exFAT read exceeds image bounds",
             error_type=ExfatReadError,
         )
-        self._stream.seek(absolute)
-        data = self._stream.read(size)
+        with self._lock:
+            self._stream.seek(absolute)
+            data = self._stream.read(size)
         if len(data) != size:
             raise ExfatReadError("short exFAT read")
         return data
@@ -240,15 +243,19 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
     def _chain(self, start, size=0, *, no_fat_chain=False):
         return list(self._iter_chain(start, size, no_fat_chain=no_fat_chain))
 
-    def _read_directory_bytes(self, cluster):
+    def _read_directory_bytes(self, cluster, size=0, no_fat_chain=False):
         """Read a directory only while its cumulative size stays bounded."""
+        if size < 0 or size > _MAX_DIR_BYTES or size % self.profile.cluster_size:
+            raise ExfatReadError("exFAT directory size exceeds reader bounds")
         raw = bytearray()
-        for item in self._iter_chain(cluster, no_fat_chain=False):
+        for item in self._iter_chain(cluster, size, no_fat_chain=no_fat_chain):
             if self.profile.cluster_size > _MAX_DIR_BYTES - len(raw):
                 raise ExfatReadError("exFAT directory exceeds reader limit")
             raw.extend(
                 self._read_rel(self._cluster_offset(item), self.profile.cluster_size)
             )
+        if size and len(raw) != size:
+            raise ExfatReadError("exFAT directory length disagrees with its chain")
         return bytes(raw)
 
     def _read_stream(self, first_cluster, size, no_fat_chain=False):
@@ -386,8 +393,8 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             checksum = (checksum + value) & 0xFFFF
         return checksum
 
-    def _directory(self, cluster):
-        raw = self._read_directory_bytes(cluster)
+    def _directory(self, cluster, size=0, no_fat_chain=False):
+        raw = self._read_directory_bytes(cluster, size, no_fat_chain)
         entries = []
         seen_names = set()
         pos = 0
@@ -586,7 +593,9 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
             match = next(
                 (
                     item
-                    for item in self._directory(current.first_cluster)
+                    for item in self._directory(
+                        current.first_cluster, current.size, current.no_fat_chain
+                    )
                     if self._upcase_key(item.name) == self._upcase_key(part)
                 ),
                 None,
@@ -628,7 +637,7 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
                 "attributes": item.attributes,
             }
             for item in sorted(
-                self._directory(entry.first_cluster),
+                self._directory(entry.first_cluster, entry.size, entry.no_fat_chain),
                 key=lambda item: (
                     not item.is_dir,
                     self._upcase_key(item.name),
@@ -644,6 +653,13 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         return entry.size
 
     def read_file_range(self, path, offset=0, length=1 << 20):
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(length, int)
+            or isinstance(length, bool)
+        ):
+            raise ExfatReadError("exFAT read offset and length must be integers")
         entry = self._find(path)
         if entry.is_dir:
             raise IsADirectoryError(path)
@@ -667,7 +683,15 @@ class NativeExfatImage(ReadOnlyVFSStatMixin):
         return data + bytes(length - valid_length)
 
     def read_file(self, path):
-        return self.read_file_range(path, 0, self.file_size(path))
+        size = self.file_size(path)
+        output = bytearray()
+        for offset in range(0, size, _MAX_READ):
+            length = min(_MAX_READ, size - offset)
+            chunk = self.read_file_range(path, offset, length)
+            if len(chunk) != length:
+                raise ExfatReadError("short exFAT whole-file read")
+            output.extend(chunk)
+        return bytes(output)
 
 
 __all__ = ["ExfatReadError", "NativeExfatImage"]

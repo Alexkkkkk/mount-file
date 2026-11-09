@@ -100,6 +100,7 @@ class NtfsAttributeSummary:
     attribute_id: int = 0
     allocated_size: int | None = None
     initialized_size: int | None = None
+    content_supported: bool = True
 
 
 @dataclass(frozen=True)
@@ -173,9 +174,7 @@ def _fixup_logfile_page(raw_page: bytes, *, page_size: int) -> bytes:
     if raw_page[:4] == b"\xff\xff\xff\xff" and not raw_page.strip(b"\xff"):
         # A volume whose log was never used after formatting carries no
         # restart page at all: the whole page stays erased (0xFF).
-        raise NtfsLogFileUnused(
-            "NTFS $LogFile restart pages were never written"
-        )
+        raise NtfsLogFileUnused("NTFS $LogFile restart pages were never written")
     if raw_page[:4] != b"RSTR":
         raise NtfsMetadataError("NTFS $LogFile restart page signature is invalid")
     usa_offset, usa_count = struct.unpack_from("<HH", raw_page, 4)
@@ -268,7 +267,10 @@ def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestar
     if first.flags != second.flags:
         raise NtfsMetadataError("NTFS $LogFile restart pages disagree on clean state")
     if not first.clean_dismount:
-        raise NtfsMetadataError("NTFS $LogFile requires recovery or has unknown state")
+        raise NtfsMetadataError(
+            "NTFS $LogFile requires recovery or has unknown state",
+            RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+        )
     return max((first, second), key=lambda item: (item.revision, item.current_lsn))
 
 
@@ -318,8 +320,15 @@ def _parse_runlist(
     *,
     lowest_vcn: int = 0,
     highest_vcn: int | None = None,
+    allow_sparse: bool = True,
 ) -> tuple[NtfsRun, ...]:
-    """Decode and validate a nonresident runlist within the volume."""
+    """Decode bounded extents; lcn=None describes metadata, not readable bytes.
+
+    Native attribute callers explicitly disallow sparse runs except for the
+    separately validated $BadClus metadata layout.
+    """
+    if not isinstance(allow_sparse, bool):
+        raise NtfsMetadataError("allow_sparse must be a boolean")
     pos = 0
     previous_lcn = 0
     vcn = lowest_vcn
@@ -353,8 +362,12 @@ def _parse_runlist(
         encoded = raw[pos : pos + offset_size]
         pos += offset_size
         if offset_size == 0:
-            raise NtfsMetadataError("sparse NTFS run is unsupported")
-        if encoded[-1] & 0x80:
+            if not allow_sparse:
+                raise NtfsMetadataError("sparse NTFS run is unsupported")
+            if vcn + run_length > cluster_count:
+                raise NtfsMetadataError("sparse NTFS run exceeds volume VCN bounds")
+            lcn = None
+        elif encoded[-1] & 0x80:
             delta = int.from_bytes(encoded, "little", signed=False) - (
                 1 << (8 * offset_size)
             )
@@ -498,15 +511,21 @@ def parse_ntfs_attribute_stream(
     upcase_table: tuple[int, ...] | None = None,
     allow_attribute_list: bool = False,
     allow_end_marker_padding: bool = False,
+    allow_badclus_sparse: bool = False,
 ) -> tuple[NtfsAttributeSummary, ...]:
     """Validate all attributes in one USA-restored FILE record.
 
     ``allow_attribute_list`` exposes a validated list descriptor for the native
     reader's bounded cross-record resolver. It does not resolve references by
     itself; ordinary callers remain fail-closed when a list is present.
+    ``allow_badclus_sparse`` describes only named $Bad DATA metadata; its bytes
+    remain unsupported. The native reader additionally checks record 8's root
+    identity and the complete fresh-format $BadClus layout before using it.
     """
     if not isinstance(allow_attribute_list, bool):
         raise NtfsMetadataError("allow_attribute_list must be a boolean")
+    if not isinstance(allow_badclus_sparse, bool):
+        raise NtfsMetadataError("allow_badclus_sparse must be a boolean")
     raw = record.fixed_record
     if cluster_count is None:
         cluster_count = 1 << 62
@@ -578,6 +597,9 @@ def parse_ntfs_attribute_stream(
                 cluster_count,
                 lowest_vcn=lowest_vcn,
                 highest_vcn=highest_vcn,
+                allow_sparse=allow_badclus_sparse
+                and type_code == 0x80
+                and name == "$Bad",
             )
             run_count = len(runs)
             allocated_size, data_size, initialized_size = struct.unpack_from(
@@ -633,6 +655,7 @@ def parse_ntfs_attribute_stream(
                 attribute_id,
                 allocated_size,
                 initialized_size,
+                not any(run.lcn is None for run in runs),
             )
         )
         pos += length
@@ -711,7 +734,19 @@ def _parse_ntfs_index_entries(
             name = key[0x42:name_end].decode("utf-16le")
         except UnicodeDecodeError as exc:
             raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-        if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        is_directory = bool(struct.unpack_from("<I", key, 0x38)[0] & 0x10000000)
+        root_self = (
+            name == "."
+            and is_directory
+            and reference == parent
+            and reference & ((1 << 48) - 1) == 5
+        )
+        if (
+            (name in (".", "..") and not root_self)
+            or "/" in name
+            or "\\" in name
+            or "\x00" in name
+        ):
             raise NtfsMetadataError(
                 "NTFS index name contains an invalid path component"
             )
@@ -731,7 +766,7 @@ def _parse_ntfs_index_entries(
             raise NtfsMetadataError("NTFS index names are duplicate or unsorted")
         names.add(folded)
         previous_name = name
-        result.append(NtfsIndexEntry(reference, name, bool(key[0x38] & 0x10000000)))
+        result.append(NtfsIndexEntry(reference, name, is_directory))
         if flags & 1:
             if not allow_children or entry_length < 24 + key_length:
                 raise NtfsMetadataError(
@@ -905,7 +940,10 @@ def parse_ntfs_file_name(value: bytes) -> NtfsFileName:
         name = value[66:end].decode("utf-16le")
     except UnicodeDecodeError as exc:
         raise NtfsMetadataError("NTFS FILE_NAME is not valid UTF-16LE") from exc
-    if name in (".", "..") or any(c in name for c in ("/", "\\", "\x00")):
+    # "." is a legal self-reference entry inside a directory index, so it must
+    # not be treated as a malformed path component. ".." and separators remain
+    # fail-closed because they cannot address a real child of the directory.
+    if name == ".." or any(c in name for c in ("/", "\\", "\x00")):
         raise NtfsMetadataError("NTFS FILE_NAME contains an invalid path component")
     return NtfsFileName(
         parent_reference,
@@ -971,6 +1009,13 @@ def _parse_ntfs_upcase_table(raw: bytes) -> tuple[int, ...]:
 def _validate_nonresident_data_stream(
     attribute: NtfsAttributeSummary, cluster_size: int, *, name: str
 ) -> None:
+    if not attribute.content_supported or any(
+        run.lcn is None for run in attribute.runs
+    ):
+        raise NtfsMetadataError(
+            f"{name} sparse NTFS content is unsupported",
+            RefusalCode.OPERATION_NOT_SUPPORTED,
+        )
     if not attribute.nonresident or attribute.lowest_vcn != 0 or not attribute.runs:
         raise NtfsMetadataError(f"{name} has no complete nonresident DATA stream")
     clusters = sum(run.length for run in attribute.runs)
@@ -1127,7 +1172,10 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         )
         if not volume_state.clean:
             self.close()
-            raise NtfsMetadataError("NTFS volume is dirty or requires repair")
+            raise NtfsMetadataError(
+                "NTFS volume is dirty or requires repair",
+                RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
+            )
         try:
             logfile_record = self.read_mft_record(2)
             logfile_attrs = self._attributes_for_record(2, logfile_record)
@@ -1276,7 +1324,11 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             cluster_count=cluster_count,
             upcase_table=upcase_table,
             allow_attribute_list=True,
+            allow_end_marker_padding=True,
+            allow_badclus_sparse=record_number == 8 and not record.is_directory,
         )
+        if any(not attribute.content_supported for attribute in base_attributes):
+            self._validate_badclus_metadata(record_number, record, base_attributes)
         list_attributes = [
             attribute
             for attribute in base_attributes
@@ -1341,6 +1393,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     cluster_count=cluster_count,
                     upcase_table=upcase_table,
                     allow_attribute_list=True,
+                    allow_end_marker_padding=True,
                 )
                 if any(
                     attribute.type_code == _ATTRIBUTE_LIST
@@ -1482,6 +1535,58 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
             )
         return tuple(resolved)
 
+    def _validate_badclus_metadata(self, record_number, record, attributes):
+        """Accept fresh-format $BadClus metadata, never sparse readable bytes."""
+        names = [attribute for attribute in attributes if attribute.type_code == 0x30]
+        data = [attribute for attribute in attributes if attribute.type_code == 0x80]
+        if (
+            record_number != 8
+            or record.is_directory
+            or len(names) != 1
+            or names[0].name
+            or names[0].nonresident
+            or names[0].resident_value is None
+            or len(data) != 2
+            or any(attribute.type_code == _ATTRIBUTE_LIST for attribute in attributes)
+        ):
+            raise NtfsMetadataError("NTFS sparse $BadClus metadata identity is invalid")
+        file_name = parse_ntfs_file_name(names[0].resident_value)
+        if (
+            file_name.name != "$BadClus"
+            or file_name.parent_reference & ((1 << 48) - 1) != 5
+            or file_name.file_attributes & 0x10000000
+            or file_name.file_attributes & 0x6 != 0x6
+        ):
+            raise NtfsMetadataError("NTFS sparse $BadClus root FILE_NAME is invalid")
+        root = self.read_mft_record(5, reference=file_name.parent_reference)
+        if not root.is_directory:
+            raise NtfsMetadataError("NTFS $BadClus parent is not the root directory")
+        unnamed = [attribute for attribute in data if not attribute.name]
+        bad = [attribute for attribute in data if attribute.name == "$Bad"]
+        capacity = self.profile.boot.cluster_count * self.profile.boot.cluster_size
+        if (
+            len(unnamed) != 1
+            or unnamed[0].nonresident
+            or unnamed[0].resident_value != b""
+            or len(bad) != 1
+            or not bad[0].nonresident
+            or bad[0].lowest_vcn != 0
+            or bad[0].highest_vcn != self.profile.boot.cluster_count - 1
+            or bad[0].data_size != capacity
+            or bad[0].allocated_size != capacity
+            or bad[0].initialized_size != 0
+            or any(run.lcn is not None for run in bad[0].runs)
+        ):
+            raise NtfsMetadataError("NTFS sparse $BadClus DATA layout is unsupported")
+
+    @staticmethod
+    def _require_supported_content(attributes):
+        if any(not attribute.content_supported for attribute in attributes):
+            raise NtfsMetadataError(
+                "sparse NTFS content ($BadClus:$Bad) is unsupported",
+                RefusalCode.OPERATION_NOT_SUPPORTED,
+            )
+
     @staticmethod
     def _standard_information_fields(attributes) -> dict:
         matches = [attribute for attribute in attributes if attribute.type_code == 0x10]
@@ -1527,6 +1632,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 entry, child, parent_reference
             )
             standard_info = self._standard_information_fields(child_attrs)
+            unsupported = [a.name for a in child_attrs if not a.content_supported]
+            content_info = (
+                {"content_supported": False, "unsupported_streams": unsupported}
+                if unsupported
+                else {}
+            )
             data = next(
                 (a for a in child_attrs if a.type_code == 0x80 and not a.name), None
             )
@@ -1546,6 +1657,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                     "date": standard_info["modified"],
                     "inode": child_number,
                     **standard_info,
+                    **content_info,
                 }
             )
         result.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))
@@ -1575,6 +1687,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
 
     def _read_nonresident_range(self, attribute, offset: int, length: int) -> bytes:
         """Read logical stream bytes, zero-filling the uninitialized tail."""
+        self._require_supported_content((attribute,))
+        if any(run.lcn is None for run in attribute.runs):
+            raise NtfsMetadataError(
+                "sparse NTFS content is unsupported",
+                RefusalCode.OPERATION_NOT_SUPPORTED,
+            )
         data_size = attribute.data_size
         initialized_size = (
             data_size
@@ -1614,12 +1732,10 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         number, record = self._resolve(path)
         if record.is_directory:
             raise NtfsMetadataError("cannot read directory content as a file")
+        attributes = self._attributes_for_record(number, record)
+        self._require_supported_content(attributes)
         data = next(
-            (
-                a
-                for a in self._attributes_for_record(number, record)
-                if a.type_code == 0x80 and not a.name
-            ),
+            (a for a in attributes if a.type_code == 0x80 and not a.name),
             None,
         )
         if data is None:
@@ -1631,6 +1747,11 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         return self._read_nonresident_range(data, offset, length)
 
     def _read_runs(self, runs, offset, length):
+        if any(run.lcn is None for run in runs):
+            raise NtfsMetadataError(
+                "sparse NTFS content is unsupported",
+                RefusalCode.OPERATION_NOT_SUPPORTED,
+            )
         volume = self.reopen()
         output = bytearray()
         wanted_end = offset + length
@@ -1754,15 +1875,25 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 )
             pending = list(child_vcns)
             visited_vcns: set[int] = set()
+            vcn_unit = (
+                self.profile.boot.cluster_size
+                if self.profile.boot.cluster_size <= block_size
+                else self.profile.boot.bytes_per_sector
+            )
             while pending:
                 vcn = pending.pop()
                 if vcn in visited_vcns:
                     raise NtfsMetadataError("NTFS $I30 index contains a cycle")
-                if vcn < 0 or vcn * block_size >= allocation.data_size:
+                logical_offset = vcn * vcn_unit
+                if (
+                    vcn < 0
+                    or logical_offset % block_size
+                    or logical_offset + block_size > allocation.data_size
+                ):
                     raise NtfsMetadataError("NTFS $I30 child VCN is outside allocation")
                 visited_vcns.add(vcn)
                 block = self._read_nonresident_range(
-                    allocation, vcn * block_size, block_size
+                    allocation, logical_offset, block_size
                 )
                 block_entries, block_children = _parse_ntfs_index_block(
                     block,
@@ -1776,6 +1907,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         unique: dict[tuple[tuple[int, ...], int], NtfsIndexEntry] = {}
         names: set[tuple[int, ...]] = set()
         for entry in entries:
+            if (
+                entry.name == "."
+                and entry.reference == parent_reference
+                and record_number == 5
+            ):
+                continue
             folded = self._name_key(entry.name)
             if folded in names:
                 raise NtfsMetadataError("NTFS directory index contains duplicate names")
@@ -1786,6 +1923,9 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     def read_file(self, path):
         """Return the complete file, fetching it through bounded ranges."""
         size = self.file_size(path)
+        if not size:
+            # Metadata-only files must not bypass content refusal as empty reads.
+            return self.read_file_range(path, 0, 0)
         output = bytearray()
         offset = 0
         while offset < size:

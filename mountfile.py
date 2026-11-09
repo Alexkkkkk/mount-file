@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import base64
 import contextlib
 import ctypes
 import json
@@ -37,6 +38,7 @@ import logging
 import logging.handlers
 import os
 import platform
+import plistlib
 import re
 import shutil
 import signal
@@ -103,7 +105,8 @@ class Paths:
 
     @classmethod
     def lock_file(cls) -> Path:
-        return cls.tmp() / f"{APP_NAME}.lock"
+        # Per-user config avoids collisions with another user's global /tmp.
+        return cls.data() / f"{APP_NAME}.lock"
 
 
 # ============================================================================
@@ -202,28 +205,35 @@ class SingleInstance:
     def __init__(self) -> None:
         self._fh = None
         self._handle = None
+        self._win_api = None
         self._ok = False
 
     def acquire(self) -> bool:
+        if self._ok:
+            return True
         if IS_WIN:
             return self._win()
         return self._posix()
 
     def release(self) -> None:
-        if not self._ok:
-            return
         with contextlib.suppress(Exception):
-            if IS_WIN and self._handle:
-                ctypes.windll.kernel32.ReleaseMutex(self._handle)
-                ctypes.windll.kernel32.CloseHandle(self._handle)
-            elif self._fh:
+            if self._handle:
+                self._win_api.CloseHandle(self._handle)
+            if self._fh:
                 self._fh.close()
-                Paths.lock_file().unlink(missing_ok=True)
+            # Never unlink a flock file: another process may already hold the
+            # old inode, allowing a third process to lock a newly created one.
+        self._fh = self._handle = None
         self._ok = False
 
     def _posix(self) -> bool:
         try:
-            self._fh = open(Paths.lock_file(), "a+")
+            descriptor = os.open(
+                Paths.lock_file(),
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            self._fh = os.fdopen(descriptor, "r+", encoding="ascii")
             import fcntl
 
             fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -234,20 +244,31 @@ class SingleInstance:
             self._ok = True
             return True
         except (BlockingIOError, OSError):
+            self.release()
             return False
 
     def _win(self) -> bool:
         try:
-            k = ctypes.windll.kernel32
-            self._handle = k.CreateMutexW(None, False, f"Global\\{APP_NAME}")
-            if k.GetLastError() == 183:  # already exists
-                if self._handle:
-                    k.CloseHandle(self._handle)
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            # The default ctypes return type is a 32-bit int, which truncates
+            # real HANDLEs on 64-bit Windows.
+            k.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+            k.CreateMutexW.restype = ctypes.c_void_p
+            k.CloseHandle.argtypes = [ctypes.c_void_p]
+            k.CloseHandle.restype = ctypes.c_int
+            self._win_api = k
+            self._handle = k.CreateMutexW(None, False, f"Local\\{APP_NAME}")
+            if not self._handle:
+                return False
+            if ctypes.get_last_error() == 183:  # already exists
+                self.release()
                 return False
             self._ok = True
             return True
-        except Exception:
-            return True  # fail-open
+        except Exception as exc:
+            log.error("Could not acquire instance lock: %s", exc)
+            self.release()
+            return False
 
 
 # ============================================================================
@@ -356,15 +377,29 @@ class LinuxBackend(MountBackend):
 
     LOOP_IMG_RE = re.compile(r"^(/dev/loop\d+)\s+(.+?)\s+(\S+)\s")
 
+    @staticmethod
+    def _euid() -> int:
+        """Effective uid, or a human MountError when the OS has no geteuid."""
+        geteuid = getattr(os, "geteuid", None)
+        if geteuid is None:
+            raise MountError(
+                "Loop-монтирование доступно только в Linux: в этой системе "
+                "нет os.geteuid. Выберите backend своей платформы."
+            )
+        return int(geteuid())
+
     def mount(self, image: Path, target: Path) -> Path:
         image = image.resolve()
-        target.mkdir(parents=True, exist_ok=True)
 
-        if shutil.which("udisksctl") and os.geteuid() != 0:
-            r = self._run(["udisksctl", "loop-setup", "-f", str(image)])
+        if shutil.which("udisksctl") and self._euid() != 0:
+            r = self._run(["udisksctl", "loop-setup", "--read-only", "-f", str(image)])
             m = re.search(r"(/dev/loop\d+)", r)
-            if m:
-                dev = m.group(1)
+            if not m:
+                raise MountError(
+                    "Could not determine the loop device from udisksctl output."
+                )
+            dev = m.group(1)
+            try:
                 output = self._run(["udisksctl", "mount", "-b", dev])
                 mounted = re.search(r"^Mounted\s+\S+\s+at\s+(.+?)\.\s*$", output)
                 if not mounted:
@@ -377,24 +412,44 @@ class LinuxBackend(MountBackend):
                         "udisksctl reported a mount point that is not an absolute path."
                     )
                 return mountpoint
+            except MountError:
+                # A failure after loop-setup must not leave an attached image.
+                # This also handles successful mounts with unparseable output.
+                with contextlib.suppress(MountError):
+                    self._run(["udisksctl", "unmount", "-b", dev])
+                with contextlib.suppress(MountError):
+                    self._run(["udisksctl", "loop-delete", "-b", dev])
+                raise
 
-        if os.geteuid() != 0:
+        if self._euid() != 0:
             raise MountError(
                 "Root is required to mount loop devices.\n"
                 "Either run with sudo, or install udisks2 for unprivileged mounting."
             )
-        self._run(["mount", "-o", "loop,ro", str(image), str(target)])
+        target = target.resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        self._run(["mount", "-o", "loop,ro", "--", str(image), str(target)])
         return target
 
     def unmount(self, target: Path) -> None:
-        try:
-            self._run(["umount", str(target)])
+        target = target.resolve()
+        if self._euid() == 0:
+            self._run(["umount", "--", str(target)])
             return
-        except MountError:
-            pass
         if shutil.which("udisksctl"):
-            with contextlib.suppress(MountError):
-                self._run(["udisksctl", "unmount", "-b", str(target)])
+            # -b accepts a block device, not a mount-point directory. Only
+            # resolve exact loop-image mounts, never a parent/user device.
+            device = next(
+                (
+                    m["device"]
+                    for m in self.list_mounted()
+                    if m["target"] == str(target)
+                ),
+                None,
+            )
+            if device:
+                self._run(["udisksctl", "unmount", "-b", device])
+                self._run(["udisksctl", "loop-delete", "-b", device])
                 return
         raise MountError(f"Cannot unmount {target}.")
 
@@ -404,15 +459,28 @@ class LinuxBackend(MountBackend):
             for line in Path("/proc/mounts").read_text().splitlines():
                 parts = line.split()
                 if len(parts) >= 3 and parts[0].startswith("/dev/loop"):
-                    out.append({"device": parts[0], "target": parts[1], "fs": parts[2]})
+                    if not re.fullmatch(r"/dev/loop\d+", parts[0]):
+                        continue
+                    target = re.sub(
+                        r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), parts[1]
+                    )
+                    out.append({"device": parts[0], "target": target, "fs": parts[2]})
         return out
 
     @staticmethod
     def _run(cmd: List[str]) -> str:
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "LC_ALL": "C"},
+            )
         except FileNotFoundError as e:
             raise MountError(f"Tool not found: {cmd[0]}") from e
+        except OSError as e:
+            raise MountError(f"Could not run {cmd[0]}: {e}") from e
         if r.returncode != 0:
             msg = (r.stderr or r.stdout or "").strip() or f"{cmd[0]} failed"
             raise MountError(msg)
@@ -424,8 +492,9 @@ class MacBackend(MountBackend):
 
     def mount(self, image: Path, target: Path) -> Path:
         image = image.resolve()
+        target = target.resolve()
         target.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run(
+        LinuxBackend._run(
             [
                 "hdiutil",
                 "attach",
@@ -435,39 +504,29 @@ class MacBackend(MountBackend):
                 "-nobrowse",
                 "-readonly",
             ],
-            capture_output=True,
-            text=True,
-            check=False,
         )
-        if r.returncode != 0:
-            raise MountError((r.stderr or r.stdout or "hdiutil attach failed").strip())
         return target
 
     def unmount(self, target: Path) -> None:
-        r = subprocess.run(
-            ["hdiutil", "detach", str(target), "-force"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if r.returncode != 0:
-            raise MountError((r.stderr or r.stdout or "hdiutil detach failed").strip())
+        LinuxBackend._run(["hdiutil", "detach", str(target.resolve())])
 
     def list_mounted(self) -> List[Dict[str, str]]:
         out: List[Dict[str, str]] = []
-        with contextlib.suppress(Exception):
-            r = subprocess.run(["hdiutil", "info"], capture_output=True, text=True)
-            cur: Dict[str, str] = {}
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if line.startswith("/dev/disk"):
-                    if cur:
-                        out.append(cur)
-                    cur = {"device": line.split()[0]}
-                elif line.startswith("/Volumes/") and cur:
-                    cur["target"] = line
-            if cur:
-                out.append(cur)
+        text = LinuxBackend._run(["hdiutil", "info", "-plist"])
+        try:
+            info = plistlib.loads(text.encode("utf-8"))
+            for image in info.get("images", []):
+                for entity in image.get("system-entities", []):
+                    if entity.get("mount-point"):
+                        out.append(
+                            {
+                                "device": entity.get("dev-entry", ""),
+                                "target": entity["mount-point"],
+                                "image": image.get("image-path", ""),
+                            }
+                        )
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise MountError("Invalid hdiutil mount information.") from exc
         return out
 
 
@@ -479,69 +538,105 @@ class WindowsBackend(MountBackend):
 
     PS_MOUNT = (
         "param($p) "
-        "$i = Mount-DiskImage -ImagePath $p -PassThru; "
-        "($i | Get-Volume).DriveLetter"
+        "$i = Mount-DiskImage -ImagePath $p -Access ReadOnly -PassThru -ErrorAction Stop; "
+        "try { $letters = @($i | Get-Volume -ErrorAction Stop | "
+        "Where-Object {$_.DriveLetter} | ForEach-Object {$_.DriveLetter}); "
+        "if ($letters.Count -ne 1) { throw 'Image did not expose a unique drive letter' }; "
+        "$letters[0] } catch { "
+        "Dismount-DiskImage -ImagePath $p -ErrorAction SilentlyContinue; throw }"
     )
     PS_UNMOUNT = "param($p) Dismount-DiskImage -ImagePath $p"
 
     def mount(self, image: Path, target: Path) -> Path:
         image = image.resolve()
         letter = self._ps(self.PS_MOUNT, str(image)).strip()
-        if not letter or letter.lower() not in "abcdefghijklmnopqrstuvwxyz":
+        if not re.fullmatch(r"[A-Za-z]", letter):
             raise MountError("Windows did not return a drive letter for the image.")
         return Path(f"{letter.upper()}:\\")
 
     def unmount(self, target: Path) -> None:
-        # target here is a drive letter path — resolve back to the source image
-        # via Get-DiskImage is complex; we accept a letter and dismount by letter.
-        letter = target.drive.rstrip(":\\")
+        # Enumerate attached images and match the volume's drive letter. ISO
+        # volumes need not have a Get-Partition record. Never dismount a user
+        # disk merely because it has the requested drive letter.
+        match = re.fullmatch(r"([A-Za-z]):[\\/]?", str(target))
+        if not match:
+            raise MountError("Expected a mounted image drive root, e.g. E:\\.")
+        letter = match.group(1).upper()
         ps = (
             "param($d) "
-            "Get-DiskImage -DevicePath (Get-Partition -DriveLetter $d).DiskNumber "
-            "| Dismount-DiskImage"
+            "$images = @(Get-CimInstance -Namespace root/Microsoft/Windows/Storage "
+            "-ClassName MSFT_DiskImage -ErrorAction Stop | "
+            "Where-Object {$_.Attached} | ForEach-Object { "
+            "$i = Get-DiskImage -ImagePath $_.ImagePath -ErrorAction Stop; "
+            "if (@($i | Get-Volume -ErrorAction Stop | "
+            "Where-Object {$_.DriveLetter -eq $d}).Count) { $i } }); "
+            "if ($images.Count -ne 1) { throw 'Drive is not a unique mounted image' }; "
+            "Dismount-DiskImage -ImagePath $images[0].ImagePath -ErrorAction Stop"
         )
-        with contextlib.suppress(MountError):
-            self._ps(ps, letter)
-            return
-        raise MountError(f"Cannot unmount drive {letter}:")
+        self._ps(ps, letter)
 
     def list_mounted(self) -> List[Dict[str, str]]:
         out: List[Dict[str, str]] = []
-        with contextlib.suppress(Exception):
-            ps = (
-                "Get-DiskImage | Where-Object {$_.Attached} | "
-                "Select-Object -Property ImagePath,DevicePath | ConvertTo-Json"
-            )
-            r = self._ps(ps)
-            if r.strip().startswith("["):
-                for item in json.loads(r):
-                    out.append(
-                        {
-                            "device": item.get("DevicePath", ""),
-                            "target": item.get("ImagePath", ""),
-                        }
-                    )
+        ps = (
+            "$result = @(Get-CimInstance -Namespace root/Microsoft/Windows/Storage "
+            "-ClassName MSFT_DiskImage -ErrorAction Stop | "
+            "Where-Object {$_.Attached} | ForEach-Object { "
+            "$i = Get-DiskImage -ImagePath $_.ImagePath -ErrorAction Stop; "
+            "$i | Get-Volume -ErrorAction Stop | Where-Object {$_.DriveLetter} | "
+            "ForEach-Object { [pscustomobject]@{DevicePath=$i.DevicePath; "
+            "ImagePath=$i.ImagePath; Target=([string]$_.DriveLetter + ':\\')} } }); "
+            "ConvertTo-Json -InputObject $result -Compress"
+        )
+        try:
+            records = json.loads(self._ps(ps) or "[]")
+            if isinstance(records, dict):
+                records = [records]
+            for item in records:
+                out.append(
+                    {
+                        "device": item.get("DevicePath", ""),
+                        "target": item.get("Target", ""),
+                        "image": item.get("ImagePath", ""),
+                    }
+                )
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise MountError("Invalid PowerShell mount information.") from exc
         return out
 
     @staticmethod
     def _ps(script: str, *args: str) -> str:
+        # -Command does not bind trailing tokens to a script's param() block.
+        # Invoke an explicit scriptblock, quote literal arguments, and encode
+        # the whole command to survive Windows command-line quoting (including
+        # apostrophes, spaces, Unicode and shell metacharacters in image paths).
+        arguments = " ".join("'" + str(arg).replace("'", "''") + "'" for arg in args)
+        invocation = (
+            "$ErrorActionPreference = 'Stop'; "
+            "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; "
+            "& { " + script + " } " + arguments
+        )
+        encoded = base64.b64encode(invocation.encode("utf-16-le")).decode("ascii")
         cmd = [
             "powershell",
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
-            "-Command",
-            script,
-            *args,
+            "-EncodedCommand",
+            encoded,
         ]
-        r = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        try:
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as exc:
+            raise MountError(f"Could not run PowerShell: {exc}") from exc
         if r.returncode != 0:
             raise MountError((r.stderr or r.stdout or "PowerShell failed").strip())
         return r.stdout
@@ -599,9 +694,9 @@ def cli_main(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
 
     setup_logging(verbose=args.verbose)
-    backend = get_backend()
 
     try:
+        backend = get_backend()
         if args.list:
             mounts = backend.list_mounted()
             if not mounts:
@@ -642,6 +737,9 @@ def cli_main(argv: Sequence[str]) -> int:
             reveal_in_file_manager(mounted)
         return 0
     except MountError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 

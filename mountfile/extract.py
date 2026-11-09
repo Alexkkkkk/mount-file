@@ -75,6 +75,8 @@ _HAS_DIR_FD = (
 
 def _safe_name(name):
     """Turn an on-image name into a name that is safe on the host FS."""
+    if not isinstance(name, str) or "\x00" in name:
+        raise ExtractError("refusing invalid image name %r" % name)
     cleaned = str(name).replace("/", "_").replace("\\", "_")
     cleaned = cleaned.replace(os.sep, "_").replace(":", "_")
     if cleaned in (".", "..", ""):
@@ -136,9 +138,20 @@ def _normalize_system_path_alias(path):
 
 
 def _find(provider, parent, name):
-    """Case-insensitive lookup inside `parent`; returns the provider entry."""
-    for item in provider.list_dir(parent or "/"):
-        if item["name"].upper() == name.upper():
+    """Resolve a name without confusing case-distinct entries on POSIX volumes."""
+    entries = list(provider.list_dir(parent or "/"))
+    for item in entries:
+        if item["name"] == name:
+            return item
+    compare = getattr(provider, "_path_names_equal", None)
+    if not callable(compare):
+        # Older FAT-oriented providers lacked namespace metadata. Retain their
+        # compatibility lookup, but never prefer it over an exact name.
+        def compare(requested, actual):
+            return requested.upper() == actual.upper()
+
+    for item in entries:
+        if compare(name, item["name"]):
             return item
     raise ExtractError("not found in image: %s" % _join(parent or "/", name))
 
@@ -297,6 +310,18 @@ def _write_file(provider, src_path, dst_path, root=None, max_bytes=None):
     else:
         dst_path = _normalize_system_path_alias(dst_path)
     parent = os.path.dirname(dst_path)
+    source_image = getattr(provider, "image_path", None)
+    if source_image is None:
+        source_image = getattr(provider, "image", None)
+    if source_image is not None:
+        try:
+            same_source = os.path.samefile(source_image, dst_path)
+        except FileNotFoundError:
+            same_source = False
+        if same_source:
+            raise ExtractError(
+                "refusing to overwrite the source image during extraction"
+            )
     _ensure_directory(parent, root=root)
 
     if _HAS_DIR_FD:
@@ -428,6 +453,12 @@ def extract_path(provider, src_path, dst_dir, progress=None, *, limits=None):
     """
     limits = _limits_or_default(limits)
     src = "/" + str(src_path or "/").strip().strip("/")
+    if "\x00" in src or "\\" in src or ".." in src.split("/"):
+        raise ExtractError("invalid source path for extraction")
+    get_stat = getattr(provider, "stat", None)
+    metadata = get_stat(src) if callable(get_stat) else None
+    if metadata is not None:
+        src = metadata["path"]
     if src == "/":
         parent, name, is_root = "/", "", True
     else:
@@ -439,7 +470,11 @@ def extract_path(provider, src_path, dst_dir, progress=None, *, limits=None):
     if is_root:
         is_dir = True
     else:
-        is_dir = bool(_find(provider, parent, name)["is_dir"])
+        entry = metadata if metadata is not None else _find(provider, parent, name)
+        is_dir = bool(entry["is_dir"])
+        if metadata is None:
+            name = entry["name"]
+            src = _join(parent, name)
 
     root = os.path.abspath(dst_dir)
     _ensure_directory(root)

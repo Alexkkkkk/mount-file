@@ -183,15 +183,15 @@ def test_f4_persists_edited_image_text(monkeypatch, qapp):
 
 
 @pytest.mark.skipif(
-    not (shutil.which("debugfs") and shutil.which("mke2fs")),
-    reason="e2fsprogs debugfs and mke2fs are required",
+    not (shutil.which("mke2fs") and shutil.which("debugfs")),
+    reason="e2fsprogs mke2fs and debugfs are required",
 )
-def test_f4_saves_existing_ext4_ini_through_real_backend(monkeypatch, tmp_path, qapp):
-    image = tmp_path / "factorydata.ext4"
+def test_f4_saves_existing_ext2_ini_through_real_backend(monkeypatch, tmp_path, qapp):
+    image = tmp_path / "factorydata.ext2"
     with image.open("wb") as stream:
         stream.truncate(16 * 1024 * 1024)
     subprocess.run(
-        [shutil.which("mke2fs"), "-q", "-F", "-t", "ext4", str(image)],
+        [shutil.which("mke2fs"), "-q", "-F", "-t", "ext2", str(image)],
         check=True,
     )
     backend = Ext234ImageWriter(str(image), allow_legacy_debugfs=True)
@@ -268,9 +268,27 @@ def test_mount_ext_does_not_use_debugfs_fallback_without_pytsk3(monkeypatch, tmp
         [shutil.which("mke2fs"), "-q", "-F", "-t", "ext4", str(partition)],
         check=True,
     )
-    initial = Ext234ImageWriter(str(partition), allow_legacy_debugfs=True)
-    initial.mkdir("/config")
-    initial.write_file("/config/factorySrv.ini", b"UARTOnOff=0\r\n")
+    seed_file = tmp_path / "factorySrv.ini"
+    seed_file.write_bytes(b"UARTOnOff=0\r\n")
+    debugfs = shutil.which("debugfs")
+    subprocess.run(
+        [debugfs, "-w", "-R", "mkdir /config", str(partition)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            debugfs,
+            "-w",
+            "-R",
+            f'write "{seed_file}" /config/factorySrv.ini',
+            str(partition),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
     image = tmp_path / "disk.img"
     offset = 1024 * 1024

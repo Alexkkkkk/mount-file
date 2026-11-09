@@ -29,6 +29,7 @@ from mountfile.ntfs_reader import (
     probe_ntfs_metadata,
     validate_ntfs_logfile_restart_pages,
 )
+from mountfile.safety import RefusalCode
 
 BPS = 512
 SPC = 8
@@ -306,9 +307,22 @@ def test_decodes_bounded_signed_ntfs_runs():
     ]
 
 
-def test_rejects_sparse_ntfs_run():
-    with pytest.raises(NtfsMetadataError, match="sparse"):
-        _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+def test_decodes_sparse_ntfs_run_as_unbacked_extent():
+    """A zero-length offset field is a sparse extent, not a malformed run.
+
+    $BadClus allocates its whole data stream this way on every mkfs.ntfs
+    volume, so refusing the run made real NTFS images unreadable.
+    """
+    runs = _parse_runlist(bytes([0x01, 0x03, 0x00]), 32)
+    assert [(run.vcn, run.lcn, run.length) for run in runs] == [(0, None, 3)]
+
+
+def test_sparse_run_keeps_following_real_extents():
+    runs = _parse_runlist(bytes([0x01, 0x02, 0x11, 0x03, 0x07, 0x00]), 32)
+    assert [(run.vcn, run.lcn, run.length) for run in runs] == [
+        (0, None, 2),
+        (2, 7, 3),
+    ]
 
 
 def test_parses_bounded_attribute_list_entries_and_extension_references():
@@ -1699,6 +1713,60 @@ def test_accepts_consistent_clean_ntfs_logfile_restart_pair():
     assert parsed.revision == 8
     assert parsed.version == (2, 1)
     assert parse_ntfs_logfile_restart_area(first).log_page_size == 4096
+
+
+def test_dirty_ntfs_logfile_restart_pair_uses_recovery_refusal_code():
+    dirty_page = _restart_page(flags=0)
+    with pytest.raises(NtfsMetadataError, match="requires recovery") as error:
+        validate_ntfs_logfile_restart_pages(dirty_page + dirty_page)
+    assert error.value.code is RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
+
+
+def test_dirty_ntfs_volume_uses_recovery_refusal_code(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    mft_data = NtfsAttributeSummary(
+        0x80,
+        64,
+        True,
+        "",
+        lowest_vcn=0,
+        highest_vcn=0,
+        run_count=1,
+        runs=(NtfsRun(0, 4, 1),),
+        data_size=CLUSTER,
+    )
+    profile = SimpleNamespace(
+        attributes=(mft_data,), boot=SimpleNamespace(cluster_size=CLUSTER)
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.probe_ntfs_metadata",
+        lambda *_args, **_kwargs: profile,
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader._validate_nonresident_data_stream",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        NativeNtfsMetadataImage,
+        "read_mft_record",
+        lambda _self, _record_number: b"volume-record",
+    )
+    monkeypatch.setattr(
+        NativeNtfsMetadataImage,
+        "_attributes_for_record",
+        lambda _self, _record_number, _record: (),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_reader.parse_ntfs_volume_state",
+        lambda _attributes: SimpleNamespace(clean=False),
+    )
+    monkeypatch.setattr(NativeNtfsMetadataImage, "close", lambda _self: None)
+
+    image = tmp_path / "dirty-ntfs.img"
+    with pytest.raises(NtfsMetadataError, match="volume is dirty") as error:
+        NativeNtfsMetadataImage(image, volume_size=VOLUME_SIZE)
+    assert error.value.code is RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
 
 
 def test_rejects_truncated_ntfs_logfile_restart_stream():

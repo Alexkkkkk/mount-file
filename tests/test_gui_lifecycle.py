@@ -14,8 +14,8 @@ except ImportError as exc:  # pragma: no cover
     pytest.skip("Qt bindings are not usable: %s" % exc, allow_module_level=True)
 
 from mountfile import tc_style, text_editor
-from mountfile.qt_compat import MB_Yes, QApplication, QEvent, QMessageBox
-from mountfile.tc_window import MainWindow
+from mountfile.qt_compat import MB_No, MB_Yes, QApplication, QEvent, QMessageBox
+from mountfile.tc_window import HexEditorPage, MainWindow
 
 
 @pytest.fixture(scope="module")
@@ -118,7 +118,9 @@ def test_saved_image_editor_copy_is_removed_when_window_closes(
         assert temp_dir and os.path.isdir(temp_dir)
         assert saved == {"path": ("/", "settings.ini"), "data": b"value=saved\n"}
         assert provider.data == b"value=saved\n"
-        assert os.path.exists(os.path.join(temp_dir, "settings.ini"))
+        from pathlib import Path
+
+        assert len(list(Path(temp_dir).rglob("settings.ini"))) == 1
 
         win.close()
         assert not os.path.exists(temp_dir)
@@ -175,3 +177,138 @@ def test_closed_window_ignores_late_update_notification(app, monkeypatch):
     win._on_update_available(
         {"version": "1.55.0", "url": "https://example.invalid/release"}
     )
+
+
+def test_image_directory_copy_uses_provider_and_exports_files(
+    app, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
+    monkeypatch.setattr(tc_style, "save_settings", lambda: True)
+    win = MainWindow()
+    calls = []
+
+    class Provider:
+        def list_dir(self, path):
+            calls.append(path)
+            if path == "/":
+                return [{"name": "folder", "is_dir": True}]
+            return [{"name": "note.txt", "is_dir": False}]
+
+        def read_file(self, path):
+            assert path == "/folder/note.txt"
+            return b"exported"
+
+    class Panel:
+        provider = Provider()
+
+        @staticmethod
+        def join(name):
+            return "/" + name
+
+    class LocalPanel:
+        path = str(tmp_path)
+
+        @staticmethod
+        def refresh():
+            pass
+
+    try:
+        win._copy_img_to_local(
+            Panel(), LocalPanel(), [{"name": "folder", "is_dir": True}]
+        )
+        assert calls == ["/folder", "/", "/folder"]
+        assert (tmp_path / "folder" / "note.txt").read_bytes() == b"exported"
+    finally:
+        win.close()
+
+
+def test_switching_image_closes_hex_and_resets_old_image_panel(
+    app, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
+    monkeypatch.setattr(tc_style, "save_settings", lambda: True)
+    win = MainWindow()
+    image = tmp_path / "new.img"
+    image.write_bytes(b"new image")
+    reset_calls = []
+
+    class Provider:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    old_provider = Provider()
+    right = win.panelR
+    right.mode = "img"
+    right.provider = old_provider
+    right.path = "/old-image/path"
+    right.tabs = [right.path]
+    right.tab_index = 0
+    right.entries = [{"name": "old-image-only-entry"}]
+    right._rebuild_tabs()
+    monkeypatch.setattr(win, "scan_volumes", lambda _path: [])
+    monkeypatch.setattr(win, "mount_volume", lambda _panel, _offset: True)
+    monkeypatch.setattr(win, "_set_loaded", lambda _loaded: None)
+    monkeypatch.setattr(win, "_update_cmd_prompt", lambda: None)
+    original_refresh = right.refresh
+
+    def refresh():
+        reset_calls.append(right.path)
+        original_refresh()
+
+    monkeypatch.setattr(right, "refresh", refresh)
+    page = HexEditorPage(
+        win, "sample.bin", 3, b"abc", lambda _data: True, win._show_panels
+    )
+    page.hex_view.insertBytes(b"changed")
+    win._show_hex_page(page)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args, **_kwargs: MB_No)
+
+    try:
+        assert not win.load_image(str(image))
+        assert win.image_path is None
+        assert win.workspace_stack.currentWidget() is page
+        assert not old_provider.closed
+
+        monkeypatch.setattr(QMessageBox, "warning", lambda *_args, **_kwargs: MB_Yes)
+        assert win.load_image(str(image))
+        assert win.workspace_stack.currentWidget() is win.splitter
+        assert old_provider.closed
+        assert right.mode == "local"
+        assert right.path == os.path.expanduser("~")
+        assert right.tabs == [right.path]
+        assert reset_calls == [right.path]
+        assert all(e.get("name") != "old-image-only-entry" for e in right.entries)
+    finally:
+        if win.isVisible():
+            monkeypatch.setattr(
+                QMessageBox, "warning", lambda *_args, **_kwargs: MB_Yes
+            )
+            win.close()
+
+
+def test_close_event_releases_provider_and_reader_handle(app, monkeypatch):
+    monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
+    monkeypatch.setattr(tc_style, "save_settings", lambda: True)
+    win = MainWindow()
+    closed = {"provider": False, "reader": False}
+
+    class Provider:
+        def close(self):
+            closed["provider"] = True
+
+    class ReaderHandle:
+        def close(self):
+            closed["reader"] = True
+
+    win.panelL.provider = Provider()
+    win.panelL.writer_fh = ReaderHandle()
+    try:
+        assert win.close()
+        assert closed == {"provider": True, "reader": True}
+        assert win.panelL.provider is None
+        assert win.panelL.writer_fh is None
+    finally:
+        if win.isVisible():
+            win.close()

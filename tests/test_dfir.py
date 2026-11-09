@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+from pathlib import Path
 
 import mountfile.cli as cli
 from mountfile.cli import main
@@ -100,7 +101,9 @@ def test_yara_cli_uses_user_rules_and_prints_json(tmp_path, monkeypatch, capsys)
 
     monkeypatch.setattr(cli, "scan_yara", fake_scan)
     assert main(["yara", str(image), "--rules", str(rules)]) == 0
-    assert calls == [(str(image), str(rules))]
+    # --rules is a path, so the scanner must receive a path object; a bare
+    # string is YARA source and used to fail with a syntax error.
+    assert calls == [(str(image), Path(str(rules)))]
     assert '"rule": "sample"' in capsys.readouterr().out
 
 

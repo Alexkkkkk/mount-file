@@ -168,7 +168,13 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         total32 = struct.unpack_from("<I", raw, 32)[0]
         fat32 = struct.unpack_from("<I", raw, 36)[0]
         total_sectors = total16 or total32
-        fat_sectors = fat16 or fat32
+        # A FAT12/16 volume may legitimately keep its sector count in the 32-bit
+        # field (mkfs.fat does this once the volume exceeds 65535 sectors), and
+        # the FAT32 FAT-size field then holds unrelated bytes. Pick the geometry
+        # that actually belongs to this volume instead of trusting field order,
+        # otherwise valid FAT16 images are rejected as FAT32-shaped.
+        fat16_layout = fat16 != 0 or root_entries != 0
+        fat_sectors = fat16 if fat16_layout else fat32
         if bps not in (512, 1024, 2048, 4096):
             raise FatReadError("unsupported FAT sector size")
         if spc == 0 or spc > 128 or spc & (spc - 1):
@@ -208,8 +214,12 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             if not 2 <= root_cluster <= cluster_count + 1:
                 raise FatReadError("FAT32 root cluster is outside the data area")
         else:
-            if root_entries == 0 or fat32:
+            # Bytes 36..39 are the FAT12/16 extended BPB (drive number,
+            # reserved byte and boot signature), not a FAT32 table length.
+            if root_entries == 0:
                 raise FatReadError("FAT12/16 BPB contains FAT32 root geometry")
+            if fat16 == 0:
+                raise FatReadError("invalid FAT volume geometry")
             root_cluster = None
         volume_bytes = total_sectors * bps
         if volume_bytes < 512 or volume_bytes > self._image_size - self.offset:
@@ -221,9 +231,7 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
             if volume_bytes > selected_size:
                 raise FatReadError("FAT volume exceeds selected partition bounds")
         fat_bytes = fat_sectors * bps
-        entries_capacity = (
-            fat_bytes * (8 if fat_type == 12 else 16 if fat_type == 16 else 32)
-        ) // 8
+        entries_capacity = (fat_bytes * 8) // fat_type
         if entries_capacity < cluster_count + 2:
             raise FatReadError("FAT table is too small for the declared data area")
         data_start = (reserved + fat_area_sectors + root_dir_sectors) * bps
@@ -284,10 +292,13 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
         if self.fat_type != 32:
             return
         backup_sector = struct.unpack_from("<H", self._boot_sector, 50)[0]
-        if not backup_sector:
+        if backup_sector in (0, 0xFFFF):
             return
+        if backup_sector >= self.profile.reserved_sectors:
+            raise FatReadError("FAT32 backup boot sector is outside reserved region")
         backup = self._read_at(backup_sector * self.block_size, self.block_size)
-        if backup != self._boot_sector:
+        primary = self._read_at(0, self.block_size)
+        if backup != primary:
             raise FatReadError("FAT32 backup boot sector is inconsistent")
 
     def _read_absolute(self, absolute: int, size: int, *, image_only=False) -> bytes:
@@ -428,6 +439,8 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
 
     @staticmethod
     def _decode_short(raw: bytes) -> str:
+        if raw[0] == 0x05:
+            raw = b"\xe5" + raw[1:]
         base = raw[:8].decode("cp437", "replace").rstrip(" ")
         ext = raw[8:11].decode("cp437", "replace").rstrip(" ")
         if not base:
@@ -436,10 +449,11 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
 
     @staticmethod
     def _decode_lfn(units: list[int]) -> str | None:
-        if not units or 0 not in units:
+        if not units:
             return None
-        end = units.index(0)
-        if any(value not in (0xFFFF,) for value in units[end + 1 :]):
+        # A name filling the last 13-unit entry exactly has no terminator.
+        end = units.index(0) if 0 in units else len(units)
+        if any(value != 0xFFFF for value in units[end + 1 :]):
             return None
         raw = b"".join(struct.pack("<H", value) for value in units[:end])
         try:
@@ -506,6 +520,19 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
                 continue
             short = bytes(item[:11])
             name = self._decode_short(short)
+            if name in (".", ".."):
+                pending.clear()
+                expected_ord = None
+                pending_checksum = None
+                continue
+            base, separator, extension = name.rpartition(".")
+            if not separator:
+                base, extension = name, ""
+            if item[12] & 0x08:
+                base = base.lower()
+            if item[12] & 0x10:
+                extension = extension.lower()
+            name = base + ("." + extension if extension else "")
             if (
                 pending
                 and expected_ord == 0

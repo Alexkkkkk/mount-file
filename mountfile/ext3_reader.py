@@ -52,6 +52,7 @@ _JBD2_MAGIC = 0xC03B3998
 _JBD2_DESCRIPTOR = 1
 _JBD2_COMMIT = 2
 _JBD2_REVOKE = 5
+_JBD2_TAG_ESCAPE = 0x00000001
 _JBD2_TAG_LAST = 0x00000008
 _JBD2_TAG_SAME_UUID = 0x00000002
 _MAX_JOURNAL_BLOCKS = 1 << 20
@@ -193,6 +194,21 @@ class NativeExt3Image(NativeExt2Image):
             raise Ext3ReadError("short JBD2 record header")
         return struct.unpack_from(">III", raw, 0)
 
+    @staticmethod
+    def _restore_jbd2_data_block(raw, *, escaped, block_size):
+        if len(raw) != block_size:
+            raise Ext3ReadError("JBD2 data block has the wrong size")
+        magic = struct.pack(">I", _JBD2_MAGIC)
+        if escaped:
+            if raw[:4] != b"\x00" * 4:
+                raise Ext3ReadError(
+                    "JBD2 escaped data block has an invalid zero prefix"
+                )
+            return magic + raw[4:]
+        if raw.startswith(magic):
+            raise Ext3ReadError("JBD2 data block magic prefix lacks ESCAPE flag")
+        return raw
+
     def _parse_jbd2_revoke(self, record, expected_sequence, journal_data_blocks):
         """Parse one classic 32-bit revoke block without checksum features."""
         magic, record_type, sequence = self._jbd2_header(record)
@@ -253,6 +269,7 @@ class NativeExt3Image(NativeExt2Image):
             cursor = 12
             tag_count = 0
             last = False
+            escaped_tags = []
             while cursor + 8 <= self.block_size:
                 block_number, flags = struct.unpack_from(">II", record, cursor)
                 cursor += 8
@@ -271,8 +288,9 @@ class NativeExt3Image(NativeExt2Image):
                     raise Ext3ReadError(
                         "JBD2 descriptor target overlaps journal inode data"
                     )
-                if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+                if flags & ~(_JBD2_TAG_ESCAPE | _JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
                     raise Ext3ReadError("unsupported JBD2 descriptor tag flags")
+                escaped_tags.append(bool(flags & _JBD2_TAG_ESCAPE))
                 if not flags & _JBD2_TAG_SAME_UUID:
                     if cursor + 16 > self.block_size:
                         raise Ext3ReadError("truncated JBD2 descriptor UUID")
@@ -288,8 +306,13 @@ class NativeExt3Image(NativeExt2Image):
             control_logical = logical + 1 + tag_count
             if control_logical >= journal_blocks:
                 raise Ext3ReadError("JBD2 transaction exceeds journal bounds")
-            for data_logical in range(logical + 1, control_logical):
-                self._journal_logical_block(inode, data_logical, journal_blocks)
+            for index, escaped in enumerate(escaped_tags):
+                data = self._journal_logical_block(
+                    inode, logical + 1 + index, journal_blocks
+                )
+                self._restore_jbd2_data_block(
+                    data, escaped=escaped, block_size=self.block_size
+                )
         else:
             revoked_blocks.update(
                 self._parse_jbd2_revoke(record, sequence, journal_data_blocks)
@@ -432,9 +455,11 @@ class NativeExt3Image(NativeExt2Image):
         """Replay classic descriptor/data/revoke/commit records read-only.
 
         One descriptor/data group and zero or more 32-bit revoke blocks are
-        accepted per transaction. Revoke blocks suppress earlier overlay data
-        for their targets; a later transaction can write those blocks again.
-        Checksummed and otherwise unknown JBD2 features remain unsupported.
+        accepted per transaction. ESCAPE-tagged data has its magic prefix
+        restored only in the in-memory overlay. Revoke blocks suppress earlier
+        overlay data for their targets; a later transaction can write those
+        blocks again. Checksummed and otherwise unknown JBD2 features remain
+        unsupported.
         The bounded ring is consumed at most once and must have an empty-record
         terminator. The source image is never opened for writing.
         """
@@ -477,6 +502,7 @@ class NativeExt3Image(NativeExt2Image):
             if record_type == _JBD2_DESCRIPTOR:
                 cursor = 12
                 targets = []
+                escaped_tags = []
                 seen_targets: set[int] = set()
                 last = False
                 while cursor + 8 <= self.block_size:
@@ -496,7 +522,9 @@ class NativeExt3Image(NativeExt2Image):
                         raise Ext3ReadError(
                             "JBD2 replay target overlaps journal inode data"
                         )
-                    if flags & ~(_JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID):
+                    if flags & ~(
+                        _JBD2_TAG_ESCAPE | _JBD2_TAG_LAST | _JBD2_TAG_SAME_UUID
+                    ):
                         raise Ext3ReadError("unsupported JBD2 replay tag flags")
                     if not flags & _JBD2_TAG_SAME_UUID:
                         if cursor + 16 > self.block_size:
@@ -505,6 +533,7 @@ class NativeExt3Image(NativeExt2Image):
                             raise Ext3ReadError("JBD2 replay descriptor UUID mismatch")
                         cursor += 16
                     targets.append(target)
+                    escaped_tags.append(bool(flags & _JBD2_TAG_ESCAPE))
                     if flags & _JBD2_TAG_LAST:
                         last = True
                         break
@@ -521,7 +550,17 @@ class NativeExt3Image(NativeExt2Image):
                     )
                     for index in range(len(targets))
                 ]
-                writes = list(zip(targets, data_blocks, strict=False))
+                writes = [
+                    (
+                        target,
+                        self._restore_jbd2_data_block(
+                            data, escaped=escaped, block_size=self.block_size
+                        ),
+                    )
+                    for target, data, escaped in zip(
+                        targets, data_blocks, escaped_tags, strict=True
+                    )
+                ]
             else:
                 revokes.update(
                     self._parse_jbd2_revoke(record, sequence, journal_data_blocks)

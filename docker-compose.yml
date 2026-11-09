@@ -11,6 +11,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        INSTALL_LEGACY_TSK: "${INSTALL_LEGACY_TSK:-0}"
         INSTALL_FORENSIC_TOOLS: "${INSTALL_FORENSIC_TOOLS:-0}"
     image: mountfile:local
     read_only: true

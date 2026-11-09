@@ -39,6 +39,12 @@ def _load_yara() -> Any:
 def _compiled_rules(rules: Any, yara_module: Optional[Any]) -> Any:
     """Return a compiled rules object, compiling source with an injected module."""
 
+    # pathlib.Path also exposes ``match()``; a rule-file path must be compiled,
+    # not mistaken for an already-compiled rules object.
+    if isinstance(rules, os.PathLike):
+        module = yara_module if yara_module is not None else _load_yara()
+        return module.compile(filepath=os.fspath(rules))
+
     matcher = getattr(rules, "match", None)
     if callable(matcher):
         return rules
@@ -52,8 +58,6 @@ def _compiled_rules(rules: Any, yara_module: Optional[Any]) -> Any:
     if not callable(compile_rules):
         raise TypeError("yara_module must provide a callable compile()")
 
-    if isinstance(rules, os.PathLike):
-        return compile_rules(filepath=os.fspath(rules))
     if isinstance(rules, bytes):
         try:
             source = rules.decode("utf-8")

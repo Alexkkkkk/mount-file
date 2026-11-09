@@ -42,12 +42,20 @@ class _FakeProvider(ReadOnlyVFSStatMixin):
 
 
 def test_validate_paths_rejects_relative_and_traversal_paths():
+    with pytest.raises(ValueError, match="at least one file path"):
+        bench_vfs._validate_paths([])
     with pytest.raises(ValueError, match="absolute"):
         bench_vfs._validate_paths(["docs/readme.txt"])
     with pytest.raises(ValueError, match="traversal"):
         bench_vfs._validate_paths(["/docs/../secret"])
     with pytest.raises(ValueError, match="unique"):
         bench_vfs._validate_paths(["/docs/readme.txt", "/docs/readme.txt"])
+
+
+def test_validate_paths_enforces_maximum_path_count():
+    paths = [f"/bench/file_{index:03d}" for index in range(bench_vfs._MAX_PATHS + 1)]
+    with pytest.raises(ValueError, match="path limit"):
+        bench_vfs._validate_paths(paths)
 
 
 @pytest.mark.parametrize(
@@ -105,6 +113,17 @@ def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     )
 
     assert report["schema_version"] == 2
+    assert report["capability_contract"] == {
+        "matrix_version": 6,
+        "interface": "vfs",
+        "tested_operations": ["list", "stat", "read-range", "extract"],
+        "evidence": "benchmark_observed_only",
+        "parity": "not_claimed",
+        "note": (
+            "Benchmark timings and content equivalence do not prove full "
+            "filesystem parity or checker-backed production support."
+        ),
+    }
     assert set(report["environment"]["runtime_versions"]) == {
         "pytsk3",
         "source_revision",
@@ -115,6 +134,10 @@ def test_build_report_records_repeated_metrics_and_does_not_modify_image(
     assert report["cache_state"]["managed_by_harness"] is False
     result = report["backends"]["native"]
     assert result["backend"] == "native-test-ro"
+    assert result["capability_status"]["matrix_version"] == 6
+    assert result["capability_status"]["profile_id"] is None
+    assert result["capability_status"]["evidence"] == "benchmark_observed_only"
+    assert result["capability_status"]["parity"] == "not_claimed"
     assert result["fs_type"] == "fixture"
     assert result["block_size"] == 4096
     assert len(result["iterations"]) == 3
@@ -132,6 +155,37 @@ def test_build_report_rejects_extent_outside_image(tmp_path):
     image.write_bytes(b"1234")
     with pytest.raises(ValueError, match="exceeds image bounds"):
         bench_vfs.build_report(image, 1, 4, ["/file"], baseline="native")
+
+
+def test_build_report_enforces_repeat_and_image_size_limits(tmp_path):
+    image = tmp_path / "sample.img"
+    image.write_bytes(b"1234")
+    with pytest.raises(ValueError, match="repeats must be"):
+        bench_vfs.build_report(
+            image,
+            0,
+            4,
+            ["/file"],
+            baseline="native",
+            repeats=bench_vfs._MAX_REPEATS + 1,
+        )
+
+    with image.open("r+b") as source:
+        source.truncate(bench_vfs._MAX_IMAGE_BYTES + 1)
+    with pytest.raises(ValueError, match="benchmark limit"):
+        bench_vfs.build_report(image, 0, 1, ["/file"], baseline="native")
+
+
+def test_iteration_refuses_extraction_over_space_bound_before_reading():
+    class OversizedProvider(_FakeProvider):
+        def stat(self, path):
+            return {"is_dir": False, "size": bench_vfs._MAX_TOTAL_EXTRACT_BYTES + 1}
+
+        def read_file_range(self, *_args, **_kwargs):
+            pytest.fail("range read started before extraction-size bound check")
+
+    with pytest.raises(ValueError, match="per-iteration limit"):
+        bench_vfs._iteration(OversizedProvider(), ["/docs/readme.txt"])
 
 
 @pytest.mark.parametrize("baseline", ["both", "pytsk3"])
