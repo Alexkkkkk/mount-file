@@ -234,6 +234,7 @@ def test_ext2_read_range_uses_generic_fallback(tmp_path):
     if shutil.which("mke2fs") is None:
         pytest.skip("mke2fs is required")
     from test_ext2_native import _make_ext2
+
     from mountfile.universal_fs_rw import Ext234RW
 
     image = tmp_path / "data.ext2"
