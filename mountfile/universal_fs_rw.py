@@ -2610,7 +2610,9 @@ class LibguestfsRW(RWBackend):
         fs_type: str = "external",
     ):
         super().__init__(image, offset)
+        self._image_lock = None
         try:
+            self._acquire_image_lock()
             import guestfs
         except ImportError as exc:
             raise RuntimeError(
@@ -2657,6 +2659,33 @@ class LibguestfsRW(RWBackend):
         except BaseException:
             self.close()
             raise
+
+    def _acquire_image_lock(self) -> None:
+        """Serialize external writers before opening the image in libguestfs."""
+        if os.name != "posix":
+            raise RuntimeError("libguestfs image locking requires a POSIX host")
+        import fcntl
+
+        lock_path = self.image.with_name(self.image.name + ".mountfile.lock")
+        handle = lock_path.open("a+b")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            handle.close()
+            raise RuntimeError("filesystem image is already locked") from exc
+        self._image_lock = handle
+
+    def _release_image_lock(self) -> None:
+        handle = self._image_lock
+        if handle is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+            self._image_lock = None
 
     def mount_options(self, options: str = "", mountpoint: str = "/") -> None:
         """Mount the selected image filesystem inside the libguestfs VM."""
@@ -2779,15 +2808,17 @@ class LibguestfsRW(RWBackend):
 
     def close(self) -> None:
         guest = getattr(self, "_g", None)
-        if guest is None:
-            return
         try:
-            self.shutdown()
-        except Exception as exc:
-            log.warning("libguestfs shutdown failed: %s", exc)
+            if guest is not None:
+                try:
+                    self.shutdown()
+                except Exception as exc:
+                    log.warning("libguestfs shutdown failed: %s", exc)
         finally:
-            guest.close()
-            self._g = None
+            if guest is not None:
+                guest.close()
+                self._g = None
+            self._release_image_lock()
 
 
 # =============================================================================
