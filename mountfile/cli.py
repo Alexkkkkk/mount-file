@@ -552,6 +552,22 @@ def cmd_mv(args):
     return OK
 
 
+def cmd_ln(args):
+    if not args.yes:
+        _warn(args.image)
+        return NEED_CONFIRM
+    offset, _, _ = _select(args.image, args)
+    source = _abs_path(args.source)
+    destination = _abs_path(args.destination)
+    fs = _selected_writer(args.image, offset, args)
+    try:
+        fs.link(source, destination)
+        print("Created hard link %s -> %s" % (destination, source))
+    finally:
+        fs.close()
+    return OK
+
+
 def cmd_rm(args):
     if not args.yes:
         _warn(args.image)
@@ -1116,6 +1132,13 @@ def build_parser():
     sp.add_argument("new_name", help="new name inside the same directory")
     sp.add_argument("--yes", action="store_true", help="confirm the write")
     sp.set_defaults(func=cmd_mv)
+
+    sp = sub.add_parser("ln", help="create a hard link in a supported profile")
+    _add_target(sp)
+    sp.add_argument("source", help="existing regular file path in the image")
+    sp.add_argument("destination", help="new path for the hard link")
+    sp.add_argument("--yes", action="store_true", help="confirm the write")
+    sp.set_defaults(func=cmd_ln)
 
     sp = sub.add_parser("rm", help="delete an entry in a supported profile")
     _add_target(sp)

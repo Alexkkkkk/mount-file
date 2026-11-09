@@ -49,6 +49,10 @@ jobs:
           rm -rf /tmp/mountfile-pr /tmp/mountfile-status
           mkdir -p /tmp/mountfile-pr /tmp/mountfile-status
           git archive FETCH_HEAD | tar -x -C /tmp/mountfile-pr
+          mkdir -p /tmp/mountfile-committed
+          for name in capability-matrix.json checker-matrix.json recovery-matrix.json product-status.json; do
+            git show "FETCH_HEAD:docs/generated/${name}" > "/tmp/mountfile-committed/${name}"
+          done
           # These are trusted scripts from the default branch. The PR checkout
           # is passed only as a data root; no PR Python code is executed.
           python scripts/sync_repository_status.py \
@@ -64,27 +68,18 @@ jobs:
           mkdir -p /tmp/mountfile-status
           python scripts/sync_repository_status.py --output-dir /tmp/mountfile-status
 
-      - name: Fail when committed status data is stale
+      - name: Verify committed status data
         run: |
           set -euo pipefail
-          status=0
+          mkdir -p /tmp/mountfile-committed
           for name in capability-matrix.json checker-matrix.json recovery-matrix.json product-status.json; do
-            committed="/tmp/committed-${name}"
-            if [ -f /tmp/mountfile-head-sha ]; then
-              git show "$(cat /tmp/mountfile-head-sha):docs/generated/${name}" > "${committed}"
-            else
-              cp "docs/generated/${name}" "${committed}"
-            fi
-            if ! diff -u "${committed}" "/tmp/mountfile-status/${name}"; then
-              echo "::error file=docs/generated/${name}::Committed status data is stale. Run 'python scripts/sync_repository_status.py' and commit the regenerated files."
-              status=1
+            if [ ! -f "/tmp/mountfile-committed/${name}" ]; then
+              cp "docs/generated/${name}" "/tmp/mountfile-committed/${name}"
             fi
           done
-          if [ "${status}" -ne 0 ]; then
-            echo "Canonical status data must be regenerated inside the pull request itself."
-            exit 1
-          fi
-          echo "Canonical status data matches the committed files."
+          python scripts/verify_generated_status.py \
+            --expected-dir /tmp/mountfile-status \
+            --committed-dir /tmp/mountfile-committed
 
       - name: Report stale generated README block
         if: github.event_name == 'pull_request_target'

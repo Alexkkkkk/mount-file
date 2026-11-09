@@ -59,7 +59,7 @@ def test_ci_gate_accounts_for_every_build_and_test_stage():
         "gui-import",
         "gui",
     ):
-        assert "needs.%s.result" % job in text
+        assert f"needs.{job}.result" in text
     assert "exit 1" in text
 
 
@@ -181,12 +181,13 @@ def test_status_sync_validates_instead_of_rewriting_the_pull_request_head():
     assert "pull_request_target:" in text
     assert "python scripts/sync_repository_status.py" in text
     assert "python scripts/generate_readme.py" in text
+    assert "python scripts/verify_generated_status.py" in text
     assert "--repo-root /tmp/mountfile-pr" in text
     assert "no PR Python code is executed" in text
     assert "git push" not in text
     assert "git commit" not in text
     assert "[skip ci]" not in text
-    assert "Committed status data is stale" in text
+    assert "Verify committed status data" in text
     assert "permissions:\n  contents: read" in text
     assert not (ROOT / ".github" / "workflows" / "readme-sync.yml").exists()
 

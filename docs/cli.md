@@ -67,6 +67,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 | `put` | записать локальные файлы | **да, FAT32** |
 | `mkdir` | создать каталог | **да, FAT32** |
 | `mv` | переименовать запись в том же каталоге | **да, FAT32** |
+| `ln` | создать hard link на regular file | **да, bounded native ext2** |
 | `rm` | удалить файл/каталог | **да, FAT32** |
 | `decode` | расшифровать RT809H MST/MTK-дамп встроенной таблицей | создаёт новый файл |
 | `split` | разбить дамп по секции `[PARTITIONS]` файла `udev` | создаёт файлы в каталоге вывода |
@@ -86,7 +87,7 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 | `slack` | slack последнего кластера по явно заданному extent | нет; файл только через `--output`, без перезаписи |
 
 Общие аргументы целевых команд (`volumes`, `info`, `status`, `ls`, `get`, `put`, `mkdir`,
-`mv`, `rm`, `autopick`):
+`mv`, `ln`, `rm`, `autopick`):
 
 - `-V N`, `--volume N` — номер тома из `volumes`, начиная с 1;
 - `-O 0x400000`, `--offset ...` — прямое байтовое смещение файловой системы;
@@ -98,7 +99,9 @@ GUI **Инструменты → Командный центр** (`Ctrl+Shift+X`
 показывает предупреждение и возвращает код **2**. Нормальный результат — **0**,
 ошибка — **1**; `Ctrl+C` возвращает **130**.
 
-`python -m mountfile capabilities` печатает schema v5 JSON. Поля
+`python -m mountfile capabilities` печатает schema v6 JSON. Ext2 native RW profile
+дополнительно поддерживает `hard-link` для regular files; эта операция не
+доступна другим профилям. Поля
 `read_capabilities` и `write_capabilities` сохранены для existing clients, а
 `operations` публикует полный canonical набор с `available`/`refused`, точным
 именем API method и structured refusal code. `constraint_ids` и `gates`
@@ -132,12 +135,13 @@ exFAT и NTFS; для них `pytsk3` не требуется. Поддержк�
 распознан, но его профиль повреждён, dirty или не поддерживается, чтение
 отклоняется безопасно, без автоматической передачи другому parser-у.
 
-## Примеры FAT32-записи
+## Примеры bounded native записи
 
 ```bash
 python -m mountfile put dump.img ./hello.txt --dest /docs --backup --yes
 python -m mountfile mkdir dump.img /docs/new --backup --yes
 python -m mountfile mv dump.img /hello.txt renamed.txt --yes
+python -m mountfile ln dump.img /hello.txt /docs/hello-link.txt --yes
 python -m mountfile rm dump.img /docs/new --recursive --backup --yes
 ```
 

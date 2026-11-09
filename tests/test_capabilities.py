@@ -15,6 +15,7 @@ from mountfile.capabilities import (
     RW_WRITE_CAPABILITIES,
     VFS_READ_CAPABILITIES,
     VFS_WRITE_CAPABILITIES,
+    api_operation_for_canonical_operation,
     canonical_operation_for_api_operation,
     get_native_capability_matrix,
 )
@@ -64,11 +65,14 @@ def test_read_and_write_profiles_use_the_correct_api_vocabulary():
             assert profile.interface == "universal-fs-rw"
             assert profile.mode == "read-write"
             assert profile.read_capabilities == RW_READ_CAPABILITIES
-            assert profile.write_capabilities == RW_WRITE_CAPABILITIES
+            if profile.profile_id == "ext2-native-rw":
+                assert profile.write_capabilities == (*RW_WRITE_CAPABILITIES, "link")
+            else:
+                assert profile.write_capabilities == RW_WRITE_CAPABILITIES
 
 
 def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
-    assert CAPABILITY_MATRIX_VERSION == 5
+    assert CAPABILITY_MATRIX_VERSION == 6
     assert VFS_READ_CAPABILITIES == (
         "list",
         "stat",
@@ -92,16 +96,19 @@ def test_vfs_matrix_distinguishes_whole_file_and_range_reads():
         ("universal-fs-rw", "read_range", "read-range"),
         ("universal-fs-rw", "write_file", "write-file"),
         ("universal-fs-rw", "rename", "rename"),
+        ("universal-fs-rw", "link", "hard-link"),
     ],
 )
 def test_operation_aliases_round_trip_to_canonical_cells(
     interface, api_operation, canonical
 ):
+    assert api_operation_for_canonical_operation(interface, canonical) == api_operation
     assert canonical_operation_for_api_operation(interface, api_operation) == canonical
+    assert api_operation_for_canonical_operation(interface, "unknown-operation") is None
     assert canonical_operation_for_api_operation(interface, "unknown-operation") is None
 
 
-def test_v5_matrix_publishes_complete_operation_and_gate_contract():
+def test_v6_matrix_publishes_complete_operation_and_gate_contract():
     snapshot = get_native_capability_matrix()
     assert snapshot["operations"] == [
         "list",
@@ -113,6 +120,7 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         "mkdir",
         "delete",
         "rename",
+        "hard-link",
     ]
     for profile in snapshot["profiles"]:
         assert profile["constraint_ids"]
@@ -136,8 +144,9 @@ def test_v5_matrix_publishes_complete_operation_and_gate_contract():
         for constraint in profiles["ext2-native-rw"]["constraints"]
     )
     assert (
-        "Explicit replay accepts classic 32-bit revoke records in a validated "
-        "no-checksum JBD2 overlay." in profiles["ext3-native-ro"]["constraints"]
+        "Explicit replay accepts classic 32-bit descriptor/revoke records and "
+        "escaped data blocks in a validated no-checksum JBD2 overlay."
+        in profiles["ext3-native-ro"]["constraints"]
     )
     assert (
         "Bounded 64BIT group-descriptor ext4 profiles are supported."
@@ -209,6 +218,7 @@ def test_advertised_operations_have_callable_interface_endpoints():
             "mkdir": "mkdir",
             "delete": "delete",
             "rename": "rename",
+            "hard-link": "link",
         },
     }
     for profile in NATIVE_CAPABILITY_MATRIX:

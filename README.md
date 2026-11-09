@@ -31,7 +31,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.73.1` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Current package version | `1.81.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.80.0`.
+This block is generated from the canonical status data in this repository. Package version: `1.81.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
@@ -244,8 +244,12 @@ silently falling back:
 python -m mountfile put dump.img ./hello.txt --dest /docs --backup --yes
 python -m mountfile mkdir dump.img /docs/new --backup --yes
 python -m mountfile mv dump.img /hello.txt renamed.txt --backup --yes
+python -m mountfile ln dump.img /hello.txt /docs/hello-link.txt --yes
 python -m mountfile rm dump.img /docs/new --recursive --backup --yes
 ```
+
+The `ln` hard-link operation is available only for the validated native ext2
+write profile; other filesystems refuse it through the capability gate.
 
 `--backup` creates a neighboring `<image>.bak`; it is not a transaction. The
 usual exit codes are `0` for success, `1` for an error, `2` when confirmation is

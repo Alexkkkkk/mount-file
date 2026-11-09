@@ -8,7 +8,7 @@ def test_recovery_report_is_fail_closed_and_json_serialisable():
 
     report = build_report()
     assert report["schema"] == 1
-    assert report["capability_matrix_version"] == 5
+    assert report["capability_matrix_version"] == 6
     assert report["production_ready"] is False
     assert json.loads(json.dumps(report)) == report
     assert {entry["profile_id"] for entry in report["entries"]} == {

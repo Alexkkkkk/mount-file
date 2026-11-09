@@ -100,6 +100,50 @@ def test_native_ext2_file_and_directory_crud_is_consistent(tmp_path):
     _assert_e2fsck_clean(image)
 
 
+def test_native_ext2_hard_link_shares_inode_and_unlinks_one_name(tmp_path):
+    image = tmp_path / "hard-link.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    payload = b"shared ext2 inode"
+    writer.write_file("/original.bin", payload)
+
+    writer.link("/original.bin", "/alias.bin")
+    original = writer._fs._lookup_child(2, b"original.bin")
+    alias = writer._fs._lookup_child(2, b"alias.bin")
+    assert original["inode"] == alias["inode"]
+    assert writer._fs._u16(writer._fs._read_inode(original["inode"]), 26) == 2
+    assert writer.read_file("/alias.bin") == payload
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/original.bin")
+    assert writer.read_file("/alias.bin") == payload
+    assert writer._fs._u16(writer._fs._read_inode(alias["inode"]), 26) == 1
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/alias.bin")
+    assert {entry["name"] for entry in writer.list_dir("/")} == {"lost+found"}
+    _assert_e2fsck_clean(image)
+
+
+def test_native_ext2_hard_link_refusals_leave_image_unchanged(tmp_path):
+    image = tmp_path / "hard-link-refusal.ext2"
+    _make_ext2(image)
+    writer = NativeExt2ImageWriter(image)
+    writer.write_file("/file.bin", b"content")
+    writer.mkdir("/directory")
+    before = hashlib.sha256(image.read_bytes()).digest()
+
+    with pytest.raises(NativeExt2Error, match="regular files"):
+        writer.link("/directory", "/directory-alias")
+    with pytest.raises(FileExistsError):
+        writer.link("/file.bin", "/directory")
+    with pytest.raises(FileNotFoundError):
+        writer.link("/missing", "/new-name")
+
+    assert hashlib.sha256(image.read_bytes()).digest() == before
+    _assert_e2fsck_clean(image)
+
+
 @pytest.mark.parametrize("block_size", [1024, 2048, 4096])
 def test_native_ext2_single_indirect_file_roundtrip_and_reclamation(
     tmp_path, block_size
@@ -164,7 +208,9 @@ def test_native_ext2_double_indirect_file_roundtrip_replace_and_delete(
     _assert_e2fsck_clean(image)
 
 
-def test_native_ext2_triple_indirect_file_roundtrip_replace_and_delete(tmp_path):
+def test_native_ext2_triple_indirect_file_roundtrip_replace_and_delete(
+    tmp_path, monkeypatch
+):
     block_size = 1024
     entries_per_block = block_size // 4
     triple_start = 12 + entries_per_block + entries_per_block**2
@@ -173,8 +219,17 @@ def test_native_ext2_triple_indirect_file_roundtrip_replace_and_delete(tmp_path)
     _make_ext2(image, size=160 * 1024 * 1024, block_size=block_size)
     writer = NativeExt2ImageWriter(image)
     payload = bytes(index % 251 for index in range(size))
+    batch_sizes = []
+    allocate_blocks = writer._fs._allocate_blocks
+
+    def allocate_many(count, preferred_group=0):
+        batch_sizes.append(count)
+        return allocate_blocks(count, preferred_group)
+
+    monkeypatch.setattr(writer._fs, "_allocate_blocks", allocate_many)
 
     writer.write_file("/triple.bin", payload)
+    assert batch_sizes == [(size + block_size - 1) // block_size]
     assert writer.read_file("/triple.bin") == payload
     inode_number = next(
         entry["inode"]
@@ -617,6 +672,8 @@ def test_native_ext2_routes_gui_and_universal_facade_without_debugfs(
     assert gui_writer.write_strategy == "native-ext2"
     gui_writer.write_file("/from-gui.txt", b"native")
     assert gui_writer.read_file("/from-gui.txt") == b"native"
+    gui_writer.link("/from-gui.txt", "/from-gui-link.txt")
+    assert gui_writer.read_file("/from-gui-link.txt") == b"native"
 
     from mountfile.universal_fs_rw import UniversalFSRW
 
@@ -624,8 +681,13 @@ def test_native_ext2_routes_gui_and_universal_facade_without_debugfs(
         assert filesystem.info().write_strategy == "native-ext2"
         filesystem.mkdir("/from-api")
         filesystem.write_file("/from-api/file", b"API")
+        filesystem.link("/from-api/file", "/from-api/alias")
         assert filesystem.read("/from-api/file") == b"API"
-        assert [entry.name for entry in filesystem.list("/from-api")] == ["file"]
+        assert filesystem.read("/from-api/alias") == b"API"
+        assert {entry.name for entry in filesystem.list("/from-api")} == {
+            "file",
+            "alias",
+        }
         flush_result = filesystem.flush()
         assert "no external repair tool" in flush_result["fsck"]["skipped"]
     _assert_e2fsck_clean(image)
@@ -1199,9 +1261,7 @@ def test_universal_facade_passes_partition_bounds_to_native_ext2(tmp_path, monke
     assert image.read_bytes() == before
 
 
-def test_write_engine_does_not_call_external_checker_for_native_ext2(
-    tmp_path, monkeypatch
-):
+def test_write_engine_reports_disposable_checker_for_native_ext2(tmp_path, monkeypatch):
     image = tmp_path / "filesystem.ext2"
     _make_ext2(image)
     import mountfile.write_engine as write_engine_module
@@ -1216,17 +1276,12 @@ def test_write_engine_does_not_call_external_checker_for_native_ext2(
     try:
         assert engine.info().write_strategy == "native-ext2"
 
-        def external_tool_must_not_run(*_args, **_kwargs):
-            pytest.fail("native ext2 verification must not invoke e2fsck")
-
-        monkeypatch.setattr(
-            write_engine_module.shutil, "which", external_tool_must_not_run
-        )
+        monkeypatch.setattr(write_engine_module.shutil, "which", lambda _tool: None)
         report = engine.verify()
         checker = next(
             item for item in report["checks"] if item["name"] == "filesystem checker"
         )
         assert checker["ok"] is None
-        assert "external e2fsck not run" in checker["detail"]
+        assert "disposable image copy" in checker["detail"]
     finally:
         engine.close()

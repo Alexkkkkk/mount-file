@@ -1379,7 +1379,7 @@ class _Ext2FS:
             old_pointer_blocks = []
             preferred = (parent - 1) // self.inodes_per_group
         needed = math.ceil(len(data) / self.block_size) if data else 0
-        new_blocks = [self._allocate_block(preferred) for _ in range(needed)]
+        new_blocks = self._allocate_blocks(needed, preferred)
         for index, block in enumerate(new_blocks):
             chunk = data[index * self.block_size : (index + 1) * self.block_size]
             self._write_block(block, chunk.ljust(self.block_size, b"\x00"))
@@ -1514,6 +1514,30 @@ class _Ext2FS:
         self._touch_inode(parent_raw)
         self._write_inode(parent, parent_raw)
 
+    def link(self, source: str, destination: str) -> None:
+        """Create a second directory entry for an existing regular file."""
+        source_parent, source_name, _ = self._parent_and_name(source)
+        source_entry = self._lookup_child(source_parent, source_name)
+        if source_entry is None:
+            raise FileNotFoundError(source)
+        inode_num = source_entry["inode"]
+        inode_raw = self._read_inode(inode_num)
+        mode = self._check_mutable_inode(inode_raw, source)
+        if stat.S_IFMT(mode) != stat.S_IFREG:
+            raise NativeExt2Error("hard links are supported only for regular files")
+        if self._u32(inode_raw, 104):
+            raise NativeExt2Error("external extended attributes are unsupported")
+        destination_parent, destination_name, _ = self._parent_and_name(destination)
+        if self._lookup_child(destination_parent, destination_name) is not None:
+            raise FileExistsError(destination)
+        links = self._u16(inode_raw, 26)
+        if links == 0 or links == 0xFFFF:
+            raise NativeExt2Error("ext2 inode link counter is invalid or full")
+        struct.pack_into("<H", inode_raw, 26, links + 1)
+        self._touch_inode(inode_raw)
+        self._write_inode(inode_num, inode_raw)
+        self._insert_entry(destination_parent, destination_name, inode_num, 1)
+
     def delete(self, path: str, recursive: bool = False) -> None:
         parent, name, _ = self._parent_and_name(path)
         entry = self._lookup_child(parent, name)
@@ -1538,8 +1562,15 @@ class _Ext2FS:
             if self._u16(raw, 26) != 2:
                 raise NativeExt2Error("unexpected ext2 directory link count")
         else:
-            if self._u16(raw, 26) != 1:
-                raise NativeExt2Error("hard-linked files are not deleted in phase 1")
+            links = self._u16(raw, 26)
+            if links == 0:
+                raise NativeExt2UnsafeError("ext2 file has an invalid zero link count")
+            if links > 1:
+                self._remove_entry(parent, entry)
+                struct.pack_into("<H", raw, 26, links - 1)
+                self._touch_inode(raw)
+                self._write_inode(inode_num, raw)
+                return
         blocks = self._inode_blocks(
             raw,
             allow_indirect=True,
@@ -2473,6 +2504,9 @@ class NativeExt2ImageWriter:
 
     def mkdir(self, path: str) -> None:
         self._mutate("mkdir", path)
+
+    def link(self, source: str, destination: str) -> None:
+        self._mutate("link", source, destination)
 
     def delete(self, path: str, recursive=False) -> None:
         self._mutate("delete", path, recursive=recursive)

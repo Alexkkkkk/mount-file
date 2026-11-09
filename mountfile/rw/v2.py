@@ -20,6 +20,7 @@ mountfile_rw_v2.py — финальные патчи к Mount File Universal RW 
 
 from __future__ import annotations
 
+import struct
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -267,19 +268,63 @@ class MountFileBridge:
 
 
 def _make_fake_image(tmp: Path) -> Path:
-    """Минимальный валидный FAT32-загрузочный сектор (для in-memory тестов)."""
+    """Минимальный валидный FAT32-образ (без внешних зависимостей)."""
     img = tmp / "test.img"
-    boot = bytearray(512)
-    boot[0:3] = b"\xEB\x3C\x90"
-    boot[3:11] = b"MSWIN4.1"
-    boot[11:13] = (512).to_bytes(2, "little")
-    boot[13] = 1
-    boot[14:16] = (32).to_bytes(2, "little")  # reserved sectors
-    boot[16] = 2  # num FATs
-    boot[21] = 0xF8
-    boot[82:90] = b"FAT32   "
-    boot[510:512] = b"\x55\xaa"
-    img.write_bytes(bytes(boot) + b"\0" * (1024 * 512))
+    total = 70000
+    bps, spc, reserved, nfats, rootc = 512, 1, 32, 2, 2
+    spf = 600
+    while True:
+        clusters = total - (reserved + nfats * spf)
+        if (clusters + 2) * 4 <= spf * bps and clusters >= 65525:
+            break
+        spf += 1
+    free_clusters = clusters - 1
+    with open(img, "wb") as f:
+        f.truncate(total * bps)
+        bpb = bytearray(bps)
+        bpb[0:3] = b"\xeb\x58\x90"
+        bpb[3:11] = b"MSWIN4.1"
+        struct.pack_into("<H", bpb, 11, bps)
+        bpb[13] = spc
+        struct.pack_into("<H", bpb, 14, reserved)
+        bpb[16] = nfats
+        bpb[21] = 0xF8
+        struct.pack_into("<I", bpb, 32, total)
+        struct.pack_into("<I", bpb, 36, spf)
+        struct.pack_into("<I", bpb, 44, rootc)
+        struct.pack_into("<H", bpb, 48, 1)
+        struct.pack_into("<H", bpb, 50, 6)
+        bpb[64] = 0x80
+        bpb[66] = 0x29
+        struct.pack_into("<I", bpb, 67, 0x20261018)
+        bpb[71:82] = b"TESTVOL    "
+        bpb[82:90] = b"FAT32   "
+        bpb[510:512] = b"\x55\xaa"
+        f.seek(0)
+        f.write(bpb)
+        fsinfo = bytearray(bps)
+        struct.pack_into("<I", fsinfo, 0, 0x41615252)
+        struct.pack_into("<I", fsinfo, 484, 0x61417272)
+        struct.pack_into("<I", fsinfo, 488, free_clusters)
+        struct.pack_into("<I", fsinfo, 492, 3)
+        struct.pack_into("<I", fsinfo, 508, 0xAA550000)
+        f.seek(bps)
+        f.write(fsinfo)
+        f.seek(6 * bps)
+        f.write(bpb)
+        fat = bytearray(spf * bps)
+        struct.pack_into("<I", fat, 0, 0x0FFFFFF8)
+        struct.pack_into("<I", fat, 4, 0xFFFFFFFF)
+        struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
+        f.seek(reserved * bps)
+        f.write(fat)
+        f.seek((reserved + spf) * bps)
+        f.write(fat)
+        root = bytearray(bps)
+        root[:11] = b"TESTVOL    "
+        root[11] = 0x08
+        f.seek((reserved + nfats * spf) * bps)
+        f.write(root)
     return img
 
 

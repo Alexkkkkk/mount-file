@@ -238,7 +238,7 @@ engine.close()
   writes fail with an explicit unsupported-profile reason; they do not invoke a
   subprocess or fall back to a legacy writer. A read-only backend reports an
   empty write capability list and a human-readable rejection reason.
-  Capability/status schema v5 also publishes a `recovery` contract. It records
+  Capability/status schema v6 also publishes a `recovery` contract. It records
   tested failure rollback and the ext2 recovery-sidecar process-kill evidence,
   while FAT/exFAT process-kill and quarantine remain `not_proven`; all native
   writers report `power_loss: unsupported`. This is an explicit refusal of

@@ -20,6 +20,7 @@
 #     e2fsprogs             ext2/ext4 images, debugfs writer, e2fsck
 #     ntfs-3g               mkfs.ntfs for the read-only NTFS profile
 #     pytsk3                filesystem-aware DFIR commands
+#     yara-python           YARA scanning commands
 #     PyQt6                 offscreen GUI check
 #
 # Exit code 0 means every executed check passed; 1 lists the failed checks.
@@ -51,6 +52,15 @@ bad() {
 skip() { SKIP=$((SKIP + 1)); SKIPPED_NAMES+=("$1"); printf '  SKIP  %s (%s)\n' "$1" "${2:-}"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+has_python_module() {
+  "$PY" -c 'import importlib, sys; importlib.import_module(sys.argv[1])' "$1" \
+    >/dev/null 2>&1
+}
+
+PROJECT_PYTHONPATH="$ROOT"
+if [ -n "${PYTHONPATH:-}" ]; then
+  PROJECT_PYTHONPATH="$ROOT:$PYTHONPATH"
+fi
 
 # run NAME -- command...                      expect exit status 0
 run() {
@@ -252,22 +262,38 @@ YAR
   run_contains "hash" "SHA-256:" -- "$PY" -m mountfile hash "$IMG"
   run_contains "grep" "hello from fat" -- "$PY" -m mountfile grep "$IMG" "hello from fat"
   run "search" -- "$PY" -m mountfile search "$IMG" "hello from fat"
-  run "timeline-build" -- "$PY" -m mountfile timeline-build "$IMG" -o "$WORK/timeline.db" --csv "$WORK/timeline.csv"
-  exists "timeline csv written" "$WORK/timeline.csv"
-  run "timeline-query" -- "$PY" -m mountfile timeline-query --db "$WORK/timeline.db"
-  run "timestomp-scan" -- "$PY" -m mountfile timestomp-scan "$IMG"
-  run "yara-scan (files + unallocated)" -- "$PY" -m mountfile yara-scan "$IMG" --rules "$WORK/detect.yar"
-  run "yara-scan (files only)" -- "$PY" -m mountfile yara-scan "$IMG" --rules "$WORK/detect.yar" --targets files
-  run_contains "yara single file" "Greeting_marker" -- "$PY" -m mountfile yara "$WORK/hello.txt" --rules "$WORK/detect.yar"
+  if has_python_module pytsk3; then
+    run "timeline-build" -- "$PY" -m mountfile timeline-build "$IMG" -o "$WORK/timeline.db" --csv "$WORK/timeline.csv"
+    exists "timeline csv written" "$WORK/timeline.csv"
+    run "timeline-query" -- "$PY" -m mountfile timeline-query --db "$WORK/timeline.db"
+    run "timestomp-scan" -- "$PY" -m mountfile timestomp-scan "$IMG"
+    run "slack-extract" -- "$PY" -m mountfile slack-extract "$IMG" -o "$WORK/slack"
+    cp "$IMG" "$WORK/fat32_after.img"
+    printf 'appended\n' >>"$WORK/fat32_after.img"
+    run "live-diff" -- "$PY" -m mountfile live-diff "$IMG" "$WORK/fat32_after.img" -o "$WORK/diff.md"
+    exists "live-diff markdown written" "$WORK/diff.md"
+  else
+    skip "timeline-build" "pytsk3 is not importable"
+    skip "timeline csv written" "timeline-build was skipped"
+    skip "timeline-query" "pytsk3 is not importable"
+    skip "timestomp-scan" "pytsk3 is not importable"
+    skip "slack-extract" "pytsk3 is not importable"
+    skip "live-diff" "pytsk3 is not importable"
+    skip "live-diff markdown written" "live-diff was skipped"
+  fi
+  if has_python_module yara; then
+    run "yara-scan (files + unallocated)" -- "$PY" -m mountfile yara-scan "$IMG" --rules "$WORK/detect.yar"
+    run "yara-scan (files only)" -- "$PY" -m mountfile yara-scan "$IMG" --rules "$WORK/detect.yar" --targets files
+    run_contains "yara single file" "Greeting_marker" -- "$PY" -m mountfile yara "$WORK/hello.txt" --rules "$WORK/detect.yar"
+  else
+    skip "yara-scan (files + unallocated)" "yara-python is not importable"
+    skip "yara-scan (files only)" "yara-python is not importable"
+    skip "yara single file" "yara-python is not importable"
+  fi
   printf '[[0, 131072]]\n' >"$WORK/ranges.json"
   run_output "unallocated-scan" "Matches:" -- "$PY" -m mountfile unallocated-scan "$IMG" --ranges "$WORK/ranges.json"
-  run "slack-extract" -- "$PY" -m mountfile slack-extract "$IMG" -o "$WORK/slack"
   run "evidence-manifest" -- "$PY" -m mountfile evidence-manifest "$IMG" --output "$WORK/manifest.json"
   exists "evidence manifest written" "$WORK/manifest.json"
-  cp "$IMG" "$WORK/fat32_after.img"
-  printf 'appended\n' >>"$WORK/fat32_after.img"
-  run "live-diff" -- "$PY" -m mountfile live-diff "$IMG" "$WORK/fat32_after.img" -o "$WORK/diff.md"
-  exists "live-diff markdown written" "$WORK/diff.md"
 else
   skip "DFIR commands" "no FAT32 fixture was built"
 fi
@@ -312,10 +338,12 @@ assert "HELLO.TXT" in names, names
 print("gui ok:", len(panel.entries), "entries, writable =", panel.writer is not None, flush=True)
 window.close()
 PYEOF
-if [ -f "$IMG" ]; then
-  run "gui import + open FAT32 + writable volume" -- env QT_QPA_PLATFORM=offscreen MOUNTFILE_NO_UPDATE=1 "$PY" "$WORK/gui_smoke.py" "$IMG"
-else
+if [ ! -f "$IMG" ]; then
   skip "gui import + open FAT32 + writable volume" "no FAT32 fixture was built"
+elif has_python_module PyQt6; then
+  run "gui import + open FAT32 + writable volume" -- env PYTHONPATH="$PROJECT_PYTHONPATH" QT_QPA_PLATFORM=offscreen MOUNTFILE_NO_UPDATE=1 "$PY" "$WORK/gui_smoke.py" "$IMG"
+else
+  skip "gui import + open FAT32 + writable volume" "PyQt6 is not importable"
 fi
 
 echo
