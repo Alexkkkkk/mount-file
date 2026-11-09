@@ -125,8 +125,10 @@ carver или chain-of-custody система.
 `xml`, `csv`, `yaml`, `md`) и сохраняет исходную UTF-8 или CP1251 кодировку и
 переводы строк. FAT12/16, FAT32, ограниченный профиль чистого ext2 и exFAT
 поддерживаются встроенно. Native ext2 не требует `debugfs`, использует
-allowlisted features и 1/2/4 KiB blocks; regular files и каталоги поддерживают
-bounded direct/single/double-indirect addressing до 64 MiB (без sparse/triple-indirect);
+allowlisted features и 1/2/4 KiB blocks; regular files поддерживают bounded
+direct/single/double/triple-indirect addressing до 128 MiB, а каталоги — bounded
+direct/single/double-indirect growth (не более 128 MiB и mapping capacity).
+Sparse files и triple-indirect directories не поддерживаются;
 неподдерживаемый или нечистый том не получает native RW. Для иных unjournaled
 ext2 features legacy `debugfs` (`PATH`, `debugfs.exe` или WSL/e2fsprogs) остаётся
 только явным library-level compatibility opt-in `allow_legacy_debugfs=True`, не
