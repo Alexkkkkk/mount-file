@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Mock-only tests: no Windows features, downloads, drivers or WSL are changed.
+param([string]$EvidencePath)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $files = @('scripts/install-windows.ps1', 'scripts/install-windows-components.ps1', 'mountfile/data/install-windows-components.ps1')
@@ -16,8 +17,13 @@ $definitions = $ast.FindAll({ param($node) $node -is [System.Management.Automati
 foreach ($definition in $definitions) { Invoke-Expression $definition.Extent.Text }
 $RebootCode = 3010
 $Distro = 'MountFileTools'
+$script:assertions = @()
 function Assert-Equal($Actual, $Expected, [string]$Label) {
-    if ($Actual -ne $Expected) { throw "$Label`: expected $Expected, got $Actual" }
+    if ($Actual -ne $Expected) {
+        $script:assertions += [pscustomobject]@{ id=$Label; status='failed' }
+        throw "$Label`: expected $Expected, got $Actual"
+    }
+    $script:assertions += [pscustomobject]@{ id=$Label; status='pass' }
 }
 function Test-Admin { return $true }
 function Get-SystemExe([string]$Name) { return 'mock-wsl' }
@@ -54,4 +60,29 @@ function Get-Service { return $null }
 Assert-Equal (Test-ImDiskReady) $false 'Missing driver fails readiness'
 function Get-Service { return @{Name='imdisk'} }
 Assert-Equal (Test-ImDiskReady) $true 'CLI and registered driver pass readiness'
-Write-Output 'PowerShell parser and 8 mock assertions passed. No system changes performed.'
+if ($EvidencePath) {
+    $evidenceFiles = @($files + 'scripts/test-windows-installers.ps1')
+    $hashes = @()
+    foreach ($relative in $evidenceFiles) {
+        $hashes += [pscustomobject]@{
+            path = $relative
+            sha256 = (Get-FileHash (Join-Path $root $relative) -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    }
+    $report = [ordered]@{
+        schema = 'mountfile.platform-adapter-evidence/v1'
+        adapter = 'windows-installer-mock-suite'
+        runner = @{
+            platform = 'windows'
+            powershell = $PSVersionTable.PSVersion.ToString()
+            os = [System.Environment]::OSVersion.VersionString
+        }
+        verdict = 'pass'
+        checks = @($script:assertions)
+        check_count = $script:assertions.Count
+        system_changes_performed = $false
+        files = $hashes
+    }
+    $report | ConvertTo-Json -Depth 6 | Set-Content -Path $EvidencePath -Encoding UTF8
+}
+Write-Output "PowerShell parser and $($script:assertions.Count) mock assertions passed. No system changes performed."

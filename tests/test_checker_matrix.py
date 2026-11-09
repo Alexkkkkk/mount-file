@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from scripts.checker_matrix import build_report
+from scripts.checker_matrix import _tool_version, build_report
 
 
 def test_checker_matrix_is_json_serialisable_and_never_claims_parity():
@@ -39,6 +39,27 @@ def test_checker_matrix_records_unavailable_as_unknown_not_pass(monkeypatch):
     assert all(entry["checker_version"] is None for entry in report["entries"])
 
 
+def test_python_checker_version_uses_installed_distribution_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.checker_matrix.importlib.util.find_spec",
+        lambda _name: type("Spec", (), {"origin": "/site-packages/pytsk3.so"})(),
+    )
+    monkeypatch.setattr(
+        "scripts.checker_matrix.metadata.version", lambda name: f"{name} 2026.1"
+    )
+
+    version = _tool_version(
+        {
+            "checker": "pytsk3",
+            "checker_package": "pytsk3",
+            "checker_kind": "python_module",
+        },
+        "/site-packages/pytsk3.so",
+    )
+
+    assert version == "pytsk3 2026.1"
+
+
 def test_checker_matrix_never_conflates_available_tool_with_fixture_evidence(
     monkeypatch,
 ):
@@ -50,6 +71,9 @@ def test_checker_matrix_never_conflates_available_tool_with_fixture_evidence(
         lambda name: type("Spec", (), {"origin": "/site-packages/" + name + ".so"})(),
     )
     monkeypatch.setattr(
+        "scripts.checker_matrix.metadata.version", lambda _name: "package 1.2"
+    )
+    monkeypatch.setattr(
         "scripts.checker_matrix.subprocess.run",
         lambda *args, **kwargs: type(
             "Result", (), {"returncode": 0, "stdout": "tool 1.2\n", "stderr": ""}
@@ -58,7 +82,8 @@ def test_checker_matrix_never_conflates_available_tool_with_fixture_evidence(
     report = build_report()
     assert all(entry["availability"] == "available" for entry in report["entries"])
     assert all(
-        entry["checker_version"] in {"tool 1.2", None} for entry in report["entries"]
+        entry["checker_version"] in {"tool 1.2", "package 1.2", None}
+        for entry in report["entries"]
     )
     assert all(entry["evidence"] == "fixture_required" for entry in report["entries"])
     assert all(entry["parity"] == "not_claimed" for entry in report["entries"])

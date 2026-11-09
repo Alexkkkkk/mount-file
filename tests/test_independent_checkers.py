@@ -129,6 +129,10 @@ def test_e2fsck_code_one_is_not_clean_and_checker_receives_copy(tmp_path, monkey
     assert not result.is_clean
     assert result.source_unchanged
     assert result.copy_unchanged
+    assert result.source_sha256_before == before
+    assert result.source_sha256_after == before
+    assert result.copy_sha256_before == before
+    assert result.copy_sha256_after == before
     assert _digest(image) == before
     assert not seen["copy"].exists(), "disposable checker copy must be cleaned up"
 
@@ -150,6 +154,12 @@ def test_successful_checker_that_changes_copy_is_not_accepted(tmp_path, monkeypa
     assert result.verdict is checkers.CheckerVerdict.NOT_VERIFIED_CLEAN
     assert result.source_unchanged
     assert not result.copy_unchanged
+    assert result.source_sha256_before == before
+    assert result.source_sha256_after == before
+    assert result.copy_sha256_before == before
+    assert (
+        result.copy_sha256_after == sha256(b"checker changed only the copy").hexdigest()
+    )
     assert _digest(image) == before
 
 
@@ -234,7 +244,9 @@ def test_real_mkfs_image_passes_nonrepair_checker_on_disposable_copy(
     assert _digest(image) == before
 
 
-def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy(tmp_path):
+def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy(
+    tmp_path, record_property
+):
     _require_tools("mke2fs", "e2fsck")
     image = tmp_path / "native-write.ext2"
     _blank_image(image)
@@ -248,6 +260,12 @@ def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy(tmp_path):
     before = _digest(image)
 
     result = checkers.check_ext_image(image, timeout=60)
+    checkers.record_checker_fixture(
+        record_property,
+        profile="ext2-native-rw",
+        image=image,
+        result=result,
+    )
 
     assert result.verdict is checkers.CheckerVerdict.CLEAN, result.diagnostics()
     assert result.source_unchanged
@@ -255,7 +273,9 @@ def test_native_ext2_mutation_passes_e2fsck_on_disposable_copy(tmp_path):
     assert _digest(image) == before
 
 
-def test_native_fat32_mutation_passes_fsck_on_disposable_copy(tmp_path):
+def test_native_fat32_mutation_passes_fsck_on_disposable_copy(
+    tmp_path, record_property
+):
     _require_tools("mkfs.fat", "fsck.fat")
     image = tmp_path / "native-write.fat32"
     _blank_image(image, size=64 * 1024 * 1024)
@@ -275,6 +295,12 @@ def test_native_fat32_mutation_passes_fsck_on_disposable_copy(tmp_path):
 
     before = _digest(image)
     result = checkers.check_fat_image(image, timeout=60)
+    checkers.record_checker_fixture(
+        record_property,
+        profile="fat32-native-rw",
+        image=image,
+        result=result,
+    )
 
     assert result.verdict is checkers.CheckerVerdict.CLEAN, result.diagnostics()
     assert result.source_unchanged
@@ -282,7 +308,7 @@ def test_native_fat32_mutation_passes_fsck_on_disposable_copy(tmp_path):
     assert _digest(image) == before
 
 
-def test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix(tmp_path):
+def test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix(tmp_path, record_property):
     _require_tools("mkfs.ntfs", "ntfsfix")
     image = tmp_path / "fresh.ntfs"
     _blank_image(image)
@@ -290,6 +316,12 @@ def test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix(tmp_path):
     before = _digest(image)
 
     result = checkers.check_ntfsfix_image(image, timeout=60)
+    checkers.record_checker_fixture(
+        record_property,
+        profile="ntfs-native-ro",
+        image=image,
+        result=result,
+    )
 
     assert result.available
     assert not result.timed_out
