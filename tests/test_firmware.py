@@ -71,6 +71,16 @@ class TestSignatureScan:
         vols = detect_volumes(path)
         assert [(v.offset, v.fstype) for v in vols] == [(1024 * 1024, "FAT32")]
 
+    def test_nearby_distinct_filesystems_are_not_hidden(self):
+        path = self._img("nearby-volumes.img")
+        second = 40 * 1024
+        write_at(path, 0, fat32_boot_sector())
+        write_at(path, second, fat32_boot_sector())
+        assert [(v.offset, v.fstype) for v in detect_volumes(path)] == [
+            (0, "FAT32"),
+            (second, "FAT32"),
+        ]
+
     def test_standard_fat32_label_at_offset_82(self):
         # A real FAT32 formatter uses EBPB offset 82 (54 is FAT12/16).
         header = bytearray(fat32_boot_sector())

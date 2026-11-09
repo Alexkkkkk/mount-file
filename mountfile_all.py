@@ -489,6 +489,10 @@ def print_cheatsheet() -> None:
                                           # bounded read; output bytes or -o file
     python main.py get <img> / -o out    # извлечение файла/каталога
     python main.py put <img> f --dest / --yes    # импорт в FAT32
+    python main.py write-range <img> /f --input p --file-offset 16 --yes
+                                          # запись по смещению в существующий файл
+    python main.py append <img> /f --input p --yes   # дописать в конец файла
+    python main.py truncate <img> /f --size 0 --yes  # изменить размер файла
     python main.py mkdir <img> /new
     python main.py mv <img> /a b         # переименование в том же каталоге
     python main.py rm <img> /new -r --yes

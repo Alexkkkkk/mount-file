@@ -774,6 +774,33 @@ class _Ext2FS:
         data = b"".join(self._read_block(block) for block in blocks)
         return data[:size]
 
+    def _inode_data_range(
+        self, raw: bytes | bytearray, offset: int, length: int | None
+    ) -> bytes:
+        """Read one bounded byte range without materializing the whole inode."""
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ValueError("read offset must be a non-negative integer")
+        if length is not None and (
+            not isinstance(length, int) or isinstance(length, bool) or length < 0
+        ):
+            raise ValueError("read length must be a non-negative integer or None")
+        size = self._inode_size(raw)
+        if offset >= size or length == 0:
+            return b""
+        end = size if length is None else min(size, offset + length)
+        blocks = self._inode_blocks(
+            raw, allow_indirect=True, allow_double_indirect=True
+        )
+        first = offset // self.block_size
+        last = (end - 1) // self.block_size
+        if last >= len(blocks):
+            raise NativeExt2UnsafeError(
+                "ext2 inode block list is shorter than its size"
+            )
+        data = b"".join(self._read_block(block) for block in blocks[first : last + 1])
+        start = offset - first * self.block_size
+        return data[start : start + (end - offset)]
+
     def _inode_size(self, raw: bytes | bytearray) -> int:
         size = self._u32(raw, 4)
         if stat.S_IFMT(self._u16(raw, 0)) == stat.S_IFREG:
@@ -1141,6 +1168,16 @@ class _Ext2FS:
         if stat.S_IFMT(mode) != stat.S_IFREG:
             raise IsADirectoryError(path)
         return self._inode_data(inode_raw)
+
+    def read_file_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
+        _, inode_raw, entry = self._resolve(path)
+        if entry is None or inode_raw is None:
+            raise FileNotFoundError(path)
+        if stat.S_IFMT(self._u16(inode_raw, 0)) != stat.S_IFREG:
+            raise IsADirectoryError(path)
+        return self._inode_data_range(inode_raw, offset, length)
 
     def write_file(self, path: str, data: bytes) -> None:
         maximum_bytes = (
@@ -2258,6 +2295,12 @@ class NativeExt2ImageWriter:
     def read_file(self, path: str) -> bytes:
         with self._lock:
             return self._fs.read_file(path)
+
+    def read_file_range(
+        self, path: str, offset: int = 0, length: int | None = None
+    ) -> bytes:
+        with self._lock:
+            return self._fs.read_file_range(path, offset, length)
 
     def list_dir(self, path="/") -> list[dict]:
         with self._lock:
