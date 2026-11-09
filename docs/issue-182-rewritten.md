@@ -36,7 +36,7 @@
 
 Фактический уровень поддержки остаётся частичным:
 
-- **ext2:** ограниченный clean, non-journaled writer с allowlist features; regular files и каталоги поддерживают bounded direct/single/double-indirect blocks до 64 MiB. Sparse/triple-indirect профили не поддержаны; persistent power-loss и общая crash-recovery acceptance не закрыты. Double-indirect directory support включён в `main` через PR #326.
+- **ext2:** ограниченный clean, non-journaled writer с allowlist features; regular files поддерживают bounded direct/single/double/triple-indirect blocks до 128 MiB, а каталоги — direct/single/double-indirect growth в пределах pointer capacity и 128 MiB. Sparse files, triple-indirect directories, persistent power-loss и общая crash-recovery acceptance остаются неподдержанными.
 - **FAT:** native bounded readers реализованы для FAT12/16/32; bounded write-возможности существуют для FAT12/16 и FAT32. Полная differential и write parity матрица для всех FAT вариантов не заявляется.
 - **exFAT:** native reader/writer возможности ограничены поддержанными профилями и проверяемыми метаданными. Не поддерживаемые layout/операции остаются fail-closed; неизвестные структуры не должны трактоваться как поддержанные.
 - **ext3/JBD2:** доступно ограниченное read-only профилирование/валидация. Журналирование и recovery требуют отдельной проверки; replay не является разрешением на запись.

@@ -1462,8 +1462,8 @@
         "bounded-ext2-write-layout"
       ],
       "constraints": [
-        "Clean ext2 allowlist only; regular files use bounded direct, single-, and double-indirect blocks, up to 64 MiB.",
-        "Sparse and triple-indirect files/directories are refused; directory growth supports bounded direct, single-, and double-indirect blocks."
+        "Clean ext2 allowlist only; regular files use bounded direct, single-, double-, and triple-indirect blocks, up to 128 MiB.",
+        "Sparse files and triple-indirect directories are refused; directories use direct, single-, and bounded double-indirect pointers."
       ],
       "filesystem": "ext2",
       "gates": [
@@ -1501,13 +1501,13 @@
           "state": "required"
         },
         {
-          "detail": "Sparse and triple-indirect files are refused; double-indirect regular files are bounded to 64 MiB.",
+          "detail": "Sparse files and triple-indirect directories are refused; regular files support bounded triple-indirect trees up to 128 MiB.",
           "id": "bounded-ext2-write-layout",
           "kind": "feature",
           "refusal": {
             "category": "unsupported",
             "code": "unsupported_profile",
-            "message": "Sparse and triple-indirect files are refused; double-indirect regular files are bounded to 64 MiB."
+            "message": "Sparse files and triple-indirect directories are refused; regular files support bounded triple-indirect trees up to 128 MiB."
           },
           "state": "required"
         }

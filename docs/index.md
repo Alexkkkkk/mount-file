@@ -43,6 +43,8 @@ python main.py path\to\image.img
 в [CLI](cli.md), интерфейс — в [GUI](gui.md).
 Экспериментальные библиотечные интерфейсы описаны в [API reference](api.md),
 а сценарии запуска — в [Demos](demos.md).
+Варианты расширения чтения и записи файловых систем, их ограничения и этапы
+безопасного внедрения описаны в [плане backend-ов](read-write-backends.md).
 Актуальную machine-readable матрицу native operations можно получить через
 `mountfile.capabilities.get_native_capability_matrix()`; она описывает API
 контракт, а не полное покрытие всех вариантов файловых систем.

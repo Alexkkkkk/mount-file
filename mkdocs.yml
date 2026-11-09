@@ -60,5 +60,6 @@ nav:
   - Синхронизация кода: sync.md
   - Разработчикам:
       - Структура репозитория: structure.md
+      - План read/write backend-ов: read-write-backends.md
       - UniversalFSRW snippet: tc_window_universal_fs_rw_snippet.md
       - VFS benchmarks: benchmarks.md

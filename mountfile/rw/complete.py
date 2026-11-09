@@ -309,7 +309,8 @@ class VerificationEngine:
             f.seek(0x438)
             magic = f.read(2)
         checks["ext4_magic"] = magic == b"\x53\xef"
-        # Проверка через e2fsck (если есть)
+        # Независимый checker обязателен для acceptance: его отсутствие не
+        # доказывает целостность образа и не должно превращаться в ``pass``.
         if shutil.which("e2fsck"):
             try:
                 res = subprocess.run(
@@ -323,7 +324,7 @@ class VerificationEngine:
             except (subprocess.TimeoutExpired, OSError):
                 checks["ext4_fsck"] = False
         else:
-            checks["ext4_fsck"] = True  # не блокируем, если утилиты нет
+            checks["ext4_fsck"] = False
         return checks
 
     # --- NTFS ---------------------------------------------------------------
