@@ -38,6 +38,90 @@ class JBD2RingPlan:
     free_blocks: int
 
 
+@dataclass(frozen=True)
+class JBD2JournalState:
+    """Validated classic JBD2 superblock state for a bounded journal ring.
+
+    This is deliberately a state-only parser.  It does not authorize an image
+    mutation: checksum features, durable ordering, checkpointing and recovery
+    evidence remain separate requirements for an ext3/ext4 writer.
+    """
+
+    block_size: int
+    max_length: int
+    first: int
+    sequence: int
+    start: int
+    uuid: bytes
+    empty: bool
+
+
+def parse_classic_jbd2_superblock(
+    raw: bytes | bytearray | memoryview,
+    *,
+    filesystem_block_size: int,
+    filesystem_uuid: bytes,
+    journal_blocks: int,
+) -> JBD2JournalState:
+    """Validate and decode a classic internal JBD2 journal superblock.
+
+    Only the no-checksum, 32-bit-tag profile used by the bounded serializer is
+    accepted.  The journal's declared ring must fit inside the journal inode;
+    ``s_start == 0`` is the only accepted empty-ring representation.  The
+    returned state can feed a later durable writer, but this function never
+    writes the image or claims ext3/ext4 write support.
+    """
+    if not isinstance(raw, bytes | bytearray | memoryview):
+        raise JBD2WriteProfileError("JBD2 superblock must be bytes-like")
+    raw = bytes(raw)
+    if len(raw) < 64:
+        raise JBD2WriteProfileError("short JBD2 journal superblock")
+    if filesystem_block_size not in _SUPPORTED_BLOCK_SIZES:
+        raise JBD2WriteProfileError("unsupported filesystem block size")
+    if not isinstance(journal_blocks, int) or isinstance(journal_blocks, bool):
+        raise JBD2WriteProfileError("journal block count must be an integer")
+    if journal_blocks < 2:
+        raise JBD2WriteProfileError("journal inode is too small for a ring")
+    try:
+        expected_uuid = bytes(filesystem_uuid)
+    except (TypeError, ValueError) as exc:
+        raise JBD2WriteProfileError("filesystem UUID must be bytes-like") from exc
+    if len(expected_uuid) != 16:
+        raise JBD2WriteProfileError("filesystem UUID must be exactly 16 bytes")
+
+    magic, block_type, sequence = struct.unpack_from(">III", raw, 0)
+    block_size, max_length, first, _sb_sequence, start = struct.unpack_from(
+        ">IIIII", raw, 12
+    )
+    feature_compat, feature_incompat, feature_ro = struct.unpack_from(">III", raw, 36)
+    journal_uuid = raw[48:64]
+    if magic != _JBD2_MAGIC or block_type not in (3, 4):
+        raise JBD2WriteProfileError("invalid JBD2 journal superblock header")
+    if block_size != filesystem_block_size:
+        raise JBD2WriteProfileError("JBD2 block size disagrees with filesystem")
+    if max_length != journal_blocks or max_length <= first + 1:
+        raise JBD2WriteProfileError("JBD2 ring length is outside journal inode bounds")
+    if not 1 <= first < max_length:
+        raise JBD2WriteProfileError("JBD2 ring first block is outside bounds")
+    if sequence == 0 or _sb_sequence == 0 or _sb_sequence != sequence:
+        raise JBD2WriteProfileError("JBD2 journal sequence must be nonzero")
+    if journal_uuid != expected_uuid:
+        raise JBD2WriteProfileError("JBD2 journal UUID does not match filesystem")
+    if feature_compat or feature_incompat or feature_ro:
+        raise JBD2WriteProfileError("unsupported or unchecked JBD2 journal feature")
+    if start != 0 and not first <= start < max_length:
+        raise JBD2WriteProfileError("JBD2 journal start is outside ring bounds")
+    return JBD2JournalState(
+        block_size=block_size,
+        max_length=max_length,
+        first=first,
+        sequence=sequence,
+        start=start,
+        uuid=journal_uuid,
+        empty=start == 0,
+    )
+
+
 def _validate_target(target: int, filesystem_blocks: int, forbidden: set[int]) -> None:
     if isinstance(target, bool) or not isinstance(target, int):
         raise JBD2WriteProfileError("JBD2 target block must be an integer")
