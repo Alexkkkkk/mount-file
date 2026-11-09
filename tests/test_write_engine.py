@@ -164,6 +164,31 @@ def test_filesystem_checker_execution_failure_is_unknown(tmp_path, monkeypatch):
         engine.close()
 
 
+def test_filesystem_checker_uses_disposable_copy(tmp_path, monkeypatch):
+    import mountfile.write_engine as write_engine_module
+
+    image, engine = _engine(tmp_path)
+    before = _sha(image)
+    commands = []
+    try:
+        monkeypatch.setattr(
+            write_engine_module.shutil, "which", lambda tool: "/fake/%s" % tool
+        )
+        monkeypatch.setattr(
+            write_engine_module,
+            "_run",
+            lambda args: (
+                commands.append((list(args), Path(args[-1]).exists())) or (0, "clean")
+            ),
+        )
+        assert engine._run_fs_check() is True
+        assert commands and Path(commands[0][0][-1]) != image
+        assert commands[0][1] is True
+        assert _sha(image) == before
+    finally:
+        engine.close()
+
+
 def test_verify_reports_observed_values_not_bare_booleans(tmp_path):
     image, engine = _engine(tmp_path)
     try:
