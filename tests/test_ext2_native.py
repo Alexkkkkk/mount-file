@@ -12,6 +12,7 @@ import sys
 import pytest
 
 import mountfile.ext2_native as ext2_native
+from mountfile.ext2_reader import NativeExt2Image
 from mountfile.ext2_native import NativeExt2Error, NativeExt2ImageWriter
 
 MKE2FS = shutil.which("mke2fs")
@@ -160,6 +161,52 @@ def test_native_ext2_double_indirect_file_roundtrip_replace_and_delete(
 
     writer.delete("/double.bin")
     assert "double.bin" not in {item["name"] for item in writer.list_dir("/")}
+    _assert_e2fsck_clean(image)
+
+
+def test_native_ext2_triple_indirect_file_roundtrip_replace_and_delete(tmp_path):
+    block_size = 1024
+    entries_per_block = block_size // 4
+    triple_start = 12 + entries_per_block + entries_per_block**2
+    size = (triple_start + 17) * block_size + 37
+    image = tmp_path / "triple-indirect.ext2"
+    _make_ext2(image, size=160 * 1024 * 1024, block_size=block_size)
+    writer = NativeExt2ImageWriter(image)
+    payload = bytes(index % 251 for index in range(size))
+
+    writer.write_file("/triple.bin", payload)
+    assert writer.read_file("/triple.bin") == payload
+    inode_number = next(
+        entry["inode"]
+        for entry in writer.list_dir("/")
+        if entry["name"] == "triple.bin"
+    )
+    raw = writer._fs._read_inode(inode_number)
+    assert writer._fs._u32(raw, 40 + 14 * 4) != 0
+    assert (
+        len(writer._fs._inode_blocks(raw, allow_triple_indirect=True))
+        == (size + block_size - 1) // block_size
+    )
+    assert (
+        len(writer._fs._inode_pointer_blocks(raw, allow_triple_indirect=True))
+        >= 261
+    )
+    _assert_e2fsck_clean(image)
+
+    provider = NativeExt2Image(image, volume_size=image.stat().st_size)
+    try:
+        assert provider.read_file("/triple.bin") == payload
+    finally:
+        provider.close()
+
+    writer.write_file("/triple.bin", b"small replacement")
+    assert writer.read_file("/triple.bin") == b"small replacement"
+    raw = writer._fs._read_inode(inode_number)
+    assert writer._fs._inode_pointer_blocks(raw, allow_triple_indirect=True) == []
+    _assert_e2fsck_clean(image)
+
+    writer.delete("/triple.bin")
+    assert "triple.bin" not in {entry["name"] for entry in writer.list_dir("/")}
     _assert_e2fsck_clean(image)
 
 
@@ -491,7 +538,7 @@ def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
     with pytest.raises(NativeExt2Error, match="traversal"):
         writer.write_file("/../escape", b"bad")
 
-    max_bytes = 64 * 1024 * 1024
+    max_bytes = 128 * 1024 * 1024
 
     class OversizedPayload:
         def __len__(self):
@@ -500,7 +547,7 @@ def test_native_ext2_rejects_unsafe_paths_oversize_and_existing_dirty_image(
         def __bytes__(self):
             raise AssertionError("oversized payload must be rejected before copying")
 
-    with pytest.raises(NativeExt2Error, match="double-indirect"):
+    with pytest.raises(NativeExt2Error, match="triple-indirect"):
         writer.write_file("/too-large.bin", OversizedPayload())
     assert image.read_bytes() == before
 
@@ -1058,11 +1105,20 @@ def test_large_file_high_size_is_not_misreported_as_empty(tmp_path):
         )
         == (1 << 32) + 1
     )
-    with pytest.raises(NativeExt2Error, match="double-indirect"):
+    with pytest.raises(NativeExt2Error, match="triple-indirect"):
         writer.read_file("/large.bin")
 
 
-def test_native_ext2_rejects_corrupt_double_indirect_file_pointer(tmp_path):
+@pytest.mark.parametrize(
+    ("pointer_index", "message"),
+    [
+        (13, "double-indirect pointer beyond"),
+        (14, "triple-indirect pointer beyond"),
+    ],
+)
+def test_native_ext2_rejects_corrupt_indirect_file_pointer(
+    tmp_path, pointer_index, message
+):
     image = tmp_path / "double-indirect.ext2"
     _make_ext2(image)
     writer = NativeExt2ImageWriter(image)
@@ -1083,11 +1139,11 @@ def test_native_ext2_rejects_corrupt_double_indirect_file_pointer(tmp_path):
         stream.seek(gdt + group * 32 + 8)
         inode_table = int.from_bytes(stream.read(4), "little")
         inode_offset = inode_table * block_size + index * inode_size
-        stream.seek(inode_offset + 40 + 13 * 4)
+        stream.seek(inode_offset + 40 + pointer_index * 4)
         stream.write((1).to_bytes(4, "little"))
 
     reader = NativeExt2ImageWriter(image)
-    with pytest.raises(NativeExt2Error, match="double-indirect pointer beyond"):
+    with pytest.raises(NativeExt2Error, match=message):
         reader.read_file("/file.bin")
 
 

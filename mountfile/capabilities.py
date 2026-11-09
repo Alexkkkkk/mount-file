@@ -337,9 +337,9 @@ _PROFILE_CONSTRAINTS = MappingProxyType(
         ),
         "ext2-native-rw": (
             "Clean ext2 allowlist only; regular files use bounded direct, single-, "
-            "and double-indirect blocks, up to 64 MiB.",
-            "Sparse and triple-indirect files/directories are refused; directory "
-            "growth supports bounded direct, single-, and double-indirect blocks.",
+            "double-, and triple-indirect blocks, up to 128 MiB.",
+            "Sparse files and triple-indirect directories are refused; directories "
+            "use direct, single-, and bounded double-indirect pointers.",
         ),
         "exfat-native-rw": (
             "Bounded one-FAT profile only; two-FAT TexFAT is refused for native browsing and writes.",
@@ -570,8 +570,8 @@ _PROFILE_SPECIFIC_GATES = MappingProxyType(
                 "bounded-ext2-write-layout",
                 "feature",
                 "required",
-                "Sparse and triple-indirect files are refused; double-indirect "
-                "regular files are bounded to 64 MiB.",
+                "Sparse files and triple-indirect directories are refused; regular "
+                "files support bounded triple-indirect trees up to 128 MiB.",
                 RefusalCode.UNSUPPORTED_PROFILE,
             ),
         ),

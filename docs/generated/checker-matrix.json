@@ -64,11 +64,11 @@
       "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
     },
     {
-      "availability": "unavailable",
+      "availability": "available",
       "checker": "fsck.exfat",
       "checker_authoritative": true,
       "checker_package": "exfatprogs",
-      "checker_path": null,
+      "checker_path": "/usr/sbin/fsck.exfat",
       "checker_version": null,
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
@@ -82,7 +82,7 @@
       "native": true,
       "parity": "not_claimed",
       "profile": "exfat-native-rw",
-      "reason": "required checker/runtime is unavailable on this runner"
+      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
     },
     {
       "availability": "available",
@@ -129,8 +129,8 @@
     }
   ],
   "platform": "linux",
-  "platform_release": "7.0.0-1017-azure",
-  "python": "3.12.16",
+  "platform_release": "6.18.38+",
+  "python": "3.12.3",
   "report": "mountfile-external-checker-matrix",
   "schema": 1
 }

@@ -41,7 +41,7 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 | ID | Задача | Статус | Что подтверждено / что осталось |
 |---|---|---|---|
 | R1 | Native read API для заявленных bounded-профилей FAT, exFAT, ext2/3/4 и NTFS | Частично | Есть readers для принятых profiles; полный feature/layout/API parity не заявлен. |
-| W1 | Native write API для файловых систем из scope | Не готово | Есть ограниченные FAT12/16, FAT32, ext2 (файлы и каталоги: bounded double-indirect) и one-FAT exFAT writers; native ext3/ext4/NTFS writers отсутствуют. |
+| W1 | Native write API для файловых систем из scope | Не готово | Есть ограниченные FAT12/16, FAT32, ext2 (regular files: bounded triple-indirect до 128 MiB; каталоги: bounded double-indirect) и one-FAT exFAT writers; native ext3/ext4/NTFS writers отсутствуют. |
 | A1 | Единый capability/refusal contract во всех интерфейсах | Частично | Matrix и typed refusals есть; проводится сверка документации и реальных profile/state limits. |
 | S1 | Fail-closed, bounds, отказ без изменения исходного образа | Частично | Есть общие primitives и значительное профильное покрытие; не доказана полная матрица `profile × state × operation`. |
 | V1 | Read-back и независимый checker для каждого writer | Частично | Linux CI требует e2fsprogs/dosfstools/exfatprogs/ntfs-3g для реальных oracle-тестов; full profile × operation matrix и writer-oracle parity ещё не закрыты. |
@@ -62,6 +62,8 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 ### Quality-gate follow-up
 
 В PR #344 проверка пяти правил correctness-lint распространена на весь репозиторий, а не только на `mountfile/` и `tests/`. В базе `main` было 51 нарушение; все оставшиеся нарушения в приложении и maintenance tools исправлены, расширенная проверка проходит с 0 findings. Это обновление включено в тот же commit, чтобы пройти проверку issue-182 ветки.
+
+- 2026-11-09: в локальной ветке `feat/issue-182-ext2-triple-indirect` добавлены bounded triple-indirect blocks для regular files (до 128 MiB при поддерживаемой геометрии) и batch allocation; обновлены capability/docs и e2fsck acceptance tests. Локальные тесты и линтеры не запускались по указанию пользователя; после публикации проверку выполняет GitHub CI. Это не закрывает power-loss или полную profile × operation acceptance matrix.
 
 - 2026-11-05: NTFS dirty `$Volume` и recovery-required `$LogFile` получают стабильный `DIRTY_OR_RECOVERY_REQUIRED` code; добавлены regression assertions. API, capability registry и audit docs уточняют bounded resident/nonresident `$ATTRIBUTE_LIST` support; это follow-up hardening, не закрытие полной profile × operation/crash-safety acceptance matrix.
 
