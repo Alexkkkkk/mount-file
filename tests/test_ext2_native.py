@@ -1194,9 +1194,7 @@ def test_universal_facade_passes_partition_bounds_to_native_ext2(tmp_path, monke
     assert image.read_bytes() == before
 
 
-def test_write_engine_does_not_call_external_checker_for_native_ext2(
-    tmp_path, monkeypatch
-):
+def test_write_engine_reports_disposable_checker_for_native_ext2(tmp_path, monkeypatch):
     image = tmp_path / "filesystem.ext2"
     _make_ext2(image)
     import mountfile.write_engine as write_engine_module
@@ -1211,17 +1209,12 @@ def test_write_engine_does_not_call_external_checker_for_native_ext2(
     try:
         assert engine.info().write_strategy == "native-ext2"
 
-        def external_tool_must_not_run(*_args, **_kwargs):
-            pytest.fail("native ext2 verification must not invoke e2fsck")
-
-        monkeypatch.setattr(
-            write_engine_module.shutil, "which", external_tool_must_not_run
-        )
+        monkeypatch.setattr(write_engine_module.shutil, "which", lambda _tool: None)
         report = engine.verify()
         checker = next(
             item for item in report["checks"] if item["name"] == "filesystem checker"
         )
         assert checker["ok"] is None
-        assert "external e2fsck not run" in checker["detail"]
+        assert "disposable image copy" in checker["detail"]
     finally:
         engine.close()

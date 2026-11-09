@@ -48,6 +48,7 @@ import json
 import logging
 import shutil
 import struct
+import tempfile
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
@@ -643,8 +644,8 @@ class WriteEngine:
         accepted = set((self.damage or {}).get("problems", []))
         if self.allow_damaged and self._baseline_fs_check is False:
             accepted.add(
-                "filesystem checker: external checker result "
-                "(None = tool/dependency unavailable)"
+                "filesystem checker: independent checker result on a disposable "
+                "image copy (None = tool/dependency unavailable)"
             )
         new_problems = [
             problem for problem in verification["problems"] if problem not in accepted
@@ -802,15 +803,10 @@ class WriteEngine:
         structural = self._probe()
         checks.extend(structural["checks"])
         fs_check = self._run_fs_check()
-        if self._backend_info.write_strategy == "native-ext2":
-            fs_check_detail = (
-                "external e2fsck not run; native ext2 validates staged metadata "
-                "after each mutation"
-            )
-        else:
-            fs_check_detail = (
-                "external checker result (None = tool/dependency unavailable)"
-            )
+        fs_check_detail = (
+            "independent checker result on a disposable image copy "
+            "(None = tool/dependency unavailable)"
+        )
         checks.append(
             {
                 "name": "filesystem checker",
@@ -834,17 +830,28 @@ class WriteEngine:
         }
 
     def _run_fs_check(self) -> Optional[bool]:
-        if self._backend_info.write_strategy == "native-ext2":
-            return None
         fs_type = fs_family((self.damage or {}).get("fs_type"))
-        if fs_type == "fat" and shutil.which("fsck.fat"):
-            proc = _run([shutil.which("fsck.fat"), "-n", str(self.image)])
-            return None if proc is None else _exitcode_ok(proc)
-        if fs_type == "ext" and shutil.which("e2fsck"):
-            args = [shutil.which("e2fsck"), "-fn"]
-            if self.offset:
-                args += ["-E", "offset=%d" % self.offset]
-            args.append(str(self.image))
+        checker = (
+            "fsck.fat" if fs_type == "fat" else "e2fsck" if fs_type == "ext" else None
+        )
+        if checker is None:
+            return None
+        executable = shutil.which(checker)
+        if not executable:
+            return None
+        with tempfile.TemporaryDirectory(prefix="mountfile-check-") as directory:
+            disposable = Path(directory) / self.image.name
+            try:
+                shutil.copy2(self.image, disposable)
+            except OSError:
+                return None
+            if checker == "fsck.fat":
+                args = [executable, "-n", str(disposable)]
+            else:
+                args = [executable, "-fn"]
+                if self.offset:
+                    args += ["-E", "offset=%d" % self.offset]
+                args.append(str(disposable))
             proc = _run(args)
             return None if proc is None else _exitcode_ok(proc)
         return None
