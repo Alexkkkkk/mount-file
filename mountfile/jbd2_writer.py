@@ -56,6 +56,79 @@ class JBD2JournalState:
     empty: bool
 
 
+@dataclass(frozen=True)
+class JBD2DecodedTransaction:
+    """Validated transaction payload ready for bounded checkpoint reduction."""
+
+    sequence: int
+    writes: tuple[tuple[int, bytes], ...]
+    revokes: tuple[int, ...]
+
+
+def decode_classic_jbd2_transaction(
+    records: Sequence[bytes],
+    *,
+    block_size: int,
+    filesystem_blocks: int,
+    journal_blocks: Sequence[int] = (),
+) -> JBD2DecodedTransaction:
+    """Decode one already-committed classic transaction without applying it.
+
+    The existing structural validator remains the authority for record shape.
+    This function only extracts the validated target/data pairs and restores
+    ESCAPE-tagged magic prefixes. It never writes an image and rejects targets
+    outside the filesystem or inside journal-owned blocks.
+    """
+    if block_size not in _SUPPORTED_BLOCK_SIZES:
+        raise JBD2WriteProfileError("unsupported JBD2 block size")
+    if not isinstance(records, Sequence) or isinstance(records, bytes | str):
+        raise JBD2WriteProfileError("JBD2 records must be a sequence of blocks")
+    forbidden = set(journal_blocks)
+    if len(forbidden) != len(journal_blocks):
+        raise JBD2WriteProfileError("duplicate journal-owned block")
+    _validate_transaction_records(records, block_size)
+    magic, record_type, sequence = struct.unpack_from(">III", records[0])
+    writes: list[tuple[int, bytes]] = []
+    revokes: list[int] = []
+    index = 0
+    if record_type == _JBD2_DESCRIPTOR:
+        cursor = 12
+        escaped: list[bool] = []
+        targets: list[int] = []
+        while True:
+            target, flags = struct.unpack_from(">II", records[0], cursor)
+            cursor += 8
+            targets.append(target)
+            escaped.append(bool(flags & _JBD2_TAG_ESCAPE))
+            if len(targets) == 1 and not flags & _JBD2_TAG_SAME_UUID:
+                cursor += 16
+            index += 1
+            if flags & _JBD2_TAG_LAST:
+                break
+        for target, is_escaped, data in zip(
+            targets, escaped, records[1 : 1 + len(targets)], strict=True
+        ):
+            _validate_target(target, filesystem_blocks, forbidden)
+            if is_escaped:
+                if data[:4] != b"\x00" * 4:
+                    raise JBD2WriteProfileError("escaped JBD2 data lacks zero prefix")
+                data = _JBD2_MAGIC_BYTES + data[4:]
+            writes.append((target, data))
+        index = 1 + len(targets)
+
+    while index < len(records) - 1:
+        revoke = records[index]
+        _magic, _type, revoke_sequence, byte_count = struct.unpack_from(">IIII", revoke)
+        if revoke_sequence != sequence:
+            raise JBD2WriteProfileError("JBD2 revoke sequence mismatch")
+        for cursor in range(16, byte_count, 4):
+            target = struct.unpack_from(">I", revoke, cursor)[0]
+            _validate_target(target, filesystem_blocks, forbidden)
+            revokes.append(target)
+        index += 1
+    return JBD2DecodedTransaction(sequence, tuple(writes), tuple(revokes))
+
+
 def parse_classic_jbd2_superblock(
     raw: bytes | bytearray | memoryview,
     *,
@@ -103,7 +176,8 @@ def parse_classic_jbd2_superblock(
         raise JBD2WriteProfileError("JBD2 ring length is outside journal inode bounds")
     if not 1 <= first < max_length:
         raise JBD2WriteProfileError("JBD2 ring first block is outside bounds")
-    if sequence == 0 or _sb_sequence == 0 or _sb_sequence != sequence:
+    empty = sequence == 0 and _sb_sequence == 0 and start == 0
+    if not empty and (sequence == 0 or _sb_sequence == 0 or _sb_sequence != sequence):
         raise JBD2WriteProfileError("JBD2 journal sequence must be nonzero")
     if journal_uuid != expected_uuid:
         raise JBD2WriteProfileError("JBD2 journal UUID does not match filesystem")
@@ -118,7 +192,7 @@ def parse_classic_jbd2_superblock(
         sequence=sequence,
         start=start,
         uuid=journal_uuid,
-        empty=start == 0,
+        empty=empty or start == 0,
     )
 
 
