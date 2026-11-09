@@ -2,9 +2,14 @@ import struct
 
 import pytest
 
-from mountfile.jbd2_checkpoint import plan_classic_jbd2_checkpoint
+from mountfile.jbd2_checkpoint import (
+    plan_classic_jbd2_checkpoint,
+    reduce_classic_jbd2_transactions,
+)
 from mountfile.jbd2_writer import (
     JBD2WriteProfileError,
+    decode_classic_jbd2_transaction,
+    encode_classic_jbd2_transaction,
     parse_classic_jbd2_superblock,
 )
 
@@ -96,3 +101,40 @@ def test_checkpoint_rejects_unknown_journal_features():
 
     with pytest.raises(JBD2WriteProfileError, match="feature"):
         make_plan(superblock=raw)
+
+
+def test_decoder_restores_escaped_data_and_reducer_applies_revoke():
+    escaped = struct.pack(">I", 0xC03B3998) + b"A" * 1020
+    first = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: escaped, 12: b"B" * 1024},
+    )
+    second = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=18,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={20: b"C" * 1024},
+        revokes=[8],
+    )
+
+    decoded_first = decode_classic_jbd2_transaction(
+        first,
+        block_size=1024,
+        filesystem_blocks=100,
+        journal_blocks=[40],
+    )
+    decoded_second = decode_classic_jbd2_transaction(
+        second,
+        block_size=1024,
+        filesystem_blocks=100,
+        journal_blocks=[40],
+    )
+    assert dict(decoded_first.writes)[8] == escaped
+    assert reduce_classic_jbd2_transactions([decoded_first, decoded_second]) == {
+        12: b"B" * 1024,
+        20: b"C" * 1024,
+    }

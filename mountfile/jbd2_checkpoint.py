@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from .jbd2_writer import (
     _JBD2_MAGIC,
     _SUPPORTED_BLOCK_SIZES,
+    JBD2DecodedTransaction,
     JBD2JournalState,
     JBD2WriteProfileError,
     parse_classic_jbd2_superblock,
@@ -40,6 +41,33 @@ class JBD2CheckpointPlan:
     clean_superblock: bytes
     state_before: JBD2JournalState
     flush_boundaries: tuple[int, ...]
+
+
+def reduce_classic_jbd2_transactions(
+    transactions: Sequence[JBD2DecodedTransaction],
+) -> dict[int, bytes]:
+    """Reduce committed transactions to final filesystem block contents.
+
+    Transactions must already be in journal sequence order. A revoke removes
+    an older pending write before later writes are applied; the decoder has
+    already proved that one transaction cannot both write and revoke a block.
+    """
+    if not isinstance(transactions, Sequence) or isinstance(
+        transactions, bytes | bytearray | str
+    ):
+        raise JBD2WriteProfileError("transactions must be a sequence")
+    reduced: dict[int, bytes] = {}
+    previous_sequence: int | None = None
+    for transaction in transactions:
+        if not isinstance(transaction, JBD2DecodedTransaction):
+            raise JBD2WriteProfileError("transaction has the wrong type")
+        if previous_sequence is not None and transaction.sequence == previous_sequence:
+            raise JBD2WriteProfileError("duplicate JBD2 transaction sequence")
+        for target in transaction.revokes:
+            reduced.pop(target, None)
+        reduced.update(transaction.writes)
+        previous_sequence = transaction.sequence
+    return dict(sorted(reduced.items()))
 
 
 def _validate_block_number(block: int, filesystem_blocks: int) -> None:
