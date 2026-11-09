@@ -73,9 +73,10 @@ LINUX_APT = [
     "dosfstools",
     "mtools",
     "e2fsprogs",  # supplies debugfs for ext2/ext3/ext4
+    "exfatprogs",  # supplies mkfs.exfat/fsck.exfat for exFAT profiles
     "ntfs-3g",
 ]
-MAC_BREW = ["qt@6", "e2fsprogs"]
+MAC_BREW = ["qt@6", "e2fsprogs", "dosfstools", "mtools"]
 
 
 def format_command(command: Sequence[object]) -> str:
