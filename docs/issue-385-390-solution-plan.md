@@ -15,7 +15,7 @@
 - **#387:** PR #407 добавил machine-readable recovery matrix, PR #417 — executable recovery acceptance и Linux artifacts. Остались непокрытые profile/failure-phase cells; recovery contract сам помечает process-kill/quarantine для FAT12/16, FAT32 и exFAT как `not_proven`, а power-loss — как `unsupported`. [26] [27] [8]
 - **#388:** PR #399 добавил `stat`, PR #400 — bounded RW `read_range` (до 1 MiB). Требование полного вызова каждой положительной/отрицательной operation cell и сохранения refusal/fallback parity across interfaces всё ещё требует отдельного conformance прохода. [28] [29] [30]
 - **#389:** PR #397/#404/#416 добавили bounded tool inventory, декларативную/исполняемую checker acceptance; PR #441 расширил cross-platform native-read evidence. Это не означает, что каждый независимый filesystem checker исполняется на каждой OS, или что все image/profile/operation cells уже имеют fixtures. [31] [32] [33] [34]
-- **#390:** PR #402/#409/#419 добавили capability/evidence поля, status contract и benchmark artifact validator; PR #468 заставляет `status-sync` падать при устаревшем generated README status. Cross-platform benchmark provenance и write benchmark matrix остаются открытыми; текущий benchmark read-only и Linux-specific. [35] [36] [37] [38] [39]
+- **#390:** PR #402/#409/#419 добавили capability/evidence поля, status contract и benchmark artifact validator; PR #468 заставляет `status-sync` падать при устаревшем generated README status. Эта проверка находит и в данном PR реальный drift: README показывал 1.86.0 при package version 1.86.1; файл перегенерирован штатным `scripts/generate_readme.py`. Cross-platform benchmark provenance и write benchmark matrix остаются открытыми; текущий benchmark read-only и Linux-specific. [35] [36] [37] [38] [39] [40]
 
 ## #385 — ext3/ext4 writer с JBD2
 
@@ -145,3 +145,4 @@ Write microbenchmark можно добавлять только как отде�
 [37]: https://github.com/Alexkkkkk/mount-file/pull/419 "Benchmark artifact validation"
 [38]: https://github.com/Alexkkkkk/mount-file/pull/468 "Generated README status synchronization"
 [39]: https://github.com/Alexkkkkk/mount-file/blob/main/.github/workflows/ci.yml "Current OS matrix and Linux integration acceptance"
+[40]: https://github.com/Alexkkkkk/mount-file/blob/main/scripts/generate_readme.py "Canonical generated README status block updater"
