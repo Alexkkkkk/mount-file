@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import posixpath
 import shutil
@@ -61,6 +62,7 @@ from .vfs import Ext2ReadError, TskError, open_image_provider, volume_size_for_o
 from .yara_scan import TARGETS, YaraScanError, scan_image
 
 OK, ERROR, NEED_CONFIRM = 0, 1, 2
+LOGGER = logging.getLogger(__name__)
 
 
 def cmd_capabilities(args):
@@ -1797,7 +1799,7 @@ def main(argv=None):
                 args.command, exit_code, time.perf_counter() - started
             )
         except Exception:  # noqa: BLE001 - telemetry cannot change command result
-            pass
+            LOGGER.debug("CLI telemetry recording failed", exc_info=True)
 
 
 if __name__ == "__main__":  # pragma: no cover
