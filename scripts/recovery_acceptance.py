@@ -20,6 +20,7 @@ from scripts.recovery_matrix import build_report as build_recovery_report
 FIXTURE_GROUPS = {
     "fat12-16": (
         "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+        "test_fat1216_process_kill_before_atomic_replace_never_publishes",
         "test_real_fat1216_mutations_pass_fsck_on_disposable_copy",
     ),
     "ext2": (
@@ -52,6 +53,9 @@ CELL_FIXTURES = {
         ),
         "hash_preservation": (
             "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+        ),
+        "process_kill": (
+            "test_fat1216_process_kill_before_atomic_replace_never_publishes",
         ),
         "independent_checker": (
             "test_real_fat1216_mutations_pass_fsck_on_disposable_copy",

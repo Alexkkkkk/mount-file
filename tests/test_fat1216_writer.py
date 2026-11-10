@@ -3,6 +3,8 @@
 
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -61,6 +63,51 @@ def test_fat1216_short_write_rolls_back_and_preserves_sentinels(tmp_path, monkey
         writer.write_file("/failed.bin", b"must rollback")
     writer.close()
     assert image.read_bytes() == before
+
+
+@pytest.mark.parametrize("fat_type", [12, 16])
+def test_fat1216_process_kill_before_atomic_replace_never_publishes(tmp_path, fat_type):
+    volume = tmp_path / f"fat{fat_type}-crash.partition"
+    _make_fat1216_image(volume, fat_type)
+    prefix, suffix = b"CRASH-PREFIX" * 7, b"CRASH-SUFFIX" * 9
+    image = tmp_path / f"fat{fat_type}-crash.disk"
+    image.write_bytes(prefix + volume.read_bytes() + suffix)
+    before = image.read_bytes()
+    offset = len(prefix)
+    size = volume.stat().st_size
+    script = """
+import os
+import sys
+from pathlib import Path
+
+import mountfile.universal_fs_rw as backend
+from mountfile.universal_fs_rw import Fat1216RW
+
+image = Path(sys.argv[1]).resolve()
+real_replace = backend.os.replace
+
+def kill_before_publish(source, destination):
+    if Path(destination).resolve() == image and str(source).endswith(".mountfile-stage"):
+        os._exit(74)
+    return real_replace(source, destination)
+
+backend.os.replace = kill_before_publish
+Fat1216RW(
+    image, offset=int(sys.argv[2]), volume_size=int(sys.argv[3])
+).write_file("/CRASH.BIN", b"must not publish")
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(image), str(offset), str(size)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert crashed.returncode == 74, crashed.stdout + crashed.stderr
+    assert image.read_bytes() == before
+    orphan_stages = list(tmp_path.glob(f".{image.name}.*.mountfile-stage"))
+    assert orphan_stages
+    for stage in orphan_stages:
+        stage.unlink()
 
 
 @pytest.mark.parametrize(
