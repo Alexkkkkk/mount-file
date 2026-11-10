@@ -31,7 +31,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.81.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Current package version | `1.85.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.84.0`.
+This block is generated from the canonical status data in this repository. Package version: `1.85.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
@@ -94,6 +94,26 @@ For the detailed status and remaining acceptance work, see
 
 For self-learning layer controls, explicit feedback, privacy boundaries and
 the OLMA code-repair gate, see [`docs/self-learning-layers.md`](docs/self-learning-layers.md).
+
+## What is not ready yet
+
+The current release is functional, but several production-readiness items remain
+open. These are tracked as separate GitHub issues rather than being implied as
+completed by the capability matrix:
+
+| Area | Status | Tracking issue |
+|---|---|---|
+| Native ext3/ext4 writer with JBD2 transaction and recovery gates | Not ready; read-only | [#385](https://github.com/Alexkkkkk/mount-file/issues/385) |
+| Native NTFS writer with `$LogFile` recovery | Not ready; read-only | [#386](https://github.com/Alexkkkkk/mount-file/issues/386) |
+| Writer acceptance: failure injection, process-kill and quarantine tests | Not ready | [#387](https://github.com/Alexkkkkk/mount-file/issues/387) |
+| Unified native VFS/refusal parity across profiles | In progress | [#388](https://github.com/Alexkkkkk/mount-file/issues/388) |
+| Cross-platform filesystem fixtures and independent checker CI | In progress | [#389](https://github.com/Alexkkkkk/mount-file/issues/389) |
+| Reproducible benchmark matrix and synchronized product status | In progress | [#390](https://github.com/Alexkkkkk/mount-file/issues/390) |
+
+The production-readiness epic is [#384](https://github.com/Alexkkkkk/mount-file/issues/384).
+The DFIR/AI roadmap remains tracked in [#87](https://github.com/Alexkkkkk/mount-file/issues/87).
+Until these issues are closed, do not interpret limited native writes, backups or
+read-only journal overlays as universal filesystem support or power-loss safety.
 
 ## Quick start
 
