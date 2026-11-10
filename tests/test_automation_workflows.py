@@ -192,6 +192,14 @@ def test_status_sync_validates_instead_of_rewriting_the_pull_request_head():
     assert not (ROOT / ".github" / "workflows" / "readme-sync.yml").exists()
 
 
+def test_status_sync_fails_when_generated_readme_is_stale():
+    text = workflow("status-sync.yml")
+    assert "Generated README block is stale" in text
+    assert "exit 1" in text
+    assert "::error file=README.md::" in text
+    assert "::warning file=README.md::" not in text
+
+
 def test_release_assets_and_production_deploy_have_one_owner_each():
     deploy = workflow("deploy.yml")
     release = workflow("release.yml")
