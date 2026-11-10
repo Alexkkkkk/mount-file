@@ -1684,20 +1684,61 @@ def _restart_page(
     *,
     flags=0x0002,
     sequence=0xA55A,
-    revision=7,
+    current_lsn=42,
+    restart_log_open_count=7,
     log_page_size=4096,
-    minor_version=1,
+    file_size=None,
+    client_free_list=0xFFFF,
+    client_in_use_list=0,
+    log_page_data_offset=None,
+    minor_version=0,
     major_version=2,
 ):
+    if file_size is None:
+        file_size = 8192 + 50 * log_page_size
+    if log_page_data_offset is None:
+        usa_end = 0x28 + (log_page_size // 512 + 1) * 2
+        log_page_data_offset = (usa_end + 7) & ~7
     page = bytearray(4096)
     page[:4] = b"RSTR"
     struct.pack_into("<HH", page, 4, 0x1E, 9)
     struct.pack_into("<II", page, 0x10, 4096, log_page_size)
-    struct.pack_into("<hh", page, 0x1A, minor_version, major_version)
+    struct.pack_into("<HH", page, 0x1A, minor_version, major_version)
     struct.pack_into("<H", page, 0x18, 0x30)
-    struct.pack_into("<QHHHHI", page, 0x30, 42, 0, 0xFFFF, 0xFFFF, flags, 0)
-    struct.pack_into("<HH", page, 0x30 + 0x14, 0x30, 0x30)
-    struct.pack_into("<I", page, 0x30 + 0x28, revision)
+    sequence_number_bits = 67 - file_size.bit_length()
+    struct.pack_into(
+        "<QHHHHIHHqIHHII",
+        page,
+        0x30,
+        current_lsn,
+        1,
+        client_free_list,
+        client_in_use_list,
+        flags,
+        sequence_number_bits,
+        0xD0,
+        0x30,
+        file_size,
+        0,
+        0x30,
+        log_page_data_offset,
+        restart_log_open_count,
+        0,
+    )
+    client_record = 0x30 + 0x30
+    struct.pack_into(
+        "<QQHHH6sI",
+        page,
+        client_record,
+        0,
+        current_lsn,
+        0xFFFF,
+        0xFFFF,
+        0,
+        bytes(6),
+        8,
+    )
+    page[client_record + 0x20 : client_record + 0x28] = "NTFS".encode("utf-16le")
     struct.pack_into("<H", page, 0x1E, sequence)
     for index in range(8):
         struct.pack_into("<H", page, 0x20 + index * 2, 0x1100 + index)
@@ -1706,13 +1747,71 @@ def _restart_page(
 
 
 def test_accepts_consistent_clean_ntfs_logfile_restart_pair():
-    first = _restart_page(revision=3)
-    second = _restart_page(revision=8)
+    first = _restart_page(restart_log_open_count=3)
+    second = _restart_page(current_lsn=43, restart_log_open_count=8)
     parsed = validate_ntfs_logfile_restart_pages(first + second)
     assert parsed.clean_dismount is True
-    assert parsed.revision == 8
-    assert parsed.version == (2, 1)
+    assert parsed.current_lsn == 43
+    assert parsed.restart_log_open_count == 8
+    assert parsed.version == (2, 0)
+    assert parsed.sequence_number_bits == 49
+    assert parsed.file_size == 52 * 4096
     assert parse_ntfs_logfile_restart_area(first).log_page_size == 4096
+
+
+def test_accepts_known_lfs_11_restart_page_version():
+    page = _restart_page(major_version=1, minor_version=1)
+    assert parse_ntfs_logfile_restart_area(page).version == (1, 1)
+
+
+def test_restart_page_selection_uses_current_lsn_not_open_count():
+    older = _restart_page(current_lsn=100, restart_log_open_count=1)
+    newer = _restart_page(current_lsn=101, restart_log_open_count=0)
+    parsed = validate_ntfs_logfile_restart_pages(older + newer)
+    assert parsed.current_lsn == 101
+
+
+def test_equal_lsn_does_not_use_open_count_to_choose_a_restart_page():
+    first = _restart_page(current_lsn=100, restart_log_open_count=9)
+    second = _restart_page(current_lsn=100, restart_log_open_count=1)
+    parsed = validate_ntfs_logfile_restart_pages(first + second)
+    assert parsed.restart_log_open_count == 9
+
+
+def test_stale_dirty_restart_page_does_not_override_newer_clean_page():
+    stale_dirty = _restart_page(flags=0, current_lsn=100, restart_log_open_count=8)
+    newer_clean = _restart_page(flags=0x0002, current_lsn=101, restart_log_open_count=1)
+    parsed = validate_ntfs_logfile_restart_pages(stale_dirty + newer_clean)
+    assert parsed.current_lsn == 101
+    assert parsed.clean_dismount is True
+
+
+def test_clean_closed_client_is_accepted_without_clean_flag():
+    first = _restart_page(flags=0, client_free_list=0, client_in_use_list=0xFFFF)
+    second = _restart_page(
+        flags=0,
+        client_free_list=0,
+        client_in_use_list=0xFFFF,
+        restart_log_open_count=8,
+    )
+    parsed = validate_ntfs_logfile_restart_pages(first + second)
+    assert parsed.client_closed is True
+    assert parsed.clean_dismount is True
+
+
+def test_newer_dirty_restart_page_blocks_even_if_older_page_is_clean():
+    older_clean = _restart_page(flags=0x0002, current_lsn=100)
+    newer_dirty = _restart_page(flags=0, current_lsn=101)
+    with pytest.raises(NtfsMetadataError, match="requires recovery") as error:
+        validate_ntfs_logfile_restart_pages(older_clean + newer_dirty)
+    assert error.value.code is RefusalCode.DIRTY_OR_RECOVERY_REQUIRED
+
+
+def test_equal_lsn_with_conflicting_clean_state_is_ambiguous_and_refused():
+    clean = _restart_page(flags=0x0002, current_lsn=100)
+    dirty = _restart_page(flags=0, current_lsn=100)
+    with pytest.raises(NtfsMetadataError, match="same LSN"):
+        validate_ntfs_logfile_restart_pages(clean + dirty)
 
 
 def test_dirty_ntfs_logfile_restart_pair_uses_recovery_refusal_code():
@@ -1782,16 +1881,119 @@ def test_rejects_valid_first_and_malformed_second_ntfs_logfile_restart_page():
 
 
 @pytest.mark.parametrize(
+    ("major_version", "minor_version"),
+    [(1, 0), (1, 2), (2, 1), (2, 0xFFFF), (0, 0xFFFF), (3, 0)],
+)
+def test_rejects_unknown_ntfs_logfile_restart_page_version(
+    major_version, minor_version
+):
+    page = _restart_page(major_version=major_version, minor_version=minor_version)
+    with pytest.raises(NtfsMetadataError, match="version is unsupported"):
+        parse_ntfs_logfile_restart_area(page)
+
+
+def test_rejects_rstr_page_with_nonzero_chkdsk_lsn():
+    page = bytearray(_restart_page())
+    struct.pack_into("<Q", page, 0x08, 1)
+    with pytest.raises(NtfsMetadataError, match="chkdsk LSN"):
+        parse_ntfs_logfile_restart_area(bytes(page))
+
+
+def test_rejects_unaligned_restart_area_offset():
+    page = bytearray(_restart_page())
+    struct.pack_into("<H", page, 0x18, 0x31)
+    with pytest.raises(NtfsMetadataError, match="restart offset"):
+        parse_ntfs_logfile_restart_area(bytes(page))
+
+
+def test_rejects_restart_area_header_truncated_by_page_boundary():
+    page = bytearray(_restart_page())
+    struct.pack_into("<H", page, 0x18, 0xFF8)
+    with pytest.raises(NtfsMetadataError, match="restart offset"):
+        parse_ntfs_logfile_restart_area(bytes(page))
+
+
+@pytest.mark.parametrize(
     "second, message",
     [
         (_restart_page(log_page_size=8192), "geometry"),
         (_restart_page(minor_version=2), "version"),
-        (_restart_page(flags=0), "clean state"),
+        (_restart_page(file_size=56 * 4096), "geometry"),
     ],
 )
 def test_rejects_inconsistent_ntfs_logfile_restart_pair(second, message):
     with pytest.raises(NtfsMetadataError, match=message):
         validate_ntfs_logfile_restart_pages(_restart_page() + second)
+
+
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (
+            lambda page: struct.pack_into("<I", page, 0x30 + 0x10, 0),
+            "sequence-number bits",
+        ),
+        (
+            lambda page: struct.pack_into("<q", page, 0x30 + 0x18, -1),
+            "file size",
+        ),
+        (
+            lambda page: struct.pack_into("<H", page, 0x30 + 0x24, 0x31),
+            "record-header length",
+        ),
+        (
+            lambda page: struct.pack_into("<H", page, 0x30 + 0x26, 0x41),
+            "page-data offset",
+        ),
+        (
+            lambda page: struct.pack_into("<H", page, 0x30 + 0x0A, 1),
+            "client-list index",
+        ),
+        (
+            lambda page: page.__setitem__(
+                slice(0x30 + 0x30 + 0x20, 0x30 + 0x30 + 0x28), b"BAD!BAD!"
+            ),
+            "client identity",
+        ),
+    ],
+)
+def test_rejects_inconsistent_ntfs_logfile_restart_area_fields(mutate, message):
+    page = bytearray(_restart_page())
+    mutate(page)
+    with pytest.raises(NtfsMetadataError, match=message):
+        parse_ntfs_logfile_restart_area(bytes(page))
+
+
+def test_restart_area_declared_size_must_fit_logfile_data_stream():
+    logfile = _restart_page() + _restart_page()
+    with pytest.raises(NtfsMetadataError, match="exceeds its DATA stream"):
+        validate_ntfs_logfile_restart_pages(logfile, stream_size=8192)
+
+
+def test_restart_area_declared_size_must_fit_initialized_stream():
+    logfile = _restart_page() + _restart_page()
+    with pytest.raises(NtfsMetadataError, match="exceeds initialized data"):
+        validate_ntfs_logfile_restart_pages(logfile, initialized_size=8192)
+
+
+def test_restart_area_accepts_size_with_partial_trailing_log_page():
+    file_size = 52 * 4096 + 123
+    logfile = _restart_page(file_size=file_size) + _restart_page(file_size=file_size)
+    parsed = validate_ntfs_logfile_restart_pages(logfile, stream_size=file_size)
+    assert parsed.file_size == file_size
+
+
+def test_restart_area_rejects_size_short_of_minimum_after_page_rounding():
+    file_size = 8192 + 48 * 4096 - 1
+    with pytest.raises(NtfsMetadataError, match="declared file size is invalid"):
+        parse_ntfs_logfile_restart_area(_restart_page(file_size=file_size))
+
+
+def test_512_byte_log_page_uses_usa_derived_data_offset():
+    page = _restart_page(log_page_size=512)
+    parsed = parse_ntfs_logfile_restart_area(page)
+    assert parsed.log_page_size == 512
+    assert parsed.log_page_data_offset == 0x30
 
 
 def test_rejects_logfile_with_less_than_two_logical_restart_pages(

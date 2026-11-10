@@ -40,6 +40,9 @@ _ATTRIBUTE_KNOWN_FLAGS = (
 )
 _VOLUME_KNOWN_FLAGS = 0x807F
 _LOGFILE_PAGE_SIZE = 4096
+_LOGFILE_CLIENT_RECORD_SIZE = 0xA0
+_LOGFILE_NO_CLIENT = 0xFFFF
+_LOGFILE_MIN_RECORD_PAGES = 48
 _MAX_READ_RANGE_BYTES = 1 << 20
 _UPCASE_TABLE_ENTRIES = 1 << 16
 _UPCASE_TABLE_SIZE = _UPCASE_TABLE_ENTRIES * 2
@@ -160,12 +163,20 @@ class NtfsLogFileRestartArea:
     restart_length: int
     flags: int
     current_lsn: int
-    revision: int
+    client_free_list: int
+    client_in_use_list: int
+    restart_log_open_count: int
+    sequence_number_bits: int
+    file_size: int
+    last_lsn_data_length: int
+    log_record_header_length: int
+    log_page_data_offset: int
+    client_closed: bool
     version: tuple[int, int] = (0, 0)
 
     @property
     def clean_dismount(self) -> bool:
-        return bool(self.flags & _LOGFILE_CLEAN_DISMOUNT)
+        return bool(self.flags & _LOGFILE_CLEAN_DISMOUNT) or self.client_closed
 
 
 def _fixup_logfile_page(raw_page: bytes, *, page_size: int) -> bytes:
@@ -197,9 +208,10 @@ def parse_ntfs_logfile_restart_area(raw_page: bytes) -> NtfsLogFileRestartArea:
     if len(raw_page) != _LOGFILE_PAGE_SIZE:
         raise NtfsMetadataError("NTFS $LogFile restart page must be exactly 4096 bytes")
     fixed = _fixup_logfile_page(raw_page, page_size=_LOGFILE_PAGE_SIZE)
+    chkdsk_lsn = struct.unpack_from("<Q", fixed, 0x08)[0]
     system_page, log_page = struct.unpack_from("<II", fixed, 0x10)
     restart_offset = struct.unpack_from("<H", fixed, 0x18)[0]
-    minor, major = struct.unpack_from("<hh", fixed, 0x1A)
+    minor, major = struct.unpack_from("<HH", fixed, 0x1A)
     if (
         system_page != _LOGFILE_PAGE_SIZE
         or log_page < 512
@@ -207,29 +219,82 @@ def parse_ntfs_logfile_restart_area(raw_page: bytes) -> NtfsLogFileRestartArea:
         or log_page & (log_page - 1)
     ):
         raise NtfsMetadataError("NTFS $LogFile restart page geometry is unsupported")
-    if major < 1 or major > 2 or (major == 1 and minor == 0):
+    # These are outer LFS restart-page versions, not NTFS client-data versions.
+    # Unknown combinations are refused rather than interpreted by a loose range.
+    if (major, minor) not in {(1, 1), (2, 0)}:
         raise NtfsMetadataError("NTFS $LogFile restart page version is unsupported")
+    if chkdsk_lsn != 0:
+        raise NtfsMetadataError("NTFS RSTR page has an unexpected chkdsk LSN")
     usa_offset = struct.unpack_from("<H", fixed, 4)[0]
     usa_end = usa_offset + struct.unpack_from("<H", fixed, 6)[0] * 2
-    if restart_offset < (usa_end + 7) & ~7 or restart_offset + 0x2A > system_page:
+    if (
+        restart_offset < (usa_end + 7) & ~7
+        or restart_offset & 7
+        or restart_offset + 0x30 > system_page
+    ):
         raise NtfsMetadataError("NTFS $LogFile restart offset is outside the page")
     area = restart_offset
     current_lsn = struct.unpack_from("<Q", fixed, area)[0]
     clients = struct.unpack_from("<H", fixed, area + 8)[0]
+    client_free_list, client_in_use_list = struct.unpack_from("<HH", fixed, area + 0x0A)
     flags = struct.unpack_from("<H", fixed, area + 0x0E)[0]
+    sequence_number_bits = struct.unpack_from("<I", fixed, area + 0x10)[0]
     restart_length = struct.unpack_from("<H", fixed, area + 0x14)[0]
     client_offset = struct.unpack_from("<H", fixed, area + 0x16)[0]
-    revision = struct.unpack_from("<I", fixed, area + 0x28)[0]
-    if clients > 1 or flags & ~_LOGFILE_KNOWN_FLAGS:
+    file_size = struct.unpack_from("<q", fixed, area + 0x18)[0]
+    last_lsn_data_length = struct.unpack_from("<I", fixed, area + 0x20)[0]
+    log_record_header_length = struct.unpack_from("<H", fixed, area + 0x24)[0]
+    log_page_data_offset = struct.unpack_from("<H", fixed, area + 0x26)[0]
+    restart_log_open_count = struct.unpack_from("<I", fixed, area + 0x28)[0]
+    if clients != 1 or flags & ~_LOGFILE_KNOWN_FLAGS:
         raise NtfsMetadataError("NTFS $LogFile restart area has unknown state")
+    if any(
+        index != _LOGFILE_NO_CLIENT and index >= clients
+        for index in (client_free_list, client_in_use_list)
+    ):
+        raise NtfsMetadataError("NTFS $LogFile client-list index is out of bounds")
+    if (client_free_list == _LOGFILE_NO_CLIENT) == (
+        client_in_use_list == _LOGFILE_NO_CLIENT
+    ):
+        raise NtfsMetadataError("NTFS $LogFile client is missing or listed twice")
     if (
         client_offset < 0x30
         or client_offset & 7
-        or client_offset + clients * 0xA0 > restart_length
+        or restart_offset + client_offset > 510
+        or client_offset + clients * _LOGFILE_CLIENT_RECORD_SIZE > restart_length
     ):
         raise NtfsMetadataError("NTFS $LogFile client array bounds are invalid")
-    if restart_length < 0x2A or area + restart_length > system_page:
+    if restart_length < 0x30 or area + restart_length > system_page:
         raise NtfsMetadataError("NTFS $LogFile restart length exceeds the page")
+    client_record = area + client_offset
+    previous_client, next_client = struct.unpack_from(
+        "<HH", fixed, client_record + 0x10
+    )
+    name_length = struct.unpack_from("<I", fixed, client_record + 0x1C)[0]
+    client_name = fixed[client_record + 0x20 : client_record + 0xA0]
+    if previous_client != _LOGFILE_NO_CLIENT or next_client != _LOGFILE_NO_CLIENT:
+        raise NtfsMetadataError("NTFS $LogFile client links are invalid")
+    if name_length != 8 or client_name[:8] != "NTFS".encode("utf-16le"):
+        raise NtfsMetadataError("NTFS $LogFile client identity is invalid")
+    if any(client_name[8:]):
+        raise NtfsMetadataError("NTFS $LogFile client name padding is invalid")
+    minimum_file_size = 2 * system_page + _LOGFILE_MIN_RECORD_PAGES * log_page
+    usable_file_size = file_size // log_page * log_page
+    if usable_file_size < minimum_file_size:
+        raise NtfsMetadataError("NTFS $LogFile declared file size is invalid")
+    expected_sequence_bits = 67 - file_size.bit_length()
+    if sequence_number_bits != expected_sequence_bits:
+        raise NtfsMetadataError("NTFS $LogFile sequence-number bits are inconsistent")
+    if log_record_header_length < 0x30 or log_record_header_length & 7:
+        raise NtfsMetadataError("NTFS $LogFile record-header length is invalid")
+    usa_end = 0x28 + (log_page // 512 + 1) * 2
+    minimum_data_offset = (usa_end + 7) & ~7
+    if (
+        log_page_data_offset < minimum_data_offset
+        or log_page_data_offset & 7
+        or log_page_data_offset >= log_page
+    ):
+        raise NtfsMetadataError("NTFS $LogFile page-data offset is invalid")
     return NtfsLogFileRestartArea(
         system_page_size=system_page,
         log_page_size=log_page,
@@ -237,13 +302,28 @@ def parse_ntfs_logfile_restart_area(raw_page: bytes) -> NtfsLogFileRestartArea:
         restart_length=restart_length,
         flags=flags,
         current_lsn=current_lsn,
-        revision=revision,
+        client_free_list=client_free_list,
+        client_in_use_list=client_in_use_list,
+        restart_log_open_count=restart_log_open_count,
+        sequence_number_bits=sequence_number_bits,
+        file_size=file_size,
+        last_lsn_data_length=last_lsn_data_length,
+        log_record_header_length=log_record_header_length,
+        log_page_data_offset=log_page_data_offset,
+        client_closed=(
+            client_free_list == 0 and client_in_use_list == _LOGFILE_NO_CLIENT
+        ),
         version=(major, minor),
     )
 
 
-def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestartArea:
-    """Validate the first two restart pages and return their newer clean area."""
+def validate_ntfs_logfile_restart_pages(
+    raw_logfile: bytes,
+    *,
+    stream_size: int | None = None,
+    initialized_size: int | None = None,
+) -> NtfsLogFileRestartArea:
+    """Validate two RSTR pages and return the newest clean, bounded restart area."""
     if len(raw_logfile) < 2 * _LOGFILE_PAGE_SIZE:
         raise NtfsMetadataError("NTFS $LogFile DATA stream is truncated")
     first = parse_ntfs_logfile_restart_area(raw_logfile[:_LOGFILE_PAGE_SIZE])
@@ -255,23 +335,40 @@ def validate_ntfs_logfile_restart_pages(raw_logfile: bytes) -> NtfsLogFileRestar
         first.log_page_size,
         first.restart_offset,
         first.restart_length,
+        first.sequence_number_bits,
+        first.file_size,
+        first.log_record_header_length,
+        first.log_page_data_offset,
     ) != (
         second.system_page_size,
         second.log_page_size,
         second.restart_offset,
         second.restart_length,
+        second.sequence_number_bits,
+        second.file_size,
+        second.log_record_header_length,
+        second.log_page_data_offset,
     ):
         raise NtfsMetadataError("NTFS $LogFile restart pages disagree on geometry")
     if first.version != second.version:
         raise NtfsMetadataError("NTFS $LogFile restart pages disagree on version")
-    if first.flags != second.flags:
-        raise NtfsMetadataError("NTFS $LogFile restart pages disagree on clean state")
-    if not first.clean_dismount:
+    if first.current_lsn == second.current_lsn and (
+        first.flags != second.flags
+        or first.client_free_list != second.client_free_list
+        or first.client_in_use_list != second.client_in_use_list
+    ):
+        raise NtfsMetadataError("NTFS $LogFile restart pages disagree at the same LSN")
+    if stream_size is not None and first.file_size > stream_size:
+        raise NtfsMetadataError("NTFS $LogFile declared size exceeds its DATA stream")
+    if initialized_size is not None and first.file_size > initialized_size:
+        raise NtfsMetadataError("NTFS $LogFile declared size exceeds initialized data")
+    newest = max((first, second), key=lambda item: item.current_lsn)
+    if not newest.clean_dismount:
         raise NtfsMetadataError(
             "NTFS $LogFile requires recovery or has unknown state",
             RefusalCode.DIRTY_OR_RECOVERY_REQUIRED,
         )
-    return max((first, second), key=lambda item: (item.revision, item.current_lsn))
+    return newest
 
 
 def _read_exact(stream, absolute: int, size: int, image_size: int, end: int) -> bytes:
@@ -1198,7 +1295,9 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 self.logfile_restart = validate_ntfs_logfile_restart_pages(
                     self._read_nonresident_range(
                         logfile_data, 0, 2 * _LOGFILE_PAGE_SIZE
-                    )
+                    ),
+                    stream_size=logfile_data.data_size,
+                    initialized_size=logfile_data.initialized_size,
                 )
             except NtfsLogFileUnused:
                 # Freshly formatted volume: the log was never used, and
