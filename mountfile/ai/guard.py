@@ -200,12 +200,15 @@ def scan(data: bytes, limit: int = MAX_SCAN_BYTES) -> GuardReport:
     """Score ``data`` for prompt-injection patterns.  Never raises."""
 
     raw = data or b""
-    blob = raw[:limit] if isinstance(raw, (bytes, bytearray)) else b""
-    text = _decode(blob if isinstance(data, (bytes, bytearray)) else raw)
-    total = (
-        len(raw) if isinstance(raw, (bytes, bytearray)) else len(text.encode("utf-8"))
-    )
-    truncated = total > len(text.encode("utf-8", "replace")) and total > limit
+    if isinstance(raw, str):
+        encoded = raw.encode("utf-8", "replace")
+    elif isinstance(raw, (bytes, bytearray, memoryview)):
+        encoded = bytes(raw)
+    else:
+        encoded = b""
+    blob = encoded[:limit]
+    text = blob.decode("utf-8", "replace")
+    truncated = len(encoded) > len(blob)
 
     hits: List[Hit] = []
     for rule, severity, pattern in _PATTERNS:
@@ -230,7 +233,7 @@ def scan(data: bytes, limit: int = MAX_SCAN_BYTES) -> GuardReport:
     return GuardReport(
         risk=_risk_for(score),
         score=score,
-        bytes_scanned=len(text.encode("utf-8", "replace")),
+        bytes_scanned=len(blob),
         truncated=bool(truncated),
         hits=tuple(hits),
     )

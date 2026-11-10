@@ -4,7 +4,7 @@
 
 PY ?= python3
 
-.PHONY: help install tools tools-check test test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
+.PHONY: help install tools tools-check test test-ai test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
         sync sync-status sync-check sync-pr sync-watch
 
 help:
@@ -12,6 +12,7 @@ help:
 	@echo "make tools      - install the complete Linux checker and Python toolchain"
 	@echo "make tools-check - verify all optional tools are available"
 	@echo "make test       - run the test suite"
+	@echo "make test-ai    - run deterministic AI safety and contract tests"
 	@echo "make test-standalone - run the standalone mountfile.py tests"
 	@echo "make lint       - ruff static check (E9,F63,F7,F82)"
 	@echo "make lint-correctness - repository-wide correctness lint (B006,E722,S110,S112,F841)"
@@ -39,6 +40,14 @@ tools-check:
 
 test:
 	$(PY) -m pytest tests/ -v
+
+test-ai:
+	$(PY) -m pytest \
+		tests/test_ai_agents.py tests/test_ai_backend.py \
+		tests/test_ai_guard.py \
+		tests/test_ai_legacy_agent.py tests/test_ai_redteam.py \
+		tests/test_ai_schema.py \
+		tests/test_ai_structured_backend.py tests/test_mcp_server.py -v
 
 # Tests for the standalone single-file build (mountfile.py). Neither
 # pytsk3 nor a display is required, so these run anywhere, including CI.

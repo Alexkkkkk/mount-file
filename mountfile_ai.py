@@ -952,7 +952,9 @@ class Executor:
                 .get("properties", {})
             )
             if "image_path" in spec_props:
-                args.setdefault("image_path", str(image))
+                # One investigation is scoped to the image selected by the
+                # operator; never let a model-supplied path switch evidence.
+                args["image_path"] = str(image)
             log.info("exec %s(%s)", step.tool, args)
             records.append(dispatch(step.tool, args))
         return records
