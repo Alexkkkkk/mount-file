@@ -143,7 +143,10 @@ class DecisionOrchestrator:
         return result
 
     def decide(self, context: LayerContext) -> list[LayerDecision]:
-        if not isinstance(context.operation, str) or context.operation not in self.OPERATIONS:
+        if (
+            not isinstance(context.operation, str)
+            or context.operation not in self.OPERATIONS
+        ):
             raise ValueError("unsupported advisory operation")
         self.hooks.emit_before("decide", context)
         decisions: list[LayerDecision] = []
@@ -153,7 +156,11 @@ class DecisionOrchestrator:
             pending = {}
             control[self.PENDING_KEY] = pending
 
-        if context.operation == "autopick" and context.candidates and self.manager.enabled("volume"):
+        if (
+            context.operation == "autopick"
+            and context.candidates
+            and self.manager.enabled("volume")
+        ):
             candidates = list(context.candidates)
             ranked = self.stack.volume.rerank(candidates)
             candidate = ranked[0] if ranked else None
@@ -244,14 +251,19 @@ class DecisionOrchestrator:
             if (
                 isinstance(features, list)
                 and len(features) == len(self.stack.volume.ranker.weights)
-                and all(isinstance(value, (int, float)) and math.isfinite(value) for value in features)
+                and all(
+                    isinstance(value, (int, float)) and math.isfinite(value)
+                    for value in features
+                )
             ):
                 self.stack.volume.ranker.update(
                     [float(value) for value in features],
                     1.0 if feedback.success else 0.0,
                 )
                 self.stack.volume.state["ranker"] = self.stack.volume.ranker.to_dict()
-                self.stack.volume.state["observations"] = self.stack.volume.observations + 1
+                self.stack.volume.state["observations"] = (
+                    self.stack.volume.observations + 1
+                )
         elif layer == "preflight" and self.manager.enabled("preflight"):
             family = raw.get("family")
             if isinstance(family, str):

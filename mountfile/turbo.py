@@ -941,7 +941,9 @@ class TurboController:
                 if stack is not None and stack.is_enabled("cache"):
                     self._cache_layer = stack.cache
                     cache_layer_enabled = True
-            except Exception:  # noqa: BLE001 - AI/cache failures must not block browsing
+            except (
+                Exception
+            ):  # noqa: BLE001 - AI/cache failures must not block browsing
                 logging.getLogger(__name__).debug(
                     "cache layer unavailable; using default cache", exc_info=True
                 )

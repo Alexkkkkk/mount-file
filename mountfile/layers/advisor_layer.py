@@ -43,7 +43,9 @@ class AdvisorLayer:
             return
         learner = self.formats.setdefault(key, BetaLearner())
         learner.update(bool(correct))
-        self.state["formats"] = {k: v.to_dict() for k, v in sorted(self.formats.items())}
+        self.state["formats"] = {
+            k: v.to_dict() for k, v in sorted(self.formats.items())
+        }
         self.state["observations"] = int(self.state.get("observations", 0)) + 1
         self.store.save()
 
@@ -54,7 +56,9 @@ class AdvisorLayer:
             return None
         return learner.beta()
 
-    def calibrate(self, hypotheses: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    def calibrate(
+        self, hypotheses: list[dict[str, Any]]
+    ) -> list[dict[str, Any]] | None:
         """Перекалибровать список гипотез advisor v2.
 
         Гипотезы — словари вида ``{"format": str, "confidence": float}``
@@ -84,7 +88,9 @@ class AdvisorLayer:
             adjusted.append(out)
         if not learned_any:
             return None
-        adjusted.sort(key=lambda h: -float(h.get("confidence", h.get("score", 0.0)) or 0.0))
+        adjusted.sort(
+            key=lambda h: -float(h.get("confidence", h.get("score", 0.0)) or 0.0)
+        )
         return adjusted
 
     def best_format(self, hypotheses: list[dict[str, Any]]) -> str | None:

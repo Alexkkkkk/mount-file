@@ -1302,14 +1302,26 @@ def cmd_layers(args):
             )
         )
         if args.json:
-            print(json.dumps([item.to_dict() for item in decisions], ensure_ascii=False, indent=2))
+            print(
+                json.dumps(
+                    [item.to_dict() for item in decisions], ensure_ascii=False, indent=2
+                )
+            )
         elif not decisions:
-            print("No learned advisory is available; deterministic operation is unchanged.")
+            print(
+                "No learned advisory is available; deterministic operation is unchanged."
+            )
         else:
             for item in decisions:
                 print(
                     "%s %s confidence=%.2f decision_id=%s advisory_only=true: %s"
-                    % (item.layer, item.action, item.confidence, item.decision_id, item.rationale)
+                    % (
+                        item.layer,
+                        item.action,
+                        item.confidence,
+                        item.decision_id,
+                        item.rationale,
+                    )
                 )
         return OK
     if action == "feedback":
@@ -1330,7 +1342,11 @@ def cmd_layers(args):
             for name, state in payload["layers"].items():
                 print(
                     "%-12s %-8s observations=%d"
-                    % (name, "enabled" if state["enabled"] else "disabled", state["observations"])
+                    % (
+                        name,
+                        "enabled" if state["enabled"] else "disabled",
+                        state["observations"],
+                    )
                 )
             print("CLI commands routed: %d" % len(payload["cli"]["layer_routing"]))
         return OK
@@ -1358,24 +1374,36 @@ def build_parser():
 
     layers = sub.add_parser("layers", help="manage advisory and self-learning layers")
     layer_commands = layers.add_subparsers(dest="layers_action", required=True)
-    status = layer_commands.add_parser("status", help="show layer state and CLI routing")
+    status = layer_commands.add_parser(
+        "status", help="show layer state and CLI routing"
+    )
     status.add_argument("--root", default=None, help="learning-store root directory")
     status.add_argument("--json", action="store_true")
     status.set_defaults(func=cmd_layers)
     for action in ("enable", "disable", "reset"):
         layer_command = layer_commands.add_parser(action)
         layer_command.add_argument("layer", choices=sorted(LAYER_NAMES))
-        layer_command.add_argument("--root", default=None, help="learning-store root directory")
+        layer_command.add_argument(
+            "--root", default=None, help="learning-store root directory"
+        )
         layer_command.set_defaults(func=cmd_layers)
-    decide = layer_commands.add_parser("decide", help="get non-authoritative layer hints")
+    decide = layer_commands.add_parser(
+        "decide", help="get non-authoritative layer hints"
+    )
     decide.add_argument("path", help="runtime context only; never persisted")
-    decide.add_argument("--operation", choices=["inspect", "autopick", "preflight", "browse", "advise"], default="inspect")
+    decide.add_argument(
+        "--operation",
+        choices=["inspect", "autopick", "preflight", "browse", "advise"],
+        default="inspect",
+    )
     decide.add_argument("--fs", default=None)
     decide.add_argument("--size", type=int, default=None)
     decide.add_argument("--root", default=None, help="learning-store root directory")
     decide.add_argument("--json", action="store_true")
     decide.set_defaults(func=cmd_layers)
-    feedback = layer_commands.add_parser("feedback", help="explicitly label one advisory decision")
+    feedback = layer_commands.add_parser(
+        "feedback", help="explicitly label one advisory decision"
+    )
     feedback.add_argument("decision_id")
     outcome = feedback.add_mutually_exclusive_group(required=True)
     outcome.add_argument("--success", dest="success", action="store_true")
@@ -1798,9 +1826,7 @@ def main(argv=None):
         try:
             from .layers.hooks import record_cli_execution
 
-            record_cli_execution(
-                args.command, exit_code, time.perf_counter() - started
-            )
+            record_cli_execution(args.command, exit_code, time.perf_counter() - started)
         except Exception:  # noqa: BLE001 - telemetry cannot change command result
             LOGGER.debug("CLI telemetry recording failed", exc_info=True)
 

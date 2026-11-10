@@ -139,7 +139,9 @@ class TestPreflightLayer:
         hint = stack.preflight.pass_hint("ntfs")
         assert hint is not None and hint > 0.8
 
-    def test_preflight_image_learns_from_actual_payload(self, root: Path, monkeypatch) -> None:
+    def test_preflight_image_learns_from_actual_payload(
+        self, root: Path, monkeypatch
+    ) -> None:
         from mountfile import fs_preflight
 
         monkeypatch.setattr(
@@ -226,7 +228,10 @@ class TestCacheLayer:
 
 # ------------------------------------------------------------ advisor
 class TestAdvisorLayer:
-    HYP = [{"format": "ntfs", "confidence": 0.8}, {"format": "exfat", "confidence": 0.6}]
+    HYP = [
+        {"format": "ntfs", "confidence": 0.8},
+        {"format": "exfat", "confidence": 0.6},
+    ]
 
     def test_calibrate_none_without_knowledge(self, root: Path) -> None:
         stack = SelfLearningStack(str(root))

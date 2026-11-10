@@ -78,7 +78,11 @@ def preflight_learned(image: str, **kwargs: Any) -> Any:
 
     payload = fs_preflight.preflight_image(image, **kwargs)
     stack = stack_for(image)
-    if stack is not None and stack.is_enabled("preflight") and isinstance(payload, dict):
+    if (
+        stack is not None
+        and stack.is_enabled("preflight")
+        and isinstance(payload, dict)
+    ):
         try:
             for volume in payload.get("volumes", []):
                 if isinstance(volume, dict):

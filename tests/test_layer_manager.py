@@ -52,7 +52,9 @@ def test_unknown_layer_is_rejected(tmp_path: Path) -> None:
         LayerManager(tmp_path).set_enabled("not-a-layer", True)
 
 
-def test_operations_layer_stores_only_aggregate_command_outcomes(tmp_path: Path) -> None:
+def test_operations_layer_stores_only_aggregate_command_outcomes(
+    tmp_path: Path,
+) -> None:
     store = KnowledgeStore(tmp_path)
     layer = OperationLayer(store)
     layer.record("get", 0, 1.5)
@@ -71,4 +73,7 @@ def test_registry_has_no_unmapped_or_unknown_default_layer() -> None:
     routing = discover()["layer_routing"]
     assert "ln" in routing
     assert routing["ln"] == "operations"
-    assert all(name != "advisor" or command.startswith("ai-") for command, name in routing.items())
+    assert all(
+        name != "advisor" or command.startswith("ai-")
+        for command, name in routing.items()
+    )

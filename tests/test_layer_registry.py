@@ -71,7 +71,12 @@ def test_layers_import_registry_without_qt() -> None:
 
 @pytest.mark.parametrize(
     "command,layer",
-    [("autopick", "volume"), ("preflight", "preflight"), ("put", "operations"), ("yara", "operations")],
+    [
+        ("autopick", "volume"),
+        ("preflight", "preflight"),
+        ("put", "operations"),
+        ("yara", "operations"),
+    ],
 )
 def test_known_routes(command: str, layer: str) -> None:
     data = discover()

@@ -43,9 +43,11 @@ class PreflightLayer:
     @staticmethod
     def family_of(report: Any) -> str | None:
         """Семейство ФС из отчёта preflight (``_detect_family``-совместимо)."""
-        family = getattr(report, "family", None) or getattr(
-            report, "detected_family", None
-        ) or getattr(report, "filesystem", None)
+        family = (
+            getattr(report, "family", None)
+            or getattr(report, "detected_family", None)
+            or getattr(report, "filesystem", None)
+        )
         return PreflightLayer.normalize_family(family)
 
     @staticmethod

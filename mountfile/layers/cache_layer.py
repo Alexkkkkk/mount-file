@@ -56,7 +56,9 @@ class CacheLayer:
         if self.miss_rate.value is None or self.miss_rate.n < 5:
             return None
         # промахи 0..1 → фактор 0.5..4.0: больше промахов — дольше кэш
-        factor = MIN_TTL_FACTOR + self.miss_rate.value * (MAX_TTL_FACTOR - MIN_TTL_FACTOR)
+        factor = MIN_TTL_FACTOR + self.miss_rate.value * (
+            MAX_TTL_FACTOR - MIN_TTL_FACTOR
+        )
         return round(min(max(factor, MIN_TTL_FACTOR), MAX_TTL_FACTOR), 3)
 
     # -------------------------------------------------------------- обёртка

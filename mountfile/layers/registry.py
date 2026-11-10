@@ -101,7 +101,9 @@ def gui_actions() -> list[str]:
     tree = ast.parse(source)
     names = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name.startswith(("_on_", "action_")):
+        if isinstance(node, ast.FunctionDef) and node.name.startswith(
+            ("_on_", "action_")
+        ):
             names.append(node.name)
     return sorted(names)
 
@@ -120,7 +122,9 @@ def discover() -> dict[str, Any]:
         actions = gui_actions()
     except Exception:  # noqa: BLE001
         actions = []
-    routing = {command: LAYER_ROUTING.get(command, DEFAULT_LAYER) for command in commands}
+    routing = {
+        command: LAYER_ROUTING.get(command, DEFAULT_LAYER) for command in commands
+    }
     return {
         "version": 1,
         "cli_commands": commands,

@@ -10,12 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mountfile.layers.control import (
-    DecisionOrchestrator,
-    Feedback,
-    Hooks,
-    LayerContext,
-)
+from mountfile.layers.control import DecisionOrchestrator, Feedback, Hooks, LayerContext
 from mountfile.layers.manager import LayerManager
 from mountfile.layers.pipeline import SelfLearningStack
 
@@ -56,7 +51,9 @@ def test_preflight_decision_is_a_hint_and_feedback_is_one_time(tmp_path: Path) -
     assert orchestrator.stack.preflight.observations == 4
 
 
-def test_volume_decision_does_not_persist_candidate_names_or_paths(tmp_path: Path) -> None:
+def test_volume_decision_does_not_persist_candidate_names_or_paths(
+    tmp_path: Path,
+) -> None:
     candidates = [
         SimpleNamespace(
             score=4.0,
@@ -89,11 +86,15 @@ def test_volume_decision_does_not_persist_candidate_names_or_paths(tmp_path: Pat
     assert orchestrator.stack.volume.observations == 1
 
 
-def test_decision_requires_supported_operation_and_respects_layer_switch(tmp_path: Path) -> None:
+def test_decision_requires_supported_operation_and_respects_layer_switch(
+    tmp_path: Path,
+) -> None:
     manager = LayerManager(tmp_path)
     manager.set_enabled("preflight", False)
     orchestrator = DecisionOrchestrator(str(tmp_path))
-    assert orchestrator.decide(LayerContext(fs_type="ext4", operation="preflight")) == []
+    assert (
+        orchestrator.decide(LayerContext(fs_type="ext4", operation="preflight")) == []
+    )
     with pytest.raises(ValueError, match="unsupported advisory operation"):
         orchestrator.decide(LayerContext(operation="write"))
 
@@ -101,9 +102,7 @@ def test_decision_requires_supported_operation_and_respects_layer_switch(tmp_pat
 def test_reset_layer_invalidates_pending_feedback(tmp_path: Path) -> None:
     stack = SelfLearningStack(str(tmp_path))
     for _ in range(3):
-        stack.preflight.observe_dict(
-            {"filesystem": "ext4", "eligible_for_read": True}
-        )
+        stack.preflight.observe_dict({"filesystem": "ext4", "eligible_for_read": True})
     orchestrator = DecisionOrchestrator(str(tmp_path))
     decisions = orchestrator.decide(LayerContext(fs_type="ext4", operation="preflight"))
     assert decisions
@@ -126,40 +125,46 @@ def test_layers_decide_and_feedback_cli(tmp_path: Path, monkeypatch, capsys) -> 
     monkeypatch.setenv("MOUNTFILE_DISABLE_LAYERS", "1")
     stack = SelfLearningStack(str(tmp_path))
     for _ in range(3):
-        stack.preflight.observe_dict(
-            {"filesystem": "ntfs", "eligible_for_read": True}
+        stack.preflight.observe_dict({"filesystem": "ntfs", "eligible_for_read": True})
+    assert (
+        cli.main(
+            [
+                "layers",
+                "decide",
+                "/private/img.raw",
+                "--operation",
+                "preflight",
+                "--fs",
+                "NTFS",
+                "--root",
+                str(tmp_path),
+                "--json",
+            ]
         )
-    assert cli.main(
-        [
-            "layers",
-            "decide",
-            "/private/img.raw",
-            "--operation",
-            "preflight",
-            "--fs",
-            "NTFS",
-            "--root",
-            str(tmp_path),
-            "--json",
-        ]
-    ) == cli.OK
+        == cli.OK
+    )
     decisions = json.loads(capsys.readouterr().out)
     assert decisions[0]["advisory_only"] is True
 
-    assert cli.main(
-        [
-            "layers",
-            "feedback",
-            decisions[0]["decision_id"],
-            "--failure",
-            "--root",
-            str(tmp_path),
-        ]
-    ) == cli.OK
+    assert (
+        cli.main(
+            [
+                "layers",
+                "feedback",
+                decisions[0]["decision_id"],
+                "--failure",
+                "--root",
+                str(tmp_path),
+            ]
+        )
+        == cli.OK
+    )
     assert "recorded" in capsys.readouterr().out
 
 
-def test_code_repair_toggle_disables_olma_suggestions(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_code_repair_toggle_disables_olma_suggestions(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     from mountfile.layers.manager import LayerManager
     from mountfile.olma.cli import olma_main
 

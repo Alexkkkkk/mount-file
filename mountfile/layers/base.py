@@ -190,7 +190,9 @@ class LogisticWeights:
     def update(self, features: list[float], label: float, lr: float = 0.05) -> float:
         """SGD-шаг по логистической функции. Возвращает loss до шага."""
         pred = _sigmoid(self.score(features))
-        loss = -(label * math.log(pred + 1e-9) + (1 - label) * math.log(1 - pred + 1e-9))
+        loss = -(
+            label * math.log(pred + 1e-9) + (1 - label) * math.log(1 - pred + 1e-9)
+        )
         if len(features) != len(self.weights):
             return loss
         err = label - pred
@@ -220,12 +222,16 @@ class EWMA:
         if not isinstance(raw, dict):
             return cls()
         value = raw.get("value")
-        ewma = cls(_num(raw.get("alpha"), 0.2), None if value is None else _num(value, 0.0))
+        ewma = cls(
+            _num(raw.get("alpha"), 0.2), None if value is None else _num(value, 0.0)
+        )
         ewma.n = int(_num(raw.get("n"), 0))
         return ewma
 
     def update(self, x: float) -> float:
-        self.value = x if self.value is None else (1 - self.alpha) * self.value + self.alpha * x
+        self.value = (
+            x if self.value is None else (1 - self.alpha) * self.value + self.alpha * x
+        )
         self.n += 1
         return self.value
 
@@ -269,7 +275,9 @@ class Layer:
         self.store.save()
 
     @staticmethod
-    def with_fallback(learned: Callable[[], Any] | None, original: Callable[[], Any]) -> Any:
+    def with_fallback(
+        learned: Callable[[], Any] | None, original: Callable[[], Any]
+    ) -> Any:
         """Попытаться применить знания; при любой ошибке — оригинальная логика."""
         if learned is not None:
             try:
