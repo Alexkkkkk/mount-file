@@ -424,7 +424,10 @@ class OllamaBackend(AiBackend):
             # Ollama constrains decoding with a JSON schema in ``format``.
             payload["format"] = schema
         body, err = _post_json(
-            self.base_url + "/api/generate", payload, timeout=self.timeout
+            self.base_url + "/api/generate",
+            payload,
+            timeout=self.timeout,
+            allow_redirects=False,
         )
         if body is None:
             return AiResult(

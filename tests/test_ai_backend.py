@@ -99,15 +99,17 @@ def test_ollama_backend_parses_response(monkeypatch):
     backend = OllamaBackend(base_url="http://127.0.0.1:11434/", model="llama3")
     captured = {}
 
-    def fake_urlopen(req, timeout=None):
+    def fake_open_request(req, timeout=None, allow_redirects=True):
         captured["url"] = req.full_url
         captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["allow_redirects"] = allow_redirects
         return FakeResponse({"response": "  это FAT32  "})
 
-    monkeypatch.setattr("mountfile.ai.backend.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mountfile.ai.backend._open_request", fake_open_request)
     res = backend.analyze("img.bin", b"EB 3C 90", prompt="что это?")
     assert res.ok and res.text == "это FAT32"
     assert captured["url"] == "http://127.0.0.1:11434/api/generate"
+    assert captured["allow_redirects"] is False
     assert captured["body"]["stream"] is False
     assert captured["body"]["model"] == "llama3"
 
@@ -115,8 +117,8 @@ def test_ollama_backend_parses_response(monkeypatch):
 def test_ollama_backend_empty_answer_is_an_error(monkeypatch):
     backend = OllamaBackend(model="missing")
     monkeypatch.setattr(
-        "mountfile.ai.backend.urllib.request.urlopen",
-        lambda req, timeout=None: FakeResponse({"response": ""}),
+        "mountfile.ai.backend._open_request",
+        lambda req, timeout=None, allow_redirects=True: FakeResponse({"response": ""}),
     )
     res = backend.analyze("a.bin", b"x")
     assert res.ok is False
@@ -141,6 +143,23 @@ def test_openai_backend_sends_bearer_and_parses_choice(monkeypatch):
     assert captured["auth"] == "Bearer secret-key"
     assert captured["url"] == "https://example.test/v1/chat/completions"
     assert captured["allow_redirects"] is False
+
+
+def test_openai_backend_redacts_api_key_from_transport_error(monkeypatch):
+    secret = "synthetic-test-api-key"
+    backend = OpenAiCompatBackend(
+        base_url="https://example.test", model="m1", api_key=secret
+    )
+    monkeypatch.setattr(
+        "mountfile.ai.backend._post_json",
+        lambda *args, **kwargs: (None, "request failed: " + secret),
+    )
+
+    result = backend.analyze("a.bin", b"synthetic data")
+
+    assert result.ok is False
+    assert secret not in result.error
+    assert "[REDACTED]" in result.error
 
 
 def test_openai_backend_rejects_remote_http_without_key_before_request(monkeypatch):
@@ -173,10 +192,10 @@ def test_network_failure_is_reported_not_raised(monkeypatch):
     backend = OllamaBackend()
     import urllib.error
 
-    def boom(req, timeout=None):
+    def boom(req, timeout=None, allow_redirects=True):
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr("mountfile.ai.backend.urllib.request.urlopen", boom)
+    monkeypatch.setattr("mountfile.ai.backend._open_request", boom)
     res = backend.analyze("a.bin", b"x")
     assert res.ok is False
     assert "Нет соединения" in res.error

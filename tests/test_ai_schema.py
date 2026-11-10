@@ -78,6 +78,24 @@ def test_validate_checks_numeric_bounds():
     assert any("confidence" in item for item in errors)
 
 
+def test_validate_rejects_boolean_for_number_and_malformed_plan_steps():
+    triage = {"kind": "document", "summary": "x", "risk": "none", "confidence": True}
+    errors = validate(triage, SCHEMAS["file_triage"])
+    assert any("$.confidence" in item and "number" in item for item in errors)
+
+    invalid_steps = (
+        ({"tool": "run_shell", "purpose": "inspect"}, "$.steps[0].tool"),
+        ({"tool": "hash_file", "purpose": 7}, "$.steps[0].purpose"),
+        (
+            {"tool": "hash_file", "purpose": "inspect", "args": []},
+            "$.steps[0].args",
+        ),
+    )
+    for step, error_path in invalid_steps:
+        errors = validate({"steps": [step]}, SCHEMAS["investigation_plan"])
+        assert any(error_path in item for item in errors)
+
+
 def test_validate_checks_array_bounds():
     errors = validate(
         {"steps": [{"tool": "hash_file", "purpose": "x"}] * 9},

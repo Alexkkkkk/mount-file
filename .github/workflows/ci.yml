@@ -505,9 +505,51 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  ai-safety:
+    name: AI safety contracts (offline)
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deterministic test dependencies
+        run: python -m pip install pytest hypothesis 'pydantic>=2.0'
+
+      - name: Run AI safety and structured-output contracts
+        run: >-
+          python -m pytest -q
+          tests/test_ai_agents.py
+          tests/test_ai_backend.py
+          tests/test_ai_guard.py
+          tests/test_ai_legacy_agent.py
+          tests/test_ai_redteam.py
+          tests/test_ai_schema.py
+          tests/test_ai_structured_backend.py
+          tests/test_mcp_server.py
+          --junitxml=ai-safety-results.xml
+
+      - name: Upload AI safety test report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ai-safety-results-${{ github.sha }}
+          path: ai-safety-results.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
   ci-gate:
     name: CI-Gate
-    needs: [tests, ubuntu-py312-compat, integration, build, gui-import, gui]
+    needs: [tests, ubuntu-py312-compat, integration, build, gui-import, gui, ai-safety]
     if: ${{ always() && github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -518,11 +560,12 @@ jobs:
       BUILD: ${{ needs.build.result }}
       GUI_IMPORT: ${{ needs.gui-import.result }}
       GUI: ${{ needs.gui.result }}
+      AI_SAFETY: ${{ needs.ai-safety.result }}
     steps:
       - name: Require every CI stage to succeed
         run: |
           set -euo pipefail
-          for result in "$TESTS" "$UBUNTU_PY312" "$INTEGRATION" "$BUILD" "$GUI_IMPORT" "$GUI"; do
+          for result in "$TESTS" "$UBUNTU_PY312" "$INTEGRATION" "$BUILD" "$GUI_IMPORT" "$GUI" "$AI_SAFETY"; do
             if [ "$result" != 'success' ]; then
               echo "::error::A required CI stage ended with $result"
               exit 1
