@@ -130,6 +130,11 @@ SETTINGS = {
     "ai_github_token": "",
     # Консенсус советника: при наличии второго доступного бэкенда — голосование.
     "ai_consensus": False,
+    # Anti-injection guard: fence untrusted file content and warn before a
+    # request leaves the machine (see mountfile/ai/guard.py).
+    "ai_guard": True,
+    # Default JSON-Schema contract for structured model answers.
+    "ai_schema": "file_triage",
     # OLMA Watch: opt-in crash monitoring (see mountfile/olma_watch.py).
     # olma_token is read from the MOUNTFILE_OLMA_TOKEN environment variable
     # or this key, and never appears in the log or in any report.
@@ -462,7 +467,13 @@ def load_settings():
             SETTINGS[key] = data[key]
     # Булевы переключатели: без этой ветки сохранённые значения (включая
     # olma_watch) после перезапуска всегда откатывались к дефолту.
-    for key in ("show_log", "olma_watch", "ai_format_autohook", "ai_consensus"):
+    for key in (
+        "show_log",
+        "olma_watch",
+        "ai_format_autohook",
+        "ai_consensus",
+        "ai_guard",
+    ):
         if key in data:
             SETTINGS[key] = bool(data[key])
     for key in (
@@ -473,6 +484,7 @@ def load_settings():
         "ai_api_key",
         "ai_github_repo",
         "ai_github_token",
+        "ai_schema",
         "olma_token",
     ):
         if key in data:

@@ -24,6 +24,9 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from .guard import fence as fence_payload
+from .schema import SCHEMAS, parse_structured
+
 #: Never read more than this many bytes of a file for one analysis.
 DEFAULT_MAX_BYTES = 256 * 1024
 
@@ -159,12 +162,38 @@ def summarize_bytes(name, data, truncated=False, size=None):
     return head + "\n".join(lines)
 
 
-def build_prompt(name, data, user_prompt=None, truncated=False, size=None):
-    """Full prompt: the rendered file plus the optional user instruction."""
-    parts = [summarize_bytes(name, data, truncated=truncated, size=size)]
+def build_prompt(name, data, user_prompt=None, truncated=False, size=None, guard=True):
+    """Full prompt: the rendered file plus the optional user instruction.
+
+    With ``guard`` (the default) the file rendering is wrapped in explicit
+    data markers, so bytes taken from a foreign disk image are read as
+    evidence instead of as another turn in the conversation.  ``guard=False``
+    reproduces the historical un-fenced prompt and exists for compatibility.
+    """
+    body = summarize_bytes(name, data, truncated=truncated, size=size)
+    if guard:
+        body = fence_payload(name, body)
+    parts = [body]
     if user_prompt:
         parts.append("\n\nЗадача от пользователя:\n" + user_prompt)
     return "\n".join(parts)
+
+
+def _format_unsupported(error):
+    """True when the server rejected ``response_format`` rather than the model."""
+
+    text = (error or "").lower()
+    return any(
+        token in text
+        for token in (
+            "400",
+            "404",
+            "422",
+            "json_schema",
+            "response_format",
+            "unsupported",
+        )
+    )
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -225,8 +254,26 @@ class AiBackend:
         """True when the backend looks reachable/configured."""
         return False
 
-    def analyze(self, name, data, prompt=None, truncated=False, size=None):
+    def analyze(self, name, data, prompt=None, truncated=False, size=None, schema=None):
         raise NotImplementedError
+
+    def analyze_json(
+        self, name, data, schema=None, prompt=None, truncated=False, size=None
+    ):
+        """Analyze and parse the answer against a JSON Schema.
+
+        Returns ``(object, errors, result)`` and never raises: a model that
+        ignores the schema yields a partial object plus the violations, so the
+        caller can show them instead of failing the whole operation.
+        """
+        chosen = schema or SCHEMAS["file_triage"]
+        result = self.analyze(
+            name, data, prompt=prompt, truncated=truncated, size=size, schema=chosen
+        )
+        if not result.ok:
+            return None, [result.error or "модель недоступна"], result
+        obj, errors = parse_structured(result.text, chosen)
+        return obj, errors, result
 
 
 class NullBackend(AiBackend):
@@ -235,7 +282,7 @@ class NullBackend(AiBackend):
     name = "none"
     label = "Не настроен"
 
-    def analyze(self, name, data, prompt=None, truncated=False, size=None):
+    def analyze(self, name, data, prompt=None, truncated=False, size=None, schema=None):
         return AiResult(
             ok=False,
             backend=self.name,
@@ -366,13 +413,16 @@ class OllamaBackend(AiBackend):
         except Exception:
             return False
 
-    def analyze(self, name, data, prompt=None, truncated=False, size=None):
+    def analyze(self, name, data, prompt=None, truncated=False, size=None, schema=None):
         payload = {
             "model": self.model,
             "prompt": build_prompt(name, data, prompt, truncated, size),
             "system": SYSTEM_PROMPT,
             "stream": False,
         }
+        if schema:
+            # Ollama constrains decoding with a JSON schema in ``format``.
+            payload["format"] = schema
         body, err = _post_json(
             self.base_url + "/api/generate", payload, timeout=self.timeout
         )
@@ -428,7 +478,7 @@ class OpenAiCompatBackend(AiBackend):
     def available(self):
         return bool(self.api_key)
 
-    def analyze(self, name, data, prompt=None, truncated=False, size=None):
+    def analyze(self, name, data, prompt=None, truncated=False, size=None, schema=None):
         transport_error = _api_key_transport_error(self.base_url)
         is_loopback = False
         try:
@@ -464,6 +514,15 @@ class OpenAiCompatBackend(AiBackend):
                 },
             ],
         }
+        if schema:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "mountfile",
+                    "schema": schema,
+                    "strict": False,
+                },
+            }
         endpoint = self.base_url
         if not endpoint.endswith("/v1"):
             endpoint += "/v1"
@@ -474,6 +533,17 @@ class OpenAiCompatBackend(AiBackend):
             timeout=self.timeout,
             allow_redirects=False,
         )
+        if body is None and schema and _format_unsupported(err):
+            # Older OpenAI-compatible servers reject ``json_schema`` but still
+            # honour the looser ``json_object`` mode: retry exactly once.
+            payload["response_format"] = {"type": "json_object"}
+            body, err = _post_json(
+                endpoint + "/chat/completions",
+                payload,
+                headers=headers,
+                timeout=self.timeout,
+                allow_redirects=False,
+            )
         if body is None:
             return AiResult(
                 ok=False,

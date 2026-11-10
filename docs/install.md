@@ -108,15 +108,22 @@ fallback явно установите `python -m pip install '.[legacy-tsk]'`; 
 python -m pip install -r requirements-all.txt
 ```
 
-На Debian/Ubuntu для полного набора интеграционных проверок реальных файловых
-систем и headless GUI дополнительно нужны системные пакеты:
+На Debian/Ubuntu для полного набора интеграционных проверок, external filesystem
+checkers, сборки optional-зависимостей и headless GUI используйте общий manifest
+системных пакетов, сохранённый в репозитории:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential python3-dev pkg-config \
-  dosfstools mtools e2fsprogs exfatprogs ntfs-3g \
-  libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+xargs -r sudo apt-get install -y < <(grep -vE '^[[:space:]]*(#|$)' tools/system-packages-debian.txt)
+python scripts/bootstrap-tools.py
 ```
+
+Для установки системных и Python-зависимостей разработчика одной командой
+запустите `scripts/bootstrap-tools.sh`. Скрипт рассчитан на Debian/Ubuntu;
+он устанавливает пакеты из того же manifest, затем Python extras и проверяет
+наличие обязательных инструментов. Эти зависимости предназначены для сборки,
+smoke-тестов и независимой проверки файловых систем, а не все требуются обычному
+read-only запуску приложения.
 
 Для явно выбранного library-level compatibility режима unjournaled ext2 на Windows можно
 использовать WSL: установите дистрибутив Linux, откройте его терминал и выполните
