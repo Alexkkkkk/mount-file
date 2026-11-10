@@ -40,6 +40,7 @@ FIXTURE_GROUPS = {
         "test_exfat_short_write_exception_and_cancellation_never_publish",
         "test_exfat_success_and_repeated_recovery_safe_retries_preserve_sentinels",
         "test_exfat_process_kill_before_atomic_replace_never_publishes",
+        "test_exfat_commit_failure_quarantines_stage_and_blocks_retry",
         "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck",
     ),
 }
@@ -93,6 +94,7 @@ CELL_FIXTURES = {
         "process_kill": (
             "test_exfat_process_kill_before_atomic_replace_never_publishes",
         ),
+        "quarantine": ("test_exfat_commit_failure_quarantines_stage_and_blocks_retry",),
         "independent_checker": (
             "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck",
         ),

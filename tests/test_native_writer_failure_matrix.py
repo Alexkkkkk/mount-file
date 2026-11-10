@@ -227,6 +227,41 @@ def test_exfat_short_write_exception_and_cancellation_never_publish(
     assert bounded.read_bytes()[-len(suffix) :] == suffix
 
 
+def test_exfat_commit_failure_quarantines_stage_and_blocks_retry(tmp_path, monkeypatch):
+    partition = tmp_path / "exfat-quarantine.partition"
+    _tree_image(partition)
+    image = tmp_path / "exfat-quarantine.img"
+    image.write_bytes(partition.read_bytes())
+    before = image.read_bytes()
+    writer = NativeExfatWriter(image, volume_size=VOLUME_SIZE)
+
+    def fail_commit(_stage):
+        raise OSError("injected atomic publish failure")
+
+    monkeypatch.setattr(writer, "_commit_stage", fail_commit)
+    with pytest.raises(OSError, match="injected atomic publish failure"):
+        writer.write_file("/QUARANTINED.TXT", b"not published")
+
+    marker = image.with_name(image.name + ".mountfile-exfat-quarantined")
+    assert image.read_bytes() == before
+    assert marker.is_file()
+    marker_text = marker.read_text(encoding="utf-8")
+    assert "mountfile-exfat-quarantine-v1" in marker_text
+    stage_name = next(
+        line.removeprefix("stage=")
+        for line in marker_text.splitlines()
+        if line.startswith("stage=")
+    )
+    stage = image.with_name(stage_name)
+    assert stage.is_file()
+
+    with pytest.raises(ExfatWriteError, match="quarantined"):
+        NativeExfatWriter(image, volume_size=VOLUME_SIZE)
+
+    stage.unlink()
+    marker.unlink()
+
+
 def test_exfat_process_kill_before_atomic_replace_never_publishes(tmp_path):
     partition = tmp_path / "exfat-crash.partition"
     _tree_image(partition)
