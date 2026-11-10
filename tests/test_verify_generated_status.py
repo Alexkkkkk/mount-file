@@ -100,6 +100,49 @@ def test_identical_generated_artifacts_pass_without_migration(tmp_path):
     )
 
 
+def test_checker_inventory_may_differ_by_runner_without_changing_claims(tmp_path):
+    expected = _artifact_set(5, candidate=False)
+    committed = _artifact_set(5, candidate=False)
+    expected["checker-matrix.json"] = {
+        "schema": 1,
+        "platform": "linux",
+        "python": "3.12.0",
+        "entries": [
+            {
+                "checker": "fsck.fat",
+                "availability": "available",
+                "checker_path": "/usr/sbin/fsck.fat",
+                "checker_version": "1.0",
+                "reason": "fixture-specific test exists but was not executed",
+                "fixture_status": "fixture_declared",
+            }
+        ],
+    }
+    committed["checker-matrix.json"] = {
+        "schema": 1,
+        "platform": "windows",
+        "python": "3.11.9",
+        "entries": [
+            {
+                "checker": "fsck.fat",
+                "availability": "unavailable",
+                "checker_path": None,
+                "checker_version": None,
+                "reason": "required checker/runtime is unavailable on this runner",
+                "fixture_status": "fixture_declared",
+            }
+        ],
+    }
+    expected_dir = tmp_path / "expected"
+    committed_dir = tmp_path / "committed"
+    _write_set(expected_dir, expected)
+    _write_set(committed_dir, committed)
+
+    assert validate_upgrade(expected_dir, committed_dir) == (
+        "Canonical status artifacts match; checker inventory differs only by runner."
+    )
+
+
 def test_valid_one_step_schema_upgrade_passes_as_data_only(tmp_path):
     expected = tmp_path / "expected"
     committed = tmp_path / "committed"

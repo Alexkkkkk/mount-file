@@ -79,8 +79,10 @@ def test_validate_checks_numeric_bounds():
 
 
 def test_validate_checks_array_bounds():
-    errors = validate({"steps": [{"tool": "hash_file", "purpose": "x"}] * 9},
-                      SCHEMAS["investigation_plan"])
+    errors = validate(
+        {"steps": [{"tool": "hash_file", "purpose": "x"}] * 9},
+        SCHEMAS["investigation_plan"],
+    )
     assert any("элементов больше" in item for item in errors)
 
 
