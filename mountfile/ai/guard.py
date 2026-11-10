@@ -202,7 +202,9 @@ def scan(data: bytes, limit: int = MAX_SCAN_BYTES) -> GuardReport:
     raw = data or b""
     blob = raw[:limit] if isinstance(raw, (bytes, bytearray)) else b""
     text = _decode(blob if isinstance(data, (bytes, bytearray)) else raw)
-    total = len(raw) if isinstance(raw, (bytes, bytearray)) else len(text.encode("utf-8"))
+    total = (
+        len(raw) if isinstance(raw, (bytes, bytearray)) else len(text.encode("utf-8"))
+    )
     truncated = total > len(text.encode("utf-8", "replace")) and total > limit
 
     hits: List[Hit] = []
