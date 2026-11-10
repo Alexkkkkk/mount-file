@@ -33,11 +33,13 @@ FIXTURE_GROUPS = {
         "test_failed_fat_rollback_quarantines_image_and_retains_snapshot",
         "test_fat32_short_write_and_cancellation_restore_selected_extent",
         "test_fat32_injected_exception_and_external_suffix_change_are_bounded",
+        "test_fat32_process_kill_before_atomic_replace_never_publishes",
         "test_native_fat32_mutation_passes_fsck_on_disposable_copy",
     ),
     "exfat": (
         "test_exfat_short_write_exception_and_cancellation_never_publish",
         "test_exfat_success_and_repeated_recovery_safe_retries_preserve_sentinels",
+        "test_exfat_process_kill_before_atomic_replace_never_publishes",
         "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck",
     ),
 }
@@ -77,6 +79,9 @@ CELL_FIXTURES = {
         "quarantine": (
             "test_failed_fat_rollback_quarantines_image_and_retains_snapshot",
         ),
+        "process_kill": (
+            "test_fat32_process_kill_before_atomic_replace_never_publishes",
+        ),
         "independent_checker": (
             "test_native_fat32_mutation_passes_fsck_on_disposable_copy",
         ),
@@ -84,6 +89,9 @@ CELL_FIXTURES = {
     "exfat": {
         "hash_preservation": (
             "test_exfat_short_write_exception_and_cancellation_never_publish",
+        ),
+        "process_kill": (
+            "test_exfat_process_kill_before_atomic_replace_never_publishes",
         ),
         "independent_checker": (
             "test_real_exfat_unicode_write_and_rename_pass_read_only_fsck",

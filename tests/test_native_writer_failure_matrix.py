@@ -8,6 +8,10 @@ and failed/cancelled writes must not publish a replacement.
 """
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from test_exfat_probe import VOLUME_SIZE, _tree_image
 from test_ext2_native import MKE2FS, _make_ext2
@@ -106,6 +110,44 @@ def test_fat32_injected_exception_and_external_suffix_change_are_bounded(
     assert final_suffix[len(changed) :] == suffix[len(changed) :]
 
 
+def test_fat32_process_kill_before_atomic_replace_never_publishes(tmp_path):
+    image, _offset, _size, _prefix, _suffix = _fat_image_with_sentinels(tmp_path)
+    before = image.read_bytes()
+    script = """
+import os
+import sys
+from pathlib import Path
+
+import mountfile.universal_fs_rw as backend
+from mountfile.universal_fs_rw import Fat32RW
+
+image = Path(sys.argv[1]).resolve()
+real_replace = backend.os.replace
+
+def kill_before_publish(source, destination):
+    if Path(destination).resolve() == image and str(source).endswith(".mountfile-stage"):
+        os._exit(74)
+    return real_replace(source, destination)
+
+backend.os.replace = kill_before_publish
+Fat32RW(image, offset=int(sys.argv[2]), volume_size=int(sys.argv[3])).write_file(
+    "/crash.bin", b"must not publish"
+)
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(image), str(_offset), str(_size)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert crashed.returncode == 74, crashed.stdout + crashed.stderr
+    assert image.read_bytes() == before
+    orphan_stages = list(tmp_path.glob(f".{image.name}.*.mountfile-stage"))
+    assert orphan_stages
+    for stage in orphan_stages:
+        stage.unlink()
+
+
 @pytest.mark.skipif(not MKE2FS, reason="mke2fs is required for ext2 fixtures")
 @pytest.mark.parametrize("payload", PAYLOADS)
 def test_ext2_bounded_success_preserves_partition_sentinels(tmp_path, payload):
@@ -183,6 +225,49 @@ def test_exfat_short_write_exception_and_cancellation_never_publish(
     assert bounded.read_bytes() == before
     assert bounded.read_bytes()[: len(prefix)] == prefix
     assert bounded.read_bytes()[-len(suffix) :] == suffix
+
+
+def test_exfat_process_kill_before_atomic_replace_never_publishes(tmp_path):
+    partition = tmp_path / "exfat-crash.partition"
+    _tree_image(partition)
+    prefix = b"EXFAT-CRASH-PREFIX" * 3
+    suffix = b"EXFAT-CRASH-SUFFIX" * 4
+    image = tmp_path / "exfat-crash.disk"
+    image.write_bytes(prefix + partition.read_bytes() + suffix)
+    before = image.read_bytes()
+    script = """
+import os
+import sys
+from pathlib import Path
+
+import mountfile.exfat_writer as backend
+from mountfile.exfat_writer import NativeExfatWriter
+
+image = Path(sys.argv[1]).resolve()
+real_replace = backend.os.replace
+
+def kill_before_publish(source, destination):
+    if Path(destination).resolve() == image and str(source).endswith(".stage"):
+        os._exit(74)
+    return real_replace(source, destination)
+
+backend.os.replace = kill_before_publish
+NativeExfatWriter(image, offset=int(sys.argv[2]), volume_size=int(sys.argv[3])).write_file(
+    "/CRASH.TXT", b"must not publish"
+)
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(image), str(len(prefix)), str(VOLUME_SIZE)],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+    )
+    assert crashed.returncode == 74, crashed.stdout + crashed.stderr
+    assert image.read_bytes() == before
+    orphan_stages = list(tmp_path.glob(f".{image.name}.exfat-*.stage"))
+    assert orphan_stages
+    for stage in orphan_stages:
+        stage.unlink()
 
 
 def test_exfat_success_and_repeated_recovery_safe_retries_preserve_sentinels(tmp_path):
