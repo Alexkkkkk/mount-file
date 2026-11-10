@@ -16,7 +16,7 @@ import shutil
 import stat
 import struct
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from mountfile.exfat_probe import (
@@ -181,6 +181,12 @@ class NativeExfatWriter:
             )
         self.image = Path(os.path.abspath(os.fspath(image_path)))
         _image_identity(self.image)
+        self._quarantine_marker = Path(str(self.image) + ".mountfile-exfat-quarantined")
+        if self._quarantine_marker.exists():
+            raise ExfatWriteError(
+                "exFAT image is quarantined after a failed commit; inspect "
+                f"{self._quarantine_marker} before writing"
+            )
         self.offset = int(offset)
         self.volume_size = int(volume_size)
         try:
@@ -208,14 +214,13 @@ class NativeExfatWriter:
         self._source_image_identity = _image_identity(self.image)
 
     def _copy_stage(self):
-        handle = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             prefix=f".{self.image.name}.exfat-",
             suffix=".stage",
             dir=self.image.parent,
             delete=False,
-        )
-        stage = Path(handle.name)
-        handle.close()
+        ) as handle:
+            stage = Path(handle.name)
         try:
             shutil.copy2(self.image, stage)
             return stage
@@ -704,19 +709,32 @@ class NativeExfatWriter:
         self._write_rel(stream, relative, raw)
 
     def _commit_stage(self, stage):
-        try:
-            if _image_identity(self.image) != self._source_image_identity:
-                raise ExfatWriteError(
-                    "source image changed concurrently; refusing commit",
-                    RefusalCode.CONCURRENT_CHANGE,
+        if _image_identity(self.image) != self._source_image_identity:
+            raise ExfatWriteError(
+                "source image changed concurrently; refusing commit",
+                RefusalCode.CONCURRENT_CHANGE,
+            )
+        staged_identity = _image_identity(stage)
+        os.replace(stage, self.image)
+        self._source_image_identity = staged_identity
+
+    def _quarantine_stage(self, stage, error):
+        """Retain an uncommitted stage and block future writes after commit failure."""
+        marker_tmp = self._quarantine_marker.with_name(
+            f".{self._quarantine_marker.name}.tmp"
+        )
+        marker_tmp.write_text(
+            "\n".join(
+                (
+                    "format=mountfile-exfat-quarantine-v1",
+                    f"stage={stage.name}",
+                    f"error={error!r}",
                 )
-            staged_identity = _image_identity(stage)
-            os.replace(stage, self.image)
-            self._source_image_identity = staged_identity
-            stage = None
-        finally:
-            if stage is not None:
-                stage.unlink(missing_ok=True)
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(marker_tmp, self._quarantine_marker)
 
     def _mutate(self, operation, validate):
         # Windows denies a second reader while msvcrt.locking holds the
@@ -735,8 +753,14 @@ class NativeExfatWriter:
             finally:
                 verified.close()
             with _image_lock(self.image):
-                self._commit_stage(stage)
-                stage = None
+                try:
+                    self._commit_stage(stage)
+                except BaseException as commit_error:
+                    self._quarantine_stage(stage, commit_error)
+                    stage = None
+                    raise
+                else:
+                    stage = None
         except BaseException:
             if stage is not None:
                 stage.unlink(missing_ok=True)
@@ -749,10 +773,8 @@ class NativeExfatWriter:
             meta = self._metadata(reader)
             owners = self._allocation_owners(reader, meta)
             existing = None
-            try:
+            with suppress(FileNotFoundError):
                 _dir, existing = self._locate(reader, path)
-            except FileNotFoundError:
-                pass
             parts = self._parts(path)
             directory_path = "/" + "/".join(parts[:-1])
             with stage.open("r+b") as stream:
