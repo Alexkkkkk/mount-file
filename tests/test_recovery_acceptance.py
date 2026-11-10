@@ -28,6 +28,7 @@ def test_typed_recovery_cells_cover_writers_and_keep_power_loss_unsupported():
     assert "quarantine" in CELL_FIXTURES["fat32"]
     assert "process_kill" in CELL_FIXTURES["fat32"]
     assert "process_kill" in CELL_FIXTURES["exfat"]
+    assert "quarantine" in CELL_FIXTURES["exfat"]
     assert "durable_recovery" in CELL_FIXTURES["ext2"]
     assert all("independent_checker" in cells for cells in CELL_FIXTURES.values())
 
