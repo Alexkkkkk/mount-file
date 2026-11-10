@@ -295,8 +295,18 @@ def guard_sql(sql: Any) -> List[str]:
         errors.append("разрешены только SELECT/WITH/EXPLAIN")
     if ";" in body:
         errors.append("несколько операторов в одном запросе запрещены")
-    for banned in ("insert ", "update ", "delete ", "drop ", "alter ", "attach ",
-                   "create ", "pragma ", "vacuum ", "load_extension"):
+    for banned in (
+        "insert ",
+        "update ",
+        "delete ",
+        "drop ",
+        "alter ",
+        "attach ",
+        "create ",
+        "pragma ",
+        "vacuum ",
+        "load_extension",
+    ):
         if re.search(r"\b%s" % banned.strip(), lowered):
             errors.append("запрещённая команда: %s" % banned.strip().upper())
     return errors

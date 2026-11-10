@@ -28,6 +28,17 @@ _PROFILE_IDENTITY_FIELDS = (
     "mode",
     "write_strategy",
 )
+_VOLATILE_CHECKER_FIELDS = frozenset(
+    {
+        "availability",
+        "checker_path",
+        "checker_version",
+        "platform",
+        "platform_release",
+        "python",
+        "reason",
+    }
+)
 
 
 class StatusValidationError(ValueError):
@@ -56,6 +67,19 @@ def _json(path: Path) -> Any:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise StatusValidationError(message)
+
+
+def _stable_checker_matrix(value: Any) -> Any:
+    """Remove runner-specific inventory fields before checker comparison."""
+    if isinstance(value, dict):
+        return {
+            key: _stable_checker_matrix(item)
+            for key, item in value.items()
+            if key not in _VOLATILE_CHECKER_FIELDS
+        }
+    if isinstance(value, list):
+        return [_stable_checker_matrix(item) for item in value]
+    return value
 
 
 def _validate_profile_operations(
@@ -196,9 +220,19 @@ def validate_upgrade(expected_dir: Path, committed_dir: Path) -> str:
     expected = {name: _json(expected_dir / name) for name in ARTIFACTS}
     candidate = {name: _json(committed_dir / name) for name in ARTIFACTS}
     _require(
-        expected_raw["checker-matrix.json"] == candidate_raw["checker-matrix.json"],
-        "checker-matrix.json must exactly match trusted generation",
+        _stable_checker_matrix(expected["checker-matrix.json"])
+        == _stable_checker_matrix(candidate["checker-matrix.json"]),
+        "checker-matrix.json changed its stable claims",
     )
+    if all(
+        expected_raw[name] == candidate_raw[name]
+        for name in (
+            "capability-matrix.json",
+            "recovery-matrix.json",
+            "product-status.json",
+        )
+    ):
+        return "Canonical status artifacts match; checker inventory differs only by runner."
 
     old_matrix = expected["capability-matrix.json"]
     new_matrix = candidate["capability-matrix.json"]
