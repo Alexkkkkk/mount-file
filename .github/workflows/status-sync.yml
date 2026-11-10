@@ -90,10 +90,12 @@ jobs:
           python scripts/generate_readme.py \
             --repo-root /tmp/mountfile-pr \
             --output /tmp/README.generated
-          # The block is informational and version-derived only, so a stale copy
-          # is reported without failing the pull request.
+          # README is part of the public status contract.  A stale generated
+          # block must fail the pull request instead of silently drifting from
+          # the canonical package/status data.
           if ! diff -q /tmp/README.committed /tmp/README.generated > /dev/null; then
-            echo "::warning file=README.md::Generated README block is stale. Run 'python scripts/generate_readme.py' to refresh it."
-          else
-            echo "Generated README block matches the committed file."
+            echo "::error file=README.md::Generated README block is stale. Run 'python scripts/generate_readme.py' and commit the result."
+            diff -u /tmp/README.committed /tmp/README.generated || true
+            exit 1
           fi
+          echo "Generated README block matches the committed file."
