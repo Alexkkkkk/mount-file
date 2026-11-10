@@ -42,13 +42,7 @@ from .backend import (
 from .copilot import CopilotSummaryBuilder
 from .guard import GuardReport, Hit, fence, neutralize, scan, wrap_report
 from .rag import DocumentationRetriever, retrieve_documentation
-from .schema import (
-    SCHEMAS,
-    extract_json,
-    guard_sql,
-    parse_structured,
-    validate,
-)
+from .schema import SCHEMAS, extract_json, guard_sql, parse_structured, validate
 
 __all__ = [
     "BACKENDS",

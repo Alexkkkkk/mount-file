@@ -73,7 +73,9 @@ def test_ollama_without_schema_omits_format(monkeypatch):
 
 
 def test_ollama_analyze_json_parses_fenced_reply(monkeypatch):
-    reply = {"response": '```json\n{"kind": "image", "summary": "s", "risk": "none"}\n```'}
+    reply = {
+        "response": '```json\n{"kind": "image", "summary": "s", "risk": "none"}\n```'
+    }
     monkeypatch.setattr(ai_backend, "_post_json", Recorder(reply))
     backend = OllamaBackend(base_url="http://127.0.0.1:11434", model="llama3")
     obj, errors, result = backend.analyze_json(
@@ -98,8 +100,16 @@ def test_ollama_analyze_json_reports_validation_error(monkeypatch):
 
 def test_openai_sends_json_schema_response_format(monkeypatch):
     recorder = Recorder(
-        {"choices": [{"message": {"content": '{"kind": "config", '
-                                             '"summary": "s", "risk": "low"}'}}]}
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"kind": "config", '
+                        '"summary": "s", "risk": "low"}'
+                    }
+                }
+            ]
+        }
     )
     monkeypatch.setattr(ai_backend, "_post_json", recorder)
     backend = OpenAiCompatBackend(

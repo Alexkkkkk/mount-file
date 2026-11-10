@@ -1167,8 +1167,7 @@ def _ai_settings_from_env():
         limit = 262144
     return {
         "ai_backend": os.environ.get("MOUNTFILE_AI_BACKEND") or "none",
-        "ai_base_url": os.environ.get("MOUNTFILE_AI_URL")
-        or "http://127.0.0.1:11434",
+        "ai_base_url": os.environ.get("MOUNTFILE_AI_URL") or "http://127.0.0.1:11434",
         "ai_base_url_openai": os.environ.get("MOUNTFILE_AI_URL_OPENAI") or "",
         "ai_model": os.environ.get("MOUNTFILE_AI_MODEL") or "",
         "ai_api_key": os.environ.get("MOUNTFILE_AI_KEY") or "",
@@ -1222,7 +1221,9 @@ def cmd_ai_analyze(args):
         )
         return ERROR
     try:
-        data, truncated = collect(local_reader(args.path), max_bytes=max_bytes(settings))
+        data, truncated = collect(
+            local_reader(args.path), max_bytes=max_bytes(settings)
+        )
     except OSError as exc:
         print("error: %s" % exc, file=sys.stderr)
         return ERROR
@@ -1662,7 +1663,9 @@ def build_parser():
         help="send a bounded, fenced file preview to the configured AI backend",
     )
     sp.add_argument("path")
-    sp.add_argument("--schema", default=None, help="validate the answer against a schema")
+    sp.add_argument(
+        "--schema", default=None, help="validate the answer against a schema"
+    )
     sp.add_argument("--prompt", default=None, help="additional instruction")
     sp.add_argument("--backend", default=None, choices=["none", "ollama", "openai"])
     sp.add_argument("--model", default=None)
