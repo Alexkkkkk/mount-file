@@ -91,7 +91,9 @@ sequence-bearing MFT reference, ссылки extension record на базову�
 точного совпадения атрибута. Nonresident list ограничен 1 MiB. Reader объединяет
 только непрерывные VCN extents и возвращает нули за `ValidDataLength`. `$MFT`,
 которому нужны extension records для bootstrap, отвергается; NTFS остаётся
-read-only и `$LogFile` не проигрывается.
+read-only. Две `$LogFile` restart pages проверяются по их LSN, клиентскому
+состоянию и bounded размерам, но log records не проигрываются и native writes
+не включаются.
 
 ### Метаданные NTFS
 
