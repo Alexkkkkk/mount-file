@@ -458,6 +458,15 @@ def maybe_advise(settings, path, parent=None, log=None, head=None):
     adapter = LLMBackendAdapter(build_backend(settings or {}))
     engine = HypothesisEngine(adapter, calibration)
     hyps = engine.diagnose(fp)
+    # Самообучающаяся калибровка: слой переставляет гипотезы по накопленному
+    # фидбеку; без знаний возвращает None — порядок оригинала сохранён.
+    from .layers.hooks import stack_for
+
+    stack = stack_for(path)
+    if stack is not None and stack.is_enabled("advisor"):
+        calibrated = stack.advisor.calibrate(hyps)
+        if calibrated is not None:
+            hyps = calibrated
     if calibration.is_confident(hyps):
         return  # формат и так ясен — не мешаем пользователю
     github = None

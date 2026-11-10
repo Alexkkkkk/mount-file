@@ -495,11 +495,14 @@ def print_cheatsheet() -> None:
     python main.py truncate <img> /f --size 0 --yes  # изменить размер файла
     python main.py mkdir <img> /new
     python main.py mv <img> /a b         # переименование в том же каталоге
+    python main.py ln <img> /src /link --yes  # создать ссылку через safety confirmation
     python main.py rm <img> /new -r --yes
     python main.py decode <dump.bin>     # RT809H (MST/MTK)
     python main.py split <dump.bin> <udev.txt> -o parts
     python main.py autopick <img>        # авто-подбор рабочего тома (offset + ФС)
     python main.py autopick <img> --json --extract out
+    python -m mountfile layers status    # управление advisory/self-learning layers
+    python -m mountfile layers disable code_repair  # выключить OLMA suggestions/learning
     python main.py ls <img> / --auto     # авто-подбор для любой команды
     python main.py grep <img> "password=" --encoding utf-16le
     python main.py hash <img>            # SHA-256 identity (read-only)

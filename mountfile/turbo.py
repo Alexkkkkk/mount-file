@@ -930,7 +930,29 @@ class TurboController:
         self.sync = DeltaSync(workers=workers)
 
         raw = fs if fs is not None else getattr(window, "fs", None)
-        self.fs = CachedFS(raw) if raw is not None else None
+        self._cache_layer = None
+        cache_layer_enabled = False
+        image_path = getattr(window, "image_path", None)
+        if raw is not None and image_path:
+            try:
+                from .layers.hooks import stack_for
+
+                stack = stack_for(image_path)
+                if stack is not None and stack.is_enabled("cache"):
+                    self._cache_layer = stack.cache
+                    cache_layer_enabled = True
+            except (
+                Exception
+            ):  # noqa: BLE001 - AI/cache failures must not block browsing
+                logging.getLogger(__name__).debug(
+                    "cache layer unavailable; using default cache", exc_info=True
+                )
+        if raw is None:
+            self.fs = None
+        elif cache_layer_enabled and self._cache_layer is not None:
+            self.fs = self._cache_layer.wrap(raw)
+        else:
+            self.fs = CachedFS(raw)
         if self.fs is not None:
             window.fs = self.fs  # existing code keeps working
 
@@ -943,6 +965,14 @@ class TurboController:
 
         def closeEvent(event, _orig=original, _self=self):
             _self.runner.cancel_all()
+            cache_layer = getattr(_self, "_cache_layer", None)
+            if cache_layer is not None:
+                try:
+                    cache_layer.flush()
+                except Exception:  # noqa: BLE001 - shutdown remains best-effort
+                    logging.getLogger(__name__).debug(
+                        "cache layer flush failed", exc_info=True
+                    )
             if _orig is not None:
                 try:
                     _orig(event)

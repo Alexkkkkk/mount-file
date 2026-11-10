@@ -92,6 +92,9 @@ For the detailed status and remaining acceptance work, see
 [`docs/issue-182-status.md`](docs/issue-182-status.md) and
 [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
 
+For self-learning layer controls, explicit feedback, privacy boundaries and
+the OLMA code-repair gate, see [`docs/self-learning-layers.md`](docs/self-learning-layers.md).
+
 ## Quick start
 
 ### Install from source

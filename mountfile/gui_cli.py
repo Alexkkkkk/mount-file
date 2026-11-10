@@ -13,7 +13,6 @@ from typing import Optional
 
 from . import cli
 from .qt_compat import (
-    AlignRight,
     DialogAccepted,
     QComboBox,
     QDialog,
@@ -26,14 +25,13 @@ from .qt_compat import (
     QPushButton,
     QThread,
     QVBoxLayout,
-    QWidget,
     exec_dialog,
     pyqtSignal,
 )
 
-# These four package CLI commands mutate an existing evidence image. Keep the
+# These package CLI commands mutate an existing evidence image. Keep the
 # set explicit: future write commands require an explicit safety review.
-IMAGE_WRITE_COMMANDS = frozenset({"put", "mkdir", "mv", "rm"})
+IMAGE_WRITE_COMMANDS = frozenset({"put", "mkdir", "mv", "ln", "rm"})
 _IMAGE_WRITE_NOTICE = (
     "Команда изменяет исходный образ напрямую. Это нельзя отменить. Работайте "
     "с проверенной копией образа. При необходимости добавьте --backup: он "
