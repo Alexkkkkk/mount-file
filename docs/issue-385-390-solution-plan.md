@@ -95,7 +95,7 @@ CI уже выполняет Python-тесты на Linux, Windows и macOS. Lin
 
 Write microbenchmark можно добавлять только как отдельный этап, только для уже объявленных bounded writer-профилей, только на новой disposable-копии для каждого повтора. Запись и независимый checker не включаются в измеряемый таймер; source hash сверяется до/после. Benchmark не повышает readiness, parity, recovery или power-loss claims. Синхронизацию README/CHANGELOG/CLI/GUI/VFS следует расширить до generated machine-readable claim manifest; validator остаётся проверочным и никогда не меняет пользовательский PR/файлы автоматически. [6] [7] [21] [22] [23]
 
-## Оценка приложенного черновика интеграции
+## Оценка приложенных черновиков интеграции
 
 Предложенные фрагменты **не добавляются в runtime-код как готовые реализации**. В `JBD2Backend` методы start/commit/abort/recover возвращают `True`, не читают и не меняют журнал и не обеспечивают durable ordering; `Ext4Writer.write_file()` всё ещё выбрасывает `NotImplementedError`. Такой API может создать ложное впечатление, что транзакция защищена, хотя записи и восстановления нет. В проекте уже есть ограниченные JBD2 record/checkpoint helpers; следующий шаг — интегрировать их в проверяемый coordinator и пройти gates из #385/#387, а не добавлять ещё одну no-op-обёртку. [1] [9] [10]
 
@@ -118,6 +118,16 @@ Write microbenchmark можно добавлять только как отде�
 Hypothesis state machine в примере импортирует `mountfile.safe_write.safe_atomic_commit/read`, которых в checkout нет. Кроме того, она ловит любой `Exception` при чтении и считает его допустимым, а её единственная invariant проверяет отсутствие `*.tmp`; поэтому повреждение уже успешно записанных данных может пройти тест. Это не моделирует commit/abort, writer operations или crash boundaries. `hypothesis` уже присутствует в dev extra; применять его следует после появления реального writer API, с моделью ожидаемого состояния и fault injection, не подавляя неожиданные ошибки.
 
 Зависимости `dissect.btrfs`, `dissect.xfs`, `dfvfs`, `atomicwriter` и `safeatomic` в предложенном виде не добавляются: API/совместимость и транзакционные гарантии ещё не подтверждены, а `dfir_ntfs` задан прямым mutable Git ref. `pip-audit` уже обслуживается имеющимся security workflow. Btrfs/XFS/F2FS и контейнерные форматы расширяют scope за пределы текущих #385–#390; сначала требуется отдельное решение о приоритетах, лицензиях/provenance, optional dependency extra, bounds, VFS contract и независимых fixtures. До этого не добавлять модули, которые создают видимость поддержки.
+
+### Третий черновик: `UnifiedForensicFacade` и `LegacyAdapter`
+
+Этот фасад не может быть добавлен поверх предыдущих эскизов как «единый fail-closed API»: в checkout отсутствуют импорты `dissect_reader`, `dfvfs_reader`, `safe_write` и `sandbox`, а также функции `safe_write_image`, `safe_atomic_commit` и `safe_atomic_read`. Следовательно, модуль не импортируется и не создаёт работоспособную интеграционную границу.
+
+Даже после появления тех модулей примеры содержат ошибки контракта: `read_container_file()` вызывает непроверенный `GetFileEntryByName()` и читает файл целиком через `.read()`; `isolation=False` только пишет warning, но всё равно запускает `run_parser_isolated()`; `write_image_atomic()` получает `atomic_writer`, однако `LegacyAdapter.migrate_fat32_write()` его не передаёт старому writer-у — вызов `writer.write_file(path, data)` продолжает писать через прежний объект. Поэтому лог «выполнена атомарно» не обоснован.
+
+`sync_all()` изменяет переданные вызывающим кодом dict через `pop("op")`, не имеет ветки `read_output`, хотя пример-тест её вызывает, и передаёт `output=...` в метод, который принимает `output_path`; показанный `test_sync_all_operations` завершится ошибкой до заявленной проверки результата. Последовательный `sync_all` также не является одной транзакцией: сбой поздней операции оставит ранние результаты, если отдельно не определить rollback/commit contract.
+
+Не добавлять facade/legacy adapter как универсальную точку обхода существующих VFS/profile/refusal contracts. Если такая абстракция понадобится, её API должен вызывать реальные backend capabilities, передавать один проверенный image/session object, ограничивать объём чтения, возвращать typed refusals и иметь executable tests для каждой операции. До этого безопасное решение — продолжать интеграцию через текущие VFS/API contracts, не маркировать старые writer-ы как атомарные и не добавлять отсутствующие modules/dependencies ради удовлетворения imports в черновике.
 
 ## Рекомендуемый порядок работ
 
