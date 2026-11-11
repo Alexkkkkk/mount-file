@@ -11,14 +11,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   auto-merge:
-    if: >-
-      github.event.pull_request.state == 'open' &&
-      !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'auto-merge') &&
-      (github.event.pull_request.user.login == 'dependabot[bot]' ||
-       github.event.pull_request.user.login == 'github-actions[bot]' ||
-       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    # Run a safe no-op check for ineligible PRs rather than reporting the whole
+    # job as skipped. The first step computes eligibility without using write tokens.
     timeout-minutes: 55
     runs-on: ubuntu-latest
     permissions:
@@ -30,7 +24,21 @@ jobs:
       PR_URL: ${{ github.event.pull_request.html_url }}
       EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Check auto-merge opt-in and trust policy
+        id: eligibility
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const eligible = pr && pr.state === 'open' && !pr.draft &&
+              pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}` &&
+              pr.labels.some(label => label.name === 'auto-merge') &&
+              (['dependabot[bot]', 'github-actions[bot]'].includes(pr.user.login) ||
+               ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association));
+            core.setOutput('eligible', String(Boolean(eligible)));
+            if (!eligible) core.info('No auto-merge requested or PR does not meet trust policy; no write action will run.');
       - name: Wait for exact-head quality, security, sync and full CI gates
+        if: steps.eligibility.outputs.eligible == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
@@ -75,10 +83,12 @@ jobs:
             }
             core.setFailed('Gates missing or still pending; PR remains open for review.');
       - name: Request squash merge without bypassing protection
+        if: steps.eligibility.outputs.eligible == 'true'
         run: |
           set -euo pipefail
           gh pr merge "$PR_URL" --squash --auto --match-head-commit "$EXPECTED_SHA" --delete-branch
       - name: Report actual merge state
+        if: steps.eligibility.outputs.eligible == 'true'
         run: |
           set -euo pipefail
           gh pr view "$PR_URL" --json state,autoMergeRequest,url

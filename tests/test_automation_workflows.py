@@ -15,20 +15,23 @@ def workflow(name):
 
 
 def test_autosync_requires_successful_verification_and_manual_request():
-    text = workflow("mfsync.yml").split("  autosync:", 1)[1]
-    assert "needs.verify.result == 'success'" in text
-    assert "github.event_name == 'workflow_dispatch'" in text
+    text = workflow("mfsync-sync.yml")
+    assert "  workflow_dispatch:" in text
+    assert "needs: verify" in text
+    assert "python tools/mfsync.py scan --all" in text
+    assert "python tools/mfsync.py check --strict" in text
     assert "always()" not in text.split("runs-on:", 1)[0]
     assert "repository-maintenance-write" in text
 
 
 def test_manual_sync_inputs_are_environment_data_not_shell_source():
-    text = workflow("mfsync.yml")
+    text = workflow("mfsync-sync.yml")
     assert "MESSAGE: ${{ inputs.message }}" in text
     assert "MODE: ${{ inputs.mode }}" in text
     assert 'MESSAGE="${{ ' not in text
     assert 'MODE="${{ ' not in text
     assert "[skip ci]" not in text
+    assert "  autosync:" not in workflow("mfsync.yml")
 
 
 def test_release_calculation_is_gated_on_trusted_main_ci():
@@ -50,7 +53,7 @@ def test_ci_gate_accounts_for_every_build_and_test_stage():
     text = workflow("ci.yml").split("  ci-gate:", 1)[1]
     assert "name: CI-Gate" in text
     assert "always()" in text
-    assert "github.event_name != 'schedule'" in text
+    assert "if: ${{ always() }}" in text
     for job in (
         "tests",
         "ubuntu-py312-compat",
@@ -74,9 +77,10 @@ def test_self_healing_never_checks_out_fork_pr_code_with_secrets():
 
 def test_auto_merge_requires_trust_label_head_match_and_all_gates():
     text = workflow("auto-merge.yml")
-    assert "head.repo.full_name == github.repository" in text
-    assert "labels.*.name, 'auto-merge'" in text
+    assert "pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`" in text
+    assert "label.name === 'auto-merge'" in text
     assert "author_association" in text
+    assert "steps.eligibility.outputs.eligible == 'true'" in text
     assert '--match-head-commit "$EXPECTED_SHA"' in text
     assert "--admin" not in text
     assert "gh pr review --approve" not in text
@@ -211,23 +215,29 @@ def test_release_assets_and_production_deploy_have_one_owner_each():
 
 
 def test_manual_publish_paths_are_limited_to_trusted_refs():
-    docker = workflow("docker.yml")
-    docs = workflow("docs.yml")
-    assert "github.ref == 'refs/heads/main'" in docker
+    docker = workflow("docker-publish.yml")
+    docs = workflow("docs-deploy.yml")
+    assert "workflow_dispatch:" in docker
+    assert "ref: main" in docker
     assert "group: ghcr-mountfile-latest" in docker
     assert "type=ref,event=tag" not in docker
-    assert "if: ${{ github.ref == 'refs/heads/main' }}" in docs
-    assert "pages: write" not in docs.split("  deploy:\n", 1)[0]
+    assert "push:" in docs and "branches: [main]" in docs
+    assert "ref: main" in docs
+    assert "pages: write" in docs
+    assert "pull_request:" not in docs
+    assert "  publish:" not in workflow("docker.yml")
+    assert "  deploy:" not in workflow("docs.yml")
 
 
 def test_nightly_build_is_a_dedicated_job_in_main_ci():
     assert not (ROOT / ".github" / "workflows" / "nightly.yml").exists()
-    text = workflow("ci.yml")
+    text = workflow("ci-nightly.yml")
+    ci = workflow("ci.yml")
     assert "cron: '0 3 * * *'" in text
     assert "name: Nightly Windows test and build" in text
-    assert "github.event_name != 'schedule'" in text
-    assert "github.event_name == 'schedule'" in text
-    assert "${{ github.event_name }}" in text
+    assert "schedule:" in text
+    assert "pull_request:" not in text
+    assert "schedule:" not in ci
 
 
 def test_codeql_shares_the_security_workflow_with_narrow_permissions():
@@ -249,6 +259,9 @@ def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs
     assert "name: gui smoke test (offscreen)" in ci
     assert "TEST_MATRIX_RESULT: ${{ needs.tests.result }}" in ci
     assert "if [ \"$TEST_MATRIX_RESULT\" != 'success' ]" in ci
+    assert "  build:\n    if: ${{ always() }}" in ci
+    assert "  gui-import:\n    if: ${{ always() }}" in ci
+    assert "schedule:" not in ci
     security = workflow("security.yml")
     assert "  analyze:\n    name: analyze" in security
 
