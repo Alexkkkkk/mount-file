@@ -6,12 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Push the verified image to GHCR (package visibility is managed separately)
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -48,50 +42,3 @@ jobs:
 
       - name: Validate compose configuration
         run: docker compose config
-
-  publish:
-    name: Publish verified image to GHCR
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
-    needs: build-smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: ghcr-mountfile-latest
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Calculate image tags and labels
-        id: metadata
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
-        with:
-          images: ghcr.io/alexkkkkk/mount-file
-          tags: |
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and publish
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
