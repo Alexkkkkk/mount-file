@@ -31,7 +31,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.86.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Source package version | Declared in [`pyproject.toml`](pyproject.toml); see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.86.1`.
+This block is generated from the canonical status data in this repository. Package version: `1.87.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
@@ -329,6 +329,38 @@ These are opt-in components and are not required for offline image browsing:
 
 Network access is opt-in for update checks, AI backends and API integrations.
 The native reader and bounded writer paths operate locally on the selected image.
+
+## Evidence handling and integration status
+
+Several capabilities in the attached integration proposal are already present;
+the table below distinguishes those from features that are not shipped:
+
+| Area | Available now | Boundary |
+|---|---|---|
+| Read-only image input | `mountfile.image_source.FileImageSource` provides bounded positioned reads through a read-only file descriptor. | This is not a hardware or system-wide write blocker; another process can still modify the source. |
+| Evidence hashing | `python -m mountfile evidence-manifest IMAGE --output MANIFEST.json` writes a non-overwriting SHA-256 sidecar. | It hashes one source file and checks for changes while reading; it is not a complete chain-of-custody record. |
+| Plugins | `mountfile.plugins.PluginRegistry` supports explicit discovery and read-only event snapshots. | Discovery imports executable Python; load only trusted plugins. |
+| Large-image/UI paths | `mountfile.search_content.search_image` performs bounded streaming search; the standalone DFIR grep uses read-only mmap; the Qt tree loads directories lazily with `fetchMore`. | These are existing focused APIs, not a universal filesystem-parity or memory-analysis layer. |
+| CFTT fixture check | `tests/test_cftt_string_search.py` exercises the real streaming search when external fixtures are supplied. | It is skipped by default, downloads no data and is not a certification claim. |
+
+The proposed `auditchain`/`pyDFIRRam` integrations and code-signing/notarization
+workflow are not bundled. They need separate dependency/API and security review,
+and signing additionally requires trusted platform certificates. The sample
+filename-suffix check is not a write blocker; use a hardware blocker and a
+documented acquisition procedure when the investigation requires them.
+
+To opt into the external CFTT string-search check, provide an image and a UTF-8
+JSON object mapping each literal string to its expected byte offset or offsets:
+
+```bash
+CFTT_STRING_IMAGE=/path/to/string-search.img \
+CFTT_EXPECTED_JSON=/path/to/expected.json \
+python -m pytest -q tests/test_cftt_string_search.py
+```
+
+No fixture is downloaded automatically. This test checks expected literal
+matches through Mount File's streaming search; it does not certify a forensic
+workflow or establish chain of custody.
 
 ## Safety boundaries
 
