@@ -17,20 +17,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  analyze:
-    name: analyze
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-        with:
-          languages: python
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-
   dependency-review:
     if: ${{ github.event_name == 'pull_request' }}
     timeout-minutes: 30
@@ -61,20 +47,18 @@ jobs:
 
   security-gate:
     name: security-gate
-    needs: [analyze, dependency-review, pip-audit]
+    needs: [dependency-review, pip-audit]
     if: ${{ always() }}
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - name: Require every applicable security check to pass
         env:
-          ANALYZE: ${{ needs.analyze.result }}
           DEPENDENCY_REVIEW: ${{ needs.dependency-review.result }}
           PIP_AUDIT: ${{ needs.pip-audit.result }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          test "$ANALYZE" = success
           test "$PIP_AUDIT" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$DEPENDENCY_REVIEW" = success

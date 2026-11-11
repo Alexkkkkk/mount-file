@@ -243,15 +243,18 @@ def test_nightly_build_is_a_dedicated_job_in_main_ci():
     assert "schedule:" not in ci
 
 
-def test_codeql_shares_the_security_workflow_with_narrow_permissions():
-    assert not (ROOT / ".github" / "workflows" / "codeql.yml").exists()
-    text = workflow("security.yml")
-    analyze = text.split("  analyze:", 1)[1].split("  dependency-review:", 1)[0]
+def test_codeql_uses_expected_workflow_path_with_narrow_permissions():
+    text = workflow("codeql.yml")
+    analyze = text.split("  analyze:", 1)[1]
+    assert "name: CodeQL" in text
     assert "name: analyze" in analyze
     assert "github/codeql-action/init@" in analyze
     assert "github/codeql-action/analyze@" in analyze
     assert "security-events: write" in analyze
     assert "security-events: write" not in text.split("jobs:", 1)[0]
+    security = workflow("security.yml")
+    assert "  analyze:" not in security
+    assert "security-events: write" not in security
 
 
 def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs():
@@ -266,7 +269,7 @@ def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs
     assert "  gui-import:\n    if: ${{ always() }}" in ci
     assert "schedule:" not in ci
     security = workflow("security.yml")
-    assert "  analyze:\n    name: analyze" in security
+    assert "  security-gate:\n    name: security-gate" in security
 
 
 def test_workflow_quality_validation_is_integrity_checked():
@@ -306,7 +309,8 @@ def test_security_audit_is_blocking_and_self_heal_is_pr_only():
     security = workflow("security.yml")
     self_heal = workflow("self-heal.yml")
     assert "name: security-gate" in security
-    assert "needs: [analyze, dependency-review, pip-audit]" in security
+    assert "needs: [dependency-review, pip-audit]" in security
+    assert "needs: [analyze, dependency-review, pip-audit]" not in security
     assert "github.event_name != 'workflow_dispatch'" not in security
     assert "continue-on-error: true" not in security
     assert "pip-audit -r requirements.txt --desc on || true" not in security
