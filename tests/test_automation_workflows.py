@@ -77,7 +77,10 @@ def test_self_healing_never_checks_out_fork_pr_code_with_secrets():
 
 def test_auto_merge_requires_trust_label_head_match_and_all_gates():
     text = workflow("auto-merge.yml")
-    assert "pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`" in text
+    assert (
+        "pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`"
+        in text
+    )
     assert "label.name === 'auto-merge'" in text
     assert "author_association" in text
     assert "steps.eligibility.outputs.eligible == 'true'" in text
