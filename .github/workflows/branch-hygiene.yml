@@ -1,0 +1,71 @@
+name: Branch hygiene
+
+on:
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+    inputs:
+      stale_days:
+        description: 'Age threshold for a branch with no open PR'
+        required: true
+        default: '45'
+        type: string
+      fail_on_stale:
+        description: 'Fail this run when stale branch candidates exist'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: branch-hygiene
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit remote branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      STALE_DAYS: ${{ inputs.stale_days || '45' }}
+      FAIL_ON_STALE: ${{ inputs.fail_on_stale || 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Run read-only branch audit
+        run: |
+          set -euo pipefail
+          args=(
+            --stale-days "$STALE_DAYS"
+            --json-out branch-hygiene.json
+            --markdown-out branch-hygiene.md
+          )
+          if [[ "$FAIL_ON_STALE" == 'true' ]]; then
+            args+=(--fail-on-stale)
+          fi
+          python scripts/branch_hygiene.py "${args[@]}" | tee branch-hygiene-summary.md
+      - name: Publish job summary
+        if: always()
+        run: cat branch-hygiene-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload branch hygiene report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: branch-hygiene-report
+          path: |
+            branch-hygiene.json
+            branch-hygiene.md
+            branch-hygiene-summary.md
+          if-no-files-found: error
+          retention-days: 14
