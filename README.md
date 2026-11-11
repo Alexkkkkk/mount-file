@@ -138,10 +138,10 @@ python -m pip install .
 python main.py
 ```
 
-You can open an image directly:
+To inspect an image from the command line:
 
 ```bash
-python main.py path/to/image.img
+python -m mountfile info path/to/image.img
 ```
 
 The project installer can prepare the Python environment and optional system
@@ -189,10 +189,13 @@ Run:
 
 ```bash
 python main.py                 # open the desktop application
-python main.py dump.img        # open an image immediately
 python main.py --version       # print the version
-python main.py --diag          # diagnose the local environment
+python -m mountfile --help     # list package CLI commands
 ```
+
+The desktop application is opened without positional arguments. Use the package
+CLI to inspect an image; `python main.py IMAGE` is routed to the separate host-OS
+mount helper, not to the desktop GUI.
 
 The GUI provides a two-panel file-manager workflow, partition and volume
 selection, directory browsing, extraction, a HEX editor, image summary,
@@ -207,8 +210,11 @@ Writing changes the image file. Before using **Import**, **New folder**,
 3. keep sufficient free space for the configured backup;
 4. confirm that the operation belongs to the active native profile.
 
-The GUI creates a backup before its first mutation in a session. This backup is
-a safety aid, not a filesystem journal and not a power-loss guarantee.
+Before each GUI write operation, the application asks whether to create a new
+backup. It uses `<image>.bak` when available, otherwise a numbered suffix such
+as `<image>.bak.1`; declining or failing to create the backup cancels that write.
+This backup is a safety aid, not a filesystem journal and not a power-loss
+guarantee.
 
 Useful shortcuts include `Tab` to switch panels, `Space` to select an entry,
 `F5`/`F6` to copy or move, `F7` to create a directory, `F8` to delete,
@@ -232,7 +238,9 @@ python -m mountfile get dump.img /photos -o ./evidence/photos
 ```
 
 After `pip install .`, the equivalent installed command is `mountfile`.
-`python main.py <same command>` is also supported by the desktop entry point.
+The package CLI can also be invoked as `python -m mountfile`. `python main.py`
+without arguments starts the GUI; with positional arguments it dispatches to the
+standalone host-OS mount helper described below, not to the package CLI.
 
 ### Read and evidence commands
 
@@ -291,7 +299,8 @@ python -m mountfile autopick dump.bin --hint system --extract ./rootfs
 ```
 
 `autopick` combines MBR/GPT, `udev` metadata and filesystem signatures, then
-verifies candidates by opening them. `--no-verify` is faster but less safe.
+verifies candidates with a real-mount check. `--no-verify` skips that check; it
+is faster but provides less verification.
 Raw NAND OOB/ECC interleaving is outside this tool's scope.
 
 For the complete option reference, see [`docs/cli.md`](docs/cli.md).
@@ -312,7 +321,8 @@ python mountfile.py --unmount /mnt/x
 
 It uses platform tools such as `udisksctl`/`mount` on Linux, `hdiutil` on macOS
 and PowerShell disk-image commands on Windows. Availability and permissions
-depend on the host OS.
+depend on the host OS. On Linux, an unprivileged `udisksctl` mount cannot honor
+`--to`; omit that option to let the system choose the mount point.
 
 ## Optional AI, API and automation layers
 
