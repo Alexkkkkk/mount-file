@@ -25,6 +25,16 @@ def _write(root: Path, name: str, report: dict) -> None:
     path.write_text(json.dumps(report), encoding="utf-8")
 
 
+def test_aggregate_normalizes_darwin_to_macos(tmp_path):
+    for platform_name in ("linux", "windows"):
+        _write(tmp_path, f"{platform_name}.json", _report(platform_name))
+    macos = _report("darwin")  # platform.system() lowercased
+    _write(tmp_path, "macos.json", macos)
+    result = aggregate(tmp_path)
+    assert result["verdict"] == "pass"
+    assert result["platforms_observed"] == ["linux", "macos", "windows"]
+
+
 def test_aggregate_requires_all_three_platforms(tmp_path):
     _write(tmp_path, "linux.json", _report("linux"))
     _write(tmp_path, "windows.json", _report("windows"))

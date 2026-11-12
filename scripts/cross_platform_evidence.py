@@ -9,6 +9,7 @@ from pathlib import Path
 
 EXPECTED_PLATFORMS = {"linux", "windows", "macos"}
 REQUIRED_SCHEMA = "mountfile.native-read-evidence/v1"
+PLATFORM_ALIASES = {"darwin": "macos"}
 
 
 def _load_reports(root: Path) -> list[tuple[Path, dict]]:
@@ -31,6 +32,10 @@ def aggregate(root: Path) -> dict[str, object]:
     for path, report in reports:
         runner = report.get("runner", {})
         platform_name = runner.get("platform")
+        if platform_name in PLATFORM_ALIASES:
+            # platform.system() reports "Darwin" on macOS runners; evidence
+            # files lowercase it to "darwin". Normalize to the canonical name.
+            platform_name = PLATFORM_ALIASES[platform_name]
         if platform_name not in EXPECTED_PLATFORMS:
             blockers.append(f"unexpected_platform:{platform_name}")
             continue
