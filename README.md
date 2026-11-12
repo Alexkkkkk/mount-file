@@ -31,7 +31,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Source package version | Declared in [`pyproject.toml`](pyproject.toml); see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
+| Current package version | `1.81.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
 | Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | License | [MIT](LICENSE) |
@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.87.3`.
+This block is generated from the canonical status data in this repository. Package version: `1.85.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
@@ -95,26 +95,6 @@ For the detailed status and remaining acceptance work, see
 For self-learning layer controls, explicit feedback, privacy boundaries and
 the OLMA code-repair gate, see [`docs/self-learning-layers.md`](docs/self-learning-layers.md).
 
-## What is not ready yet
-
-The current release is functional, but several production-readiness items remain
-open. These are tracked as separate GitHub issues rather than being implied as
-completed by the capability matrix:
-
-| Area | Status | Tracking issue |
-|---|---|---|
-| Native ext3/ext4 writer with JBD2 transaction and recovery gates | Not ready; read-only | [#385](https://github.com/Alexkkkkk/mount-file/issues/385) |
-| Native NTFS writer with `$LogFile` recovery | Not ready; read-only | [#386](https://github.com/Alexkkkkk/mount-file/issues/386) |
-| Writer acceptance: failure injection, process-kill and quarantine tests | Not ready | [#387](https://github.com/Alexkkkkk/mount-file/issues/387) |
-| Unified native VFS/refusal parity across profiles | In progress | [#388](https://github.com/Alexkkkkk/mount-file/issues/388) |
-| Cross-platform filesystem fixtures and independent checker CI | In progress | [#389](https://github.com/Alexkkkkk/mount-file/issues/389) |
-| Reproducible benchmark matrix and synchronized product status | In progress | [#390](https://github.com/Alexkkkkk/mount-file/issues/390) |
-
-The production-readiness epic is [#384](https://github.com/Alexkkkkk/mount-file/issues/384).
-The DFIR/AI roadmap remains tracked in [#87](https://github.com/Alexkkkkk/mount-file/issues/87).
-Until these issues are closed, do not interpret limited native writes, backups or
-read-only journal overlays as universal filesystem support or power-loss safety.
-
 ## Quick start
 
 ### Install from source
@@ -138,10 +118,10 @@ python -m pip install .
 python main.py
 ```
 
-To inspect an image from the command line:
+You can open an image directly:
 
 ```bash
-python -m mountfile info path/to/image.img
+python main.py path/to/image.img
 ```
 
 The project installer can prepare the Python environment and optional system
@@ -189,13 +169,10 @@ Run:
 
 ```bash
 python main.py                 # open the desktop application
+python main.py dump.img        # open an image immediately
 python main.py --version       # print the version
-python -m mountfile --help     # list package CLI commands
+python main.py --diag          # diagnose the local environment
 ```
-
-The desktop application is opened without positional arguments. Use the package
-CLI to inspect an image; `python main.py IMAGE` is routed to the separate host-OS
-mount helper, not to the desktop GUI.
 
 The GUI provides a two-panel file-manager workflow, partition and volume
 selection, directory browsing, extraction, a HEX editor, image summary,
@@ -210,11 +187,8 @@ Writing changes the image file. Before using **Import**, **New folder**,
 3. keep sufficient free space for the configured backup;
 4. confirm that the operation belongs to the active native profile.
 
-Before each GUI write operation, the application asks whether to create a new
-backup. It uses `<image>.bak` when available, otherwise a numbered suffix such
-as `<image>.bak.1`; declining or failing to create the backup cancels that write.
-This backup is a safety aid, not a filesystem journal and not a power-loss
-guarantee.
+The GUI creates a backup before its first mutation in a session. This backup is
+a safety aid, not a filesystem journal and not a power-loss guarantee.
 
 Useful shortcuts include `Tab` to switch panels, `Space` to select an entry,
 `F5`/`F6` to copy or move, `F7` to create a directory, `F8` to delete,
@@ -238,9 +212,7 @@ python -m mountfile get dump.img /photos -o ./evidence/photos
 ```
 
 After `pip install .`, the equivalent installed command is `mountfile`.
-The package CLI can also be invoked as `python -m mountfile`. `python main.py`
-without arguments starts the GUI; with positional arguments it dispatches to the
-standalone host-OS mount helper described below, not to the package CLI.
+`python main.py <same command>` is also supported by the desktop entry point.
 
 ### Read and evidence commands
 
@@ -299,14 +271,7 @@ python -m mountfile autopick dump.bin --hint system --extract ./rootfs
 ```
 
 `autopick` combines MBR/GPT, `udev` metadata and filesystem signatures, then
-verifies candidates with a real-mount check. `--no-verify` skips that check; it
-is faster but provides less verification.
-
-`decode` and `split` stage output files beside their destinations and publish
-completed files atomically. They refuse source-file aliases and linked or
-non-regular output targets. `split` also rejects unsafe partition names and
-negative ranges; lengths past EOF are clamped, and ranges starting past EOF are
-skipped.
+verifies candidates by opening them. `--no-verify` is faster but less safe.
 Raw NAND OOB/ECC interleaving is outside this tool's scope.
 
 For the complete option reference, see [`docs/cli.md`](docs/cli.md).
@@ -327,8 +292,7 @@ python mountfile.py --unmount /mnt/x
 
 It uses platform tools such as `udisksctl`/`mount` on Linux, `hdiutil` on macOS
 and PowerShell disk-image commands on Windows. Availability and permissions
-depend on the host OS. On Linux, an unprivileged `udisksctl` mount cannot honor
-`--to`; omit that option to let the system choose the mount point.
+depend on the host OS.
 
 ## Optional AI, API and automation layers
 
@@ -345,38 +309,6 @@ These are opt-in components and are not required for offline image browsing:
 
 Network access is opt-in for update checks, AI backends and API integrations.
 The native reader and bounded writer paths operate locally on the selected image.
-
-## Evidence handling and integration status
-
-Several capabilities in the attached integration proposal are already present;
-the table below distinguishes those from features that are not shipped:
-
-| Area | Available now | Boundary |
-|---|---|---|
-| Read-only image input | `mountfile.image_source.FileImageSource` provides bounded positioned reads through a read-only file descriptor. | This is not a hardware or system-wide write blocker; another process can still modify the source. |
-| Evidence hashing | `python -m mountfile evidence-manifest IMAGE --output MANIFEST.json` writes a non-overwriting SHA-256 sidecar. | It hashes one source file and checks for changes while reading; it is not a complete chain-of-custody record. |
-| Plugins | `mountfile.plugins.PluginRegistry` supports explicit discovery and read-only event snapshots. | Discovery imports executable Python; load only trusted plugins. |
-| Large-image/UI paths | `mountfile.search_content.search_image` performs bounded streaming search; the standalone DFIR grep uses read-only mmap; the Qt tree loads directories lazily with `fetchMore`. | These are existing focused APIs, not a universal filesystem-parity or memory-analysis layer. |
-| CFTT fixture check | `tests/test_cftt_string_search.py` exercises the real streaming search when external fixtures are supplied. | It is skipped by default, downloads no data and is not a certification claim. |
-
-The proposed `auditchain`/`pyDFIRRam` integrations and code-signing/notarization
-workflow are not bundled. They need separate dependency/API and security review,
-and signing additionally requires trusted platform certificates. The sample
-filename-suffix check is not a write blocker; use a hardware blocker and a
-documented acquisition procedure when the investigation requires them.
-
-To opt into the external CFTT string-search check, provide an image and a UTF-8
-JSON object mapping each literal string to its expected byte offset or offsets:
-
-```bash
-CFTT_STRING_IMAGE=/path/to/string-search.img \
-CFTT_EXPECTED_JSON=/path/to/expected.json \
-python -m pytest -q tests/test_cftt_string_search.py
-```
-
-No fixture is downloaded automatically. This test checks expected literal
-matches through Mount File's streaming search; it does not certify a forensic
-workflow or establish chain of custody.
 
 ## Safety boundaries
 
