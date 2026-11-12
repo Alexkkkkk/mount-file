@@ -11,6 +11,8 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from mountfile import rt809
@@ -217,6 +219,115 @@ class TestUdev:
         assert sizes == [0x4000, 0x8000, 0x100000]  # last clamped to EOF
         base = os.path.basename(written[2])
         assert base == "USER_0x0000100000_0x00100000_system.bin"
+
+    def test_split_refuses_hardlink_output_alias_to_dump(self):
+        dump = os.path.join(self.tmp, "dump.bin")
+        original = b"original evidence bytes"
+        with open(dump, "wb") as stream:
+            stream.write(original)
+        out_dir = os.path.join(self.tmp, "out")
+        os.mkdir(out_dir)
+        udev = self._udev("[PARTITIONS]\n0,4,part\n")
+        output = os.path.join(out_dir, Part("part", 0, 4).file_name())
+        try:
+            os.link(dump, output)
+        except OSError as exc:
+            pytest.skip("hard links unavailable: %s" % exc)
+
+        with pytest.raises(Rt809Error, match="multiple hard links"):
+            rt809.split_by_udev(dump, udev, out_dir)
+
+        assert open(dump, "rb").read() == original
+        assert open(output, "rb").read() == original
+
+    def test_split_refuses_symlink_output_alias_to_dump(self):
+        dump = os.path.join(self.tmp, "dump.bin")
+        original = b"original evidence bytes"
+        with open(dump, "wb") as stream:
+            stream.write(original)
+        out_dir = os.path.join(self.tmp, "out")
+        os.mkdir(out_dir)
+        udev = self._udev("[PARTITIONS]\n0,4,part\n")
+        output = os.path.join(out_dir, Part("part", 0, 4).file_name())
+        try:
+            os.symlink(dump, output)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip("symlinks unavailable: %s" % exc)
+
+        with pytest.raises(Rt809Error, match="output link"):
+            rt809.split_by_udev(dump, udev, out_dir)
+
+        assert open(dump, "rb").read() == original
+        assert os.path.islink(output)
+
+    def test_split_atomic_replace_preserves_dump_if_output_races_to_hardlink(
+        self, monkeypatch
+    ):
+        dump = os.path.join(self.tmp, "dump.bin")
+        original = b"original evidence bytes"
+        with open(dump, "wb") as stream:
+            stream.write(original)
+        out_dir = os.path.join(self.tmp, "out")
+        os.mkdir(out_dir)
+        udev = self._udev("[PARTITIONS]\n0,4,part\n")
+        output = os.path.join(out_dir, Part("part", 0, 4).file_name())
+        real_replace = os.replace
+        race_triggered = False
+
+        def link_source_then_replace(staged, destination):
+            nonlocal race_triggered
+            try:
+                os.link(dump, destination)
+            except OSError as exc:
+                pytest.skip("hard links unavailable: %s" % exc)
+            race_triggered = True
+            return real_replace(staged, destination)
+
+        monkeypatch.setattr(rt809.os, "replace", link_source_then_replace)
+        rt809.split_by_udev(dump, udev, out_dir)
+
+        assert race_triggered
+        assert open(dump, "rb").read() == original
+        assert open(output, "rb").read() == original[:4]
+
+    def test_split_rejects_path_traversal_partition_name(self):
+        dump = os.path.join(self.tmp, "dump.bin")
+        with open(dump, "wb") as stream:
+            stream.write(b"evidence")
+        out_dir = os.path.join(self.tmp, "out")
+        udev = self._udev("[PARTITIONS]\n0,4,x/../../stolen\n")
+        nested_prefix = os.path.join(out_dir, "USER_0x0000000000_0x00000004_x")
+        os.makedirs(nested_prefix)
+        escaped = os.path.join(self.tmp, "stolen.bin")
+
+        with pytest.raises(Rt809Error, match="safe filename"):
+            rt809.split_by_udev(dump, udev, out_dir)
+
+        assert not os.path.exists(escaped)
+        assert open(dump, "rb").read() == b"evidence"
+
+    def test_split_preserves_existing_output_when_atomic_publish_fails(
+        self, monkeypatch
+    ):
+        dump = os.path.join(self.tmp, "dump.bin")
+        with open(dump, "wb") as stream:
+            stream.write(b"evidence")
+        out_dir = os.path.join(self.tmp, "out")
+        os.mkdir(out_dir)
+        udev = self._udev("[PARTITIONS]\n0,4,part\n")
+        output = os.path.join(out_dir, Part("part", 0, 4).file_name())
+        with open(output, "wb") as stream:
+            stream.write(b"previous output")
+
+        def fail_replace(_source, _destination):
+            raise OSError("simulated atomic publish failure")
+
+        monkeypatch.setattr(rt809.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="simulated atomic publish failure"):
+            rt809.split_by_udev(dump, udev, out_dir)
+
+        assert open(output, "rb").read() == b"previous output"
+        assert not [name for name in os.listdir(out_dir) if name.endswith(".tmp")]
 
     def test_part_filename(self):
         assert Part("lk", 0x4000, 0x8000).file_name() == (

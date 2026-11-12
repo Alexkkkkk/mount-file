@@ -301,6 +301,12 @@ python -m mountfile autopick dump.bin --hint system --extract ./rootfs
 `autopick` combines MBR/GPT, `udev` metadata and filesystem signatures, then
 verifies candidates with a real-mount check. `--no-verify` skips that check; it
 is faster but provides less verification.
+
+`decode` and `split` stage output files beside their destinations and publish
+completed files atomically. They refuse source-file aliases and linked or
+non-regular output targets. `split` also rejects unsafe partition names and
+negative ranges; lengths past EOF are clamped, and ranges starting past EOF are
+skipped.
 Raw NAND OOB/ECC interleaving is outside this tool's scope.
 
 For the complete option reference, see [`docs/cli.md`](docs/cli.md).
