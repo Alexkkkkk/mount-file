@@ -269,6 +269,10 @@ jobs:
           # platforms instead of silently overwriting earlier reports.
           merge-multiple: false
       - name: Aggregate platform evidence fail-closed
+        env:
+          # The speed-layer matrix intentionally retains Linux and Windows.
+          # The script still defaults to all three platforms outside CI.
+          MOUNTFILE_EXPECTED_PLATFORMS: linux,windows
         run: |
           python scripts/cross_platform_evidence.py \
             platform-evidence \
