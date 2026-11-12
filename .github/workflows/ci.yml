@@ -236,7 +236,10 @@ jobs:
         with:
           pattern: native-read-evidence-*
           path: platform-evidence
-          merge-multiple: true
+          # Every matrix leg emits native-read-evidence.json. Keep artifact
+          # directories separate so the recursive aggregator can see all
+          # platforms instead of silently overwriting earlier reports.
+          merge-multiple: false
       - name: Aggregate platform evidence fail-closed
         run: |
           python scripts/cross_platform_evidence.py \
