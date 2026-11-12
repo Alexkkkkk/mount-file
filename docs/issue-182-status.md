@@ -47,7 +47,7 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 | V1 | Read-back и независимый checker для каждого writer | Частично | Linux CI требует e2fsprogs/dosfstools/exfatprogs/ntfs-3g для реальных oracle-тестов; full profile × operation matrix и writer-oracle parity ещё не закрыты. |
 | C1 | Crash recovery/quarantine и проверка process-kill/power-loss | Частично | ext2 имеет sidecar recovery и process-crash tests; нет общей полной crash/power-loss гарантии для всех writers. |
 | CI1 | Обязательная Linux/Windows/macOS матрица с реальными fixtures | Частично | CI workflow и локальные тесты существуют; полный набор внешних checker/integration tests на всех ОС не подтверждён. |
-| B1 | Воспроизводимые benchmark на Linux, Windows и macOS | Не готово | Linux CI публикует ограниченный ext2 read-only benchmark artifact; write workloads и Windows/macOS provenance отсутствуют. |
+| B1 | Воспроизводимые benchmark на Linux, Windows и macOS | Частично | Linux CI публикует ограниченный ext2 read-only benchmark artifact; каждый Linux/Windows/macOS runner теперь публикует `benchmark-provenance/v1` с runner/source/resource limits. Реальные Windows/macOS benchmark fixtures и write workloads пока `not_collected`/`not_claimed`. |
 | D1 | Единый актуальный статус в docs, GUI, CLI, VFS и release | Частично | README, status sheet и Unreleased changelog явно фиксируют unsupported writes; CLI/GUI используют capability status. Полная проверка всех labels и release surfaces ещё впереди. |
 | P1 | Пройти все acceptance gates и объявить поддержанные профили production-ready | Не готово | Все обязательные gates должны выполняться одновременно; текущие ограничения выше не позволяют считать issue завершённой. |
 
@@ -58,6 +58,8 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 ## Решение для обновления статуса
 
 Не помечать семейство «готово» только из-за наличия reader/writer класса. Для завершения профиля нужны точные поддерживаемые операции и features, положительные и отрицательные fixtures, независимая проверка, failure/crash tests, согласованная документация и CI на заявленных платформах.
+
+- 2026-11-12: Stage B follow-up hardens the native FAT reader lifecycle: `reopen()` rebuilds provider state from the original selected extent, closes the new handle and invalidates stale profile metadata after validation failure or interruption, leaving the provider retryable. Focused FAT reader suite: 38 passed; Black, isort, CI Ruff rule groups, `compileall` and `git diff --check` passed. This closes one lifecycle gap only; the full VFS × GUI/CLI/MCP routing matrix remains partial.
 
 ### Quality-gate follow-up
 

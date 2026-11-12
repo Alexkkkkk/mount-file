@@ -34,6 +34,18 @@ def test_manual_sync_inputs_are_environment_data_not_shell_source():
     assert "  autosync:" not in workflow("mfsync.yml")
 
 
+def test_branch_hygiene_is_scheduled_read_only_and_manual_fail_closed():
+    text = workflow("branch-hygiene.yml")
+    assert "schedule:" in text
+    assert "workflow_dispatch:" in text
+    assert "contents: read" in text
+    assert "pull-requests: read" in text
+    assert "scripts/branch_hygiene.py" in text
+    assert "fail_on_stale" in text
+    assert "deletes_branches" not in text
+    assert "git push" not in text
+
+
 def test_release_calculation_is_gated_on_trusted_main_ci():
     text = workflow("version-bump.yml")
     assert "workflow_run:" in text
