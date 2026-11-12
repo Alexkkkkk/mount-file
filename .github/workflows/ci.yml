@@ -221,6 +221,36 @@ jobs:
           subprocess.run([str(cli), "--help"], check=True)
           PY
 
+  cross-platform-evidence:
+    name: Cross-platform evidence gate
+    needs: [tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+      - name: Download all platform native evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: native-read-evidence-*
+          path: platform-evidence
+          merge-multiple: true
+      - name: Aggregate platform evidence fail-closed
+        run: |
+          python scripts/cross_platform_evidence.py \
+            platform-evidence \
+            --json-out cross-platform-evidence.json
+      - name: Upload aggregate platform evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cross-platform-evidence
+          path: cross-platform-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
   # Keep the legacy protected context while tests run only once in the matrix.
   # It fails closed unless the complete matrix, including Ubuntu/Python 3.12, passes.
   ubuntu-py312-compat:
