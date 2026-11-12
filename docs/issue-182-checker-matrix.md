@@ -81,5 +81,13 @@ binaries for the integration job. Windows and macOS CI execute the native and
 synthetic fixtures that do not require Linux-only binaries; their absence is
 reported as unavailable rather than being interpreted as cross-platform parity.
 
+The `cross-platform-evidence` CI job downloads all three platform artifacts and
+runs `scripts/cross_platform_evidence.py`. This aggregate gate is fail-closed:
+missing, duplicate, blocked, fallback-enabled, or parity-claiming platform
+reports fail the job. A complete aggregate requires Linux, Windows, and macOS,
+while retaining `parity=not_claimed`; an unavailable checker remains
+`unavailable`/`not_claimed` and can never become a pass merely because a native
+fixture ran.
+
 This matrix does not enable an NTFS writer, does not treat `ntfsfix` as a full
 NTFS checker, and does not claim complete filesystem-format parity.
