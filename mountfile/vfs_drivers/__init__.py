@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Dict, Type
 
-from mountfile.vfs_contract import ErrorCode, Operation, VFS, VFSResult
+from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
 from mountfile.vfs_drivers.ext4_adapter import Ext4VFS
 from mountfile.vfs_drivers.fat32_adapter import Fat32VFS
 from mountfile.vfs_drivers.ntfs_adapter import NtfsVFS

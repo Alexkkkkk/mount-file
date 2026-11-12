@@ -1,0 +1,147 @@
+# AUDIT OF THE PROPOSED "FINAL" CONFIG — what was fixed and why.
+# This corrected orchestrator addresses 5 concrete bugs found against this repo.
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group: {}
+  # FIX 2: the job-level `if`s referenced `github.event_name == 'schedule'`
+  # and the orchestrator is meant to be manually runnable, but neither trigger
+  # was declared. Without these, `schedule` never fires and workflow_dispatch
+  # returns 422.
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # FIX 3: was `github.ref != 'refs/heads/main'`. Under that form a
+  # merge-queue batch (ref gh-readonly-queue/...) is cancel-in-progress:true —
+  # exactly the "cancelled batch leaves the queue waiting forever" failure
+  # mode the config itself warns about. Only PR runs may be superseded.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ui: ${{ steps.filter.outputs.ui }}
+      sync: ${{ steps.filter.outputs.sync }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # base_sha of a merge_group entry can be far behind; full history
+          # also keeps push-run diffs possible without extra fetches.
+          fetch-depth: 0
+
+      - name: Detect changed files
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FILES=$(git diff --name-only \
+              "${{ github.event.pull_request.base.sha }}" \
+              "${{ github.sha }}")
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            FILES=$(git diff --name-only \
+              "${{ github.event.merge_group.base_sha }}" \
+              "${{ github.event.merge_group.head_sha }}")
+          else
+            # push / workflow_dispatch / schedule: check everything
+            FILES=$(git ls-files)
+          fi
+
+          UI_PAT='^(mount_file/ui/|tests/gui/)'
+          SYNC_PAT='^(mfsync/|tests/integration/)'
+
+          if echo "$FILES" | grep -qE "$UI_PAT"; then
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if echo "$FILES" | grep -qE "$SYNC_PAT"; then
+            echo "sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  quality:
+    needs: changes
+    uses: ./.github/workflows/quality.yml
+
+  security:
+    needs: changes
+    uses: ./.github/workflows/security.yml
+
+  unit:
+    needs: quality
+    uses: ./.github/workflows/ci.yml
+    with:
+      tier: fast
+
+  integration:
+    needs: [unit, changes]
+    if: needs.changes.outputs.sync == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule'
+    uses: ./.github/workflows/ci.yml
+    with:
+      tier: integration
+
+  gui:
+    needs: [unit, changes]
+    if: needs.changes.outputs.ui == 'true' || github.ref == 'refs/heads/main' || github.event_name == 'schedule'
+    uses: ./.github/workflows/gui.yml
+
+  sync-verify:
+    needs: quality
+    uses: ./.github/workflows/sync.yml
+    with:
+      mode: verify
+
+  pipeline-gate:
+    needs: [quality, security, unit, integration, gui, sync-verify]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      QUALITY: ${{ needs.quality.result }}
+      SECURITY: ${{ needs.security.result }}
+      UNIT: ${{ needs.unit.result }}
+      INTEGRATION: ${{ needs.integration.result }}
+      GUI: ${{ needs.gui.result }}
+      SYNC_VERIFY: ${{ needs.sync-verify.result }}
+    steps:
+      - name: Verify all upstream results
+        shell: bash
+        run: |
+          set -euo pipefail
+          # FIX 1 (the main bug): the original gate failed on any result
+          # != 'success', so a path-skipped job (`skipped`) failed the gate —
+          # which makes the config's own path filtering impossible: on a UI-less
+          # PR, `gui` skips and every PR goes red. Skipped is a *pass* outcome
+          # for the optional, path-filtered legs; it is NOT accepted for the
+          # always-on legs (quality / security / unit).
+          for pair in "quality:$QUALITY" "security:$SECURITY" "unit:$UNIT"; do
+            name="${pair%%:*}"; result="${pair#*:}"
+            if [ "$result" != "success" ]; then
+              echo "Gate failed: required stage $name = $result"
+              exit 1
+            fi
+          done
+          for pair in "integration:$INTEGRATION" "gui:$GUI" "sync-verify:$SYNC_VERIFY"; do
+            name="${pair%%:*}"; result="${pair#*:}"
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "Gate failed: stage $name = $result"
+              exit 1
+            fi
+          done
+          echo "All gates passed"

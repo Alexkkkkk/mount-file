@@ -14,7 +14,7 @@ from typing import BinaryIO, List, Union
 from mountfile.ext3_reader import NativeExt3Image, NativeExt4Image
 from mountfile.ntfs_reader import NativeNtfsMetadataImage
 from mountfile.safety import RefusalError
-from mountfile.vfs_contract import ErrorCode, Operation, VFS, VFSResult
+from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
 
 
 class _ReadOnlyNativeVFS(VFS):
@@ -60,7 +60,9 @@ class _ReadOnlyNativeVFS(VFS):
             return VFSResult.fail(ErrorCode.RANGE_OUT_OF_BOUNDS, str(exc))
 
     # -- unsupported ----------------------------------------------------
-    def write(self, path: str, data: Union[BinaryIO, bytes], offset: int = 0) -> VFSResult:
+    def write(
+        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+    ) -> VFSResult:
         return self._write_refusal()
 
     def create(self, path: str, is_dir: bool = False) -> VFSResult:

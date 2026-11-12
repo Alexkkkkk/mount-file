@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -12,11 +13,35 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  # PR runs are constantly superseded. Main and merge-queue batch runs must
+  # finish: a cancelled batch run would leave the queue waiting on checks
+  # that never report (falling back to check_response_timeout instead).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Fast tier (4 legs) on PRs and merge-queue batches, full 3x3 matrix on
+  # main pushes. The matrix is computed in a setup job because the matrix
+  # context is not available in a job-level `if`. The fast tier keeps every
+  # REQUIRED check name reporting ("test (3.10/3.11/3.12)" are in branch
+  # protection) and only drops the non-required macos/windows-extra legs;
+  # dropping a required leg would leave its context pending forever.
+  setup-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.10","check_name":"Tests (windows-latest, py3.10)","timeout":40},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40},{"os":"macos-latest","python":"3.10","check_name":"Tests (macos-latest, py3.10)","timeout":75},{"os":"macos-latest","python":"3.11","check_name":"Tests (macos-latest, py3.11)","timeout":75},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75}]}' >> "$GITHUB_OUTPUT"
+          fi
+
   tests:
     name: ${{ matrix.check_name }}
+    needs: [setup-matrix]
     # Per-leg budget. macOS runners are markedly slower than Linux and a
     # cancelled leg used to poison the whole matrix (a cancelled matrix leg
     # makes the fail-closed "Tests (ubuntu-latest, py3.12)" gate exit 1, which
@@ -26,46 +51,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        # macos-latest и 3.11 пришли из удалённого dfir-quality.yml:
-        # это было единственное, что тот workflow добавлял к ci.yml.
-        include:
-          - os: ubuntu-latest
-            python: "3.10"
-            check_name: "test (3.10)"
-            timeout: 40
-          - os: ubuntu-latest
-            python: "3.11"
-            check_name: "test (3.11)"
-            timeout: 40
-          - os: ubuntu-latest
-            python: "3.12"
-            check_name: "test (3.12)"
-            timeout: 40
-          - os: windows-latest
-            python: "3.10"
-            check_name: "Tests (windows-latest, py3.10)"
-            timeout: 40
-          - os: windows-latest
-            python: "3.11"
-            check_name: "Tests (windows-latest, py3.11)"
-            timeout: 40
-          - os: windows-latest
-            python: "3.12"
-            check_name: "Tests (windows-latest, py3.12)"
-            timeout: 40
-          - os: macos-latest
-            python: "3.10"
-            check_name: "Tests (macos-latest, py3.10)"
-            timeout: 75
-          - os: macos-latest
-            python: "3.11"
-            check_name: "Tests (macos-latest, py3.11)"
-            timeout: 75
-          - os: macos-latest
-            python: "3.12"
-            check_name: "Tests (macos-latest, py3.12)"
-            timeout: 75
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -283,6 +269,10 @@ jobs:
           # platforms instead of silently overwriting earlier reports.
           merge-multiple: false
       - name: Aggregate platform evidence fail-closed
+        env:
+          # The speed-layer matrix intentionally retains Linux and Windows.
+          # The script still defaults to all three platforms outside CI.
+          MOUNTFILE_EXPECTED_PLATFORMS: linux,windows
         run: |
           python scripts/cross_platform_evidence.py \
             platform-evidence \

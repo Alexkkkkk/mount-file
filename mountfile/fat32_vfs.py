@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import BinaryIO, List, Union
 
 from mountfile.fat32 import Fat32Error, Fat32Provider
-from mountfile.vfs_contract import ErrorCode, Operation, VFS, VFSResult
+from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
 
 
 class Fat32VFS(VFS):
@@ -59,7 +59,9 @@ class Fat32VFS(VFS):
         except Fat32Error as exc:
             return VFSResult.fail(ErrorCode.NOT_FOUND, str(exc))
 
-    def write(self, path: str, data: Union[BinaryIO, bytes], offset: int = 0) -> VFSResult:
+    def write(
+        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+    ) -> VFSResult:
         if offset:
             return VFSResult.fail(
                 ErrorCode.OPERATION_NOT_SUPPORTED,

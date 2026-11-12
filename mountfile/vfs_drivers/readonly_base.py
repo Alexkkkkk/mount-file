@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import BinaryIO, List, Union
 
-from mountfile.vfs_contract import ErrorCode, Operation, VFS, VFSResult
+from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
 
 
 class ReadOnlyNativeVFS(VFS):
@@ -38,18 +38,20 @@ class ReadOnlyNativeVFS(VFS):
         return self._provider
 
     def _open_provider(self):
-        from mountfile.native_vfs_adapters import (
-            Ext3VFS,
-            Ext4VFS as _Ext4Adapter,
-            NtfsVFS as _NtfsAdapter,
-        )
+        from mountfile.native_vfs_adapters import Ext3VFS
+        from mountfile.native_vfs_adapters import Ext4VFS as _Ext4Adapter
+        from mountfile.native_vfs_adapters import NtfsVFS as _NtfsAdapter
 
         if self.provider_property == "ext4":
             # NativeExt4Image/NativeExt3Image distinguish themselves by probe;
             # the bounded read-only adapter covers both classic profiles.
-            return _Ext4Adapter(self.image_path, self.offset, self._volume_size).provider
+            return _Ext4Adapter(
+                self.image_path, self.offset, self._volume_size
+            ).provider
         if self.provider_property == "ntfs":
-            return _NtfsAdapter(self.image_path, self.offset, self._volume_size).provider
+            return _NtfsAdapter(
+                self.image_path, self.offset, self._volume_size
+            ).provider
         raise RuntimeError("unknown read-only provider property")
 
     def close(self) -> None:
@@ -87,7 +89,9 @@ class ReadOnlyNativeVFS(VFS):
             return VFSResult.fail(ErrorCode.RANGE_OUT_OF_BOUNDS, str(exc))
 
     # -- unsupported writes (overridden by concrete adapters) ------------
-    def write(self, path: str, data: Union[BinaryIO, bytes], offset: int = 0) -> VFSResult:
+    def write(
+        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+    ) -> VFSResult:
         return self._write_refusal(
             "WRITE_NOT_SUPPORTED", "write is disabled for this profile"
         )
