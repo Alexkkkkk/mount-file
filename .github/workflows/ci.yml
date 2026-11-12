@@ -179,7 +179,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-<<<<<<< HEAD
       - name: Validate capability operation conformance
         run: python scripts/capability_conformance.py --json-out capability-conformance.json
 
@@ -189,7 +188,9 @@ jobs:
         with:
           name: capability-conformance-${{ matrix.os }}-py${{ matrix.python }}
           path: capability-conformance.json
-=======
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Emit cross-platform benchmark provenance
         if: always()
         run: python scripts/benchmark_provenance.py --json-out benchmark-provenance.json
@@ -200,7 +201,6 @@ jobs:
         with:
           name: benchmark-provenance-${{ matrix.os }}-py${{ matrix.python }}
           path: benchmark-provenance.json
->>>>>>> origin/main
           if-no-files-found: error
           retention-days: 14
 
