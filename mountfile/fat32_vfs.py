@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import BinaryIO, List, Union
 
 from mountfile.fat32 import Fat32Error, Fat32Provider
-from mountfile.vfs_contract import ErrorCode, Operation, VFS, VFSResult
+from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
 
 
 class Fat32VFS(VFS):
