@@ -22,6 +22,16 @@ RESOURCE_LIMITS = {
     "max_repeats": 100,
     "max_warmups": 20,
 }
+GENERATED_WORKTREE_ARTIFACTS = {
+    "benchmark-provenance.json",
+    "capability-conformance.json",
+    "checker-matrix.json",
+    "coverage.xml",
+    "native-read-evidence.json",
+    "platform-benchmark-provenance-validation.json",
+    "platform-benchmark-provenance.json",
+    "test-results.xml",
+}
 
 
 def _command_version(command: str) -> str | None:
@@ -58,6 +68,24 @@ def _git_value(repo_root: Path, *args: str) -> str | None:
     return value or None
 
 
+def _source_worktree_status(repo_root: Path) -> str | None:
+    status = _git_value(repo_root, "status", "--porcelain", "--untracked-files=all")
+    if status is None:
+        return (
+            ""
+            if _git_value(repo_root, "rev-parse", "--is-inside-work-tree") == "true"
+            else None
+        )
+    source_lines = []
+    for line in status.splitlines():
+        path = line[3:]
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        if Path(path).name not in GENERATED_WORKTREE_ARTIFACTS:
+            source_lines.append(line)
+    return "\n".join(source_lines)
+
+
 def _fixture_hash(path: Path | None) -> str | None:
     if path is None:
         return None
@@ -74,7 +102,7 @@ def _fixture_hash(path: Path | None) -> str | None:
 def build_report(
     *, repo_root: Path, junit_path: Path | None = None, fixture: Path | None = None
 ) -> dict[str, object]:
-    dirty = _git_value(repo_root, "status", "--porcelain", "--untracked-files=normal")
+    dirty = _source_worktree_status(repo_root)
     operations = {
         operation: {
             "status": "not_claimed",
@@ -139,7 +167,7 @@ def build_report(
             "power_loss": "unsupported",
             "crash_recovery": "not_claimed",
         },
-        "verdict": "pass" if dirty is not None or dirty == "" else "blocked",
+        "verdict": "pass" if dirty == "" else "blocked",
     }
     return report
 

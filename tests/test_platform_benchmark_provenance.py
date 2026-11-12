@@ -4,6 +4,7 @@ from scripts.platform_benchmark_provenance import (
     OPERATIONS,
     RESOURCE_LIMITS,
     SCHEMA,
+    _source_worktree_status,
     build_report,
     validate_report,
 )
@@ -62,3 +63,19 @@ def test_provenance_rejects_crash_and_power_loss_guarantees(tmp_path):
     assert result["verdict"] == "blocked"
     assert "claims.power_loss" in result["blockers"]
     assert "claims.crash_recovery" in result["blockers"]
+
+
+def test_generated_ci_artifacts_do_not_make_source_dirty(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "scripts.platform_benchmark_provenance._git_value",
+        lambda *_args: "?? test-results.xml\n?? platform-benchmark-provenance.json",
+    )
+    assert _source_worktree_status(tmp_path) == ""
+
+
+def test_real_source_change_still_makes_source_dirty(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "scripts.platform_benchmark_provenance._git_value",
+        lambda *_args: " M mountfile/vfs.py\n?? test-results.xml",
+    )
+    assert _source_worktree_status(tmp_path) == " M mountfile/vfs.py"

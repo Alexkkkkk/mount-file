@@ -156,12 +156,8 @@ jobs:
       - name: Emit cross-platform benchmark provenance
         if: always()
         run: |
-          python scripts/platform_benchmark_provenance.py \
-            --junitxml test-results.xml \
-            --json-out platform-benchmark-provenance.json
-          python scripts/platform_benchmark_provenance.py \
-            --validate platform-benchmark-provenance.json \
-            --json-out platform-benchmark-provenance-validation.json
+          python scripts/platform_benchmark_provenance.py --junitxml test-results.xml --json-out platform-benchmark-provenance.json
+          python scripts/platform_benchmark_provenance.py --validate platform-benchmark-provenance.json --json-out platform-benchmark-provenance-validation.json
 
       - name: Upload cross-platform benchmark provenance
         if: always()
