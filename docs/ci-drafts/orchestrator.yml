@@ -35,7 +35,7 @@ jobs:
       ui: ${{ steps.filter.outputs.ui }}
       sync: ${{ steps.filter.outputs.sync }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # base_sha of a merge_group entry can be far behind; full history
           # also keeps push-run diffs possible without extra fetches.
