@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # Docs-only / metadata-only PRs skip Docker and docs builds entirely.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - '.github/ISSUE_TEMPLATE/**'
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -12,7 +19,7 @@ permissions:
 
 concurrency:
   group: docker-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-smoke:
