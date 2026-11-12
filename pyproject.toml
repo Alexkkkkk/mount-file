@@ -131,6 +131,19 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# Зависший тест не должен съедать CI: таймаут на любой тест.
+timeout = 120
+timeout_method = "thread"
+markers = [
+  "unit: быстрые изолированные тесты (<50мс), гоняются на каждом PR",
+  "integration: реальная файловая система / реальные запуски mfsync",
+  "gui: требует Qt, запускается с QT_QPA_PLATFORM=offscreen",
+  "e2e: полный roundtrip через CLI, медленные",
+  "slow: дольше 1с, исключены из PR-гейта (nightly)",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning:PyQt6.*",
+]
 
 [tool.semantic_release]
 # v9 обновляет обе канонические версии одним релизным коммитом: Python-
