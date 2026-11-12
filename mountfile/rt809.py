@@ -104,10 +104,16 @@ class Part:
 
 
 # ------------------------------------------------------------------ detect
-def _head(path, size):
-    need = min(size, MST_REGION_END)
-    with open(path, "rb") as f:
-        return bytearray(f.read(need))
+def _detect_buffer(head):
+    """Return the dump kind and encryption flag from an already-read prefix."""
+    if len(head) >= 0x114 and head[0x100:0x114] == MARKER_MTK:
+        return "MTK", head[MTK_FLAG_ADDR : MTK_FLAG_ADDR + 2] == FLAG_ENCODE
+    mst_end = MST_FLAG_ADDR + 8
+    if len(head) >= mst_end:
+        mst_zone = head[MST_FLAG_ADDR:mst_end]
+        if mst_zone[4:8] == MARKER_MST:
+            return "MST", mst_zone[0:2] == FLAG_ENCODE
+    return None, False
 
 
 def detect(path):
@@ -202,36 +208,31 @@ def decode_dump(path, out_path=None, table_dir=None, kind=None):
     but is not encrypted (nothing to decode).  Raises :class:`Rt809Error` for
     dumps without a known marker.
     """
-    detected, encrypted = detect(path)
-    if detected is None:
-        raise Rt809Error(
-            "no MST ('MBOT') or MTK ('MTK/DTV/ROMCODE/MSDC') marker found: %s" % path
-        )
-    if kind and kind.upper() != detected:
-        raise Rt809Error("dump kind is %s, not %s" % (detected, kind))
-    if not encrypted:
-        return None
+    with open(path, "rb") as src:
+        source_metadata = os.fstat(src.fileno())
+        if not stat.S_ISREG(source_metadata.st_mode):
+            raise Rt809Error("source dump must be a regular file")
+        size = source_metadata.st_size
+        head = bytearray(src.read(min(size, MST_REGION_END)))
+        detected, encrypted = _detect_buffer(head)
+        if detected is None:
+            raise Rt809Error(
+                "no MST ('MBOT') or MTK ('MTK/DTV/ROMCODE/MSDC') marker found: %s"
+                % path
+            )
+        if kind and kind.upper() != detected:
+            raise Rt809Error("dump kind is %s, not %s" % (detected, kind))
+        if not encrypted:
+            return None
 
-    table = load_table(detected, table_dir)
-    source_metadata = os.stat(path)
-    if not stat.S_ISREG(source_metadata.st_mode):
-        raise Rt809Error("source dump must be a regular file")
-    size = source_metadata.st_size
-    source_signature = _file_signature(source_metadata)
-    if out_path is None:
-        out_path = os.fsdecode(os.fspath(path)) + "_decode.bin"
+        table = load_table(detected, table_dir)
+        _decode_head(head, detected, table)
+        if out_path is None:
+            out_path = os.fsdecode(os.fspath(path)) + "_decode.bin"
 
-    head = _head(path, size)
-    if _file_signature(os.stat(path)) != source_signature:
-        raise Rt809Error("source dump changed while decoding")
-    _decode_head(head, detected, table)
-
-    def write_decoded(stream):
-        if stream.write(head) != len(head):
-            raise Rt809Error("short write while staging decoded dump")
-        with open(path, "rb") as src:
-            if _file_signature(os.fstat(src.fileno())) != source_signature:
-                raise Rt809Error("source dump changed while decoding")
+        def write_decoded(stream):
+            if stream.write(head) != len(head):
+                raise Rt809Error("short write while staging decoded dump")
             src.seek(len(head))
             remaining = size - len(head)
             while remaining > 0:
@@ -243,16 +244,8 @@ def decode_dump(path, out_path=None, table_dir=None, kind=None):
                 if stream.write(chunk) != len(chunk):
                     raise Rt809Error("short write while staging decoded dump")
                 remaining -= len(chunk)
-            if _file_signature(os.fstat(src.fileno())) != source_signature:
-                raise Rt809Error("source dump changed while decoding")
-        try:
-            current_source = os.stat(path)
-        except OSError as exc:
-            raise Rt809Error("source dump path changed while decoding") from exc
-        if _file_signature(current_source) != source_signature:
-            raise Rt809Error("source dump path changed while decoding")
 
-    _write_output_safely(out_path, (path,), write_decoded)
+        _write_output_safely(out_path, (path,), write_decoded)
     return out_path
 
 
@@ -396,16 +389,6 @@ def _write_output_safely(output_path, source_paths, write_contents):
                 pass
 
 
-def _file_signature(metadata):
-    return (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    )
-
-
 def split_by_udev(dump, udev_path, out_dir=None):
     """Split ``dump`` into one ``.bin`` per udev partition entry.
 
@@ -425,7 +408,6 @@ def split_by_udev(dump, udev_path, out_dir=None):
         if not stat.S_ISREG(source_stat.st_mode):
             raise Rt809Error("source dump must be a regular file")
         dump_size = source_stat.st_size
-        source_signature = _file_signature(source_stat)
         protected_sources = (dump, udev_path)
         planned = []
         output_names = set()
@@ -470,16 +452,6 @@ def split_by_udev(dump, udev_path, out_dir=None):
                     if written_count != len(chunk):
                         raise Rt809Error("short write while staging partition output")
                     remaining -= len(chunk)
-                if _file_signature(os.fstat(src.fileno())) != source_signature:
-                    raise Rt809Error("source dump changed while splitting")
-                try:
-                    current_source = os.stat(dump)
-                except OSError as exc:
-                    raise Rt809Error(
-                        "source dump path changed while splitting"
-                    ) from exc
-                if _file_signature(current_source) != source_signature:
-                    raise Rt809Error("source dump path changed while splitting")
 
             _write_output_safely(out_path, protected_sources, write_partition)
             written.append(out_path)
