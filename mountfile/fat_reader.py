@@ -81,6 +81,7 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
     def __init__(self, image_path, offset=0, volume_size=None):
         self.image_path = str(image_path)
         self.offset = int(offset)
+        self._selected_volume_size = volume_size
         if self.offset < 0:
             raise FatReadError("negative filesystem offset")
         if self.offset and volume_size is None:
@@ -270,10 +271,35 @@ class NativeFatImage(ReadOnlyVFSStatMixin):
 
     def reopen(self) -> None:
         if self._stream is None or self._stream.closed:
-            self._stream = Path(self.image_path).open("rb")
-            self._image_size = os.fstat(self._stream.fileno()).st_size
-            self.profile = self._parse_profile(self.volume_size)
-            self._validate_metadata_copies()
+            try:
+                self.__init__(
+                    self.image_path,
+                    self.offset,
+                    self._selected_volume_size,
+                )
+            except BaseException:
+                self.close()
+                self._invalidate_profile()
+                raise
+
+    def _invalidate_profile(self) -> None:
+        """Do not expose stale geometry after a failed reopen attempt."""
+        self._image_size = 0
+        self._boot_sector = None
+        self.profile = None
+        self.fat_type = None
+        self.block_size = None
+        self.cluster_size = None
+        self.volume_size = None
+        self.volume_end = None
+        self.fat_start = None
+        self.fat_size = None
+        self.data_start = None
+        self.root_dir_start = None
+        self.root_cluster = None
+        self.cluster_count = None
+        self._max_cluster = None
+        self.backend_name = "native-fat-closed"
 
     def _validate_metadata_copies(self) -> None:
         """Reject inconsistent mirrored FAT metadata before any read access."""
