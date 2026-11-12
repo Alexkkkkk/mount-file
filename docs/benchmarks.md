@@ -119,6 +119,29 @@ INCLUDE_10M=1 scripts/run_vfs_benchmarks.sh /tmp/vfs-bench-10m
 
 ## 3. Окружение
 
+### Cross-platform provenance
+
+Каждый Linux/Windows/macOS CI runner публикует `benchmark-provenance.json`
+со схемой `mountfile.benchmark-provenance/v1`. В него входят ОС, release,
+архитектура, Python, commit/worktree state, fixture hash (если fixture была
+объявлена) и единые resource limits. Если на runner не был собран и проверен
+полный benchmark artifact, статус строго равен `not_collected`; он не может
+превратиться в `pass`, `parity` остаётся `not_claimed`, а `write_operations`
+остаётся `false`. Это делает отсутствие кроссплатформенного benchmark evidence
+видимым и воспроизводимым, но намеренно не выдаёт provenance за измерение
+производительности или независимую filesystem parity.
+
+Локальный запуск из clean checkout:
+
+```bash
+python scripts/benchmark_provenance.py --json-out /tmp/benchmark-provenance.json
+```
+
+Полный VFS benchmark с ext2 fixture по-прежнему выполняется отдельным Linux
+integration job. Cross-platform performance и write benchmarks остаются
+`not_claimed` до появления соответствующих native fixtures и независимых
+checker artifacts.
+
 | Параметр | Значение |
 | --- | --- |
 | Python | CPython 3.12.3 |
