@@ -1,0 +1,46 @@
+name: 'Setup Python test environment'
+description: >-
+  Superset of .github/actions/python-test-env: pinned setup-python with pip
+  cache plus the deterministic test stack (pytest, pytest-cov, pytest-timeout,
+  hypothesis, PyQt6 and the API server dependencies). One place to bump tool
+  versions so direct and orchestrated runs never drift apart.
+inputs:
+  python-version:
+    description: 'Python version for actions/setup-python'
+    required: false
+    default: '3.12'
+  install-test-stack:
+    description: "Install the pinned test stack ('true') or skip it ('false')"
+    required: false
+    default: 'true'
+  extra-pip:
+    description: 'Space-separated extra pip packages'
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Set up Python with pip cache
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    - name: Install the pinned test stack
+      if: inputs.install-test-stack == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip pytest pytest-cov pytest-timeout hypothesis setuptools wheel 'PyQt6>=6.11.0'
+        python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0' 'pydantic>=2.0'
+
+    - name: Install extra pip packages
+      if: inputs.extra-pip != ''
+      shell: bash
+      env:
+        EXTRA_PIP: ${{ inputs.extra-pip }}
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC2086
+        python -m pip install $EXTRA_PIP
