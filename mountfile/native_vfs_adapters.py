@@ -60,7 +60,9 @@ class _ReadOnlyNativeVFS(VFS):
             return VFSResult.fail(ErrorCode.RANGE_OUT_OF_BOUNDS, str(exc))
 
     # -- unsupported ----------------------------------------------------
-    def write(self, path: str, data: Union[BinaryIO, bytes], offset: int = 0) -> VFSResult:
+    def write(
+        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+    ) -> VFSResult:
         return self._write_refusal()
 
     def create(self, path: str, is_dir: bool = False) -> VFSResult:

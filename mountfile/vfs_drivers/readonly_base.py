@@ -47,9 +47,13 @@ class ReadOnlyNativeVFS(VFS):
         if self.provider_property == "ext4":
             # NativeExt4Image/NativeExt3Image distinguish themselves by probe;
             # the bounded read-only adapter covers both classic profiles.
-            return _Ext4Adapter(self.image_path, self.offset, self._volume_size).provider
+            return _Ext4Adapter(
+                self.image_path, self.offset, self._volume_size
+            ).provider
         if self.provider_property == "ntfs":
-            return _NtfsAdapter(self.image_path, self.offset, self._volume_size).provider
+            return _NtfsAdapter(
+                self.image_path, self.offset, self._volume_size
+            ).provider
         raise RuntimeError("unknown read-only provider property")
 
     def close(self) -> None:
@@ -87,7 +91,9 @@ class ReadOnlyNativeVFS(VFS):
             return VFSResult.fail(ErrorCode.RANGE_OUT_OF_BOUNDS, str(exc))
 
     # -- unsupported writes (overridden by concrete adapters) ------------
-    def write(self, path: str, data: Union[BinaryIO, bytes], offset: int = 0) -> VFSResult:
+    def write(
+        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+    ) -> VFSResult:
         return self._write_refusal(
             "WRITE_NOT_SUPPORTED", "write is disabled for this profile"
         )

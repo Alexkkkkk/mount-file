@@ -271,8 +271,10 @@ def test_codeql_uses_expected_workflow_path_with_narrow_permissions():
 
 def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs():
     ci = workflow("ci.yml")
+    # The required contexts are emitted by the setup-matrix JSON (fast tier on
+    # PRs/merge-group, full 3x3 on main pushes) rather than a static YAML matrix.
     for context in ("test (3.10)", "test (3.11)", "test (3.12)"):
-        assert f'check_name: "{context}"' in ci
+        assert f'"check_name":"{context}"' in ci
     assert "name: Tests (ubuntu-latest, py3.12)" in ci
     assert "name: gui smoke test (offscreen)" in ci
     assert "TEST_MATRIX_RESULT: ${{ needs.tests.result }}" in ci

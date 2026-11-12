@@ -25,7 +25,9 @@ class NtfsVFS(ReadOnlyNativeVFS):
 
         return [Operation.LIST, Operation.STAT, Operation.READ]
 
-    def write(self, path: str, data: Union[BinaryIO, bytes], offset: int = 0) -> VFSResult:
+    def write(
+        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+    ) -> VFSResult:
         return VFSResult(
             success=False,
             error_code="WRITE_DISABLED_LOGFILE_UNSAFE",

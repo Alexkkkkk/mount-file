@@ -50,9 +50,19 @@ def make_ext4_fixture(path: Path, size_mb: int = 64) -> dict:
         raise SystemExit("mke2fs not found; install e2fsprogs first")
     subprocess.run(
         [
-            "mke2fs", "-q", "-t", "ext4", "-b", "4096",
-            "-I", "256", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0",
-            str(path), f"{size_mb}M",
+            "mke2fs",
+            "-q",
+            "-t",
+            "ext4",
+            "-b",
+            "4096",
+            "-I",
+            "256",
+            "-F",
+            "-E",
+            "lazy_itable_init=0,lazy_journal_init=0",
+            str(path),
+            f"{size_mb}M",
         ],
         check=True,
         stdout=subprocess.DEVNULL,
