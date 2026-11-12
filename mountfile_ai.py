@@ -51,11 +51,13 @@ from __future__ import annotations
 # =============================================================================
 import argparse
 import hashlib
+import hmac
 import json
 import logging
 import os
 import re
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -129,16 +131,29 @@ class Config:
         return resolved
 
 
+_AUDIT_GENESIS_HASH = "0" * 64
+_AUDIT_MAX_RECORD_BYTES = 16 << 20
+
+
+class AuditIntegrityError(ValueError):
+    """The existing audit JSONL cannot be verified or safely extended."""
+
+
 class Audit:
-    """Append-only JSONL with hash-chained entries (chain-of-custody)."""
+    """Hash-linked JSONL log; not an authenticated chain-of-custody record.
+
+    The complete existing chain is verified before appending. The unkeyed
+    hashes can detect malformed or inconsistent records, but cannot prove who
+    created them or detect a complete rewrite/rollback without an external
+    trusted anchor.
+    """
+
+    _RESERVED_FIELDS = frozenset(("ts", "prev", "event", "hash"))
 
     def __init__(self, path: Path) -> None:
-        self.path = path
-        self._prev_hash = "0" * 64
-        if self.path.exists():
-            last = self.path.read_text(encoding="utf-8").strip().splitlines()
-            if last:
-                self._prev_hash = json.loads(last[-1]).get("hash", self._prev_hash)
+        self.path = Path(path)
+        self._lock = threading.RLock()
+        self._prev_hash = self._read_chain()
 
     @staticmethod
     def sha256_file(path: Path) -> str:
@@ -148,20 +163,115 @@ class Audit:
                 h.update(chunk)
         return h.hexdigest()
 
+    @staticmethod
+    def _record_hash(record: dict[str, Any]) -> str:
+        payload = json.dumps(record, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _read_chain(self) -> str:
+        previous = _AUDIT_GENESIS_HASH
+        try:
+            stream = self.path.open("rb")
+        except FileNotFoundError:
+            return previous
+        except OSError as exc:
+            raise AuditIntegrityError(f"cannot read audit log: {exc}") from exc
+
+        try:
+            with stream:
+                line_number = 0
+                while True:
+                    raw = stream.readline(_AUDIT_MAX_RECORD_BYTES + 1)
+                    if not raw:
+                        break
+                    line_number += 1
+                    if len(raw) > _AUDIT_MAX_RECORD_BYTES:
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} exceeds the size limit"
+                        )
+                    if not raw.endswith(b"\n"):
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} is incomplete"
+                        )
+                    raw = raw[:-1]
+                    if raw.endswith(b"\r"):
+                        raw = raw[:-1]
+                    try:
+                        record = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} is not valid UTF-8 JSON"
+                        ) from exc
+                    if not isinstance(record, dict):
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} must be a JSON object"
+                        )
+                    digest = record.get("hash")
+                    if not isinstance(digest, str) or len(digest) != 64:
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} has an invalid hash field"
+                        )
+                    if record.get("prev") != previous:
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} breaks the previous-hash link"
+                        )
+                    unsigned = dict(record)
+                    del unsigned["hash"]
+                    expected = self._record_hash(unsigned)
+                    if not hmac.compare_digest(digest, expected):
+                        raise AuditIntegrityError(
+                            f"audit record {line_number} hash does not match its contents"
+                        )
+                    previous = digest
+        except AuditIntegrityError:
+            raise
+        except OSError as exc:
+            raise AuditIntegrityError(f"cannot read audit log: {exc}") from exc
+        return previous
+
+    def verify(self) -> tuple[bool, str | None]:
+        """Verify all records and return ``(valid, reason)`` without raising."""
+        with self._lock:
+            try:
+                self._prev_hash = self._read_chain()
+            except AuditIntegrityError as exc:
+                return False, str(exc)
+        return True, None
+
     def write(self, event: str, **data: Any) -> dict:
-        body = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "prev": self._prev_hash,
-            "event": event,
-            **data,
-        }
-        payload = json.dumps(body, sort_keys=True, default=str)
-        digest = hashlib.sha256(payload.encode()).hexdigest()
-        body["hash"] = digest
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(body, default=str) + "\n")
-        self._prev_hash = digest
-        return body
+        if not isinstance(event, str) or not event.strip():
+            raise ValueError("audit event must be a non-empty string")
+        reserved = self._RESERVED_FIELDS.intersection(data)
+        if reserved:
+            names = ", ".join(sorted(reserved))
+            raise ValueError(f"audit event data uses reserved fields: {names}")
+
+        with self._lock:
+            current_hash = self._read_chain()
+            if current_hash != self._prev_hash:
+                raise AuditIntegrityError(
+                    "audit log changed since this instance was initialized; "
+                    "refusing to append"
+                )
+            body = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "prev": current_hash,
+                "event": event,
+                **data,
+            }
+            digest = self._record_hash(body)
+            body["hash"] = digest
+            line = json.dumps(body, sort_keys=True, default=str) + "\n"
+            if len(line.encode("utf-8")) > _AUDIT_MAX_RECORD_BYTES:
+                raise ValueError("audit record exceeds the size limit")
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8", newline="\n") as stream:
+                    stream.write(line)
+            except OSError as exc:
+                raise AuditIntegrityError(f"cannot append audit log: {exc}") from exc
+            self._prev_hash = digest
+            return body
 
 
 CONFIG = Config()

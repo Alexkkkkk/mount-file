@@ -2,6 +2,7 @@
 """Tests for the package MCP command-line entry point."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -149,3 +150,96 @@ def test_legacy_auto_decrypt_uses_rt809_detection(monkeypatch, tmp_path):
     assert result["key"] == "MTK"
     assert Path(result["output"]) == tmp_path / "mtk-auto.decoded.bin"
     assert Path(result["output"]).is_file()
+
+
+def test_audit_verifies_existing_chain_and_appends_after_reopen(tmp_path):
+    path = tmp_path / "audit" / "events.jsonl"
+    audit = root_cli.Audit(path)
+
+    first = audit.write("created", details={"count": 2})
+    second = audit.write("updated", details=["a", "b"])
+    assert audit.verify() == (True, None)
+
+    reopened = root_cli.Audit(path)
+    third = reopened.write("continued")
+
+    assert first["prev"] == "0" * 64
+    assert second["prev"] == first["hash"]
+    assert third["prev"] == second["hash"]
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_audit_rejects_record_content_change_on_open(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    root_cli.Audit(path).write("created", detail="original")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["detail"] = "modified"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(root_cli.AuditIntegrityError, match="hash does not match"):
+        root_cli.Audit(path)
+
+
+def test_audit_rejects_broken_link_even_when_record_hash_is_recomputed(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    audit = root_cli.Audit(path)
+    audit.write("first")
+    audit.write("second")
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records[1]["prev"] = "0" * 64
+    unsigned = {key: value for key, value in records[1].items() if key != "hash"}
+    records[1]["hash"] = root_cli.Audit._record_hash(unsigned)
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    with pytest.raises(
+        root_cli.AuditIntegrityError, match="breaks the previous-hash link"
+    ):
+        root_cli.Audit(path)
+
+
+def test_audit_rejects_incomplete_final_record(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    root_cli.Audit(path).write("created")
+    path.write_bytes(path.read_bytes()[:-1])
+
+    with pytest.raises(root_cli.AuditIntegrityError, match="is incomplete"):
+        root_cli.Audit(path)
+
+
+def test_audit_does_not_append_after_log_changes_during_session(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    audit = root_cli.Audit(path)
+    audit.write("created")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["event"] = "rewritten"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    modified = path.read_bytes()
+
+    with pytest.raises(root_cli.AuditIntegrityError, match="hash does not match"):
+        audit.write("must-not-append")
+    assert path.read_bytes() == modified
+
+
+def test_audit_rejects_reserved_fields_and_empty_event(tmp_path):
+    audit = root_cli.Audit(tmp_path / "audit.jsonl")
+
+    with pytest.raises(ValueError, match="non-empty"):
+        audit.write(" ")
+    with pytest.raises(ValueError, match="reserved fields"):
+        audit.write("event", hash="caller-controlled")
+    assert not audit.path.exists()
+
+
+def test_audit_refuses_append_after_in_session_truncation(tmp_path):
+    path = tmp_path / "audit.jsonl"
+    audit = root_cli.Audit(path)
+    audit.write("created")
+    path.write_bytes(b"")
+
+    with pytest.raises(
+        root_cli.AuditIntegrityError, match="changed since this instance"
+    ):
+        audit.write("must-not-replace-history")
+    assert path.read_bytes() == b""
