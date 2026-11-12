@@ -17,6 +17,11 @@ file only tracks the releases themselves.
   fail closed instead of trusting the last stored hash. This is not an
   authenticated chain-of-custody or durability guarantee.
 
+- **RT809H decode/split outputs:** files are staged beside their destinations
+  and atomically published after validation. The splitter rejects unsafe
+  partition names and ranges, source-file aliases, linked/non-regular targets,
+  and incomplete reads; decode uses the same protected output path.
+
 - **YARA CLI**: `python -m mountfile yara --rules <файл>` передавал путь как
   YARA-исходник, поэтому каждая команда завершалась `syntax error`. Теперь
   компилируется сам файл правил, а `mountfile/dfir_yara.py` не принимает

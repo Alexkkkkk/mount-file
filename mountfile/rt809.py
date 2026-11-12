@@ -35,6 +35,9 @@ byte-exact output):
 from __future__ import annotations
 
 import os
+import stat
+import tempfile
+from pathlib import Path
 
 __all__ = [
     "BLOCK",
@@ -101,10 +104,16 @@ class Part:
 
 
 # ------------------------------------------------------------------ detect
-def _head(path, size):
-    need = min(size, MST_REGION_END)
-    with open(path, "rb") as f:
-        return bytearray(f.read(need))
+def _detect_buffer(head):
+    """Return the dump kind and encryption flag from an already-read prefix."""
+    if len(head) >= 0x114 and head[0x100:0x114] == MARKER_MTK:
+        return "MTK", head[MTK_FLAG_ADDR : MTK_FLAG_ADDR + 2] == FLAG_ENCODE
+    mst_end = MST_FLAG_ADDR + 8
+    if len(head) >= mst_end:
+        mst_zone = head[MST_FLAG_ADDR:mst_end]
+        if mst_zone[4:8] == MARKER_MST:
+            return "MST", mst_zone[0:2] == FLAG_ENCODE
+    return None, False
 
 
 def detect(path):
@@ -199,43 +208,44 @@ def decode_dump(path, out_path=None, table_dir=None, kind=None):
     but is not encrypted (nothing to decode).  Raises :class:`Rt809Error` for
     dumps without a known marker.
     """
-    detected, encrypted = detect(path)
-    if detected is None:
-        raise Rt809Error(
-            "no MST ('MBOT') or MTK ('MTK/DTV/ROMCODE/MSDC') marker found: %s" % path
-        )
-    if kind and kind.upper() != detected:
-        raise Rt809Error("dump kind is %s, not %s" % (detected, kind))
-    if not encrypted:
-        return None
+    with open(path, "rb") as src:
+        source_metadata = os.fstat(src.fileno())
+        if not stat.S_ISREG(source_metadata.st_mode):
+            raise Rt809Error("source dump must be a regular file")
+        size = source_metadata.st_size
+        head = bytearray(src.read(min(size, MST_REGION_END)))
+        detected, encrypted = _detect_buffer(head)
+        if detected is None:
+            raise Rt809Error(
+                "no MST ('MBOT') or MTK ('MTK/DTV/ROMCODE/MSDC') marker found: %s"
+                % path
+            )
+        if kind and kind.upper() != detected:
+            raise Rt809Error("dump kind is %s, not %s" % (detected, kind))
+        if not encrypted:
+            return None
 
-    table = load_table(detected, table_dir)
-    size = os.path.getsize(path)
-    if out_path is None:
-        out_path = path + "_decode.bin"
+        table = load_table(detected, table_dir)
+        _decode_head(head, detected, table)
+        if out_path is None:
+            out_path = os.fsdecode(os.fspath(path)) + "_decode.bin"
 
-    source = os.path.abspath(os.fspath(path))
-    destination = os.path.abspath(os.fspath(out_path))
-    same_path = os.path.normcase(source) == os.path.normcase(destination)
-    if not same_path and os.path.exists(destination):
-        try:
-            same_path = os.path.samefile(source, destination)
-        except OSError:
-            pass
-    if same_path:
-        raise Rt809Error("output path must not refer to the source dump")
+        def write_decoded(stream):
+            if stream.write(head) != len(head):
+                raise Rt809Error("short write while staging decoded dump")
+            src.seek(len(head))
+            remaining = size - len(head)
+            while remaining > 0:
+                chunk = src.read(min(_COPY_CHUNK, remaining))
+                if not chunk:
+                    raise Rt809Error(
+                        "source dump changed or was truncated while decoding"
+                    )
+                if stream.write(chunk) != len(chunk):
+                    raise Rt809Error("short write while staging decoded dump")
+                remaining -= len(chunk)
 
-    head = _head(path, size)
-    _decode_head(head, detected, table)
-
-    with open(path, "rb") as src, open(out_path, "wb") as dst:
-        dst.write(head)
-        src.seek(len(head))
-        while True:
-            chunk = src.read(_COPY_CHUNK)
-            if not chunk:
-                break
-            dst.write(chunk)
+        _write_output_safely(out_path, (path,), write_decoded)
     return out_path
 
 
@@ -302,34 +312,147 @@ def _default_out_dir(dump):
     return base + "_/"
 
 
+def _validate_partition_name(name):
+    if (
+        not isinstance(name, str)
+        or not name
+        or name in (".", "..")
+        or any(char in name for char in '/\\\x00<>:"|?*')
+        or any(ord(char) < 32 for char in name)
+        or name.endswith((".", " "))
+    ):
+        raise Rt809Error("partition name is not a safe filename component")
+
+
+def _assert_safe_output_path(output_path, source_paths):
+    destination = os.path.abspath(os.fsdecode(os.fspath(output_path)))
+    destination_key = os.path.normcase(destination)
+    for source_path in source_paths:
+        source = os.path.abspath(os.fsdecode(os.fspath(source_path)))
+        if destination_key == os.path.normcase(source):
+            raise Rt809Error("partition output must not refer to a source dump")
+
+    try:
+        info = os.lstat(destination)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise Rt809Error("cannot safely inspect partition output path") from exc
+
+    is_reparse_point = bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    if stat.S_ISLNK(info.st_mode) or is_reparse_point:
+        raise Rt809Error("refusing partition output link")
+    if not stat.S_ISREG(info.st_mode):
+        raise Rt809Error("partition output must be a regular file")
+    if getattr(info, "st_nlink", 1) != 1:
+        raise Rt809Error("refusing partition output with multiple hard links")
+
+    for source_path in source_paths:
+        try:
+            aliases_source = os.path.samefile(source_path, destination)
+        except OSError as exc:
+            raise Rt809Error(
+                "cannot safely verify partition output against source files"
+            ) from exc
+        if aliases_source:
+            raise Rt809Error("partition output must not refer to a source dump")
+
+
+def _write_output_safely(output_path, source_paths, write_contents):
+    """Publish a complete file without opening or truncating its final path."""
+    _assert_safe_output_path(output_path, source_paths)
+    destination = Path(os.fsdecode(os.fspath(output_path)))
+    descriptor = None
+    staged_path = None
+    try:
+        descriptor, staged_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=os.fspath(destination.parent),
+        )
+        staged_path = Path(staged_name)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            write_contents(stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _assert_safe_output_path(destination, source_paths)
+        os.replace(staged_path, destination)
+        staged_path = None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if staged_path is not None:
+            try:
+                staged_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def split_by_udev(dump, udev_path, out_dir=None):
     """Split ``dump`` into one ``.bin`` per udev partition entry.
 
     Returns ``(parts, written_paths)``; lengths are clamped to the dump size
     (entries fully past the end are skipped), as in the reference script.
+    Each output is staged beside its destination and published only after the
+    requested range has been copied and source/output safety checks pass.
     """
     parts = parse_udev(udev_path)
     if out_dir is None:
-        out_dir = _default_out_dir(dump)
-    os.makedirs(out_dir, exist_ok=True)
-
-    dump_size = os.path.getsize(dump)
+        out_dir = _default_out_dir(os.fsdecode(os.fspath(dump)))
+    else:
+        out_dir = os.fsdecode(os.fspath(out_dir))
     written = []
     with open(dump, "rb") as src:
+        source_stat = os.fstat(src.fileno())
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise Rt809Error("source dump must be a regular file")
+        dump_size = source_stat.st_size
+        protected_sources = (dump, udev_path)
+        planned = []
+        output_names = set()
+
         for part in parts:
+            _validate_partition_name(part.name)
+            if (
+                not isinstance(part.offset, int)
+                or isinstance(part.offset, bool)
+                or part.offset < 0
+                or not isinstance(part.length, int)
+                or isinstance(part.length, bool)
+                or part.length < 0
+            ):
+                raise Rt809Error("partition offset and length must be non-negative")
             if part.offset >= dump_size:
                 continue
             length = min(part.length, dump_size - part.offset)
             out_name = Part(part.name, part.offset, length).file_name()
-            out_path = os.path.join(out_dir, out_name)
-            src.seek(part.offset)
-            remaining = length
-            with open(out_path, "wb") as dst:
+            out_path = os.path.join(os.fspath(out_dir), out_name)
+            output_key = os.path.normcase(os.path.abspath(out_path))
+            if output_key in output_names:
+                raise Rt809Error("partition entries produce duplicate output paths")
+            output_names.add(output_key)
+            _assert_safe_output_path(out_path, protected_sources)
+            planned.append((part.offset, length, out_path))
+
+        os.makedirs(out_dir, exist_ok=True)
+
+        for offset, length, out_path in planned:
+
+            def write_partition(stream):
+                src.seek(offset)
+                remaining = length
                 while remaining > 0:
                     chunk = src.read(min(_COPY_CHUNK, remaining))
                     if not chunk:
-                        break
-                    dst.write(chunk)
+                        raise Rt809Error(
+                            "source dump changed or was truncated during split"
+                        )
+                    written_count = stream.write(chunk)
+                    if written_count != len(chunk):
+                        raise Rt809Error("short write while staging partition output")
                     remaining -= len(chunk)
+
+            _write_output_safely(out_path, protected_sources, write_partition)
             written.append(out_path)
     return parts, written
