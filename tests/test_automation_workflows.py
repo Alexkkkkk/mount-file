@@ -330,6 +330,8 @@ def test_security_audit_is_blocking_and_self_heal_is_pr_only():
     assert "pip-audit -r requirements.txt --desc on || true" not in security
     assert "pip-audit -r requirements-win7.txt --desc on || true" not in security
     assert 'AUTO_APPROVE_PATCHES: "false"' in self_heal
+
+
 def test_unified_sync_gates_writes_behind_the_reusable_verify_and_serializes():
     text = workflow("sync.yml")
     assert "uses: ./.github/workflows/mfsync.yml" in text
@@ -343,9 +345,8 @@ def test_unified_sync_gates_writes_behind_the_reusable_verify_and_serializes():
     # within the jobs section, the verify-gate comes before the serialized
     # write pool reference: writes only after checks
     jobs_text = text.split("jobs:", 1)[1]
-    assert (
-        jobs_text.index("uses: ./.github/workflows/mfsync.yml")
-        < jobs_text.index("repository-maintenance-write")
+    assert jobs_text.index("uses: ./.github/workflows/mfsync.yml") < jobs_text.index(
+        "repository-maintenance-write"
     )
 
 
