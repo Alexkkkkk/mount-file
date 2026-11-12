@@ -152,6 +152,18 @@ performance: Windows/macOS benchmark provenance и fixture/checker matrix ещё
 из чистого checkout, иначе validator закономерно отвергнет dirty source
 provenance.
 
+Каждый Linux/Windows/macOS test-leg теперь также публикует
+`platform-benchmark-provenance.json`, создаваемый
+`scripts/platform_benchmark_provenance.py`. Артефакт фиксирует commit и clean
+worktree, OS/runner/Python, доступные checker tools, resource limits и полный
+набор операций `list_dir`, `stat`, `read_range`, `extract`, `write`. Это
+cross-platform provenance contract и не скрытая замена реальному filesystem
+benchmark: каждый отчёт явно содержит `evidence=benchmark_observed_only`,
+`parity=not_claimed`, `power_loss=unsupported` и
+`crash_recovery=not_claimed`. Validator блокирует dirty source, неполный набор
+операций, изменённые limits и любые claims о полной parity или power-loss
+гарантиях.
+
 ## 4. Результаты
 
 Два независимых запуска до новой 10 MiB fixture/reader оптимизации сохранены как
