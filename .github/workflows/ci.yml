@@ -179,6 +179,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Validate capability operation conformance
+        run: python scripts/capability_conformance.py --json-out capability-conformance.json
+
+      - name: Upload capability conformance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: capability-conformance-${{ matrix.os }}-py${{ matrix.python }}
+          path: capability-conformance.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Emit cross-platform benchmark provenance
         if: always()
         run: python scripts/benchmark_provenance.py --json-out benchmark-provenance.json

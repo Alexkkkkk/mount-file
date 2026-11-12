@@ -164,6 +164,17 @@ provider status. Она не классифицирует произвольно
 заменяет profile validators: malformed, dirty или unsupported volume всё равно
 отвергается при open.
 
+Для CI и локальной проверки callable parity используется
+`python scripts/capability_conformance.py --json-out capability-conformance.json`.
+Команда проверяет все 12 profiles и 10 canonical operation cells: доступные
+cells должны указывать на реально callable endpoint соответствующего VFS/RW
+interface, а refused cells обязаны иметь typed
+`operation_not_supported` refusal без API endpoint. Она также сверяет
+`UniversalFSRW` writer strategy с profile mapping и не позволяет read-only VFS
+профилю объявить mutation. Отчёт имеет schema
+`mountfile.capability-conformance/v1`, сохраняет `parity=not_claimed` и не
+включает legacy fallback в callable contract.
+
 Опциональный authenticated HTTP API отдаёт тот же static catalog на
 `GET /capabilities`. Если injected registry реализует `filesystem_status(image,
 offset=0)`, `GET /filesystem/status` и compatibility aliases `/fs/status` и
