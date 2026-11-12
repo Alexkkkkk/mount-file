@@ -10,10 +10,14 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from mountfile.fat32 import Fat32Provider
 from mountfile.fat32_vfs import Fat32VFS as _ProviderBackedFat32VFS
 
 
 class Fat32VFS(_ProviderBackedFat32VFS):
-    def __init__(self, image_path: str, offset: int = 0, volume_size: int = None):
+    def __init__(
+        self, image_path: str, offset: int = 0, volume_size: Optional[int] = None
+    ):
         super().__init__(Fat32Provider(image_path, offset=offset))

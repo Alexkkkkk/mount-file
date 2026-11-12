@@ -65,6 +65,13 @@ class TestFat32VFS:
         assert not result.success
         assert result.error_code == ErrorCode.NOT_FOUND.value
 
+    def test_read_range_out_of_bounds_returns_typed_error(self):
+        """Regression: out-of-range reads must fail closed, never raise."""
+        result = self.vfs.read("/hello.txt", offset=0, size=1 << 40)
+        assert isinstance(result, VFSResult)
+        assert result.success is False
+        assert result.error_code is not None
+
 
 class TestReadOnlyVFSFailClosed:
     """ext4/NTFS writers must refuse with a typed code, never raise."""
@@ -77,3 +84,7 @@ class TestReadOnlyVFSFailClosed:
         result = VFSResult.fail(ErrorCode.WRITE_NOT_SUPPORTED, "nope")
         assert result.success is False
         assert result.error_code == "write_not_supported"
+
+    def test_error_code_has_range_out_of_bounds(self):
+        """Regression for PR #494: adapters reference RANGE_OUT_OF_BOUNDS."""
+        assert ErrorCode.RANGE_OUT_OF_BOUNDS.value == "range_out_of_bounds"

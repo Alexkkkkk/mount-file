@@ -43,6 +43,7 @@ class ErrorCode(str, Enum):
     NOT_FOUND = "not_found"
     ALREADY_EXISTS = "already_exists"
     INVALID_PATH = "invalid_path"
+    RANGE_OUT_OF_BOUNDS = "range_out_of_bounds"
     OUT_OF_SPACE = "out_of_space"
     IO_ERROR = "io_error"
 
