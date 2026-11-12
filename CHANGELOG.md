@@ -12,6 +12,11 @@ file only tracks the releases themselves.
   and `docs/issue-182-status.md`; benchmark evidence does not imply parity or
   production readiness.
 
+- **AI agent audit log:** the existing JSONL hash chain is verified in full
+  before an append. Invalid, inconsistent, truncated, or oversized records now
+  fail closed instead of trusting the last stored hash. This is not an
+  authenticated chain-of-custody or durability guarantee.
+
 - **YARA CLI**: `python -m mountfile yara --rules <файл>` передавал путь как
   YARA-исходник, поэтому каждая команда завершалась `syntax error`. Теперь
   компилируется сам файл правил, а `mountfile/dfir_yara.py` не принимает
