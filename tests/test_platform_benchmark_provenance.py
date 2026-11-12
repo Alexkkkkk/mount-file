@@ -68,7 +68,7 @@ def test_provenance_rejects_crash_and_power_loss_guarantees(tmp_path):
 def test_generated_ci_artifacts_do_not_make_source_dirty(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "scripts.platform_benchmark_provenance._git_value",
-        lambda *_args: "?? test-results.xml\n?? platform-benchmark-provenance.json",
+        lambda *_args: "?? test-results.xml\n?? platform-benchmark-provenance.json\n?? windows-installer-evidence.json",
     )
     assert _source_worktree_status(tmp_path) == ""
 
