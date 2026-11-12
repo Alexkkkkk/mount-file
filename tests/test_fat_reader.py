@@ -127,6 +127,107 @@ def test_native_fat32_rejects_inconsistent_mirrored_fat(tmp_path):
         NativeFatImage(image, volume_size=image.stat().st_size)
 
 
+def test_native_fat_reopen_closes_handle_after_profile_validation_failure(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "fat32-reopen-invalid-profile.img"
+    make_fat32_image(image)
+    provider = NativeFatImage(image, volume_size=image.stat().st_size)
+    provider.close()
+
+    original_boot = image.read_bytes()[:512]
+    broken_boot = bytearray(original_boot)
+    broken_boot[510:512] = b"\x00\x00"
+    with image.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(broken_boot)
+
+    opened_streams = []
+    path_open = Path.open
+
+    def record_path_open(path, *args, **kwargs):
+        stream = path_open(path, *args, **kwargs)
+        if path == image:
+            opened_streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", record_path_open)
+    with pytest.raises(FatReadError, match="valid FAT boot sector"):
+        provider.reopen()
+
+    assert provider.f is None
+    assert provider._stream is None
+    assert opened_streams and opened_streams[-1].closed
+    assert provider.profile is None
+    assert provider.volume_size is None
+    assert provider.fat_type is None
+
+    with image.open("r+b") as stream:
+        stream.seek(0)
+        stream.write(original_boot)
+
+    provider.reopen()
+    try:
+        assert provider.f is not None and not provider.f.closed
+        assert provider.list_dir("/") == []
+    finally:
+        provider.close()
+
+
+def test_native_fat_reopen_refreshes_geometry_from_changed_bpb(tmp_path):
+    image = tmp_path / "fat12-reopen-geometry.img"
+    _make_small_fat(image, 12)
+    provider = NativeFatImage(image)
+    original_volume_size = provider.volume_size
+    provider.close()
+
+    with image.open("r+b") as stream:
+        stream.seek(19)
+        stream.write(struct.pack("<H", 2500))
+
+    provider.reopen()
+    try:
+        assert provider.profile.total_sectors == 2500
+        assert provider.volume_size == 2500 * 512
+        assert provider.volume_size < original_volume_size
+        assert provider.volume_end == provider.offset + provider.volume_size
+        assert provider._max_cluster == provider.profile.cluster_count + 1
+        assert provider.read_file("/HELLO.TXT").startswith(b"hello FAT12")
+    finally:
+        provider.close()
+
+
+def test_native_fat_reopen_closes_handle_when_initialization_is_interrupted(
+    tmp_path, monkeypatch
+):
+    image = tmp_path / "fat12-reopen-interrupt.img"
+    _make_small_fat(image, 12)
+    provider = NativeFatImage(image)
+    provider.close()
+    opened_streams = []
+    path_open = Path.open
+
+    def record_path_open(path, *args, **kwargs):
+        stream = path_open(path, *args, **kwargs)
+        if path == image:
+            opened_streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", record_path_open)
+
+    def interrupt_validation():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(provider, "_validate_metadata_copies", interrupt_validation)
+    with pytest.raises(KeyboardInterrupt):
+        provider.reopen()
+
+    assert provider.f is None
+    assert provider._stream is None
+    assert opened_streams and opened_streams[-1].closed
+    assert provider.profile is None
+
+
 def _make_active_fat32_image(image, active_fat: int) -> None:
     make_fat32_image(image)
     raw = bytearray(image.read_bytes())

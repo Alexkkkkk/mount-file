@@ -138,6 +138,10 @@ engine.close()
   FAT12/16 writer требует fixed root directory; эта ограниченная запись не
   означает полного write parity. Native reader отклоняет рассинхронные mirrored
   FAT copies и повреждённую backup BPB FAT32 до чтения файлов.
+  После `close()` вызов `reopen()` повторно проверяет geometry и metadata; если
+  повторное открытие или проверка завершается ошибкой, новый file handle закрыт,
+  stale profile/geometry fields очищаются, а provider остаётся закрытым и может
+  быть повторно открыт после устранения причины отказа.
   Статус read parity (issue #182): подтверждена differential тест-матрицей
   в `tests/test_fat_reader.py` — для всех трёх вариантов FAT прогоняются
   valid- и invalid-fixture (синтетические образы со short-name, LFN, пустым,

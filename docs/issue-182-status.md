@@ -59,6 +59,8 @@ FAT32 и exFAT и публикует JSON/JUnit artifact в Linux CI. Успеш
 
 Не помечать семейство «готово» только из-за наличия reader/writer класса. Для завершения профиля нужны точные поддерживаемые операции и features, положительные и отрицательные fixtures, независимая проверка, failure/crash tests, согласованная документация и CI на заявленных платформах.
 
+- 2026-11-12: Stage B follow-up hardens the native FAT reader lifecycle: `reopen()` rebuilds provider state from the original selected extent, closes the new handle and invalidates stale profile metadata after validation failure or interruption, leaving the provider retryable. Focused FAT reader suite: 38 passed; Black, isort, CI Ruff rule groups, `compileall` and `git diff --check` passed. This closes one lifecycle gap only; the full VFS × GUI/CLI/MCP routing matrix remains partial.
+
 ### Quality-gate follow-up
 
 В PR #344 проверка пяти правил correctness-lint распространена на весь репозиторий, а не только на `mountfile/` и `tests/`. В базе `main` было 51 нарушение; все оставшиеся нарушения в приложении и maintenance tools исправлены, расширенная проверка проходит с 0 findings. Это обновление включено в тот же commit, чтобы пройти проверку issue-182 ветки.
