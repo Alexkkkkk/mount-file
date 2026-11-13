@@ -5,7 +5,7 @@
 PY ?= python3
 
 .PHONY: help install tools tools-check test test-ai test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
-        sync sync-status sync-check sync-pr sync-watch
+        sync sync-status sync-check sync-pr sync-watch test-fast
 
 help:
 	@echo "make install    - install runtime dependencies"
@@ -40,6 +40,11 @@ tools-check:
 
 test:
 	$(PY) -m pytest tests/ -v
+
+# Быстрый локальный гейт: параллельно по ядрам, без GUI/e2e,
+# та же конфигурация, что в PR-прогоне CI.
+test-fast:
+	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "not gui and not e2e"
 
 test-ai:
 	$(PY) -m pytest \

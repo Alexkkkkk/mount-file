@@ -38,6 +38,16 @@ def standalone():
     return module
 
 
+# Скомпилированный Qt и CLI-импорт проверяются там, где PyQt6 установлен
+# (CI ставит его отдельным шагом); локально без биндингов тест пропускается
+# по той же схеме, что и GUI-тесты.
+_no_qt = importlib.util.find_spec("PyQt6") is None
+
+
+@pytest.mark.skipif(
+    _no_qt,
+    reason="нет установленных Qt-биндингов: проверка выполняется в CI с PyQt6",
+)
 def test_install_verifies_compiled_qt_and_real_cli_import():
     probes = dict(installer.checks_for_profile(minimal=True, dev=False))
     assert "QtWidgets" in probes["PyQt6"]
