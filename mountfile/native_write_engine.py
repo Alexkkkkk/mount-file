@@ -209,20 +209,41 @@ class TransactionalWriter:
 @contextlib.contextmanager
 def _exclusive_lock(image: Path) -> Iterator[None]:
     """Take a non-blocking advisory lock beside the image."""
-
-    import fcntl
-
     lock_path = image.with_name(image.name + ".lock")
     lock_path.touch(exist_ok=True)
     with lock_path.open("r+") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError(f"image {image} is locked by another writer") from exc
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"image {image} is locked by another writer"
+                ) from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError(
+                    f"image {image} is locked by another writer"
+                ) from exc
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _snapshot(image: Path, workdir: Path | None) -> Path:

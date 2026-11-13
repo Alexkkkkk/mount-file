@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import fcntl
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -99,7 +99,10 @@ def test_verifier_exception_is_fail_closed(tmp_path: Path):
     assert image.read_bytes() == b"ORIGINAL"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="lock contention test uses POSIX flock")
 def test_locked_image_is_rejected_without_mutation(tmp_path: Path):
+    import fcntl
+
     image = tmp_path / "disk.img"
     image.write_bytes(b"ORIGINAL")
     lock = image.with_name(image.name + ".lock")
