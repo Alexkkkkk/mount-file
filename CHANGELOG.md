@@ -6,6 +6,14 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Experimental native write guard:** ext4 and NTFS now have transactional,
+  external-tool writer adapters behind `MOUNTFILE_ENABLE_NATIVE_WRITE=1`.
+  They write only to a verified sibling copy and atomically replace the source
+  after filesystem verification; missing helpers, dirty/invalid images,
+  offsets, unsafe paths, and verification failures refuse the operation.
+  The flag is disabled by default, and this experimental single-file path does
+  not change the production capability matrix or claim full journal replay.
+
 - **Filesystem support status:** GUI write actions and CLI capability output are
   governed by the canonical profile matrix. Native ext3/ext4/NTFS writes remain
   unsupported, and power-loss safety is unsupported. See the capability matrix
