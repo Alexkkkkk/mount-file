@@ -1,0 +1,176 @@
+name: sync
+
+# Единая точка синхронизации репозитория: объединяет верификацию (mfsync.yml)
+# и ручную запись (mfsync-sync.yml) в один конвейер с явными режимами.
+# Старые файлы удаляются отдельным коммитом после того, как sync.yml
+# обкатается; контракты в tests/test_automation_workflows.py обновлены вместе
+# с этим файлом.
+#
+# Режимы:
+#   verify — только проверка: status + secret scan + version parity + тесты
+#   commit — синхронизация ветки прямым коммитом (tools/mfsync.py sync)
+#   pr     — синхронизация через pull request (tools/mfsync.py sync --pr)
+#
+# Безопасность:
+#   * Любая запись возможна ТОЛЬКО после успешного verify-гейта (needs: verify).
+#   * Все пишущие прогоны сериализованы группой repository-maintenance-write
+#     вместе с autofix.yml и mfsync-sync.yml — два пишущих workflow физически
+#     не могут выполняться одновременно.
+#   * Никаких force-push: конфликтный pull mfsync прерывает rebase,
+#     восстанавливает рабочее дерево и сообщает конфликтные пути; отклонённый
+#     правилами ветки push (GH013) mfsync автоматически превращает в PR
+#     из ветки sync/*.
+#   * Токен только из секретов (SYNC_TOKEN || AUTOMATION_TOKEN || GITHUB_TOKEN);
+#     в файле нет зашитых учётных данных.
+#   * Запись вручную (workflow_dispatch / repository_dispatch / workflow_call
+#     с mode=commit|pr); по расписанию выполняется только read-only verify.
+
+on:
+  schedule:
+    # Еженедельная контрольная верификация; ежедневную делает mfsync.yml (03:17).
+    - cron: '47 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'verify = только проверка; commit = прямой коммит; pr = через pull request'
+        required: false
+        default: verify
+        type: choice
+        options: [verify, commit, pr]
+      message:
+        description: 'Необязательное сообщение коммита; передаётся как данные, никогда как код shell'
+        required: false
+        default: ''
+        type: string
+      ref:
+        description: 'Ветка для синхронизации (по умолчанию — текущая)'
+        required: false
+        default: ''
+        type: string
+  repository_dispatch:
+    types: [sync]
+  workflow_call:
+    inputs:
+      mode:
+        required: false
+        type: string
+        default: verify
+      message:
+        required: false
+        type: string
+        default: ''
+      ref:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      SYNC_TOKEN:
+        required: false
+        description: 'Токен для записи; по умолчанию AUTOMATION_TOKEN || GITHUB_TOKEN'
+      AUTOMATION_TOKEN:
+        required: false
+        description: 'Запасной токен записи, как в autofix.yml; по умолчанию GITHUB_TOKEN'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify (status, secrets, versions, tests)
+    # Реиспользует проверенный гейт mfsync.yml вместо копии его шагов:
+    # одна реализация проверок для расписания, PR, dispatch и синхронизации.
+    uses: ./.github/workflows/mfsync.yml
+    permissions:
+      contents: read
+
+  sync:
+    name: Repository sync (commit | pr)
+    needs: [verify]
+    if: >-
+      needs.verify.result == 'success' &&
+      (
+        (github.event_name == 'workflow_dispatch' && (inputs.mode == 'commit' || inputs.mode == 'pr')) ||
+        (github.event_name == 'repository_dispatch' && (github.event.client_payload.mode == 'commit' || github.event.client_payload.mode == 'pr')) ||
+        (github.event_name == 'workflow_call' && (inputs.mode == 'commit' || inputs.mode == 'pr'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    # Та же группа записи, что у autofix.yml и mfsync-sync.yml: пишущие
+    # прогоны строго по очереди.
+    concurrency:
+      group: repository-maintenance-write
+      cancel-in-progress: false
+    env:
+      MODE: ${{ inputs.mode || github.event.client_payload.mode || 'verify' }}
+      MESSAGE: ${{ inputs.message || github.event.client_payload.message || '' }}
+      REF: ${{ inputs.ref || github.event.client_payload.ref || github.ref_name }}
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN || secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.REF }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config mfsync.prOnly true
+      - name: Repository sync
+        if: env.MODE == 'commit' || env.MODE == 'pr'
+        run: |
+          set -euo pipefail
+          MESSAGE="${MESSAGE:-chore(sync): automated mfsync run}"
+          if [ "$MODE" = 'pr' ]; then
+            python tools/mfsync.py sync --pr -m "$MESSAGE"
+          else
+            python tools/mfsync.py sync -m "$MESSAGE"
+          fi
+      - name: Post-sync report
+        if: always()
+        run: python tools/mfsync.py status | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+
+  incident:
+    name: Report sync failure
+    needs: [verify, sync]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MODE: ${{ inputs.mode || github.event.client_payload.mode || 'verify' }}
+      REF: ${{ inputs.ref || github.event.client_payload.ref || github.ref_name }}
+    steps:
+      - name: Open or update the sync-failure incident issue
+        run: |
+          set -euo pipefail
+          {
+            echo "Unified sync failed in run [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo ""
+            echo "- Mode: \`$MODE\`"
+            echo "- Ref: \`$REF\`"
+            echo "- Event: \`${{ github.event_name }}\`"
+            echo ""
+            echo "mfsync never leaves a half-finished rebase and never force-pushes; check the run log for the conflicting paths or the rejected push."
+          } > "$RUNNER_TEMP/issue_body.md"
+          existing="$(gh issue list --state open --json number,title --jq '.[] | select(.title == "Repository sync failed") | .number' | head -1 || true)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/issue_body.md"
+            echo "appended run details to existing issue #$existing"
+          else
+            gh issue create --title "Repository sync failed" --body-file "$RUNNER_TEMP/issue_body.md"
+            echo "opened a new incident issue"
+          fi

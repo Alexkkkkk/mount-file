@@ -330,3 +330,33 @@ def test_security_audit_is_blocking_and_self_heal_is_pr_only():
     assert "pip-audit -r requirements.txt --desc on || true" not in security
     assert "pip-audit -r requirements-win7.txt --desc on || true" not in security
     assert 'AUTO_APPROVE_PATCHES: "false"' in self_heal
+
+
+def test_unified_sync_gates_writes_behind_the_reusable_verify_and_serializes():
+    text = workflow("sync.yml")
+    assert "uses: ./.github/workflows/mfsync.yml" in text
+    assert "needs: [verify]" in text
+    assert "repository-maintenance-write" in text
+    assert "python tools/mfsync.py sync" in text
+    assert 'MESSAGE="${{ ' not in text
+    assert "git push" not in text
+    assert "[skip ci]" not in text
+    assert "contents: write" in text
+    # within the jobs section, the verify-gate comes before the serialized
+    # write pool reference: writes only after checks
+    jobs_text = text.split("jobs:", 1)[1]
+    assert jobs_text.index("uses: ./.github/workflows/mfsync.yml") < jobs_text.index(
+        "repository-maintenance-write"
+    )
+
+
+def test_unified_sync_schedule_is_read_only_and_write_modes_are_explicit():
+    text = workflow("sync.yml")
+    assert "schedule:" in text
+    # the writing job runs only on an explicit request with mode=commit|pr
+    assert "github.event_name == 'workflow_dispatch'" in text
+    assert "github.event_name == 'repository_dispatch'" in text
+    assert "github.event_name == 'workflow_call'" in text
+    # scheduled runs never write: verify-only
+    assert "github.event_name == 'schedule'" not in text
+    assert "issues: write" in text

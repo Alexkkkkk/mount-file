@@ -1,0 +1,71 @@
+name: pipeline
+
+# Single entry point for the verification pipeline. Calls the existing
+# quality / security / mfsync / CI workflows as reusable workflows and
+# exposes exactly one aggregate status check: Pipeline-Gate.
+#
+# Transition: the four called workflows still also trigger directly on
+# push/pull_request, so runs are duplicated until their direct triggers are
+# removed (follow-up commit after this pipeline has run green).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+
+  security:
+    # dependency-review comments on the PR, so the caller must allow
+    # pull-requests: write; the called workflow stays read-only on contents.
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      pull-requests: write
+
+  mfsync:
+    uses: ./.github/workflows/mfsync.yml
+    permissions:
+      contents: read
+
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  pipeline-gate:
+    name: Pipeline-Gate
+    needs: [quality, security, mfsync, ci]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      QUALITY: ${{ needs.quality.result }}
+      SECURITY: ${{ needs.security.result }}
+      MFSYNC: ${{ needs.mfsync.result }}
+      CI: ${{ needs.ci.result }}
+    steps:
+      - name: Require every pipeline stage to succeed
+        run: |
+          set -euo pipefail
+          fail=0
+          for stage in "$QUALITY" "$SECURITY" "$MFSYNC" "$CI"; do
+            if [ "$stage" != 'success' ]; then
+              echo "::error::A pipeline stage ended with $stage"
+              fail=1
+            fi
+          done
+          exit "$fail"
