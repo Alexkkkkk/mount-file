@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import BinaryIO, List, Union
+from typing import BinaryIO, List, Optional, Union
 
 from mountfile.ext3_reader import NativeExt3Image, NativeExt4Image
 from mountfile.ntfs_reader import NativeNtfsMetadataImage
@@ -22,7 +22,9 @@ class _ReadOnlyNativeVFS(VFS):
 
     provider_class = None  # type: ignore[assignment]
 
-    def __init__(self, image_path: str, offset: int = 0, volume_size: int = None):
+    def __init__(
+        self, image_path: str, offset: int = 0, volume_size: Optional[int] = None
+    ):
         self.provider = self.provider_class(
             image_path, offset=offset, volume_size=volume_size
         )
