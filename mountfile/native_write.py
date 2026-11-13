@@ -200,6 +200,10 @@ class Ext4TransactionalWriter:
 
     ``e2fsck -fy`` performs journal recovery on the temporary copy only;
     ``e2fsck -fn`` must then report a clean image before replacement.
+
+    ``debugfs write`` creates a regular file when the destination does not
+    exist, so ``create_file`` exposes that operation explicitly while keeping
+    the same journal gate and atomic publication path.
     """
 
     def write_file(
@@ -231,6 +235,13 @@ class Ext4TransactionalWriter:
         finally:
             _unlink(payload)
             _unlink(temporary)
+
+    def create_file(
+        self, image_path: str, path: str, data: bytes = b"", offset: int = 0
+    ) -> None:
+        """Create or replace a regular file on a verified disposable copy."""
+
+        self.write_file(image_path, path, data, offset)
 
 
 class NtfsTransactionalWriter:
