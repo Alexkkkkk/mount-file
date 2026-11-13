@@ -54,10 +54,12 @@ def test_ntfs_log_gate_is_fail_closed_on_runner_error():
         NTFSLogFileManager().require_clean("image.img", runner)
 
 
-def test_ntfs_log_gate_accepts_zero_exit_runner():
+def test_ntfs_log_gate_does_not_treat_ntfsfix_as_authoritative():
     def runner(*args, **kwargs):
         return subprocess.CompletedProcess(args[0], 0, "", "")
 
     result = NTFSLogFileManager().check_logfile("image.img", runner)
 
-    assert result.state is NTFSLogState.CLEAN
+    assert result.state is NTFSLogState.ERROR
+    with pytest.raises(JournalSafetyError, match="authoritative"):
+        NTFSLogFileManager().require_clean("image.img", runner)

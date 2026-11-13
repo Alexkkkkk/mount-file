@@ -15,9 +15,11 @@ file only tracks the releases themselves.
   not change the production capability matrix or claim full journal replay.
 
 - **Journal-aware preflight:** the guarded writer now validates the ext4
-  `RECOVER` flag and gates NTFS `$LogFile` through `ntfsfix -n`. ext4 replay is
-  delegated to `e2fsck -fy` on the temporary copy only; no raw journal flags
-  are cleared and no incomplete descriptor/revoke/checksum replay is enabled.
+  `RECOVER` flag and uses `ntfsfix -n` only as a diagnostic signal. ext4
+  replay is delegated to `e2fsck -fy` on the temporary copy only; no raw
+  journal flags are cleared and no incomplete descriptor/revoke/checksum replay
+  is enabled. NTFS mutation remains blocked until an authoritative `$LogFile`
+  parser/recovery oracle is available.
 
 - **Filesystem support status:** GUI write actions and CLI capability output are
   governed by the canonical profile matrix. Native ext3/ext4/NTFS writes remain

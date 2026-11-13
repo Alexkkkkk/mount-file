@@ -106,7 +106,7 @@ class NTFSLogCheckResult:
 
 
 class NTFSLogFileManager:
-    """Conservative $LogFile gate using ntfsfix's read-only check."""
+    """Diagnostic $LogFile gate that never treats ntfsfix as authoritative."""
 
     def check_logfile(
         self, image_path: str, runner: CommandRunner
@@ -115,7 +115,10 @@ class NTFSLogFileManager:
             runner(["ntfsfix", "-n", image_path])
         except Exception as exc:  # runner normalizes command/exit failures
             return NTFSLogCheckResult(NTFSLogState.NEEDS_REPLAY, str(exc))
-        return NTFSLogCheckResult(NTFSLogState.CLEAN, "$LogFile check passed")
+        return NTFSLogCheckResult(
+            NTFSLogState.ERROR,
+            "ntfsfix is diagnostic only; authoritative $LogFile replay is not implemented",
+        )
 
     def require_clean(self, image_path: str, runner: CommandRunner) -> None:
         result = self.check_logfile(image_path, runner)
