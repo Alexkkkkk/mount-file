@@ -16,14 +16,19 @@ permissions:
   # Свои операции Copilot выполняет со своим собственным токеном.
   contents: read
 
+concurrency:
+  group: copilot-setup-steps-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Job ОБЯЗАН называться `copilot-setup-steps`, иначе Copilot его не подхватит.
   copilot-setup-steps:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Runtime для npx-серверов MCP: filesystem, sequential-thinking, memory
       - name: Set up Node.js
