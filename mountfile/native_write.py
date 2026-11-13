@@ -154,9 +154,33 @@ def _require_tools(*tools: str) -> None:
         )
 
 
+def _fsync_path(path: str) -> None:
+    """Flush a finished temporary file before it is renamed over the source.
+
+    Windows requires a writable handle for ``FlushFileBuffers``; opening the
+    copy read-only raises ``OSError: [Errno 9] Bad file descriptor``.  The
+    handle is therefore opened read-write first, and a platform that refuses
+    even that degrades to no explicit flush instead of failing the write.
+    """
+
+    flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        except OSError:
+            return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_replace(source: str, temporary: str) -> None:
-    with open(temporary, "rb") as handle:
-        os.fsync(handle.fileno())
+    _fsync_path(temporary)
     os.replace(temporary, source)
     if os.name == "nt":
         return
