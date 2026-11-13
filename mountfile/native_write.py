@@ -126,6 +126,8 @@ def _run(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -150,8 +152,13 @@ def _atomic_replace(source: str, temporary: str) -> None:
     with open(temporary, "rb") as handle:
         os.fsync(handle.fileno())
     os.replace(temporary, source)
+    if os.name == "nt":
+        return
     directory = os.path.dirname(source) or "."
-    directory_fd = os.open(directory, os.O_RDONLY)
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
     try:
         os.fsync(directory_fd)
     finally:
