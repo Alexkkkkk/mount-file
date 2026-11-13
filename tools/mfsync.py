@@ -400,7 +400,7 @@ def read_versions(cwd):
         if not os.path.isfile(path):
             continue
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            with open(path, encoding="utf-8", errors="replace") as handle:
                 match = pattern.search(handle.read(4000))
         except OSError:
             continue
@@ -674,7 +674,7 @@ class _lock(object):
 
     def _owner_pid(self):
         try:
-            with open(self.path, "r", encoding="ascii", errors="replace") as handle:
+            with open(self.path, encoding="ascii", errors="replace") as handle:
                 return int(handle.read().strip().split(":", 1)[0])
         except (OSError, ValueError):
             return None
@@ -710,7 +710,7 @@ class _lock(object):
     def __exit__(self, *_exc):
         if self.held:
             try:
-                with open(self.path, "r", encoding="ascii", errors="replace") as handle:
+                with open(self.path, encoding="ascii", errors="replace") as handle:
                     owned = handle.read() == self.token
                 # Windows may reject unlinking an open file. Read and close
                 # the handle first, then remove only our own lock.

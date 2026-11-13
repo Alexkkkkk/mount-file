@@ -132,9 +132,8 @@ from .qt_compat import (
     exec_dialog,
     standard_icon,
 )
-from .updater import StartupUpdater, app_version, auto_install
+from .updater import StartupUpdater, app_version, auto_install, is_frozen
 from .updater import disabled as updates_disabled
-from .updater import is_frozen
 
 #: The five columns of the reference interface, in order.
 COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")
@@ -3912,7 +3911,7 @@ class MainWindow(QMainWindow):
             # short and made a whole-image NTFS/exFAT open fail with
             # "declared size exceeds the selected volume bounds".
             next_offsets = [
-                int(getattr(volume, "offset"))
+                int(volume.offset)
                 for volume in (self.volumes or [])
                 if getattr(volume, "offset", -1) > offset
                 and getattr(volume, "source", "table") == "table"

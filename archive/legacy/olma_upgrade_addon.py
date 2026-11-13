@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # MOUNTFILE_FIX — OLMA upgrade: self-learning + GitHub publishing
 """
 Апгрейд существующей OLMA-установки:

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # MOUNTFILE_FIX — auto-patched + OLMA full integration
 """
 Единый патч-скрипт: внедряет OLMA-фреймворк в Mount File.

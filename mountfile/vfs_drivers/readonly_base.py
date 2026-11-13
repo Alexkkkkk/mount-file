@@ -40,7 +40,6 @@ class ReadOnlyNativeVFS(VFS):
         return self._provider
 
     def _open_provider(self):
-        from mountfile.native_vfs_adapters import Ext3VFS
         from mountfile.native_vfs_adapters import Ext4VFS as _Ext4Adapter
         from mountfile.native_vfs_adapters import NtfsVFS as _NtfsAdapter
 

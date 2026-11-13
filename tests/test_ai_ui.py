@@ -26,9 +26,11 @@ pytest.importorskip(
     "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
 )
 
-from mountfile import ai  # noqa: E402
-from mountfile import ai_format_advisor  # noqa: E402
-from mountfile import tc_window  # noqa: E402
+from mountfile import (
+    ai,  # noqa: E402
+    ai_format_advisor,  # noqa: E402
+    tc_window,  # noqa: E402
+)
 from mountfile.ai import AiResult  # noqa: E402
 from mountfile.qt_compat import QApplication, QMenu, QToolBar  # noqa: E402
 from mountfile.tc_window import AiDialog, MainWindow  # noqa: E402
