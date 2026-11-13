@@ -19,6 +19,12 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import PurePosixPath
 
+from mountfile.journal_safety import (
+    Ext4JournalManager,
+    JournalSafetyError,
+    NTFSLogFileManager,
+)
+
 ENABLE_ENV = "MOUNTFILE_ENABLE_NATIVE_WRITE"
 ENABLE_VALUE = "1"
 
@@ -184,10 +190,18 @@ class Ext4TransactionalWriter:
         payload = _payload_file(data, directory)
         source_path, temporary = _image_copy(source)
         try:
-            _run(["e2fsck", "-fy", temporary], allowed={0, 1})
+            journal = Ext4JournalManager(temporary)
+            try:
+                journal.replay_on_copy(temporary, _run)
+            except JournalSafetyError as exc:
+                raise NativeWriteUnsafe(str(exc)) from exc
             command = f"write {shlex.quote(payload)} {shlex.quote(internal)}"
             _run(["debugfs", "-w", "-R", command, temporary])
             _run(["e2fsck", "-fn", temporary])
+            try:
+                journal.require_clean(temporary)
+            except JournalSafetyError as exc:
+                raise NativeWriteUnsafe(str(exc)) from exc
             _atomic_replace(source_path, temporary)
             temporary = ""
         finally:
@@ -209,9 +223,16 @@ class NtfsTransactionalWriter:
         source_path, temporary = _image_copy(source)
         payload = _payload_file(data, os.path.dirname(source) or ".")
         try:
-            _run(["ntfsfix", "-n", temporary])
+            log_file = NTFSLogFileManager()
+            try:
+                log_file.require_clean(temporary, _run)
+            except JournalSafetyError as exc:
+                raise NativeWriteUnsafe(str(exc)) from exc
             _run(["ntfscp", "-f", temporary, payload, internal])
-            _run(["ntfsfix", "-n", temporary])
+            try:
+                log_file.require_clean(temporary, _run)
+            except JournalSafetyError as exc:
+                raise NativeWriteUnsafe(str(exc)) from exc
             _atomic_replace(source_path, temporary)
             temporary = ""
         finally:

@@ -14,6 +14,11 @@ file only tracks the releases themselves.
   The flag is disabled by default, and this experimental single-file path does
   not change the production capability matrix or claim full journal replay.
 
+- **Journal-aware preflight:** the guarded writer now validates the ext4
+  `RECOVER` flag and gates NTFS `$LogFile` through `ntfsfix -n`. ext4 replay is
+  delegated to `e2fsck -fy` on the temporary copy only; no raw journal flags
+  are cleared and no incomplete descriptor/revoke/checksum replay is enabled.
+
 - **Filesystem support status:** GUI write actions and CLI capability output are
   governed by the canonical profile matrix. Native ext3/ext4/NTFS writes remain
   unsupported, and power-loss safety is unsupported. See the capability matrix

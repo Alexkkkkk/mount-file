@@ -61,6 +61,16 @@ def test_ext4_writer_checks_copy_before_atomic_replace(monkeypatch, tmp_path):
         "mountfile.native_write._run",
         lambda command, **kwargs: commands.append(list(command)),
     )
+    monkeypatch.setattr(
+        "mountfile.native_write.Ext4JournalManager.replay_on_copy",
+        lambda self, image_path, runner: runner(
+            ["e2fsck", "-fy", image_path], allowed={0, 1}
+        ),
+    )
+    monkeypatch.setattr(
+        "mountfile.native_write.Ext4JournalManager.require_clean",
+        lambda self, image_path=None: None,
+    )
     Ext4TransactionalWriter().write_file(str(image), "etc/config", b"new")
 
     assert [command[0] for command in commands] == ["e2fsck", "debugfs", "e2fsck"]
