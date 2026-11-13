@@ -569,6 +569,23 @@ class Ext4NativeWriter:
             if temporary:
                 _unlink(temporary)
 
+    def create_file(
+        self, image_path: str, path: str, data: bytes = b"", offset: int = 0
+    ) -> int:
+        """Create a regular file through the guarded ext4 write path.
+
+        The in-process libext2fs profile intentionally supports overwriting an
+        existing inode only.  Creation requires directory-entry allocation;
+        delegate that operation to the project's already validated debugfs
+        transactional writer so journal recovery and atomic publication remain
+        identical to the other native paths.
+        """
+
+        from mountfile.native_write import Ext4TransactionalWriter
+
+        Ext4TransactionalWriter().create_file(image_path, path, data, offset)
+        return len(data)
+
 
 def journal_gate_summary(image_path: str, offset: int = 0) -> dict:
     """Machine-readable gate result used by the VFS adapter and the CLI."""
