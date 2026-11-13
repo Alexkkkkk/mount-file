@@ -28,11 +28,7 @@ from mountfile.ext4_native_writer import (
     require_supported_profile,
 )
 from mountfile.journal_safety import JournalState
-from mountfile.native_write import (
-    ENABLE_ENV,
-    NativeWriteDisabled,
-    NativeWriteUnsafe,
-)
+from mountfile.native_write import ENABLE_ENV, NativeWriteDisabled, NativeWriteUnsafe
 from mountfile.ntfs_native_writer import (
     NtfsNativeWriter,
     NtfsProfileUnsupported,

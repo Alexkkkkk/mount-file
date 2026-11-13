@@ -40,10 +40,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator, Optional, Sequence
 
-from mountfile.journal_safety import (
-    Ext4JournalManager,
-    JournalState,
-)
+from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.native_write import (
     NativeWriteError,
     NativeWriteUnsafe,
