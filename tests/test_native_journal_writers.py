@@ -65,13 +65,15 @@ def make_ext4(tmp_path, name="fs.img", size="32M", seed=b"seed\n"):
     # ``^metadata_csum`` keeps the superblock checksum-free so the crash fixture
     # below can set the real RECOVER bit the way an interrupted mount would;
     # images with checksums are covered by the profile-rejection tests instead.
-    assert _run(
-        ["mkfs.ext4", "-q", "-F", "-O", "^metadata_csum", str(image)]
-    ).returncode == 0
+    assert (
+        _run(["mkfs.ext4", "-q", "-F", "-O", "^metadata_csum", str(image)]).returncode
+        == 0
+    )
     payload = tmp_path / "seed.bin"
     payload.write_bytes(seed)
     assert (
-        _run(["debugfs", "-w", "-R", f"write {payload} /f.txt", str(image)]).returncode == 0
+        _run(["debugfs", "-w", "-R", f"write {payload} /f.txt", str(image)]).returncode
+        == 0
     )
     return image
 
@@ -223,9 +225,9 @@ def test_ext4_native_writer_replays_dirty_journal_on_the_copy(tmp_path, monkeypa
     image = make_ext4(tmp_path)
     set_recover_bit(image)
     payload = b"after replay\n"
-    assert Ext4NativeWriter(recover="copy").write_file(str(image), "/f.txt", payload) == len(
-        payload
-    )
+    assert Ext4NativeWriter(recover="copy").write_file(
+        str(image), "/f.txt", payload
+    ) == len(payload)
     assert ext4_read(image) == payload.decode()
     assert probe_journal(str(image), 0).state is JournalState.CLEAN
     assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
@@ -303,9 +305,11 @@ def test_ntfs_gate_rejects_dirty_volume_bit(tmp_path):
 
     provider = NativeNtfsMetadataImage(str(image), volume_size=os.path.getsize(image))
     try:
-        record = provider.read_mft_record(3)
         blob = bytearray(image.read_bytes())
-        offset = provider.profile.boot.mft_offset + 3 * provider.profile.boot.file_record_size
+        offset = (
+            provider.profile.boot.mft_offset
+            + 3 * provider.profile.boot.file_record_size
+        )
         record_offset = blob.find(b"FILE", offset - 0x40)
         attribute = blob.find(b"\x70\x00\x00\x00", record_offset)
         assert attribute > 0

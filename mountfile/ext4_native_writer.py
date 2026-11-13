@@ -333,9 +333,7 @@ def _read_journal_head(image_path: str, offset: int) -> bytes:
     with _open_fs(lib, image_path, offset, 0) as fs:
         _check(
             lib,
-            lib.lib.ext2fs_file_open2(
-                fs, journal_inode, None, 0, ctypes.byref(handle)
-            ),
+            lib.lib.ext2fs_file_open2(fs, journal_inode, None, 0, ctypes.byref(handle)),
             f"ext2fs_file_open2(journal inode {journal_inode})",
         )
         try:
@@ -374,12 +372,21 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
 
     block_size = profile["block_size"]
     if len(raw) < 12:
-        return Ext4JournalProbe(JournalState.ERROR, "JBD2 superblock is truncated", block_size)
+        return Ext4JournalProbe(
+            JournalState.ERROR, "JBD2 superblock is truncated", block_size
+        )
     magic, blocktype = struct.unpack_from(">II", raw, 0)
-    if magic != _JBD2_MAGIC or blocktype not in (_JBD2_SUPERBLOCK_V1, _JBD2_SUPERBLOCK_V2):
-        return Ext4JournalProbe(JournalState.ERROR, "JBD2 superblock magic is invalid", block_size)
+    if magic != _JBD2_MAGIC or blocktype not in (
+        _JBD2_SUPERBLOCK_V1,
+        _JBD2_SUPERBLOCK_V2,
+    ):
+        return Ext4JournalProbe(
+            JournalState.ERROR, "JBD2 superblock magic is invalid", block_size
+        )
     if len(raw) < 0x20:
-        return Ext4JournalProbe(JournalState.ERROR, "JBD2 superblock V2 header is truncated", block_size)
+        return Ext4JournalProbe(
+            JournalState.ERROR, "JBD2 superblock V2 header is truncated", block_size
+        )
     start = struct.unpack_from(">I", raw, 0x18)[0]
     sequence = struct.unpack_from(">I", raw, 0x1C)[0]
     max_length = struct.unpack_from(">I", raw, 0x10)[0]
@@ -420,12 +427,12 @@ def _require_clean(image_path: str, offset: int) -> None:
     if probe.state is JournalState.ERROR:
         raise Ext4ProfileUnsupported(f"journal state is unknown: {probe.message}")
     if probe.state is JournalState.NEEDS_REPLAY:
-        raise Ext4ProfileUnsupported(f"journal is still dirty after replay: {probe.message}")
+        raise Ext4ProfileUnsupported(
+            f"journal is still dirty after replay: {probe.message}"
+        )
 
 
-def recover_journal_on_copy(
-    image_path: str, offset: int, runner=_run
-) -> bool:
+def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
     """Replay JBD2 with ``e2fsck -fy`` on the disposable copy.
 
     This is the only supported recovery path: real journal records are applied by
@@ -542,7 +549,9 @@ class Ext4NativeWriter:
             require_supported_profile(temporary, 0)
             probe = probe_journal(temporary, 0)
             if probe.state is JournalState.ERROR:
-                raise Ext4ProfileUnsupported(f"journal state is unknown: {probe.message}")
+                raise Ext4ProfileUnsupported(
+                    f"journal state is unknown: {probe.message}"
+                )
             if probe.state is JournalState.NEEDS_REPLAY:
                 if self.recover == "refuse":
                     raise Ext4ProfileUnsupported(

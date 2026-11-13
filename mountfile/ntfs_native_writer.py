@@ -92,14 +92,18 @@ def probe_ntfs_log(image_path: str, offset: int = 0) -> NtfsLogGate:
         return NtfsLogGate(False, "offset is outside the image")
     volume_size = size - offset
     try:
-        image = NativeNtfsMetadataImage(image_path, offset=offset, volume_size=volume_size)
+        image = NativeNtfsMetadataImage(
+            image_path, offset=offset, volume_size=volume_size
+        )
     except (NtfsMetadataError, NtfsRecordError, ValueError, OSError) as exc:
         return NtfsLogGate(False, f"NTFS metadata is unusable: {exc}")
     try:
         profile = image.profile
         try:
-            attributes = image._attributes_for_record(  # noqa: SLF001 - validated helper
-                3, image.read_mft_record(3)
+            attributes = (
+                image._attributes_for_record(  # noqa: SLF001 - validated helper
+                    3, image.read_mft_record(3)
+                )
             )
             volume_state = parse_ntfs_volume_state(attributes)
         except (NtfsMetadataError, NtfsRecordError, ValueError) as exc:
