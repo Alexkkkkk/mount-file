@@ -6,6 +6,21 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Experimental native write guard:** ext4 and NTFS now have transactional,
+  external-tool writer adapters behind `MOUNTFILE_ENABLE_NATIVE_WRITE=1`.
+  They write only to a verified sibling copy and atomically replace the source
+  after filesystem verification; missing helpers, dirty/invalid images,
+  offsets, unsafe paths, and verification failures refuse the operation.
+  The flag is disabled by default, and this experimental single-file path does
+  not change the production capability matrix or claim full journal replay.
+
+- **Journal-aware preflight:** the guarded writer now validates the ext4
+  `RECOVER` flag and uses `ntfsfix -n` only as a diagnostic signal. ext4
+  replay is delegated to `e2fsck -fy` on the temporary copy only; no raw
+  journal flags are cleared and no incomplete descriptor/revoke/checksum replay
+  is enabled. NTFS mutation remains blocked until an authoritative `$LogFile`
+  parser/recovery oracle is available.
+
 - **Filesystem support status:** GUI write actions and CLI capability output are
   governed by the canonical profile matrix. Native ext3/ext4/NTFS writes remain
   unsupported, and power-loss safety is unsupported. See the capability matrix
