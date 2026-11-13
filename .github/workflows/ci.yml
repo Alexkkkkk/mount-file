@@ -5,11 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-<<<<<<< ours
   merge_group:
-=======
   workflow_call:
->>>>>>> theirs
   workflow_dispatch:
 
 permissions:
