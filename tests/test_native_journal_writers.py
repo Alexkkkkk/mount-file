@@ -10,10 +10,13 @@ writer that only *claims* success fails here.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import struct
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -190,7 +193,8 @@ def test_ext4_replay_on_copy_uses_e2fsck_and_clears_recover(tmp_path):
 
 @needs_ext
 @needs_libext2fs
-def test_ext4_native_write_replaces_existing_file(tmp_path):
+def test_ext4_native_write_replaces_existing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
     image = make_ext4(tmp_path)
     payload = b"journal-gated native write\n" * 3
     written = ext4_write_file_native(str(image), "/f.txt", payload)
@@ -201,13 +205,100 @@ def test_ext4_native_write_replaces_existing_file(tmp_path):
 
 @needs_ext
 @needs_libext2fs
-def test_ext4_native_write_refuses_missing_target(tmp_path):
+def test_ext4_native_write_refuses_missing_target(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
     image = make_ext4(tmp_path)
     before = image.read_bytes()
     with pytest.raises(Exception) as excinfo:
         ext4_write_file_native(str(image), "/missing.txt", b"data")
     assert "missing" in str(excinfo.value)
     assert image.read_bytes() == before
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_public_write_requires_opt_in(tmp_path, monkeypatch):
+    monkeypatch.delenv(ENABLE_ENV, raising=False)
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+    with pytest.raises(NativeWriteDisabled):
+        ext4_write_file_native(str(image), "/f.txt", b"nope")
+    assert image.read_bytes() == before
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_public_write_verifier_failure_preserves_original(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+
+    def reject_verification(*_args, **_kwargs):
+        raise Ext4ProfileUnsupported("injected independent-checker failure")
+
+    monkeypatch.setattr(
+        "mountfile.ext4_native_writer.verify_image_after_operation",
+        reject_verification,
+    )
+    with pytest.raises(Ext4ProfileUnsupported, match="independent-checker"):
+        ext4_write_file_native(str(image), "/f.txt", b"must not publish")
+    assert image.read_bytes() == before
+
+
+@needs_ext
+@needs_libext2fs
+@pytest.mark.parametrize(
+    "fault_point",
+    (
+        "copy:start",
+        "copy:done",
+        "helper:start",
+        "helper:done",
+        "mutation:start",
+        "mutation:flush",
+        "mutation:done",
+        "publish:start",
+        "publish:done",
+    ),
+)
+def test_ext4_process_kill_at_writer_boundaries_is_original_or_complete(
+    tmp_path, fault_point
+):
+    """A killed guarded writer leaves the source intact or a complete publish."""
+    image = make_ext4(tmp_path)
+    original_hash = hashlib.sha256(image.read_bytes()).digest()
+    payload = b"complete ext4 publish only\n"
+    script = """
+import os
+import sys
+from pathlib import Path
+
+import mountfile.native_write as native_write
+from mountfile.ext4_native_writer import Ext4NativeWriter
+
+fault_point = sys.argv[2]
+def kill_at(point):
+    if point == fault_point:
+        os._exit(74)
+
+native_write.FAULT_HOOK = kill_at
+Ext4NativeWriter().write_file(sys.argv[1], "/f.txt", b"complete ext4 publish only\\n")
+"""
+    env = os.environ.copy()
+    env[ENABLE_ENV] = "1"
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(image), fault_point],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert crashed.returncode == 74, crashed.stdout + crashed.stderr
+    if fault_point == "publish:done":
+        assert ext4_read(image) == payload.decode()
+        assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
+    else:
+        assert hashlib.sha256(image.read_bytes()).digest() == original_hash
 
 
 @needs_ext

@@ -510,7 +510,7 @@ def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
     return True
 
 
-def ext4_write_file_native(
+def _ext4_write_file_native_in_place(
     image_path: str,
     internal_path: str,
     data: bytes,
@@ -518,12 +518,12 @@ def ext4_write_file_native(
     offset: int = 0,
     library: Optional[LibExt2fs] = None,
 ) -> int:
-    """Overwrite an **existing** file inside a clean ext4 image via libext2fs.
+    """Overwrite an **existing** file in a disposable ext4 copy via libext2fs.
 
-    Journal handling, copy/verify/publication are the caller's responsibility (see
-    :class:`Ext4NativeWriter`).  ``ext2fs_namei`` must resolve the path first, so a
-    missing path is an error instead of an implicit create.  Returns the number of
-    bytes written.
+    This in-place primitive is private and must only receive a disposable copy
+    owned by :class:`Ext4NativeWriter`. ``ext2fs_namei`` must resolve the path
+    first, so a missing path is an error instead of an implicit create. Returns
+    the number of bytes written.
     """
 
     lib = library or libext2fs()
@@ -622,14 +622,40 @@ def ext4_write_file_native(
     return len(payload)
 
 
+def ext4_write_file_native(
+    image_path: str,
+    internal_path: str,
+    data: bytes,
+    *,
+    offset: int = 0,
+    library: LibExt2fs | None = None,
+) -> int:
+    """Safely overwrite an existing file through copy, verify, and publication.
+
+    This exported convenience API has the same fail-closed behavior as
+    :class:`Ext4NativeWriter`; direct in-place mutation is kept private.
+    """
+
+    return Ext4NativeWriter(library=library).write_file(
+        image_path, internal_path, data, offset
+    )
+
+
 class Ext4NativeWriter:
     """Copy -> gate -> libext2fs write -> verify -> atomic publish."""
 
-    def __init__(self, *, require_flag: bool = True, recover: str = "copy") -> None:
+    def __init__(
+        self,
+        *,
+        require_flag: bool = True,
+        recover: str = "copy",
+        library: LibExt2fs | None = None,
+    ) -> None:
         if recover not in ("copy", "refuse"):
             raise ValueError("recover must be 'copy' or 'refuse'")
         self.require_flag = require_flag
         self.recover = recover
+        self.library = library
         self.last_verification: dict | None = None
 
     def write_file(
@@ -662,7 +688,9 @@ class Ext4NativeWriter:
             # writes metadata outside any JBD2 transaction.
             _require_clean(temporary, 0)
             _run(["e2fsck", "-fn", temporary], allowed={0})
-            written = ext4_write_file_native(temporary, internal, data)
+            written = _ext4_write_file_native_in_place(
+                temporary, internal, data, library=self.library
+            )
             self.last_verification = verify_image_after_operation(temporary, 0)
             _atomic_replace(source_path, temporary)
             temporary = ""
