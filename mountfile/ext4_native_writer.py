@@ -45,6 +45,7 @@ from mountfile.native_write import (
     NativeWriteError,
     NativeWriteUnsafe,
     _atomic_replace,
+    _fault,
     _image_copy,
     _require_enabled,
     _require_tools,
@@ -446,6 +447,48 @@ def _require_clean(image_path: str, offset: int) -> None:
         )
 
 
+def _recover_flag_set(image_path: str, offset: int) -> bool:
+    """Read the authoritative ``EXT4_FEATURE_INCOMPAT_RECOVER`` bit from disk."""
+
+    superblock = _read_superblock(image_path, offset)
+    incompat = struct.unpack_from("<I", superblock, 0x60)[0]
+    return bool(incompat & EXT4_FEATURE_INCOMPAT_RECOVER)
+
+
+def verify_image_after_operation(
+    image_path: str, offset: int = 0, *, runner=_run
+) -> dict:
+    """Run the independent checker after **every** ext4 mutation, not only recovery.
+
+    Issue #510, block B: ``e2fsck -f -n`` used to be attached to the recovery
+    path, so an ordinary write was validated by the library's own read-back
+    alone.  Three independent invariants are required here:
+
+    * ``e2fsck -fn`` must exit 0 -- any error, warning or repair makes the
+      operation fail closed before the copy is published;
+    * the JBD2 probe must be :class:`~mountfile.journal_safety.JournalState.CLEAN`;
+    * the ``RECOVER`` incompatibility bit must be clear in the on-disk
+      superblock, read back without trusting either of the two above.
+
+    Returns machine-readable evidence for the acceptance matrix.
+    """
+
+    result = runner(["e2fsck", "-fn", image_path], allowed={0})
+    _require_clean(image_path, offset)
+    if _recover_flag_set(image_path, offset):
+        raise Ext4ProfileUnsupported(
+            "ext4 RECOVER flag is still set after the operation"
+        )
+    probe = probe_journal(image_path, offset)
+    return {
+        "checker": "e2fsck -fn",
+        "exit_code": getattr(result, "returncode", 0),
+        "journal_state": probe.state.value,
+        "recover_flag": False,
+        "block_size": probe.block_size,
+    }
+
+
 def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
     """Replay JBD2 with ``e2fsck -fy`` on the disposable copy.
 
@@ -460,7 +503,10 @@ def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
     if before.clean:
         return False
     runner(["e2fsck", "-fy", image_path], allowed={0, 1, 2, 3})
-    _require_clean(image_path, offset)
+    # A replay that leaves the copy dirty, uncorrectable or structurally broken
+    # (a torn commit record, a bad descriptor, an out-of-ring head) must never be
+    # treated as recovery success: the checker is re-run with repair disabled.
+    verify_image_after_operation(image_path, offset, runner=runner)
     return True
 
 
@@ -489,6 +535,7 @@ def ext4_write_file_native(
     if len(payload) > 0xFFFFFFFF:
         raise NativeWriteUnsafe("payload exceeds the bounded write size")
 
+    _fault("mutation:start")
     with _open_fs(lib, image_path, offset, EXT2_FLAG_RW | EXT2_FLAG_64BITS) as fs:
         inode_number = ctypes.c_uint(0)
         _check(
@@ -569,7 +616,9 @@ def ext4_write_file_native(
                     "ext2fs_file_close(readback)",
                 )
         # ext2fs_flush() is what makes the bitmap/inode changes durable.
+        _fault("mutation:flush")
         _check(lib, lib.lib.ext2fs_flush(fs), "ext2fs_flush")
+    _fault("mutation:done")
     return len(payload)
 
 
@@ -581,6 +630,7 @@ class Ext4NativeWriter:
             raise ValueError("recover must be 'copy' or 'refuse'")
         self.require_flag = require_flag
         self.recover = recover
+        self.last_verification: dict | None = None
 
     def write_file(
         self, image_path: str, path: str, data: bytes, offset: int = 0
@@ -613,8 +663,7 @@ class Ext4NativeWriter:
             _require_clean(temporary, 0)
             _run(["e2fsck", "-fn", temporary], allowed={0})
             written = ext4_write_file_native(temporary, internal, data)
-            _run(["e2fsck", "-fn", temporary], allowed={0})
-            _require_clean(temporary, 0)
+            self.last_verification = verify_image_after_operation(temporary, 0)
             _atomic_replace(source_path, temporary)
             temporary = ""
             return written
@@ -632,11 +681,21 @@ class Ext4NativeWriter:
         delegate that operation to the project's already validated debugfs
         transactional writer so journal recovery and atomic publication remain
         identical to the other native paths.
+
+        The delegated writer checks its own copy, but the published result is
+        verified here as well: every writer operation, whichever backend produced
+        it, ends with ``e2fsck -fn`` plus a clean journal gate on the caller's
+        image (issue #510, block B).
         """
 
         from mountfile.native_write import Ext4TransactionalWriter
 
+        if self.require_flag:
+            _require_enabled()
+        _require_tools("e2fsck")
+        source = os.path.abspath(os.fspath(image_path))
         Ext4TransactionalWriter().create_file(image_path, path, data, offset)
+        self.last_verification = verify_image_after_operation(source, 0)
         return len(data)
 
 
@@ -653,6 +712,7 @@ def journal_gate_summary(image_path: str, offset: int = 0) -> dict:
         "journal_sequence": probe.journal_sequence,
         "libext2fs": libext2fs_available(),
         "native_write_enabled": enabled,
+        "post_operation_checker": "e2fsck -fn",
         "writable": bool(enabled and probe.clean),
     }
 
@@ -678,4 +738,5 @@ __all__ = [
     "probe_journal",
     "recover_journal_on_copy",
     "require_supported_profile",
+    "verify_image_after_operation",
 ]
