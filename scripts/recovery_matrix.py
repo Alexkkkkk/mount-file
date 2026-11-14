@@ -8,7 +8,8 @@ claim: unsupported or unproven recovery cells remain blockers.
 trusted generated-status gate compares that artifact with the trusted generator
 and only tolerates a capability schema version bump, so its payload stays
 byte-identical to the trusted output. The finer-grained operation x state x
-checker acceptance matrix is therefore published separately by
+checker acceptance matrix, including the experimental ext4/NTFS profiles that
+are not yet part of the capability matrix, is published separately by
 ``build_acceptance_report``.
 """
 from __future__ import annotations
@@ -30,10 +31,38 @@ _OPERATIONS = ("write-file", "mkdir", "delete", "rename", "journal-recovery")
 _STATES = ("clean", "dirty", "corrupt", "concurrent-change", "process-killed")
 _CHECKERS = {
     "ext2": "e2fsck -fn",
+    "ext3/ext4": "e2fsck -fn",
+    "NTFS": "ntfs-aware-checker (unavailable)",
     "FAT12": "fsck.fat -n",
     "FAT32": "fsck.fat -n",
     "exFAT": "fsck.exfat -n",
 }
+# Replay-capable profiles that are deliberately absent from the capability
+# matrix: they are reported with blocked verdicts, never as available writes.
+_EXPERIMENTAL_PROFILES = (
+    {
+        "profile_id": "ext4-native-rw",
+        "filesystem": "ext3/ext4",
+        "write_strategy": "staged-native-with-journal-replay",
+        "recovery": {
+            "rollback": "tested_on_failure",
+            "process_kill": "tested_with_recovery_sidecar",
+            "power_loss": "unsupported",
+            "quarantine": "tested_on_recovery_failure",
+        },
+    },
+    {
+        "profile_id": "ntfs-native-rw",
+        "filesystem": "NTFS",
+        "write_strategy": "staged-native-with-logfile-replay",
+        "recovery": {
+            "rollback": "not_proven",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "tested_on_recovery_failure",
+        },
+    },
+)
 _ACCEPTANCE_REASON = (
     "An acceptance cell stays not production-ready until its checker evidence "
     "is reproducible; power-loss remains unsupported."
@@ -65,6 +94,11 @@ def _writable_profiles() -> list[dict[str, object]]:
         for profile in NATIVE_CAPABILITY_MATRIX
         if profile.write_capabilities
     ]
+
+
+def _acceptance_profiles() -> list[dict[str, object]]:
+    """Writable profiles plus the experimental replay profiles."""
+    return [*_writable_profiles(), *(dict(item) for item in _EXPERIMENTAL_PROFILES)]
 
 
 def _acceptance_cells(
@@ -162,7 +196,7 @@ def build_acceptance_report() -> dict[str, object]:
     changing a trusted recovery claim.
     """
     entries = []
-    for profile in _writable_profiles():
+    for profile in _acceptance_profiles():
         recovery = profile["recovery"]
         if not isinstance(recovery, dict):
             raise TypeError("recovery contract must be a mapping")

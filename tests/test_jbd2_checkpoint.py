@@ -6,9 +6,12 @@ import pytest
 from mountfile.jbd2_checkpoint import (
     JBD2CheckpointExecutionError,
     coordinate_classic_jbd2_replay,
+    coordinate_classic_jbd2_replay_from_ring,
     execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
+    read_classic_jbd2_ring,
     reduce_classic_jbd2_transactions,
+    scan_classic_jbd2_transactions,
 )
 from mountfile.jbd2_writer import (
     JBD2DecodedTransaction,
@@ -99,6 +102,174 @@ def test_coordinate_classic_replay_decodes_reduces_and_checkpoints_atomically():
         sync=lambda: None,
     )
     assert plan.state_before.start == 5
+    assert stream.getvalue()[8 * 1024 : 9 * 1024] == b"R" * 1024
+    assert struct.unpack_from(">I", stream.getvalue(), 40 * 1024 + 24)[0] == 0
+
+
+def test_scanner_extracts_complete_transaction_from_ring():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+        journal_blocks=[40, 41, 42, 43],
+    )
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records)] = records
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    assert scan_classic_jbd2_transactions(ring, state) == (records,)
+
+
+def test_scanner_rejects_missing_commit_in_ring():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+    )
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records) - 1] = records[:-1]
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        scan_classic_jbd2_transactions(ring, state)
+
+
+def test_scanner_rejects_unknown_control_record():
+    records = list(
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+        )
+    )
+    unknown = bytearray(records[-1])
+    struct.pack_into(">I", unknown, 4, 99)
+    records[-1] = bytes(unknown)
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records)] = records
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        scan_classic_jbd2_transactions(ring, state)
+
+
+def test_scanner_follows_transaction_across_ring_end():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+    )
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[30] = records[0]
+    ring[31] = records[1]
+    ring[1] = records[2]
+    raw = bytearray(journal_superblock())
+    struct.pack_into(">I", raw, 28, 30)
+    state = parse_classic_jbd2_superblock(
+        raw,
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    assert scan_classic_jbd2_transactions(ring, state) == (tuple(records),)
+
+
+def test_scanner_rejects_revoke_record_outside_block():
+    records = list(
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+            revokes=[9],
+        )
+    )
+    revoke = bytearray(records[-2])
+    struct.pack_into(">I", revoke, 12, 1028)
+    records[-2] = bytes(revoke)
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records)] = records
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    with pytest.raises(JBD2WriteProfileError, match="revoke"):
+        scan_classic_jbd2_transactions(ring, state)
+
+
+def test_ring_reader_uses_explicit_physical_block_map():
+    stream = io.BytesIO(b"A" * 1024 + b"B" * 1024 + b"C" * 1024)
+    assert read_classic_jbd2_ring(stream, [2, 0, 1], block_size=1024, max_block=3) == (
+        b"C" * 1024,
+        b"A" * 1024,
+        b"B" * 1024,
+    )
+
+
+def test_ring_reader_rejects_short_or_out_of_bounds_physical_block():
+    with pytest.raises(JBD2WriteProfileError, match="truncated"):
+        read_classic_jbd2_ring(io.BytesIO(b"A" * 1023), [0], block_size=1024)
+    with pytest.raises(JBD2WriteProfileError, match="outside image"):
+        read_classic_jbd2_ring(
+            io.BytesIO(b"A" * 1024), [1], block_size=1024, max_block=1
+        )
+
+
+def test_ring_map_bridge_scans_and_checkpoints_real_stream():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+    )
+    image = bytearray(100 * 1024)
+    image[40 * 1024 : 41 * 1024] = journal_superblock()
+    physical = [40] + [41 + index for index in range(31)]
+    physical[5:8] = [50, 51, 52]
+    image[50 * 1024 : 51 * 1024] = records[0]
+    image[51 * 1024 : 52 * 1024] = records[1]
+    image[52 * 1024 : 53 * 1024] = records[2]
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    stream = io.BytesIO(image)
+    coordinate_classic_jbd2_replay_from_ring(
+        stream,
+        state=state,
+        physical_blocks=physical,
+        filesystem_uuid=UUID,
+        filesystem_blocks=100,
+        journal_physical_blocks=[40, 41, 42, 43],
+        journal_superblock_physical_block=40,
+        sync=lambda: None,
+    )
     assert stream.getvalue()[8 * 1024 : 9 * 1024] == b"R" * 1024
     assert struct.unpack_from(">I", stream.getvalue(), 40 * 1024 + 24)[0] == 0
 

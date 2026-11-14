@@ -31,6 +31,7 @@ from mountfile.ext4_native_writer import (
     probe_journal,
     recover_journal_on_copy,
     require_supported_profile,
+    resolve_journal_physical_blocks,
 )
 from mountfile.journal_safety import JournalState
 from mountfile.native_write import ENABLE_ENV, NativeWriteDisabled, NativeWriteUnsafe
@@ -83,6 +84,15 @@ def make_ext4(tmp_path, name="fs.img", size="32M", seed=b"seed\n"):
 
 def ext4_read(image, internal="/f.txt"):
     return _run(["debugfs", "-R", f"cat {internal}", str(image)]).stdout
+
+
+@needs_ext
+@needs_libext2fs
+def test_libext2fs_resolves_internal_journal_data_blocks(tmp_path):
+    image = make_ext4(tmp_path)
+    blocks = resolve_journal_physical_blocks(str(image))
+    assert len(blocks) == 1024
+    assert all(isinstance(block, int) and block > 0 for block in blocks)
 
 
 def set_recover_bit(image, *, set_bit=True):
