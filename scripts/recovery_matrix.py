@@ -66,11 +66,19 @@ def _acceptance_cells(profile, recovery: dict[str, str]) -> list[dict[str, str]]
                     else "not_proven"
                 )
             elif state == "concurrent-change":
-                source = recovery.get("rollback", "not_proven")
+                source = (
+                    recovery.get("rollback", "not_proven")
+                    if operation == "write-file"
+                    else "not_proven"
+                )
             elif state == "process-killed":
-                source = recovery.get("process_kill", "not_proven")
+                source = (
+                    recovery.get("process_kill", "not_proven")
+                    if operation == "write-file"
+                    else "not_proven"
+                )
             else:
-                source = recovery.get("rollback", "not_proven")
+                source = "not_proven"
             evidence = _typed_evidence(source)
             cells.append(
                 {

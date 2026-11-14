@@ -42,9 +42,9 @@
         {
           "checker": "fsck.fat -n",
           "operation": "write-file",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -77,16 +77,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -112,16 +112,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -147,16 +147,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -182,16 +182,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -262,9 +262,9 @@
         {
           "checker": "fsck.fat -n",
           "operation": "write-file",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -297,16 +297,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -332,16 +332,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -367,16 +367,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -402,16 +402,16 @@
         {
           "checker": "fsck.fat -n",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.fat -n",
@@ -482,9 +482,9 @@
         {
           "checker": "e2fsck -fn",
           "operation": "write-file",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
@@ -517,23 +517,23 @@
         {
           "checker": "e2fsck -fn",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "mkdir",
-          "source": "tested_with_recovery_sidecar",
+          "source": "not_proven",
           "state": "process-killed",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
@@ -552,23 +552,23 @@
         {
           "checker": "e2fsck -fn",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "delete",
-          "source": "tested_with_recovery_sidecar",
+          "source": "not_proven",
           "state": "process-killed",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
@@ -587,23 +587,23 @@
         {
           "checker": "e2fsck -fn",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "rename",
-          "source": "tested_with_recovery_sidecar",
+          "source": "not_proven",
           "state": "process-killed",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
@@ -622,23 +622,23 @@
         {
           "checker": "e2fsck -fn",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "e2fsck -fn",
           "operation": "journal-recovery",
-          "source": "tested_with_recovery_sidecar",
+          "source": "not_proven",
           "state": "process-killed",
-          "status": "pass"
+          "status": "not_proven"
         }
       ],
       "acceptance_dimensions": {
@@ -700,9 +700,9 @@
         {
           "checker": "fsck.exfat -n",
           "operation": "write-file",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
@@ -735,16 +735,16 @@
         {
           "checker": "fsck.exfat -n",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
           "operation": "mkdir",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
@@ -770,16 +770,16 @@
         {
           "checker": "fsck.exfat -n",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
           "operation": "delete",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
@@ -805,16 +805,16 @@
         {
           "checker": "fsck.exfat -n",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
           "operation": "rename",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
@@ -840,16 +840,16 @@
         {
           "checker": "fsck.exfat -n",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "corrupt",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",
           "operation": "journal-recovery",
-          "source": "tested_on_failure",
+          "source": "not_proven",
           "state": "concurrent-change",
-          "status": "pass"
+          "status": "not_proven"
         },
         {
           "checker": "fsck.exfat -n",

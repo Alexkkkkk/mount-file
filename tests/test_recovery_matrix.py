@@ -102,3 +102,23 @@ def test_ntfs_and_ext4_recovery_cells_remain_explicitly_blocked():
     profile_ids = {entry["profile_id"] for entry in report["entries"]}
     assert "ext4-native-rw" not in profile_ids
     assert "ntfs-native-rw" not in profile_ids
+
+
+def test_recovery_evidence_is_not_broadcast_to_uncovered_operations_or_states():
+    ext2 = next(
+        entry for entry in build_report()["entries"] if entry["profile_id"] == "ext2-native-rw"
+    )
+    process_killed = {
+        cell["operation"]: cell
+        for cell in ext2["acceptance_cells"]
+        if cell["state"] == "process-killed"
+    }
+    assert process_killed["write-file"]["status"] == "pass"
+    assert all(
+        process_killed[operation]["status"] == "not_proven"
+        for operation in ("mkdir", "delete", "rename", "journal-recovery")
+    )
+    corrupt = [
+        cell for cell in ext2["acceptance_cells"] if cell["state"] == "corrupt"
+    ]
+    assert all(cell["status"] == "not_proven" for cell in corrupt)
