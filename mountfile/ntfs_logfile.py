@@ -163,11 +163,13 @@ TRANSACTION_PREPARED = 2
 TRANSACTION_COMMITTED = 3
 
 # The overlay executor is intentionally narrower than the parser. Resident
-# value updates are the only operation with a bounded byte payload that can be
+# value updates are the only operations with a bounded byte payload that can be
 # applied after an independently validated target is supplied. MFT
 # allocation/reuse, bitmap changes, index updates and mirror repair require a
 # filesystem-aware metadata executor and remain typed refusals.
-BOUNDED_OVERLAY_OPERATIONS = frozenset((0x07,))  # UpdateResidentValue
+BOUNDED_OVERLAY_OPERATIONS = frozenset(
+    (0x07, 0x08)
+)  # UpdateResidentValue, UpdateNonresidentValue
 
 _STATE_NAMES = {
     TRANSACTION_UNINITIALIZED: "uninitialized",
@@ -497,6 +499,62 @@ def replay_analysis_on_resident_record(
         analysis,
         record.fixed_record,
         {(attribute_id, 0): target},
+    )
+
+
+def replay_analysis_on_nonresident_run(
+    analysis: NtfsLogFileAnalysis,
+    source: bytes | bytearray,
+    attribute: NtfsAttributeSummary,
+    *,
+    volume_offset: int,
+    cluster_size: int,
+    byte_offset: int,
+) -> tuple[bytes, tuple[OverlayProvenance, ...]]:
+    """Apply a bounded nonresident update to a private volume overlay.
+
+    The caller supplies the independently validated stream byte offset; the
+    resolver derives the physical byte offset from the runlist. All steps must
+    address that same attribute/run and have equal payload lengths. Fragmented,
+    sparse, compressed or incomplete ranges fail before staging any bytes.
+    """
+    steps = tuple(
+        step
+        for step in (*analysis.redo_plan, *analysis.undo_plan)
+        if step.operation not in SKIPPABLE_OPERATIONS
+    )
+    if not steps:
+        return bytes(source), ()
+    if any(step.operation != 0x08 for step in steps):
+        raise NtfsReplayOverlayError(
+            "nonresident run replay requires UpdateNonresidentValue operations"
+        )
+    identities = {(step.target_attr, step.target_vcn) for step in steps}
+    if len(identities) != 1:
+        raise NtfsReplayOverlayError(
+            "nonresident run replay requires one attribute and one VCN"
+        )
+    lengths = {len(step.payload) for step in steps}
+    if len(lengths) != 1 or not lengths:
+        raise NtfsReplayOverlayError(
+            "nonresident run replay requires equal non-empty payload lengths"
+        )
+    attribute_id, target_vcn = next(iter(identities))
+    if attribute.attribute_id != attribute_id:
+        raise NtfsReplayOverlayError("nonresident replay attribute identity mismatch")
+    target = resolve_nonresident_run_target(
+        attribute,
+        volume_offset=volume_offset,
+        cluster_size=cluster_size,
+        byte_offset=byte_offset,
+        length=next(iter(lengths)),
+    )
+    if target.target_vcn != target_vcn:
+        raise NtfsReplayOverlayError("nonresident replay VCN does not match run target")
+    return replay_analysis_to_overlay(
+        analysis,
+        source,
+        {(attribute_id, target_vcn): target},
     )
 
 
@@ -1500,6 +1558,7 @@ __all__ = [
     "parse_restart_pages",
     "replay_analysis_to_overlay",
     "replay_analysis_on_resident_record",
+    "replay_analysis_on_nonresident_run",
     "resolve_resident_attribute_target",
     "resolve_nonresident_run_target",
     "read_logfile_stream",
