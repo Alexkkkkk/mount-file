@@ -9,8 +9,8 @@ from mountfile.jbd2_checkpoint import (
     coordinate_classic_jbd2_replay_from_ring,
     execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
-    reduce_classic_jbd2_transactions,
     read_classic_jbd2_ring,
+    reduce_classic_jbd2_transactions,
     scan_classic_jbd2_transactions,
 )
 from mountfile.jbd2_writer import (
@@ -222,9 +222,11 @@ def test_scanner_rejects_revoke_record_outside_block():
 
 def test_ring_reader_uses_explicit_physical_block_map():
     stream = io.BytesIO(b"A" * 1024 + b"B" * 1024 + b"C" * 1024)
-    assert read_classic_jbd2_ring(
-        stream, [2, 0, 1], block_size=1024, max_block=3
-    ) == (b"C" * 1024, b"A" * 1024, b"B" * 1024)
+    assert read_classic_jbd2_ring(stream, [2, 0, 1], block_size=1024, max_block=3) == (
+        b"C" * 1024,
+        b"A" * 1024,
+        b"B" * 1024,
+    )
 
 
 def test_ring_reader_rejects_short_or_out_of_bounds_physical_block():

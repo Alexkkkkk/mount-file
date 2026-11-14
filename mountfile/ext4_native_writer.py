@@ -40,9 +40,9 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.jbd2_checkpoint import coordinate_classic_jbd2_replay_from_ring
 from mountfile.jbd2_writer import parse_classic_jbd2_superblock
+from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.native_write import (
     NativeWriteError,
     NativeWriteUnsafe,
@@ -333,9 +333,7 @@ def resolve_journal_physical_blocks(
     with _open_fs(lib, image_path, offset, 0) as fs:
         _check(
             lib,
-            lib.lib.ext2fs_block_iterate3(
-                fs, journal_inode, 0, None, collect, None
-            ),
+            lib.lib.ext2fs_block_iterate3(fs, journal_inode, 0, None, collect, None),
             f"ext2fs_block_iterate3(journal inode {journal_inode})",
         )
     if not blocks or min(blocks) != 0 or set(blocks) != set(range(len(blocks))):
@@ -387,12 +385,14 @@ def native_classic_jbd2_recover(image_path: str, offset: int = 0) -> None:
             stream,
             state=state,
             physical_blocks=tuple(
-                offset // profile["block_size"] + physical for physical in physical_blocks
+                offset // profile["block_size"] + physical
+                for physical in physical_blocks
             ),
             filesystem_uuid=filesystem_uuid,
             filesystem_blocks=blocks_lo,
             journal_physical_blocks=tuple(
-                offset // profile["block_size"] + physical for physical in physical_blocks
+                offset // profile["block_size"] + physical
+                for physical in physical_blocks
             ),
             journal_superblock_physical_block=(
                 offset // profile["block_size"] + physical_blocks[0]
@@ -795,9 +795,7 @@ def ext4_write_file_native(
 
     return Ext4NativeWriter(
         library=library, native_coordinator=native_coordinator
-    ).write_file(
-        image_path, internal_path, data, offset
-    )
+    ).write_file(image_path, internal_path, data, offset)
 
 
 class Ext4NativeWriter:
@@ -851,9 +849,11 @@ class Ext4NativeWriter:
                     native_coordinator=(
                         self.native_coordinator
                         if self.native_coordinator is not None
-                        else native_classic_jbd2_recover
-                        if self.recover == "native"
-                        else None
+                        else (
+                            native_classic_jbd2_recover
+                            if self.recover == "native"
+                            else None
+                        )
                     ),
                 )
             # A clean journal is a precondition, not a formality: the library below

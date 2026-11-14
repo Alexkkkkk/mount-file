@@ -30,8 +30,8 @@ from mountfile.ext4_native_writer import (
     libext2fs_available,
     probe_journal,
     recover_journal_on_copy,
-    resolve_journal_physical_blocks,
     require_supported_profile,
+    resolve_journal_physical_blocks,
 )
 from mountfile.journal_safety import JournalState
 from mountfile.native_write import ENABLE_ENV, NativeWriteDisabled, NativeWriteUnsafe

@@ -77,7 +77,9 @@ def scan_classic_jbd2_transactions(
     if state.start == 0:
         return ()
     block_size = state.block_size
-    if any(not isinstance(block, bytes) or len(block) != block_size for block in journal):
+    if any(
+        not isinstance(block, bytes) or len(block) != block_size for block in journal
+    ):
         raise JBD2WriteProfileError("JBD2 journal contains a partial block")
 
     def at(position: int) -> bytes:
@@ -135,17 +137,15 @@ def scan_classic_jbd2_transactions(
                 raise JBD2WriteProfileError("JBD2 control record sequence is invalid")
             if control_type == 5:
                 byte_count = struct.unpack_from(">I", control, 12)[0]
-                if (
-                    byte_count < 16
-                    or byte_count > block_size
-                    or byte_count % 4
-                ):
+                if byte_count < 16 or byte_count > block_size or byte_count % 4:
                     raise JBD2WriteProfileError("JBD2 revoke record length is invalid")
                 records.append(control)
                 position = advance(position)
                 continue
             if control_type != 2:
-                raise JBD2WriteProfileError("JBD2 transaction is missing a commit record")
+                raise JBD2WriteProfileError(
+                    "JBD2 transaction is missing a commit record"
+                )
             records.append(control)
             transactions.append(tuple(records))
             position = advance(position)
@@ -194,7 +194,9 @@ def read_classic_jbd2_ring(
             stream.seek(physical * block_size)
             block = stream.read(block_size)
         except (OSError, AttributeError, TypeError) as exc:
-            raise JBD2WriteProfileError(f"cannot read JBD2 physical block: {exc}") from exc
+            raise JBD2WriteProfileError(
+                f"cannot read JBD2 physical block: {exc}"
+            ) from exc
         if not isinstance(block, bytes) or len(block) != block_size:
             raise JBD2WriteProfileError("JBD2 physical block is truncated")
         result.append(block)
@@ -219,9 +221,7 @@ def coordinate_classic_jbd2_replay_from_ring(
     requires the caller to provide a validated superblock state and physical
     mapping; no ext4 inode or extent assumptions are made here.
     """
-    ring = read_classic_jbd2_ring(
-        stream, physical_blocks, block_size=state.block_size
-    )
+    ring = read_classic_jbd2_ring(stream, physical_blocks, block_size=state.block_size)
     records = scan_classic_jbd2_transactions(ring, state)
     superblock = ring[0]
     return coordinate_classic_jbd2_replay(

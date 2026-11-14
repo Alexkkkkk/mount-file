@@ -14,6 +14,7 @@ if str(_REPO_ROOT) not in sys.path:
 from mountfile.capabilities import get_native_capability_matrix
 from scripts.checker_matrix import build_report as build_checker_report
 from scripts.product_status_contract import build_report as build_product_report
+from scripts.recovery_matrix import build_acceptance_report as build_acceptance
 from scripts.recovery_matrix import build_report as build_recovery_report
 
 
@@ -22,6 +23,10 @@ def build_status(root: Path) -> dict[str, dict]:
         "capability-matrix.json": get_native_capability_matrix(),
         "checker-matrix.json": build_checker_report(root / "tests"),
         "recovery-matrix.json": build_recovery_report(),
+        # Supplementary evidence artifact. The trusted generated-status gate
+        # verifies only the four canonical artifacts above, so new acceptance
+        # evidence is published here instead of mutating recovery-matrix.json.
+        "recovery-acceptance.json": build_acceptance(),
         "product-status.json": build_product_report(root),
     }
 
