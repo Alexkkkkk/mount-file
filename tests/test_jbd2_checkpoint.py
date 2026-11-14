@@ -9,6 +9,7 @@ from mountfile.jbd2_checkpoint import (
     execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
     reduce_classic_jbd2_transactions,
+    scan_classic_jbd2_transactions,
 )
 from mountfile.jbd2_writer import (
     JBD2DecodedTransaction,
@@ -101,6 +102,26 @@ def test_coordinate_classic_replay_decodes_reduces_and_checkpoints_atomically():
     assert plan.state_before.start == 5
     assert stream.getvalue()[8 * 1024 : 9 * 1024] == b"R" * 1024
     assert struct.unpack_from(">I", stream.getvalue(), 40 * 1024 + 24)[0] == 0
+
+
+def test_scanner_extracts_complete_transaction_from_ring():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+        journal_blocks=[40, 41, 42, 43],
+    )
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records)] = records
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    assert scan_classic_jbd2_transactions(ring, state) == (records,)
 
 
 def test_coordinate_classic_replay_rejects_checksum_features_before_writes():

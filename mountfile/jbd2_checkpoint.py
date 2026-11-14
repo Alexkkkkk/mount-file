@@ -50,6 +50,104 @@ class JBD2CheckpointExecutionError(RuntimeError):
     """Checkpoint execution stopped before the clean marker was durable."""
 
 
+def scan_classic_jbd2_transactions(
+    journal: Sequence[bytes],
+    state: JBD2JournalState,
+    *,
+    max_transactions: int = 1 << 16,
+) -> tuple[tuple[bytes, ...], ...]:
+    """Extract complete classic transactions from a validated journal ring.
+
+    Only the no-checksum 32-bit-tag profile is accepted. The scanner follows
+    ``state.start``, validates descriptor tags and UUID placement, collects
+    data/revoke blocks until a matching commit, and returns immutable record
+    groups for :func:`coordinate_classic_jbd2_replay`. It never mutates the
+    journal and refuses torn or unknown control records.
+    """
+    if not isinstance(state, JBD2JournalState):
+        raise JBD2WriteProfileError("JBD2 scanner state has the wrong type")
+    if not isinstance(journal, Sequence) or isinstance(journal, bytes | str):
+        raise JBD2WriteProfileError("JBD2 journal must be a sequence of blocks")
+    if len(journal) != state.max_length:
+        raise JBD2WriteProfileError("JBD2 journal ring length disagrees with state")
+    if not isinstance(max_transactions, int) or isinstance(max_transactions, bool):
+        raise JBD2WriteProfileError("JBD2 scanner transaction limit is invalid")
+    if max_transactions <= 0:
+        raise JBD2WriteProfileError("JBD2 scanner transaction limit is invalid")
+    if state.start == 0:
+        return ()
+    block_size = state.block_size
+    if any(not isinstance(block, bytes) or len(block) != block_size for block in journal):
+        raise JBD2WriteProfileError("JBD2 journal contains a partial block")
+
+    def at(position: int) -> bytes:
+        if not state.first <= position < state.max_length:
+            raise JBD2WriteProfileError("JBD2 scanner position escaped the ring")
+        return journal[position]
+
+    def advance(position: int) -> int:
+        return state.first if position + 1 >= state.max_length else position + 1
+
+    position = state.start
+    transactions: list[tuple[bytes, ...]] = []
+    visited: set[int] = set()
+    while position not in visited and len(transactions) < max_transactions:
+        visited.add(position)
+        descriptor = at(position)
+        if not any(descriptor):
+            break
+        magic, record_type, sequence = struct.unpack_from(">III", descriptor, 0)
+        if magic != _JBD2_MAGIC or record_type != 1:
+            raise JBD2WriteProfileError("JBD2 scanner expected a descriptor")
+        if sequence != state.sequence and not transactions:
+            raise JBD2WriteProfileError("JBD2 descriptor sequence disagrees with state")
+        cursor = 12
+        tags = 0
+        while True:
+            if cursor + 8 > block_size:
+                raise JBD2WriteProfileError("JBD2 descriptor tags are truncated")
+            _target, flags = struct.unpack_from(">II", descriptor, cursor)
+            cursor += 8
+            if tags == 0 and not flags & 0x00000002:
+                if cursor + 16 > block_size:
+                    raise JBD2WriteProfileError("JBD2 descriptor UUID is truncated")
+                cursor += 16
+            tags += 1
+            if flags & 0x00000008:
+                break
+            if tags > (block_size - 12) // 8:
+                raise JBD2WriteProfileError("JBD2 descriptor has too many tags")
+        records = [descriptor]
+        position = advance(position)
+        for _ in range(tags):
+            records.append(at(position))
+            position = advance(position)
+        while True:
+            control = at(position)
+            control_magic, control_type, control_sequence = struct.unpack_from(
+                ">III", control, 0
+            )
+            if control_magic != _JBD2_MAGIC or control_sequence != sequence:
+                raise JBD2WriteProfileError("JBD2 control record sequence is invalid")
+            if control_type == 5:
+                if struct.unpack_from(">I", control, 12)[0] < 16:
+                    raise JBD2WriteProfileError("JBD2 revoke record length is invalid")
+                records.append(control)
+                position = advance(position)
+                continue
+            if control_type != 2:
+                raise JBD2WriteProfileError("JBD2 transaction is missing a commit record")
+            records.append(control)
+            transactions.append(tuple(records))
+            position = advance(position)
+            break
+    if not transactions:
+        raise JBD2WriteProfileError("JBD2 scanner found no complete transaction")
+    if len(transactions) >= max_transactions and position not in visited:
+        raise JBD2WriteProfileError("JBD2 scanner transaction limit exceeded")
+    return tuple(transactions)
+
+
 def reduce_classic_jbd2_transactions(
     transactions: Sequence[JBD2DecodedTransaction],
 ) -> dict[int, bytes]:
