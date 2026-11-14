@@ -6,6 +6,7 @@ import pytest
 from mountfile.jbd2_checkpoint import (
     JBD2CheckpointExecutionError,
     coordinate_classic_jbd2_replay,
+    coordinate_classic_jbd2_replay_from_ring,
     execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
     reduce_classic_jbd2_transactions,
@@ -233,6 +234,42 @@ def test_ring_reader_rejects_short_or_out_of_bounds_physical_block():
         read_classic_jbd2_ring(
             io.BytesIO(b"A" * 1024), [1], block_size=1024, max_block=1
         )
+
+
+def test_ring_map_bridge_scans_and_checkpoints_real_stream():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+    )
+    image = bytearray(100 * 1024)
+    image[40 * 1024 : 41 * 1024] = journal_superblock()
+    physical = [40] + [41 + index for index in range(31)]
+    physical[5:8] = [50, 51, 52]
+    image[50 * 1024 : 51 * 1024] = records[0]
+    image[51 * 1024 : 52 * 1024] = records[1]
+    image[52 * 1024 : 53 * 1024] = records[2]
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    stream = io.BytesIO(image)
+    coordinate_classic_jbd2_replay_from_ring(
+        stream,
+        state=state,
+        physical_blocks=physical,
+        filesystem_uuid=UUID,
+        filesystem_blocks=100,
+        journal_physical_blocks=[40, 41, 42, 43],
+        journal_superblock_physical_block=40,
+        sync=lambda: None,
+    )
+    assert stream.getvalue()[8 * 1024 : 9 * 1024] == b"R" * 1024
+    assert struct.unpack_from(">I", stream.getvalue(), 40 * 1024 + 24)[0] == 0
 
 
 def test_coordinate_classic_replay_rejects_checksum_features_before_writes():
