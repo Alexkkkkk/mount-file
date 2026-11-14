@@ -1,7 +1,223 @@
 {
+  "acceptance_dimensions": {
+    "checkers": {
+      "FAT12": "fsck.fat -n",
+      "FAT32": "fsck.fat -n",
+      "exFAT": "fsck.exfat -n",
+      "ext2": "e2fsck -fn"
+    },
+    "operations": [
+      "write-file",
+      "mkdir",
+      "delete",
+      "rename",
+      "journal-recovery"
+    ],
+    "states": [
+      "clean",
+      "dirty",
+      "corrupt",
+      "concurrent-change",
+      "process-killed"
+    ]
+  },
   "capability_matrix_version": 6,
   "entries": [
     {
+      "acceptance_cells": [
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "not_applicable",
+          "state": "clean",
+          "status": "unavailable"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        }
+      ],
+      "acceptance_dimensions": {
+        "checker": "fsck.fat -n",
+        "operations": [
+          "write-file",
+          "mkdir",
+          "delete",
+          "rename",
+          "journal-recovery"
+        ],
+        "states": [
+          "clean",
+          "dirty",
+          "corrupt",
+          "concurrent-change",
+          "process-killed"
+        ]
+      },
       "blocking_cells": [
         "process_kill",
         "power_loss",
@@ -28,6 +244,200 @@
       "verdict": "blocked"
     },
     {
+      "acceptance_cells": [
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "not_applicable",
+          "state": "clean",
+          "status": "unavailable"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.fat -n",
+          "operation": "journal-recovery",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        }
+      ],
+      "acceptance_dimensions": {
+        "checker": "fsck.fat -n",
+        "operations": [
+          "write-file",
+          "mkdir",
+          "delete",
+          "rename",
+          "journal-recovery"
+        ],
+        "states": [
+          "clean",
+          "dirty",
+          "corrupt",
+          "concurrent-change",
+          "process-killed"
+        ]
+      },
       "blocking_cells": [
         "process_kill",
         "power_loss",
@@ -54,6 +464,200 @@
       "verdict": "blocked"
     },
     {
+      "acceptance_cells": [
+        {
+          "checker": "e2fsck -fn",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "write-file",
+          "source": "tested_with_recovery_sidecar",
+          "state": "process-killed",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "mkdir",
+          "source": "tested_with_recovery_sidecar",
+          "state": "process-killed",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "delete",
+          "source": "tested_with_recovery_sidecar",
+          "state": "process-killed",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "rename",
+          "source": "tested_with_recovery_sidecar",
+          "state": "process-killed",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "journal-recovery",
+          "source": "not_applicable",
+          "state": "clean",
+          "status": "unavailable"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "journal-recovery",
+          "source": "tested_on_recovery_failure",
+          "state": "dirty",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "e2fsck -fn",
+          "operation": "journal-recovery",
+          "source": "tested_with_recovery_sidecar",
+          "state": "process-killed",
+          "status": "pass"
+        }
+      ],
+      "acceptance_dimensions": {
+        "checker": "e2fsck -fn",
+        "operations": [
+          "write-file",
+          "mkdir",
+          "delete",
+          "rename",
+          "journal-recovery"
+        ],
+        "states": [
+          "clean",
+          "dirty",
+          "corrupt",
+          "concurrent-change",
+          "process-killed"
+        ]
+      },
       "blocking_cells": [
         "power_loss"
       ],
@@ -78,6 +682,200 @@
       "verdict": "blocked"
     },
     {
+      "acceptance_cells": [
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "write-file",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "write-file",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "mkdir",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "mkdir",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "delete",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "delete",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "clean",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "rename",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "rename",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "journal-recovery",
+          "source": "not_applicable",
+          "state": "clean",
+          "status": "unavailable"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "journal-recovery",
+          "source": "not_proven",
+          "state": "dirty",
+          "status": "not_proven"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "corrupt",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "journal-recovery",
+          "source": "tested_on_failure",
+          "state": "concurrent-change",
+          "status": "pass"
+        },
+        {
+          "checker": "fsck.exfat -n",
+          "operation": "journal-recovery",
+          "source": "not_proven",
+          "state": "process-killed",
+          "status": "not_proven"
+        }
+      ],
+      "acceptance_dimensions": {
+        "checker": "fsck.exfat -n",
+        "operations": [
+          "write-file",
+          "mkdir",
+          "delete",
+          "rename",
+          "journal-recovery"
+        ],
+        "states": [
+          "clean",
+          "dirty",
+          "corrupt",
+          "concurrent-change",
+          "process-killed"
+        ]
+      },
       "blocking_cells": [
         "process_kill",
         "power_loss",

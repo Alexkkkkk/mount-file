@@ -54,3 +54,51 @@ def test_ext2_recovery_evidence_is_more_complete_but_not_production_ready():
     assert ext2["recovery"]["quarantine"] == "tested_on_recovery_failure"
     assert ext2["recovery"]["power_loss"] == "unsupported"
     assert ext2["blocking_cells"] == ["power_loss"]
+
+
+def test_acceptance_matrix_covers_every_declared_dimension_without_inference():
+    report = build_report()
+    dimensions = report["acceptance_dimensions"]
+    expected_count = len(dimensions["operations"]) * len(dimensions["states"])
+    assert dimensions["operations"] == [
+        "write-file",
+        "mkdir",
+        "delete",
+        "rename",
+        "journal-recovery",
+    ]
+    assert dimensions["states"] == [
+        "clean",
+        "dirty",
+        "corrupt",
+        "concurrent-change",
+        "process-killed",
+    ]
+    for entry in report["entries"]:
+        cells = entry["acceptance_cells"]
+        assert len(cells) == expected_count
+        assert {
+            (cell["operation"], cell["state"]) for cell in cells
+        } == {
+            (operation, state)
+            for operation in dimensions["operations"]
+            for state in dimensions["states"]
+        }
+        assert all(
+            cell["status"] in {"pass", "unavailable", "not_proven"}
+            for cell in cells
+        )
+        # No generated cell may silently claim success without a tested source.
+        assert all(
+            cell["status"] != "pass" or cell["source"].startswith("tested_")
+            for cell in cells
+        )
+
+
+def test_ntfs_and_ext4_recovery_cells_remain_explicitly_blocked():
+    report = build_report()
+    # These profiles are intentionally absent from the writable matrix until
+    # their replay executors are proven; the report must not manufacture them.
+    profile_ids = {entry["profile_id"] for entry in report["entries"]}
+    assert "ext4-native-rw" not in profile_ids
+    assert "ntfs-native-rw" not in profile_ids

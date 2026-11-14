@@ -19,6 +19,14 @@ from mountfile.capabilities import CAPABILITY_MATRIX_VERSION, NATIVE_CAPABILITY_
 
 _REQUIRED = ("rollback", "process_kill", "power_loss", "quarantine")
 _BLOCKING_VALUES = {"not_proven", "unsupported", "not_applicable"}
+_OPERATIONS = ("write-file", "mkdir", "delete", "rename", "journal-recovery")
+_STATES = ("clean", "dirty", "corrupt", "concurrent-change", "process-killed")
+_CHECKERS = {
+    "ext2": "e2fsck -fn",
+    "FAT12": "fsck.fat -n",
+    "FAT32": "fsck.fat -n",
+    "exFAT": "fsck.exfat -n",
+}
 
 
 def _typed_evidence(value: str) -> dict[str, str]:
@@ -32,6 +40,48 @@ def _typed_evidence(value: str) -> dict[str, str]:
     if value in {"unsupported", "not_applicable"}:
         return {"status": "unavailable", "source": value}
     return {"status": "not_proven", "source": value}
+
+
+def _acceptance_cells(profile, recovery: dict[str, str]) -> list[dict[str, str]]:
+    """Expand the compact recovery contract into auditable matrix cells.
+
+    Missing evidence is never inferred to be successful.  The expansion copies
+    profile-level evidence only to the matching state dimension and leaves all
+    other combinations explicitly unavailable or not proven.
+    """
+    checker = _CHECKERS.get(profile.filesystem, "unavailable")
+    cells: list[dict[str, str]] = []
+    for operation in _OPERATIONS:
+        for state in _STATES:
+            if state == "clean":
+                source = (
+                    "not_applicable"
+                    if operation == "journal-recovery"
+                    else "not_proven"
+                )
+            elif state == "dirty":
+                source = (
+                    recovery.get("quarantine", "not_proven")
+                    if operation == "journal-recovery"
+                    else "not_proven"
+                )
+            elif state == "concurrent-change":
+                source = recovery.get("rollback", "not_proven")
+            elif state == "process-killed":
+                source = recovery.get("process_kill", "not_proven")
+            else:
+                source = recovery.get("rollback", "not_proven")
+            evidence = _typed_evidence(source)
+            cells.append(
+                {
+                    "operation": operation,
+                    "state": state,
+                    "checker": checker,
+                    "status": evidence["status"],
+                    "source": evidence["source"],
+                }
+            )
+    return cells
 
 
 def build_report() -> dict[str, object]:
@@ -53,6 +103,12 @@ def build_report() -> dict[str, object]:
                 "evidence": "capability_contract",
                 "parity": "not_claimed",
                 "power_loss": recovery.get("power_loss", "unsupported"),
+                "acceptance_dimensions": {
+                    "operations": list(_OPERATIONS),
+                    "states": list(_STATES),
+                    "checker": _CHECKERS.get(profile.filesystem, "unavailable"),
+                },
+                "acceptance_cells": _acceptance_cells(profile, recovery),
             }
         )
     return {
@@ -64,6 +120,11 @@ def build_report() -> dict[str, object]:
             "A profile is not production-ready until every required recovery cell "
             "has reproducible evidence; power-loss remains unsupported."
         ),
+        "acceptance_dimensions": {
+            "operations": list(_OPERATIONS),
+            "states": list(_STATES),
+            "checkers": dict(_CHECKERS),
+        },
         "entries": entries,
     }
 
