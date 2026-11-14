@@ -108,8 +108,52 @@ def test_locked_image_is_rejected_without_mutation(tmp_path: Path):
     lock = image.with_name(image.name + ".lock")
     with lock.open("w") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with pytest.raises(RuntimeError, match="locked"):
-            TransactionalWriter(FakeEngine(), verify=lambda _: True).execute(
-                plan(image)
-            )
+        receipt = TransactionalWriter(FakeEngine(), verify=lambda _: True).execute(
+            plan(image)
+        )
+    assert receipt.outcome is WriteOutcome.REJECTED_PRECONDITION
+    assert "lock" in receipt.detail
     assert image.read_bytes() == b"ORIGINAL"
+
+
+def test_missing_source_returns_typed_precondition_receipt(tmp_path: Path):
+    image = tmp_path / "missing.img"
+    receipt = TransactionalWriter(FakeEngine(), verify=lambda _: True).execute(
+        plan(image)
+    )
+    assert receipt.outcome is WriteOutcome.REJECTED_PRECONDITION
+    assert "source image" in receipt.detail
+
+
+def test_external_change_during_write_is_not_published(tmp_path: Path):
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"ORIGINAL")
+
+    class MutatingEngine(FakeEngine):
+        def apply(self, copy: Path, plan: WritePlan) -> None:
+            super().apply(copy, plan)
+            image.write_bytes(b"EXTERNAL")
+
+    receipt = TransactionalWriter(
+        MutatingEngine(), verify=lambda copy: b"MUTATED" in copy.read_bytes()
+    ).execute(plan(image))
+    assert receipt.outcome is WriteOutcome.REJECTED_PRECONDITION
+    assert "changed during write" in receipt.detail
+    assert image.read_bytes() == b"EXTERNAL"
+
+
+def test_audit_failure_does_not_relabel_published_write(tmp_path: Path):
+    image = tmp_path / "disk.img"
+    image.write_bytes(b"ORIGINAL")
+
+    class BrokenJournal:
+        def append(self, receipt: object) -> None:
+            raise OSError("audit storage unavailable")
+
+    receipt = TransactionalWriter(
+        FakeEngine(),
+        verify=lambda copy: b"MUTATED" in copy.read_bytes(),
+        journal=BrokenJournal(),  # type: ignore[arg-type]
+    ).execute(plan(image))
+    assert receipt.outcome is WriteOutcome.COMMITTED
+    assert image.read_bytes() == b"ORIGINAL|MUTATED|"

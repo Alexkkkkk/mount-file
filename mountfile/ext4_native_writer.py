@@ -270,6 +270,14 @@ def normalize_internal_path(path: str) -> str:
 
 
 def _read_superblock(image_path: str, offset: int) -> bytes:
+    if offset < 0:
+        raise Ext4ProfileUnsupported("filesystem offset cannot be negative")
+    try:
+        image_size = os.path.getsize(image_path)
+    except OSError as exc:
+        raise Ext4ProfileUnsupported(f"cannot stat ext4 image: {exc}") from exc
+    if offset + 1024 + 1024 > image_size:
+        raise Ext4ProfileUnsupported("ext4 superblock is outside the image")
     with open(image_path, "rb") as handle:
         handle.seek(offset + 1024)
         superblock = handle.read(1024)
@@ -394,10 +402,18 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
     # cleanly unmounted one both keep a non-zero head (typically 1 or 2) inside
     # the ring.  Treating ``s_start != 0`` as dirty would refuse every healthy
     # image, so it is only reported, and a head outside the ring is corruption.
-    if start and max_length and not (first <= start < first + max_length):
+    if not max_length or first <= 0 or first >= max_length:
         return Ext4JournalProbe(
             JournalState.ERROR,
-            f"JBD2 head {start} is outside the ring [{first}, {first + max_length})",
+            f"invalid JBD2 ring geometry (first={first}, max_length={max_length})",
+            block_size,
+            start,
+            sequence,
+        )
+    if start and not (first <= start < max_length):
+        return Ext4JournalProbe(
+            JournalState.ERROR,
+            f"JBD2 head {start} is outside the ring [{first}, {max_length})",
             block_size,
             start,
             sequence,
@@ -516,6 +532,42 @@ def ext4_write_file_native(
                     )
         finally:
             _check(lib, lib.lib.ext2fs_file_close(handle), "ext2fs_file_close")
+        if payload:
+            read_handle = ctypes.c_void_p()
+            _check(
+                lib,
+                lib.lib.ext2fs_file_open2(
+                    fs,
+                    inode_number.value,
+                    None,
+                    0,
+                    ctypes.byref(read_handle),
+                ),
+                f"ext2fs_file_open2(readback {internal})",
+            )
+            try:
+                read_buffer = ctypes.create_string_buffer(len(payload))
+                read_count = ctypes.c_uint(0)
+                _check(
+                    lib,
+                    lib.lib.ext2fs_file_read(
+                        read_handle,
+                        read_buffer,
+                        len(payload),
+                        ctypes.byref(read_count),
+                    ),
+                    f"ext2fs_file_read(readback {internal})",
+                )
+                if read_count.value != len(payload) or read_buffer.raw != payload:
+                    raise NativeWriteError(
+                        f"ext4 semantic read-back mismatch for {internal}"
+                    )
+            finally:
+                _check(
+                    lib,
+                    lib.lib.ext2fs_file_close(read_handle),
+                    "ext2fs_file_close(readback)",
+                )
         # ext2fs_flush() is what makes the bitmap/inode changes durable.
         _check(lib, lib.lib.ext2fs_flush(fs), "ext2fs_flush")
     return len(payload)

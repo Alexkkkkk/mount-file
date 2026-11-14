@@ -119,6 +119,15 @@ def test_ext4_profile_check_rejects_non_ext_image(tmp_path):
         require_supported_profile(str(image), 0)
 
 
+@needs_ext
+def test_ext4_profile_check_rejects_offsets_outside_image(tmp_path):
+    image = make_ext4(tmp_path)
+    with pytest.raises(Ext4ProfileUnsupported, match="negative"):
+        require_supported_profile(str(image), -1)
+    with pytest.raises(Ext4ProfileUnsupported, match="outside"):
+        require_supported_profile(str(image), image.stat().st_size)
+
+
 def test_ext4_profile_check_rejects_unjournaled_image(tmp_path):
     image = tmp_path / "ext2.img"
     with open(image, "wb") as handle:

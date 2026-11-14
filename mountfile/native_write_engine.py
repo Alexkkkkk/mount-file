@@ -77,7 +77,13 @@ class JournalWriter:
         line = json.dumps(asdict(receipt), sort_keys=True, default=str) + "\n"
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
-            os.write(fd, line.encode("utf-8"))
+            payload = line.encode("utf-8")
+            written = 0
+            while written < len(payload):
+                count = os.write(fd, payload[written:])
+                if count <= 0:
+                    raise OSError("audit journal short write")
+                written += count
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -102,10 +108,39 @@ class TransactionalWriter:
     def execute(self, plan: WritePlan) -> WriteReceipt:
         started = time.monotonic()
         image = Path(plan.image)
-        original_hash = _sha256(image)
+        try:
+            original_hash = _sha256(image)
+        except OSError as exc:
+            return self._reject(
+                plan,
+                "",
+                started,
+                WriteOutcome.REJECTED_PRECONDITION,
+                f"source image: {exc}",
+            )
         temp: Path | None = None
         try:
-            with _exclusive_lock(image):
+            try:
+                lock = _exclusive_lock(image)
+                lock.__enter__()
+            except (OSError, RuntimeError) as exc:
+                return self._reject(
+                    plan,
+                    original_hash,
+                    started,
+                    WriteOutcome.REJECTED_PRECONDITION,
+                    f"lock: {exc}",
+                )
+            try:
+                locked_hash = _sha256(image)
+                if locked_hash != original_hash:
+                    return self._reject(
+                        plan,
+                        original_hash,
+                        started,
+                        WriteOutcome.REJECTED_PRECONDITION,
+                        "source image changed while acquiring the lock",
+                    )
                 try:
                     temp = _snapshot(image, self.workdir)
                 except OSError as exc:
@@ -115,6 +150,14 @@ class TransactionalWriter:
                         started,
                         WriteOutcome.REJECTED_PRECONDITION,
                         f"snapshot: {exc}",
+                    )
+                if _sha256(image) != locked_hash:
+                    return self._reject(
+                        plan,
+                        original_hash,
+                        started,
+                        WriteOutcome.REJECTED_PRECONDITION,
+                        "source image changed during snapshot",
                     )
                 try:
                     self.engine.prepare(temp)
@@ -145,6 +188,14 @@ class TransactionalWriter:
                         WriteOutcome.FAILED_VERIFY,
                         "verification on copy failed",
                     )
+                if _sha256(image) != locked_hash:
+                    return self._reject(
+                        plan,
+                        original_hash,
+                        started,
+                        WriteOutcome.REJECTED_PRECONDITION,
+                        "source image changed during write",
+                    )
                 final_hash = _sha256(temp)
                 try:
                     _atomic_replace(temp, image)
@@ -158,6 +209,8 @@ class TransactionalWriter:
                     )
                 temp = None
                 return self._commit(plan, original_hash, final_hash, started)
+            finally:
+                lock.__exit__(None, None, None)
         finally:
             if temp is not None:
                 with contextlib.suppress(OSError):
@@ -203,7 +256,13 @@ class TransactionalWriter:
 
     def _emit(self, receipt: WriteReceipt) -> None:
         if self.journal is not None:
-            self.journal.append(receipt)
+            try:
+                self.journal.append(receipt)
+            except OSError:
+                # Do not report a published filesystem mutation as failed after
+                # os.replace has already completed.  The returned receipt remains
+                # authoritative; audit storage can be repaired independently.
+                log.exception("could not append native-write audit receipt")
 
 
 @contextlib.contextmanager
