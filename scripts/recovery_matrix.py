@@ -47,10 +47,6 @@ def build_report() -> dict[str, object]:
                 "filesystem": profile.filesystem,
                 "strategy": profile.write_strategy,
                 "recovery": recovery,
-                "typed_evidence": {
-                    key: _typed_evidence(recovery.get(key, "not_proven"))
-                    for key in _REQUIRED
-                },
                 "required_cells": list(_REQUIRED),
                 "blocking_cells": blockers,
                 "verdict": "blocked" if blockers else "evidence_bounded",
@@ -60,7 +56,7 @@ def build_report() -> dict[str, object]:
             }
         )
     return {
-        "schema": 2,
+        "schema": 1,
         "report": "mountfile-writer-recovery-acceptance",
         "capability_matrix_version": CAPABILITY_MATRIX_VERSION,
         "production_ready": False,

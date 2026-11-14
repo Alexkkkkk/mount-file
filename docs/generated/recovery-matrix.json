@@ -25,24 +25,6 @@
         "quarantine"
       ],
       "strategy": "native-fat12-16",
-      "typed_evidence": {
-        "power_loss": {
-          "source": "unsupported",
-          "status": "unavailable"
-        },
-        "process_kill": {
-          "source": "not_proven",
-          "status": "not_proven"
-        },
-        "quarantine": {
-          "source": "not_proven",
-          "status": "not_proven"
-        },
-        "rollback": {
-          "source": "tested_on_failure",
-          "status": "pass"
-        }
-      },
       "verdict": "blocked"
     },
     {
@@ -69,24 +51,6 @@
         "quarantine"
       ],
       "strategy": "native",
-      "typed_evidence": {
-        "power_loss": {
-          "source": "unsupported",
-          "status": "unavailable"
-        },
-        "process_kill": {
-          "source": "not_proven",
-          "status": "not_proven"
-        },
-        "quarantine": {
-          "source": "not_proven",
-          "status": "not_proven"
-        },
-        "rollback": {
-          "source": "tested_on_failure",
-          "status": "pass"
-        }
-      },
       "verdict": "blocked"
     },
     {
@@ -111,24 +75,6 @@
         "quarantine"
       ],
       "strategy": "native-ext2",
-      "typed_evidence": {
-        "power_loss": {
-          "source": "unsupported",
-          "status": "unavailable"
-        },
-        "process_kill": {
-          "source": "tested_with_recovery_sidecar",
-          "status": "pass"
-        },
-        "quarantine": {
-          "source": "tested_on_recovery_failure",
-          "status": "pass"
-        },
-        "rollback": {
-          "source": "tested_on_failure",
-          "status": "pass"
-        }
-      },
       "verdict": "blocked"
     },
     {
@@ -155,29 +101,11 @@
         "quarantine"
       ],
       "strategy": "native-exfat-phase1",
-      "typed_evidence": {
-        "power_loss": {
-          "source": "unsupported",
-          "status": "unavailable"
-        },
-        "process_kill": {
-          "source": "not_proven",
-          "status": "not_proven"
-        },
-        "quarantine": {
-          "source": "not_proven",
-          "status": "not_proven"
-        },
-        "rollback": {
-          "source": "tested_on_failure",
-          "status": "pass"
-        }
-      },
       "verdict": "blocked"
     }
   ],
   "production_ready": false,
   "production_ready_reason": "A profile is not production-ready until every required recovery cell has reproducible evidence; power-loss remains unsupported.",
   "report": "mountfile-writer-recovery-acceptance",
-  "schema": 2
+  "schema": 1
 }

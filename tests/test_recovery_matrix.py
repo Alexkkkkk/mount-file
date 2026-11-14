@@ -1,13 +1,13 @@
 """Tests for the evidence-bounded writer recovery report."""
 
-from scripts.recovery_matrix import build_report
+from scripts.recovery_matrix import _typed_evidence, build_report
 
 
 def test_recovery_report_is_fail_closed_and_json_serialisable():
     import json
 
     report = build_report()
-    assert report["schema"] == 2
+    assert report["schema"] == 1
     assert report["capability_matrix_version"] == 6
     assert report["production_ready"] is False
     assert json.loads(json.dumps(report)) == report
@@ -23,15 +23,26 @@ def test_recovery_report_is_fail_closed_and_json_serialisable():
         entry["evidence"] == "capability_contract" for entry in report["entries"]
     )
     assert all(entry["parity"] == "not_claimed" for entry in report["entries"])
-    assert all(
-        {cell["status"] for cell in entry["typed_evidence"].values()}
-        <= {"pass", "unavailable", "not_proven"}
-        for entry in report["entries"]
-    )
-    assert all(
-        entry["typed_evidence"]["power_loss"]["status"] == "unavailable"
-        for entry in report["entries"]
-    )
+
+
+def test_typed_evidence_distinguishes_pass_unavailable_and_not_proven():
+    assert _typed_evidence("tested_on_failure") == {
+        "status": "pass",
+        "source": "tested_on_failure",
+    }
+    assert _typed_evidence("unsupported") == {
+        "status": "unavailable",
+        "source": "unsupported",
+    }
+    assert _typed_evidence("not_proven") == {
+        "status": "not_proven",
+        "source": "not_proven",
+    }
+    for entry in build_report()["entries"]:
+        assert entry["recovery"]["power_loss"] == "unsupported"
+        assert _typed_evidence(entry["recovery"]["power_loss"])["status"] == (
+            "unavailable"
+        )
 
 
 def test_ext2_recovery_evidence_is_more_complete_but_not_production_ready():
