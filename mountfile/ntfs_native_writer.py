@@ -314,7 +314,6 @@ class NtfsNativeWriter:
             raise NtfsProfileUnsupported(
                 "nonzero offsets are not supported by the bounded NTFS profile"
             )
-        _require_tools("ntfscp")
         internal = normalize_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
         if not os.path.isfile(source):
@@ -331,6 +330,7 @@ class NtfsNativeWriter:
                 raise NtfsReplayQuarantined(
                     quarantine_ntfs_image(source, reason=gate.reason)
                 )
+        _require_tools("ntfscp")
         source_path, temporary = _image_copy(source)
         try:
             gate = probe_ntfs_log(temporary, 0)
