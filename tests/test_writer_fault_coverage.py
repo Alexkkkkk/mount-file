@@ -8,9 +8,17 @@ names, and a real ext4 write emits every point in the documented order.
 
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from test_native_journal_writers import make_ext4, needs_ext, needs_libext2fs
 
+from mountfile.ext4_native_writer import probe_journal
+from mountfile.journal_safety import JournalState
 from mountfile.native_write import (
     ENABLE_ENV,
     FAULT_POINTS,
@@ -72,3 +80,79 @@ def test_ext4_writer_emits_every_declared_point_in_order(tmp_path, monkeypatch) 
     assert trace.index("mutation:start") < trace.index("mutation:flush")
     assert trace.index("mutation:flush") < trace.index("mutation:done")
     assert trace.index("mutation:done") < trace.index("publish:start")
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_KILL_CHILD = """
+import os
+import signal
+import sys
+
+from mountfile.native_write import fault_hook_installed
+
+target = sys.argv[1]
+
+
+def hook(name):
+    if name == target:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+fault_hook_installed(hook)
+from mountfile.ext4_native_writer import ext4_write_file_native
+
+ext4_write_file_native(sys.argv[2], "/f.txt", b"killed write\\n")
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
+@needs_ext
+@needs_libext2fs
+@pytest.mark.parametrize("point", FAULT_POINTS)
+def test_ext4_process_kill_preserves_source_until_publish(tmp_path, point) -> None:
+    """Kill the writer at every declared boundary and inspect the source image.
+
+    Every point before ``publish:done`` must leave the caller's image
+    byte-identical.  ``publish:done`` is the one point where the atomic replace
+    has already happened, so the new content is expected.
+    """
+
+    image = make_ext4(tmp_path, size="8M")
+    before = image.read_bytes()
+    environment = os.environ.copy()
+    environment[ENABLE_ENV] = "1"
+    environment["PYTHONPATH"] = str(_REPO_ROOT)
+    result = subprocess.run(
+        [sys.executable, "-c", _KILL_CHILD, point, str(image)],
+        cwd=str(_REPO_ROOT),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == -signal.SIGKILL, result.stderr
+    after = image.read_bytes()
+    if point == "publish:done":
+        assert after != before
+    else:
+        assert after == before
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_writer_finishes_with_a_clean_checkpointed_journal(
+    tmp_path, monkeypatch
+) -> None:
+    from mountfile.ext4_native_writer import ext4_write_file_native
+
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    ext4_write_file_native(str(image), "/f.txt", b"checkpoint evidence\n")
+    probe = probe_journal(str(image))
+    assert probe.state is JournalState.CLEAN
+    # A cleanly unmounted ext4 keeps a nonzero ring head; ``s_sequence == 0``
+    # is the actual "no pending transaction" checkpoint marker.
+    assert probe.journal_sequence == 0
+    from mountfile.native_write import _run
+
+    assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
