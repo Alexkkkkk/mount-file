@@ -40,7 +40,7 @@ devices and does not claim complete filesystem or forensic-tool parity.
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.88.0`.
+This block is generated from the canonical status data in this repository. Package version: `1.90.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 

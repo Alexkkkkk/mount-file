@@ -42,6 +42,7 @@ from mountfile.ext_probe import (
     _COMPAT_ORPHAN_FILE,
     _COMPAT_SPARSE_SUPER2,
     _INCOMPAT_64BIT,
+    _INCOMPAT_CSUM_SEED,
     _INCOMPAT_FLEX_BG,
     _RO_COMPAT_BIGALLOC,
     _RO_COMPAT_METADATA_CSUM,
@@ -119,7 +120,10 @@ class NativeExt3Image(NativeExt2Image):
         if profile.fs_type == "ext4":
             # EXTENTS | 64BIT | FLEX_BG: flex_bg only relocates group metadata
             # inside the filesystem, which the descriptor reader bounds-checks.
-            incompat_allowed |= 0x02C0
+            # CSUM_SEED only replaces the UUID-derived checksum seed with
+            # s_checksum_seed; the layout is unchanged and is verified by the
+            # same inode/directory/group checksums.
+            incompat_allowed |= 0x02C0 | _INCOMPAT_CSUM_SEED
         if profile.feature_incompat & ~incompat_allowed:
             raise Ext3ReadError("unsupported incompatible ext feature")
         ro_allowed = (
@@ -785,6 +789,9 @@ class NativeExt4Image(NativeExt3Image):
     def _checksum_seed(self) -> int:
         from mountfile.ext_checksum import crc32c_raw
 
+        stored = getattr(self.profile, "checksum_seed", None)
+        if stored is not None:
+            return int(stored) & 0xFFFFFFFF
         return crc32c_raw(self.profile.filesystem_uuid)
 
     def _validate_inode_checksum(self, number: int, raw: bytes) -> None:

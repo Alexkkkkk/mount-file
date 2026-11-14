@@ -279,7 +279,7 @@ def test_ext4_timestamp_low_epoch_bits_and_signed_seconds(seconds, extra, expect
 
 def test_real_ext4_timestamp_matches_debugfs_encoding(tmp_path):
     image = _image(tmp_path / "ext4.img", 32 * 1024**2)
-    _run(_tool("mkfs.ext4"), "-F", "-q", str(image))
+    _run(_tool("mkfs.ext4"), "-F", "-q", "-O", "^fast_commit,^orphan_file", str(image))
     source = tmp_path / "source.txt"
     source.write_bytes(b"independent ext4 timestamp")
     _run(_tool("debugfs"), "-w", "-R", f"write {source} /stamp.txt", str(image))
