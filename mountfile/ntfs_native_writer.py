@@ -30,25 +30,23 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from mountfile.ext4_native_writer import normalize_internal_path
 from mountfile.native_write import (
-    NativeWriteError,
     NativeWriteUnsafe,
     _atomic_replace,
     _image_copy,
     _require_enabled,
+    _require_source_unchanged,
     _require_tools,
     _run,
+    _sha256_file,
     _unlink,
     native_write_enabled,
-    validate_internal_path,
 )
 from mountfile.ntfs_mft import NtfsRecordError
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
-    NtfsLogFileUnused,
     NtfsMetadataError,
     parse_ntfs_volume_state,
 )
@@ -65,7 +63,7 @@ class NtfsLogGate:
     clean: bool
     reason: str
     volume_flags: int = 0
-    log_clean_dismount: Optional[bool] = None
+    log_clean_dismount: bool | None = None
     log_used: bool = True
     mirror_matches: bool = True
 
@@ -87,7 +85,10 @@ def probe_ntfs_log(image_path: str, offset: int = 0) -> NtfsLogGate:
     ``clean=False`` -- the gate is fail-closed by construction.
     """
 
-    size = os.path.getsize(image_path)
+    try:
+        size = os.path.getsize(image_path)
+    except OSError as exc:
+        return NtfsLogGate(False, f"image is not readable: {exc}")
     if offset < 0 or offset >= size:
         return NtfsLogGate(False, "offset is outside the image")
     volume_size = size - offset
@@ -218,6 +219,7 @@ class NtfsNativeWriter:
         _require_tools("ntfscp")
         internal = normalize_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         source_path, temporary = _image_copy(source)
         try:
             gate = probe_ntfs_log(temporary, 0)
@@ -231,6 +233,7 @@ class NtfsNativeWriter:
                 raise NtfsProfileUnsupported(
                     f"volume is not clean after the write: {after.reason}"
                 )
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
             return written

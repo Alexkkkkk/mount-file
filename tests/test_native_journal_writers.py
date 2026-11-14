@@ -10,13 +10,17 @@ writer that only *claims* success fails here.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import struct
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
+import mountfile.ext4_native_writer as ext4_native_writer
 from mountfile.ext4_native_writer import (
     Ext4NativeWriter,
     Ext4ProfileUnsupported,
@@ -55,9 +59,8 @@ def _run(command):
 
 def make_ext4(tmp_path, name="fs.img", size="32M", seed=b"seed\n"):
     image = tmp_path / name
-    handle = open(image, "wb")
-    handle.truncate(32 << 20)
-    handle.close()
+    with open(image, "wb") as handle:
+        handle.truncate(32 << 20)
     # ``^metadata_csum`` keeps the superblock checksum-free so the crash fixture
     # below can set the real RECOVER bit the way an interrupted mount would;
     # images with checksums are covered by the profile-rejection tests instead.
@@ -190,7 +193,8 @@ def test_ext4_replay_on_copy_uses_e2fsck_and_clears_recover(tmp_path):
 
 @needs_ext
 @needs_libext2fs
-def test_ext4_native_write_replaces_existing_file(tmp_path):
+def test_ext4_native_write_replaces_existing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
     image = make_ext4(tmp_path)
     payload = b"journal-gated native write\n" * 3
     written = ext4_write_file_native(str(image), "/f.txt", payload)
@@ -201,13 +205,153 @@ def test_ext4_native_write_replaces_existing_file(tmp_path):
 
 @needs_ext
 @needs_libext2fs
-def test_ext4_native_write_refuses_missing_target(tmp_path):
+def test_ext4_native_write_refuses_missing_target(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
     image = make_ext4(tmp_path)
     before = image.read_bytes()
     with pytest.raises(Exception) as excinfo:
         ext4_write_file_native(str(image), "/missing.txt", b"data")
     assert "missing" in str(excinfo.value)
     assert image.read_bytes() == before
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_public_write_requires_opt_in(tmp_path, monkeypatch):
+    monkeypatch.delenv(ENABLE_ENV, raising=False)
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+    with pytest.raises(NativeWriteDisabled):
+        ext4_write_file_native(str(image), "/f.txt", b"nope")
+    assert image.read_bytes() == before
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_public_write_verifier_failure_preserves_original(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+
+    def reject_verification(*_args, **_kwargs):
+        raise Ext4ProfileUnsupported("injected independent-checker failure")
+
+    monkeypatch.setattr(
+        "mountfile.ext4_native_writer.verify_image_after_operation",
+        reject_verification,
+    )
+    with pytest.raises(Ext4ProfileUnsupported, match="independent-checker"):
+        ext4_write_file_native(str(image), "/f.txt", b"must not publish")
+    assert image.read_bytes() == before
+
+
+@needs_ext
+def test_ext4_create_file_publishes_only_after_verification(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    Ext4NativeWriter().create_file(str(image), "/created.txt", b"created\n")
+    assert ext4_read(image, "/created.txt") == "created\n"
+    assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
+
+
+@needs_ext
+def test_ext4_create_file_verifier_failure_preserves_original(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+
+    def reject_verification(*_args, **_kwargs):
+        raise Ext4ProfileUnsupported("injected create_file verifier failure")
+
+    monkeypatch.setattr(
+        ext4_native_writer,
+        "verify_image_after_operation",
+        reject_verification,
+    )
+    with pytest.raises(Ext4ProfileUnsupported, match="create_file"):
+        Ext4NativeWriter().create_file(str(image), "/created.txt", b"x")
+    assert image.read_bytes() == before
+    assert ext4_read(image, "/created.txt") == ""
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_public_write_refuses_concurrent_source_change(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+    original_write = ext4_native_writer._ext4_write_file_native_in_place
+
+    def mutate_source_after_staging(*args, **kwargs):
+        written = original_write(*args, **kwargs)
+        with image.open("ab") as handle:
+            handle.write(b"external concurrent modification")
+        return written
+
+    monkeypatch.setattr(
+        ext4_native_writer,
+        "_ext4_write_file_native_in_place",
+        mutate_source_after_staging,
+    )
+    with pytest.raises(NativeWriteUnsafe, match="changed concurrently"):
+        ext4_write_file_native(str(image), "/f.txt", b"must not publish")
+    assert image.read_bytes() == before + b"external concurrent modification"
+
+
+@needs_ext
+@needs_libext2fs
+@pytest.mark.parametrize(
+    "fault_point",
+    (
+        "copy:start",
+        "copy:done",
+        "helper:start",
+        "helper:done",
+        "mutation:start",
+        "mutation:flush",
+        "mutation:done",
+        "publish:start",
+        "publish:done",
+    ),
+)
+def test_ext4_process_kill_at_writer_boundaries_is_original_or_complete(
+    tmp_path, fault_point
+):
+    """A killed guarded writer leaves the source intact or a complete publish."""
+    image = make_ext4(tmp_path)
+    original_hash = hashlib.sha256(image.read_bytes()).digest()
+    payload = b"complete ext4 publish only\n"
+    script = """
+import os
+import sys
+from pathlib import Path
+
+import mountfile.native_write as native_write
+from mountfile.ext4_native_writer import Ext4NativeWriter
+
+fault_point = sys.argv[2]
+def kill_at(point):
+    if point == fault_point:
+        os._exit(74)
+
+native_write.FAULT_HOOK = kill_at
+Ext4NativeWriter().write_file(sys.argv[1], "/f.txt", b"complete ext4 publish only\\n")
+"""
+    env = os.environ.copy()
+    env[ENABLE_ENV] = "1"
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(image), fault_point],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert crashed.returncode == 74, crashed.stdout + crashed.stderr
+    if fault_point == "publish:done":
+        assert ext4_read(image) == payload.decode()
+        assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
+    else:
+        assert hashlib.sha256(image.read_bytes()).digest() == original_hash
 
 
 @needs_ext
@@ -347,6 +491,12 @@ def test_ntfs_gate_rejects_offset_outside_image(tmp_path):
     gate = probe_ntfs_log(str(image), 1 << 40)
     assert gate.clean is False
     assert "offset" in gate.reason
+
+
+def test_ntfs_gate_fails_closed_when_image_is_unreadable(tmp_path):
+    gate = probe_ntfs_log(str(tmp_path / "missing.img"))
+    assert gate.clean is False
+    assert "not readable" in gate.reason
 
 
 # ------------------------------------------------------------------ NTFS write

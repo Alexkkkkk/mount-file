@@ -21,6 +21,19 @@ _REQUIRED = ("rollback", "process_kill", "power_loss", "quarantine")
 _BLOCKING_VALUES = {"not_proven", "unsupported", "not_applicable"}
 
 
+def _typed_evidence(value: str) -> dict[str, str]:
+    """Project legacy contract labels into an explicit evidence vocabulary.
+
+    ``pass`` is reserved for a reproducible test label. In particular,
+    ``unsupported`` becomes ``unavailable`` rather than a successful result.
+    """
+    if value.startswith("tested_"):
+        return {"status": "pass", "source": value}
+    if value in {"unsupported", "not_applicable"}:
+        return {"status": "unavailable", "source": value}
+    return {"status": "not_proven", "source": value}
+
+
 def build_report() -> dict[str, object]:
     entries = []
     for profile in NATIVE_CAPABILITY_MATRIX:

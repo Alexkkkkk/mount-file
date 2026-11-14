@@ -11,12 +11,13 @@ verification result fails closed.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shlex
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import PurePosixPath
 
 from mountfile.journal_safety import (
@@ -27,6 +28,40 @@ from mountfile.journal_safety import (
 
 ENABLE_ENV = "MOUNTFILE_ENABLE_NATIVE_WRITE"
 ENABLE_VALUE = "1"
+
+#: Names emitted by the primitives below, in the order a successful write emits
+#: them.  The seam lives *inside* the primitives that touch storage, so a new
+#: caller cannot forget to instrument it -- the review of issue #387 pointed out
+#: that hand-placed checkpoints can simply be missed.
+#: ``tests/test_writer_fault_coverage.py`` fails when the runtime stops emitting
+#: a declared point or emits an undeclared one.
+FAULT_POINTS = (
+    "copy:start",
+    "copy:done",
+    "helper:start",
+    "helper:done",
+    "mutation:start",
+    "mutation:flush",
+    "mutation:done",
+    "publish:start",
+    "publish:done",
+)
+
+FAULT_HOOK: Callable[[str], None] | None = None
+"""Test seam invoked inside every image-touching primitive.
+
+Runtime keeps it ``None``.  Acceptance fixtures install a hook that blocks until
+the parent process kills it, which reproduces a power loss between two durable
+states at a point the *primitive* guarantees was instrumented.
+"""
+
+
+def _fault(name: str) -> None:
+    """Report that execution reached the durable boundary ``name``."""
+
+    hook = FAULT_HOOK
+    if hook is not None:
+        hook(name)
 
 
 class NativeWriteError(RuntimeError):
@@ -111,11 +146,36 @@ def _image_copy(image_path: str) -> tuple[str, str]:
     )
     os.close(fd)
     try:
+        _fault("copy:start")
         shutil.copy2(source, temporary)
     except Exception:
         _unlink(temporary)
         raise
+    _fault("copy:done")
     return source, temporary
+
+
+def _sha256_file(path: str) -> bytes:
+    """Return a bounded-stream digest used for source identity checks."""
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _require_source_unchanged(source: str, expected: bytes) -> None:
+    """Refuse to publish a stage over a concurrently modified source image."""
+
+    try:
+        actual = _sha256_file(source)
+    except OSError as exc:
+        raise NativeWriteUnsafe(f"cannot verify source image identity: {exc}") from exc
+    if actual != expected:
+        raise NativeWriteUnsafe(
+            "source image changed concurrently; refusing to publish staged write"
+        )
 
 
 def _unlink(path: str) -> None:
@@ -127,6 +187,7 @@ def _run(
     command: Sequence[str], *, allowed: set[int] = frozenset({0}), timeout: int = 120
 ) -> subprocess.CompletedProcess[str]:
     try:
+        _fault("helper:start")
         result = subprocess.run(
             list(command),
             check=False,
@@ -143,6 +204,7 @@ def _run(
         raise NativeWriteUnsafe(
             f"helper returned {result.returncode}: {' '.join(command[:2])}; {detail}"
         )
+    _fault("helper:done")
     return result
 
 
@@ -180,8 +242,10 @@ def _fsync_path(path: str) -> None:
 
 
 def _atomic_replace(source: str, temporary: str) -> None:
+    _fault("publish:start")
     _fsync_path(temporary)
     os.replace(temporary, source)
+    _fault("publish:done")
     if os.name == "nt":
         return
     directory = os.path.dirname(source) or "."
@@ -193,6 +257,32 @@ def _atomic_replace(source: str, temporary: str) -> None:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def fault_point_trace(function, *args, **kwargs) -> list[str]:
+    """Run ``function`` with the seam installed and return the emitted points.
+
+    This is the primitive-level coverage instrument requested by the issue #387
+    review: the trace is produced by the runtime itself, not by names a test
+    author remembered to add.
+    """
+
+    global FAULT_HOOK
+    trace: list[str] = []
+    previous = FAULT_HOOK
+    FAULT_HOOK = trace.append
+    try:
+        function(*args, **kwargs)
+    finally:
+        FAULT_HOOK = previous
+    return trace
+
+
+def fault_hook_installed(hook: Callable[[str], None] | None) -> None:
+    """Install (or clear with ``None``) the process-wide fault seam."""
+
+    global FAULT_HOOK
+    FAULT_HOOK = hook
 
 
 class Ext4TransactionalWriter:
@@ -213,6 +303,7 @@ class Ext4TransactionalWriter:
         _require_zero_offset(offset)
         _require_tools("e2fsck", "debugfs")
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         directory = os.path.dirname(source) or "."
         internal = validate_internal_path(path)
         payload = _payload_file(data, directory)
@@ -230,6 +321,7 @@ class Ext4TransactionalWriter:
                 journal.require_clean(temporary)
             except JournalSafetyError as exc:
                 raise NativeWriteUnsafe(str(exc)) from exc
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
         finally:
@@ -255,6 +347,7 @@ class NtfsTransactionalWriter:
         _require_zero_offset(offset)
         internal = validate_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         source_path, temporary = _image_copy(source)
         payload = _payload_file(data, os.path.dirname(source) or ".")
         try:
@@ -268,6 +361,7 @@ class NtfsTransactionalWriter:
                 log_file.require_clean(temporary, _run)
             except JournalSafetyError as exc:
                 raise NativeWriteUnsafe(str(exc)) from exc
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
         finally:
@@ -277,11 +371,15 @@ class NtfsTransactionalWriter:
 
 __all__ = [
     "ENABLE_ENV",
+    "FAULT_HOOK",
+    "FAULT_POINTS",
     "Ext4TransactionalWriter",
     "NativeWriteDisabled",
     "NativeWriteError",
     "NativeWriteUnsafe",
     "NtfsTransactionalWriter",
+    "fault_hook_installed",
+    "fault_point_trace",
     "native_write_enabled",
     "validate_internal_path",
 ]
