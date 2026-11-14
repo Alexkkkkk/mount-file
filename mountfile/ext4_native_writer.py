@@ -36,7 +36,7 @@ import ctypes
 import ctypes.util
 import os
 import struct
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -499,11 +499,20 @@ def verify_image_after_operation(
     }
 
 
-def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
-    """Replay JBD2 with ``e2fsck -fy`` on the disposable copy.
+def recover_journal_on_copy(
+    image_path: str,
+    offset: int,
+    runner=_run,
+    *,
+    native_coordinator: Callable[[str, int], None] | None = None,
+) -> bool:
+    """Replay JBD2 on a disposable copy and independently verify the result.
 
-    This is the only supported recovery path: real journal records are applied by
-    e2fsprogs itself.  Returns ``True`` when a replay actually ran.
+    ``native_coordinator`` is the integration seam for a filesystem-aware
+    scanner plus :func:`jbd2_checkpoint.coordinate_classic_jbd2_replay`. It
+    must decode the complete journal before mutating this copy. When absent,
+    the established ``e2fsck -fy`` recovery path remains the conservative
+    fallback; either path is always followed by the independent checker.
     """
 
     require_supported_profile(image_path, offset)
@@ -512,7 +521,15 @@ def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
         raise Ext4ProfileUnsupported(before.message)
     if before.clean:
         return False
-    runner(["e2fsck", "-fy", image_path], allowed={0, 1, 2, 3})
+    if native_coordinator is not None:
+        try:
+            native_coordinator(image_path, offset)
+        except Exception as exc:
+            raise Ext4ProfileUnsupported(
+                f"native JBD2 coordinator refused recovery: {exc}"
+            ) from exc
+    else:
+        runner(["e2fsck", "-fy", image_path], allowed={0, 1, 2, 3})
     # A replay that leaves the copy dirty, uncorrectable or structurally broken
     # (a torn commit record, a bad descriptor, an out-of-ring head) must never be
     # treated as recovery success: the checker is re-run with repair disabled.
@@ -639,6 +656,7 @@ def ext4_write_file_native(
     *,
     offset: int = 0,
     library: LibExt2fs | None = None,
+    native_coordinator: Callable[[str, int], None] | None = None,
 ) -> int:
     """Safely overwrite an existing file through copy, verify, and publication.
 
@@ -646,7 +664,9 @@ def ext4_write_file_native(
     :class:`Ext4NativeWriter`; direct in-place mutation is kept private.
     """
 
-    return Ext4NativeWriter(library=library).write_file(
+    return Ext4NativeWriter(
+        library=library, native_coordinator=native_coordinator
+    ).write_file(
         image_path, internal_path, data, offset
     )
 
@@ -660,12 +680,14 @@ class Ext4NativeWriter:
         require_flag: bool = True,
         recover: str = "copy",
         library: LibExt2fs | None = None,
+        native_coordinator: Callable[[str, int], None] | None = None,
     ) -> None:
         if recover not in ("copy", "refuse"):
             raise ValueError("recover must be 'copy' or 'refuse'")
         self.require_flag = require_flag
         self.recover = recover
         self.library = library
+        self.native_coordinator = native_coordinator
         self.last_verification: dict | None = None
 
     def write_file(
@@ -694,7 +716,11 @@ class Ext4NativeWriter:
                     raise Ext4ProfileUnsupported(
                         "journal needs replay; refusing to write a dirty filesystem"
                     )
-                recover_journal_on_copy(temporary, 0)
+                recover_journal_on_copy(
+                    temporary,
+                    0,
+                    native_coordinator=self.native_coordinator,
+                )
             # A clean journal is a precondition, not a formality: the library below
             # writes metadata outside any JBD2 transaction.
             _require_clean(temporary, 0)
