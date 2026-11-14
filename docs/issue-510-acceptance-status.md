@@ -19,8 +19,8 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | Item | Status | Evidence |
 | --- | --- | --- |
 | `$LogFile` parser: RCRD, restart area, USA, redo/undo | implemented | `mountfile/ntfs_logfile.py`, `tests/test_ntfs_logfile_parser.py`. |
-| Undo for OPEN transactions | plan | `_build_plans()` produces an undo plan from active transactions; no image-level executor is enabled. |
-| Checkpointing and full redo | plan | Checkpoint LSN, transaction table and redo plan are parsed; `executable` stays `False`. |
+| Undo for OPEN transactions | partial | `_build_plans()` produces an undo plan from active transactions; `replay_analysis_to_overlay()` now applies it after committed redo to a private overlay with explicit targets. It is not an image writer. |
+| Checkpointing and full redo | partial | Checkpoint LSN, transaction table and redo plan are parsed; the bounded executor applies redo/undo in recovery order, but `executable` stays `False` until MFT/runlist resolution and crash evidence exist. |
 | Safe MFT allocation/reuse and `$MFTMirr` repair | not implemented | The gate only compares `$MFT`/`$MFTMirr` record 0 and refuses a mismatch. |
 | Replay on copied Windows/NTFS crash fixtures | not implemented | Only the read-only fixture exists; dirty/crashed fixtures are not available. |
 | Quarantine for unproven replay | implemented | `recover="copy"` writes a content-addressed copy plus JSON marker and raises `NtfsReplayQuarantined`; tests in `tests/test_native_journal_writers.py`. |
@@ -35,7 +35,7 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | Hash preservation on failure | verified | ext4 tests assert the source hash is unchanged; NTFS staged writes use the same source-identity guard. |
 | Source identity / concurrent modification | verified | SHA-256 is captured before staging and re-checked before atomic replace in ext4 and NTFS writers. |
 | Independent checker + read-back per operation | partial | ext4 uses `e2fsck -fn` plus journal gate after every operation; NTFS uses the `$LogFile` gate but has no replay checker. |
-| CI artifact profile × operation × state × checker | partial | The existing acceptance scripts and CI artifacts remain the source of truth; NTFS replay cells stay blocked. |
+| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses; `docs/generated/recovery-matrix.json` is verified against the generator. |
 | Unsupported cells as typed refusals | partial | Capability contracts and NTFS quarantine are typed; not every profile has an end-to-end assertion. |
 
 ## Block E — parity and status
