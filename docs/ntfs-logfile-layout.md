@@ -1,7 +1,10 @@
 # $LogFile on-disk layout verified against Linux `fs/ntfs3/fslog.c`
 
 > **Implementation boundary:** this document specifies the read-only, MIT
-> implementation in `mountfile.ntfs_logfile`. It is not a replay implementation.
+> implementation in `mountfile.ntfs_logfile`. It is not an image-level replay
+> implementation. `NtfsReplayOverlay` applies a plan only to a private in-memory
+> byte buffer when the caller has already resolved every target; it never opens
+> an image for writing and does not guess MFT/attribute/runlist locations.
 > The external `dfir_ntfs` project is GPL-3.0 and is therefore not vendored or
 > imported into this MIT project; it is also a parser rather than a complete
 > NTFS metadata mutation engine. Dirty-log replay remains `unavailable` and is
