@@ -71,6 +71,7 @@ EXT4_FEATURE_INCOMPAT_META_BG = 0x0010
 EXT4_FEATURE_INCOMPAT_CSUM_V2 = 0x0800
 EXT4_FEATURE_INCOMPAT_CSUM_V3 = 0x1000
 EXT4_FEATURE_COMPAT_CSUM_SEED = 0x2000
+EXT4_FEATURE_INCOMPAT_CSUM_SEED = 0x2000
 
 SUPPORTED_BLOCK_SIZES = frozenset((1024, 2048, 4096))
 
@@ -303,7 +304,7 @@ def require_supported_profile(image_path: str, offset: int = 0) -> dict:
         raise Ext4ProfileUnsupported(
             "journal/metadata checksum features are outside the validated profile"
         )
-    if compat & EXT4_FEATURE_COMPAT_CSUM_SEED:
+    if incompat & EXT4_FEATURE_INCOMPAT_CSUM_SEED:
         raise Ext4ProfileUnsupported("checksum seed is not supported")
     if not compat & EXT4_FEATURE_COMPAT_HAS_JOURNAL:
         raise Ext4ProfileUnsupported(
