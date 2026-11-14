@@ -21,7 +21,8 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | `$LogFile` parser: RCRD, restart area, USA, redo/undo | implemented | `mountfile/ntfs_logfile.py`, `tests/test_ntfs_logfile_parser.py`. |
 | Undo for OPEN transactions | partial | `_build_plans()` produces an undo plan from active transactions; `replay_analysis_to_overlay()` now applies it after committed redo to a private overlay with explicit targets. The executable overlay profile is limited to `UpdateResidentValue`; MFT/index/bitmap/mirror operations are typed refusals. It is not an image writer. |
 | Checkpointing and full redo | partial | Checkpoint LSN, transaction table and redo plan are parsed; the bounded executor applies redo/undo in recovery order, but `executable` stays `False` until MFT/runlist resolution and crash evidence exist. |
-| Safe MFT allocation/reuse and `$MFTMirr` repair | not implemented | The gate only compares `$MFT`/`$MFTMirr` record 0 and refuses a mismatch. |
+| Safe resident target resolution | partial | `resolve_resident_attribute_target()` validates a USA-restored FILE record, unique resident attribute id, value bounds and rejects `$ATTRIBUTE_LIST`/nonresident targets. |
+| Safe MFT allocation/reuse and `$MFTMirr` repair | not implemented | The gate only compares `$MFT`/`$MFTMirr` record 0 and refuses a mismatch; allocation, reuse, index and mirror operations remain typed refusals. |
 | Replay on copied Windows/NTFS crash fixtures | not implemented | Only the read-only fixture exists; dirty/crashed fixtures are not available. |
 | Quarantine for unproven replay | implemented | `recover="copy"` writes a content-addressed copy plus JSON marker and raises `NtfsReplayQuarantined`; tests in `tests/test_native_journal_writers.py`. |
 | `ntfsfix` is secondary, not authoritative | verified | `probe_ntfs_log()` reads `$Volume` and `$LogFile` structures; it never trusts a command exit code. |
