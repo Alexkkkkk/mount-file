@@ -166,6 +166,30 @@ def test_decoder_refuses_corrupted_commit_and_truncated_ring():
         )
 
 
+def test_classic_decoder_refuses_checksum_enabled_journal_features():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"A" * 1024},
+    )
+    with pytest.raises(JBD2WriteProfileError, match="checksum"):
+        decode_classic_jbd2_transaction(
+            records,
+            block_size=1024,
+            filesystem_blocks=100,
+            journal_features=(0, 1, 0),
+        )
+    with pytest.raises(JBD2WriteProfileError, match="features"):
+        decode_classic_jbd2_transaction(
+            records,
+            block_size=1024,
+            filesystem_blocks=100,
+            journal_features=[0, 0, 0],
+        )
+
+
 @pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (0, 1), (True, 2)])
 def test_reducer_rejects_invalid_or_nonforward_transaction_sequences(sequences):
     transactions = [JBD2DecodedTransaction(sequence, (), ()) for sequence in sequences]
