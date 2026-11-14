@@ -541,6 +541,46 @@ def replay_analysis_to_overlay(
     return NtfsReplayOverlay(source).apply(steps, targets)
 
 
+def replay_analysis_to_stream(
+    analysis: NtfsLogFileAnalysis,
+    stream: BinaryIO,
+    targets: Mapping[tuple[int, int], ReplayTarget],
+    *,
+    sync: Callable[[], None] | None = None,
+) -> tuple[OverlayProvenance, ...]:
+    """Execute a validated bounded analysis against a disposable stream.
+
+    This is the stream counterpart of :func:`replay_analysis_to_overlay`.
+    It keeps the parser's ordering and operation allow-list, then delegates
+    the all-or-nothing validation, durability barrier and read-back to
+    :meth:`NtfsReplayOverlay.apply_to_stream`. It never opens or publishes an
+    image and refuses every metadata operation outside the bounded profile.
+    """
+    if not isinstance(analysis, NtfsLogFileAnalysis):
+        raise NtfsReplayOverlayError("replay analysis has an invalid type")
+    if analysis.truncated:
+        raise NtfsReplayOverlayError(
+            "cannot execute a replay plan from a truncated $LogFile stream"
+        )
+    if not isinstance(targets, Mapping):
+        raise NtfsReplayOverlayError("replay targets must be an explicit mapping")
+    steps = (*analysis.redo_plan, *analysis.undo_plan)
+    unsupported = [
+        step.operation_name
+        for step in steps
+        if step.operation not in SKIPPABLE_OPERATIONS
+        and step.operation not in BOUNDED_OVERLAY_OPERATIONS
+    ]
+    if unsupported:
+        raise NtfsReplayOverlayError(
+            "NTFS replay operation requires an image-level metadata executor: "
+            + ", ".join(sorted(set(unsupported)))
+        )
+    return NtfsReplayOverlay(b"").apply_to_stream(
+        stream, steps, targets, sync=sync
+    )
+
+
 def replay_analysis_on_resident_record(
     analysis: NtfsLogFileAnalysis,
     record: NtfsFileRecordHeader,
@@ -1642,6 +1682,7 @@ __all__ = [
     "parse_clients",
     "parse_restart_pages",
     "replay_analysis_to_overlay",
+    "replay_analysis_to_stream",
     "replay_analysis_on_resident_record",
     "replay_analysis_on_nonresident_run",
     "resolve_resident_attribute_target",

@@ -13,6 +13,7 @@ from mountfile.ntfs_logfile import (
     ReplayStep,
     ReplayTarget,
     replay_analysis_to_overlay,
+    replay_analysis_to_stream,
     replay_analysis_on_resident_record,
     replay_analysis_on_nonresident_run,
     resolve_nonresident_run_target,
@@ -212,6 +213,22 @@ def test_analysis_executor_applies_committed_redo_before_active_undo() -> None:
         {(128, 0): ReplayTarget(128, 0, 2, 3)},
     )
     assert result == b"abUNDf"
+    assert [item.kind for item in provenance] == ["redo", "undo"]
+
+
+def test_analysis_stream_executor_applies_recovery_order_and_reads_back() -> None:
+    from io import BytesIO
+
+    stream = BytesIO(b"abcdef")
+    provenance = replay_analysis_to_stream(
+        _analysis(
+            redo=(step(kind="redo", payload=b"RED", lsn=1),),
+            undo=(step(kind="undo", payload=b"UND", lsn=2),),
+        ),
+        stream,
+        {(128, 0): ReplayTarget(128, 0, 2, 3)},
+    )
+    assert stream.getvalue() == b"abUNDf"
     assert [item.kind for item in provenance] == ["redo", "undo"]
 
 
