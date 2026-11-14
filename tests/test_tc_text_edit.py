@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """F4 text-edit save and encoding preservation tests."""
+
 import os
 import shutil
 import stat
@@ -265,7 +266,16 @@ def test_mount_ext_does_not_use_debugfs_fallback_without_pytsk3(monkeypatch, tmp
     with partition.open("wb") as stream:
         stream.truncate(8 * 1024 * 1024)
     subprocess.run(
-        [shutil.which("mke2fs"), "-q", "-F", "-t", "ext4", "-O", "^fast_commit,^orphan", str(partition)],
+        [
+            shutil.which("mke2fs"),
+            "-q",
+            "-F",
+            "-t",
+            "ext4",
+            "-O",
+            "^fast_commit,^orphan",
+            str(partition),
+        ],
         check=True,
     )
     seed_file = tmp_path / "factorySrv.ini"
