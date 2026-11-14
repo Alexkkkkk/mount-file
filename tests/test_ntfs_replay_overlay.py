@@ -96,3 +96,28 @@ def test_overlay_rejects_overlap_and_out_of_bounds_targets() -> None:
             [step(kind="redo", payload=b"XYZ")],
             {(128, 0): ReplayTarget(128, 0, 5, 3)},
         )
+
+
+def test_overlay_allows_adjacent_non_overlapping_targets() -> None:
+    result, provenance = NtfsReplayOverlay(b"abcdef").apply(
+        [
+            step(kind="redo", payload=b"XY", target_vcn=0),
+            step(kind="undo", payload=b"Z", target_vcn=1),
+        ],
+        {
+            (128, 0): ReplayTarget(128, 0, 0, 2),
+            (128, 1): ReplayTarget(128, 1, 2, 1),
+        },
+    )
+    assert result == b"XYZdef"
+    assert [item.offset for item in provenance] == [0, 2]
+
+
+def test_overlay_handles_large_payload_without_per_byte_state() -> None:
+    payload = b"q" * (1 << 20)
+    result, provenance = NtfsReplayOverlay(bytes(1 << 20)).apply(
+        [step(kind="redo", payload=payload)],
+        {(128, 0): ReplayTarget(128, 0, 0, len(payload))},
+    )
+    assert result == payload
+    assert provenance[0].length == len(payload)

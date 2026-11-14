@@ -29,6 +29,12 @@ tests:
   LSN -- prepared and committed transactions are never undone, and the undo
   pointer lives in the record header, not in the client record.
 
+The module also exposes :class:`NtfsReplayOverlay`, an atomic in-memory reducer
+for a plan whose byte targets were resolved by the caller.  It never opens an
+image, never guesses MFT/attribute/runlist locations, and is not wired into the
+native writer.  It exists so redo/undo ordering and payload selection can be
+proven before any image-level executor is allowed to exist.
+
 Refusals are typed, never silent: a log page whose size differs from the 4 KiB
 system page, records that cross the page's free-space boundary, multi-page
 records, ``transact_id`` values that are not valid table offsets, redo/undo
@@ -38,6 +44,7 @@ all raise :class:`NtfsLogFileError`.
 
 from __future__ import annotations
 
+import bisect
 import os
 import struct
 from collections.abc import Mapping, Sequence
@@ -233,7 +240,10 @@ class NtfsReplayOverlay:
         staged = bytearray(self._source)
         provenance: list[OverlayProvenance] = []
         validated: list[tuple[ReplayStep, ReplayTarget]] = []
-        occupied: dict[int, tuple[int, int]] = {}
+        # Interval list sorted by start offset.  A byte map would allocate one
+        # entry per payload byte, which is unbounded for large nonresident
+        # values; overlap detection only needs the occupied intervals.
+        occupied: list[tuple[int, int, tuple[int, int]]] = []
         for step in steps:
             if step.operation in SKIPPABLE_OPERATIONS:
                 continue
@@ -247,7 +257,10 @@ class NtfsReplayOverlay:
                     "replay target is unresolved: "
                     f"attr={step.target_attr} vcn={step.target_vcn}"
                 )
-            if target.target_attr != step.target_attr or target.target_vcn != step.target_vcn:
+            if (
+                target.target_attr != step.target_attr
+                or target.target_vcn != step.target_vcn
+            ):
                 raise NtfsReplayOverlayError("replay target identity mismatch")
             if target.offset < 0 or target.length < 0:
                 raise NtfsReplayOverlayError("replay target range is negative")
@@ -260,13 +273,13 @@ class NtfsReplayOverlay:
                 )
             range_end = target.offset + target.length
             target_key = (target.target_attr, target.target_vcn)
-            if any(
-                position in occupied and occupied[position] != target_key
-                for position in range(target.offset, range_end)
-            ):
-                raise NtfsReplayOverlayError("overlapping replay targets are ambiguous")
-            for position in range(target.offset, range_end):
-                occupied[position] = target_key
+            if target.length:
+                for start, end, key in occupied:
+                    if key != target_key and start < range_end and target.offset < end:
+                        raise NtfsReplayOverlayError(
+                            "overlapping replay targets are ambiguous"
+                        )
+                bisect.insort(occupied, (target.offset, range_end, target_key))
             validated.append((step, target))
         for step, target in validated:
             staged[target.offset : target.offset + target.length] = step.payload
