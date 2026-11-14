@@ -124,6 +124,10 @@ def scan_classic_jbd2_transactions(
             position = advance(position)
         while True:
             control = at(position)
+            if not any(control):
+                raise JBD2WriteProfileError(
+                    "JBD2 transaction is missing a commit record"
+                )
             control_magic, control_type, control_sequence = struct.unpack_from(
                 ">III", control, 0
             )

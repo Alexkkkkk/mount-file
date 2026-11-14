@@ -124,6 +124,51 @@ def test_scanner_extracts_complete_transaction_from_ring():
     assert scan_classic_jbd2_transactions(ring, state) == (records,)
 
 
+def test_scanner_rejects_missing_commit_in_ring():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+    )
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records) - 1] = records[:-1]
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        scan_classic_jbd2_transactions(ring, state)
+
+
+def test_scanner_rejects_unknown_control_record():
+    records = list(
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+        )
+    )
+    unknown = bytearray(records[-1])
+    struct.pack_into(">I", unknown, 4, 99)
+    records[-1] = bytes(unknown)
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records)] = records
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        scan_classic_jbd2_transactions(ring, state)
+
+
 def test_coordinate_classic_replay_rejects_checksum_features_before_writes():
     records = [
         encode_classic_jbd2_transaction(
