@@ -246,6 +246,35 @@ def test_ext4_public_write_verifier_failure_preserves_original(tmp_path, monkeyp
 
 
 @needs_ext
+def test_ext4_create_file_publishes_only_after_verification(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    Ext4NativeWriter().create_file(str(image), "/created.txt", b"created\n")
+    assert ext4_read(image, "/created.txt") == "created\n"
+    assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
+
+
+@needs_ext
+def test_ext4_create_file_verifier_failure_preserves_original(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+
+    def reject_verification(*_args, **_kwargs):
+        raise Ext4ProfileUnsupported("injected create_file verifier failure")
+
+    monkeypatch.setattr(
+        ext4_native_writer,
+        "verify_image_after_operation",
+        reject_verification,
+    )
+    with pytest.raises(Ext4ProfileUnsupported, match="create_file"):
+        Ext4NativeWriter().create_file(str(image), "/created.txt", b"x")
+    assert image.read_bytes() == before
+    assert ext4_read(image, "/created.txt") == ""
+
+
+@needs_ext
 @needs_libext2fs
 def test_ext4_public_write_refuses_concurrent_source_change(tmp_path, monkeypatch):
     monkeypatch.setenv(ENABLE_ENV, "1")

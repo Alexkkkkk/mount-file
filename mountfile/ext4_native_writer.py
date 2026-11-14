@@ -531,7 +531,7 @@ def _ext4_write_file_native_in_place(
     lib = library or libext2fs()
     require_supported_profile(image_path, offset)
     internal = normalize_internal_path(internal_path)
-    if not isinstance(data, (bytes, bytearray)):
+    if not isinstance(data, bytes | bytearray):
         raise NativeWriteUnsafe("ext4 native write requires bytes")
     payload = bytes(data)
     if len(payload) > 0xFFFFFFFF:
@@ -711,13 +711,11 @@ class Ext4NativeWriter:
         The in-process libext2fs profile intentionally supports overwriting an
         existing inode only.  Creation requires directory-entry allocation;
         delegate that operation to the project's already validated debugfs
-        transactional writer so journal recovery and atomic publication remain
-        identical to the other native paths.
-
-        The delegated writer checks its own copy, but the published result is
-        verified here as well: every writer operation, whichever backend produced
-        it, ends with ``e2fsck -fn`` plus a clean journal gate on the caller's
-        image (issue #510, block B).
+        transactional writer.  The delegation happens on a *disposable copy*:
+        the result is checked with ``e2fsck -fn`` and the journal gate, the
+        source identity is re-verified, and only then is the stage atomically
+        published.  A failed post-operation check therefore leaves the caller's
+        image byte-identical (issue #510, block B and D).
         """
 
         from mountfile.native_write import Ext4TransactionalWriter
@@ -725,10 +723,20 @@ class Ext4NativeWriter:
         if self.require_flag:
             _require_enabled()
         _require_tools("e2fsck")
+        internal = normalize_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
-        Ext4TransactionalWriter().create_file(image_path, path, data, offset)
-        self.last_verification = verify_image_after_operation(source, 0)
-        return len(data)
+        source_identity = _sha256_file(source)
+        source_path, temporary = _image_copy(source)
+        try:
+            Ext4TransactionalWriter().create_file(temporary, internal, data, offset)
+            self.last_verification = verify_image_after_operation(temporary, 0)
+            _require_source_unchanged(source_path, source_identity)
+            _atomic_replace(source_path, temporary)
+            temporary = ""
+            return len(data)
+        finally:
+            if temporary:
+                _unlink(temporary)
 
 
 def journal_gate_summary(image_path: str, offset: int = 0) -> dict:
