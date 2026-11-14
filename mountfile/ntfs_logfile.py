@@ -299,6 +299,33 @@ class NtfsReplayOverlay:
         return bytes(staged), tuple(provenance)
 
 
+def replay_analysis_to_overlay(
+    analysis: NtfsLogFileAnalysis,
+    source: bytes | bytearray,
+    targets: Mapping[tuple[int, int], ReplayTarget],
+) -> tuple[bytes, tuple[OverlayProvenance, ...]]:
+    """Apply a parsed redo/undo plan to a private, explicitly mapped overlay.
+
+    This is the first executable part of block C, but it is intentionally not
+    an NTFS image writer.  The caller must resolve every ``(attribute, VCN)``
+    target from validated MFT/runlist metadata.  The order is the recovery
+    order: redo committed transactions first, then undo active transactions.
+    Truncated analysis is refused before any bytes are staged.  No MFT
+    allocation, ``$MFTMirr`` repair, USA update, or filesystem publication is
+    performed here; those remain separate acceptance-gated work.
+    """
+    if not isinstance(analysis, NtfsLogFileAnalysis):
+        raise NtfsReplayOverlayError("replay analysis has an invalid type")
+    if analysis.truncated:
+        raise NtfsReplayOverlayError(
+            "cannot execute a replay plan from a truncated $LogFile stream"
+        )
+    if not isinstance(targets, Mapping):
+        raise NtfsReplayOverlayError("replay targets must be an explicit mapping")
+    steps = (*analysis.redo_plan, *analysis.undo_plan)
+    return NtfsReplayOverlay(source).apply(steps, targets)
+
+
 class _UnusedPage(Exception):
     """Internal marker for an erased (all ``0xFF``) log page."""
 
@@ -1296,5 +1323,6 @@ __all__ = [
     "analyze_logfile",
     "parse_clients",
     "parse_restart_pages",
+    "replay_analysis_to_overlay",
     "read_logfile_stream",
 ]

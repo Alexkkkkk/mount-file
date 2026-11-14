@@ -3,11 +3,13 @@ from __future__ import annotations
 import pytest
 
 from mountfile.ntfs_logfile import (
+    NtfsLogFileAnalysis,
     NtfsReplayOverlay,
     NtfsReplayOverlayError,
     OverlayProvenance,
     ReplayStep,
     ReplayTarget,
+    replay_analysis_to_overlay,
 )
 
 
@@ -121,3 +123,41 @@ def test_overlay_handles_large_payload_without_per_byte_state() -> None:
     )
     assert result == payload
     assert provenance[0].length == len(payload)
+
+
+def _analysis(*, redo=(), undo=(), truncated=False) -> NtfsLogFileAnalysis:
+    return NtfsLogFileAnalysis(
+        restart=object(),
+        page_size=4096,
+        first_page=0x4000,
+        log_size=0x10000,
+        scanned_bytes=0x10000,
+        current_lsn=10,
+        checkpoint_lsn=1,
+        oldest_lsn=1,
+        redo_plan=tuple(redo),
+        undo_plan=tuple(undo),
+        truncated=truncated,
+    )
+
+
+def test_analysis_executor_applies_committed_redo_before_active_undo() -> None:
+    result, provenance = replay_analysis_to_overlay(
+        _analysis(
+            redo=(step(kind="redo", payload=b"RED", lsn=1),),
+            undo=(step(kind="undo", payload=b"UND", lsn=2),),
+        ),
+        b"abcdef",
+        {(128, 0): ReplayTarget(128, 0, 2, 3)},
+    )
+    assert result == b"abUNDf"
+    assert [item.kind for item in provenance] == ["redo", "undo"]
+
+
+def test_analysis_executor_refuses_truncated_log_before_overlay() -> None:
+    with pytest.raises(NtfsReplayOverlayError, match="truncated"):
+        replay_analysis_to_overlay(
+            _analysis(redo=(step(kind="redo", payload=b"XYZ"),), truncated=True),
+            b"abcdef",
+            {(128, 0): target()},
+        )
