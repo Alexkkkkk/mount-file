@@ -58,9 +58,8 @@ def _run(command):
 
 def make_ext4(tmp_path, name="fs.img", size="32M", seed=b"seed\n"):
     image = tmp_path / name
-    handle = open(image, "wb")
-    handle.truncate(32 << 20)
-    handle.close()
+    with open(image, "wb") as handle:
+        handle.truncate(32 << 20)
     # ``^metadata_csum`` keeps the superblock checksum-free so the crash fixture
     # below can set the real RECOVER bit the way an interrupted mount would;
     # images with checksums are covered by the profile-rejection tests instead.

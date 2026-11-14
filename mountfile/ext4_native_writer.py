@@ -36,9 +36,9 @@ import ctypes
 import ctypes.util
 import os
 import struct
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Optional, Sequence
 
 from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.native_write import (
@@ -133,7 +133,7 @@ class LibExt2fs:
       ``EXT2_ROOT_INO`` for an image-internal absolute path).
     """
 
-    def __init__(self, library: Optional[str] = None) -> None:
+    def __init__(self, library: str | None = None) -> None:
         name = library or ctypes.util.find_library("ext2fs")
         if not name:
             raise LibExt2fsUnavailable(
@@ -212,7 +212,7 @@ class LibExt2fs:
             lib.ext2fs_error_name.restype = ctypes.c_char_p
 
 
-_DEFAULT_LIB: Optional[LibExt2fs] = None
+_DEFAULT_LIB: LibExt2fs | None = None
 
 
 def libext2fs() -> LibExt2fs:
@@ -516,7 +516,7 @@ def _ext4_write_file_native_in_place(
     data: bytes,
     *,
     offset: int = 0,
-    library: Optional[LibExt2fs] = None,
+    library: LibExt2fs | None = None,
 ) -> int:
     """Overwrite an **existing** file in a disposable ext4 copy via libext2fs.
 
