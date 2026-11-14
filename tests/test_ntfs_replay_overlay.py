@@ -10,6 +10,7 @@ from mountfile.ntfs_logfile import (
     ReplayStep,
     ReplayTarget,
     replay_analysis_to_overlay,
+    replay_analysis_on_resident_record,
     resolve_resident_attribute_target,
 )
 
@@ -217,3 +218,44 @@ def test_resident_target_resolver_refuses_nonresident_and_out_of_bounds_ranges()
     )
     with pytest.raises(NtfsReplayOverlayError, match="exceeds"):
         resolve_resident_attribute_target(resident, attribute_id=7, value_offset=2, length=2)
+
+
+def test_resident_record_executor_derives_target_and_applies_redo_then_undo() -> None:
+    from test_ntfs_reader import _record_with_attributes, _resident_attribute
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(
+        _record_with_attributes((_resident_attribute(0x80, 7, b"abcdef"),))
+    )
+    redo = step(kind="redo", payload=b"RED", target_attr=7, lsn=1)
+    undo = step(kind="undo", payload=b"UND", target_attr=7, lsn=2)
+    result, provenance = replay_analysis_on_resident_record(
+        _analysis(redo=(redo,), undo=(undo,)), record
+    )
+    assert result != record.fixed_record
+    assert [item.kind for item in provenance] == ["redo", "undo"]
+    target = resolve_resident_attribute_target(
+        record, attribute_id=7, value_offset=0, length=3
+    )
+    assert result[target.offset : target.offset + target.length] == b"UND"
+
+
+def test_resident_record_executor_rejects_mixed_attribute_targets() -> None:
+    from test_ntfs_reader import _record_with_attributes, _resident_attribute
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(
+        _record_with_attributes(
+            (_resident_attribute(0x80, 7, b"abc"), _resident_attribute(0x80, 8, b"xyz"))
+        )
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="one attribute target"):
+        replay_analysis_on_resident_record(
+            _analysis(
+                redo=(
+                    step(kind="redo", payload=b"AAA", target_attr=7),
+                    step(kind="redo", payload=b"BBB", target_attr=8),
+                )
+            ),
+            record,
+        )

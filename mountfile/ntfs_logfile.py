@@ -409,6 +409,51 @@ def replay_analysis_to_overlay(
     return NtfsReplayOverlay(source).apply(steps, targets)
 
 
+def replay_analysis_on_resident_record(
+    analysis: NtfsLogFileAnalysis,
+    record: NtfsFileRecordHeader,
+) -> tuple[bytes, tuple[OverlayProvenance, ...]]:
+    """Replay a bounded plan onto a private copy of one resident FILE record.
+
+    Every non-skipped step must address the same resident attribute id and VCN
+    zero, and every payload must have the same length.  The target offset is
+    derived from the validated record by
+    :func:`resolve_resident_attribute_target`; callers cannot inject an
+    arbitrary byte offset.  This remains an in-memory reducer and never writes
+    an MFT record or publishes an NTFS image.
+    """
+    steps = tuple(
+        step
+        for step in (*analysis.redo_plan, *analysis.undo_plan)
+        if step.operation not in SKIPPABLE_OPERATIONS
+    )
+    if not steps:
+        return bytes(record.fixed_record), ()
+    if any(step.operation not in BOUNDED_OVERLAY_OPERATIONS for step in steps):
+        raise NtfsReplayOverlayError(
+            "resident record replay contains an unsupported metadata operation"
+        )
+    identities = {(step.target_attr, step.target_vcn) for step in steps}
+    if len(identities) != 1 or next(iter(identities))[1] != 0:
+        raise NtfsReplayOverlayError(
+            "resident record replay requires one attribute target at VCN zero"
+        )
+    lengths = {len(step.payload) for step in steps}
+    if len(lengths) != 1 or not lengths:
+        raise NtfsReplayOverlayError(
+            "resident record replay requires equal non-empty payload lengths"
+        )
+    attribute_id, _vcn = next(iter(identities))
+    target = resolve_resident_attribute_target(
+        record, attribute_id=attribute_id, value_offset=0, length=next(iter(lengths))
+    )
+    return replay_analysis_to_overlay(
+        analysis,
+        record.fixed_record,
+        {(attribute_id, 0): target},
+    )
+
+
 class _UnusedPage(Exception):
     """Internal marker for an erased (all ``0xFF``) log page."""
 
@@ -1408,6 +1453,7 @@ __all__ = [
     "parse_clients",
     "parse_restart_pages",
     "replay_analysis_to_overlay",
+    "replay_analysis_on_resident_record",
     "resolve_resident_attribute_target",
     "read_logfile_stream",
 ]
