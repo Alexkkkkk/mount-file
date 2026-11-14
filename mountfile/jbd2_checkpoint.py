@@ -22,6 +22,7 @@ from .jbd2_writer import (
     JBD2DecodedTransaction,
     JBD2JournalState,
     JBD2WriteProfileError,
+    decode_classic_jbd2_transaction,
     parse_classic_jbd2_superblock,
 )
 
@@ -85,6 +86,64 @@ def reduce_classic_jbd2_transactions(
         reduced.update(transaction.writes)
         previous_sequence = sequence
     return dict(sorted(reduced.items()))
+
+
+def coordinate_classic_jbd2_replay(
+    stream: BinaryIO,
+    *,
+    superblock: bytes | bytearray | memoryview,
+    records: Sequence[Sequence[bytes]],
+    filesystem_block_size: int,
+    filesystem_uuid: bytes,
+    journal_blocks: int,
+    filesystem_blocks: int,
+    journal_physical_blocks: Sequence[int],
+    journal_superblock_physical_block: int,
+    journal_features: tuple[int, int, int] = (0, 0, 0),
+    sync: Callable[[], None] | None = None,
+    fault_injector: Callable[[JBD2CheckpointWrite], None] | None = None,
+) -> JBD2CheckpointPlan:
+    """Run the complete bounded classic replay/checkpoint pipeline.
+
+    ``records`` must already be split at committed transaction boundaries by a
+    filesystem-aware journal scanner. This coordinator performs the remaining
+    safety-critical sequence: reject checksum/unknown features, decode every
+    transaction before mutating the stream, reduce writes/revokes in sequence
+    order, plan data-before-clean-marker ordering, and execute the checkpoint.
+    It never publishes a filesystem image and refuses an empty or malformed
+    transaction set.
+    """
+    if not isinstance(records, Sequence) or isinstance(records, bytes | str):
+        raise JBD2WriteProfileError("JBD2 replay records must be a sequence")
+    decoded = tuple(
+        decode_classic_jbd2_transaction(
+            transaction,
+            block_size=filesystem_block_size,
+            filesystem_blocks=filesystem_blocks,
+            journal_blocks=journal_physical_blocks,
+            journal_features=journal_features,
+        )
+        for transaction in records
+    )
+    data_writes = reduce_classic_jbd2_transactions(decoded)
+    plan = plan_classic_jbd2_checkpoint(
+        superblock=superblock,
+        filesystem_block_size=filesystem_block_size,
+        filesystem_uuid=filesystem_uuid,
+        journal_blocks=journal_blocks,
+        filesystem_blocks=filesystem_blocks,
+        journal_physical_blocks=journal_physical_blocks,
+        data_writes=data_writes,
+        journal_superblock_physical_block=journal_superblock_physical_block,
+    )
+    execute_classic_jbd2_checkpoint(
+        stream,
+        plan,
+        block_size=filesystem_block_size,
+        sync=sync,
+        fault_injector=fault_injector,
+    )
+    return plan
 
 
 def _validate_block_number(block: int, filesystem_blocks: int) -> None:

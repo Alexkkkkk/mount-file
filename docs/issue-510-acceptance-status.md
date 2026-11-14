@@ -8,7 +8,7 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Checksums end-to-end | partial | v2/v3 primitives in `mountfile/ext4_jbd2_csum.py`; the classic decoder now explicitly rejects any nonzero JBD2 feature tuple, while corrupted commits and truncated rings fail closed in `tests/test_jbd2_checkpoint.py`. A full checksummed replay engine is not wired into the writer. |
+| Checksums end-to-end | partial | v2/v3 primitives in `mountfile/ext4_jbd2_csum.py`; the classic decoder and `coordinate_classic_jbd2_replay()` reject any nonzero JBD2 feature tuple, while corrupted commits and truncated rings fail closed. A checksummed replay engine is still not wired into the ext4 writer. |
 | Checkpointing in the writer cycle | verified | Every ext4 write ends with `JournalState.CLEAN` and `s_sequence == 0`, checked by `e2fsck -fn` in `tests/test_writer_fault_coverage.py`. |
 | Process-kill at every transaction boundary | verified | Real `SIGKILL` at every `FAULT_POINTS` boundary; the source image is byte-identical until `publish:done` (`tests/test_writer_fault_coverage.py`). |
 | Interrupted commit / malformed journal refusal | partial | Structural decoder refusal is tested; `e2fsck -fy` recovery on a disposable copy is re-verified with `e2fsck -fn` and the journal gate. |

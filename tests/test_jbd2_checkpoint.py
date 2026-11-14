@@ -5,6 +5,7 @@ import pytest
 
 from mountfile.jbd2_checkpoint import (
     JBD2CheckpointExecutionError,
+    coordinate_classic_jbd2_replay,
     execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
     reduce_classic_jbd2_transactions,
@@ -68,6 +69,68 @@ def test_checkpoint_orders_data_before_single_clean_superblock():
     )
     assert clean_state.empty is True
     assert clean_state.sequence == 0
+
+
+def test_coordinate_classic_replay_decodes_reduces_and_checkpoints_atomically():
+    records = [
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+            journal_blocks=[40, 41, 42, 43],
+        )
+    ]
+    stream = io.BytesIO(b"\x00" * (100 * 1024))
+    stream.seek(40 * 1024)
+    stream.write(journal_superblock())
+    stream.seek(0)
+    plan = coordinate_classic_jbd2_replay(
+        stream,
+        superblock=journal_superblock(),
+        records=records,
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+        filesystem_blocks=100,
+        journal_physical_blocks=[40, 41, 42, 43],
+        journal_superblock_physical_block=40,
+        sync=lambda: None,
+    )
+    assert plan.state_before.start == 5
+    assert stream.getvalue()[8 * 1024 : 9 * 1024] == b"R" * 1024
+    assert struct.unpack_from(">I", stream.getvalue(), 40 * 1024 + 24)[0] == 0
+
+
+def test_coordinate_classic_replay_rejects_checksum_features_before_writes():
+    records = [
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+            journal_blocks=[40, 41, 42, 43],
+        )
+    ]
+    stream = io.BytesIO(b"\x00" * (100 * 1024))
+    before = stream.getvalue()
+    with pytest.raises(JBD2WriteProfileError, match="features"):
+        coordinate_classic_jbd2_replay(
+            stream,
+            superblock=journal_superblock(),
+            records=records,
+            filesystem_block_size=1024,
+            filesystem_uuid=UUID,
+            journal_blocks=32,
+            filesystem_blocks=100,
+            journal_physical_blocks=[40, 41, 42, 43],
+            journal_superblock_physical_block=40,
+            journal_features=(1, 0, 0),
+            sync=lambda: None,
+        )
+    assert stream.getvalue() == before
 
 
 def test_checkpoint_is_deterministic_and_does_not_mutate_input():
