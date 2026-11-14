@@ -134,7 +134,12 @@ def scan_classic_jbd2_transactions(
             if control_magic != _JBD2_MAGIC or control_sequence != sequence:
                 raise JBD2WriteProfileError("JBD2 control record sequence is invalid")
             if control_type == 5:
-                if struct.unpack_from(">I", control, 12)[0] < 16:
+                byte_count = struct.unpack_from(">I", control, 12)[0]
+                if (
+                    byte_count < 16
+                    or byte_count > block_size
+                    or byte_count % 4
+                ):
                     raise JBD2WriteProfileError("JBD2 revoke record length is invalid")
                 records.append(control)
                 position = advance(position)

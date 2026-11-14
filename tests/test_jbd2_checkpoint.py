@@ -169,6 +169,55 @@ def test_scanner_rejects_unknown_control_record():
         scan_classic_jbd2_transactions(ring, state)
 
 
+def test_scanner_follows_transaction_across_ring_end():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"R" * 1024},
+    )
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[30] = records[0]
+    ring[31] = records[1]
+    ring[1] = records[2]
+    raw = bytearray(journal_superblock())
+    struct.pack_into(">I", raw, 28, 30)
+    state = parse_classic_jbd2_superblock(
+        raw,
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    assert scan_classic_jbd2_transactions(ring, state) == (tuple(records),)
+
+
+def test_scanner_rejects_revoke_record_outside_block():
+    records = list(
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+            revokes=[9],
+        )
+    )
+    revoke = bytearray(records[-2])
+    struct.pack_into(">I", revoke, 12, 1028)
+    records[-2] = bytes(revoke)
+    ring = [b"\x00" * 1024 for _ in range(32)]
+    ring[5 : 5 + len(records)] = records
+    state = parse_classic_jbd2_superblock(
+        journal_superblock(),
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+    )
+    with pytest.raises(JBD2WriteProfileError, match="revoke"):
+        scan_classic_jbd2_transactions(ring, state)
+
+
 def test_coordinate_classic_replay_rejects_checksum_features_before_writes():
     records = [
         encode_classic_jbd2_transaction(
