@@ -27,7 +27,14 @@ def test_native_ext4_reads_metadata_csum_seed_profile(tmp_path):
     with image.open("wb") as stream:
         stream.truncate(32 * 1024**2)
     subprocess.run(
-        [shutil.which("mkfs.ext4"), "-F", "-q", "-O", "metadata_csum_seed", str(image)],
+        [
+            shutil.which("mkfs.ext4"),
+            "-F",
+            "-q",
+            "-O",
+            "metadata_csum_seed,^fast_commit,^orphan_file,^sparse_super2",
+            str(image),
+        ],
         check=True,
         capture_output=True,
     )
