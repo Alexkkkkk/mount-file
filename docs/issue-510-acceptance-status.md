@@ -37,7 +37,7 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | Hash preservation on failure | verified | ext4 tests assert the source hash is unchanged; NTFS staged writes use the same source-identity guard. |
 | Source identity / concurrent modification | verified | SHA-256 is captured before staging and re-checked before atomic replace in ext4 and NTFS writers. |
 | Independent checker + read-back per operation | partial | ext4 uses `e2fsck -fn` plus journal gate after every operation; NTFS uses the `$LogFile` gate but has no replay checker. |
-| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses; `docs/generated/recovery-matrix.json` is verified against the generator. |
+| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses into `docs/generated/recovery-acceptance.json`. The canonical `docs/generated/recovery-matrix.json` stays byte-identical to the trusted generator, because the trusted status gate only accepts a one-step capability schema bump for it; a unit test pins both artifacts to their generators. |
 | Unsupported cells as typed refusals | partial | Capability contracts and NTFS quarantine are typed; not every profile has an end-to-end assertion. |
 
 ## Block E — parity and status

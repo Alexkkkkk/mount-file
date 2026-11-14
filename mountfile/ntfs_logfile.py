@@ -243,8 +243,12 @@ def resolve_resident_attribute_target(
             record, allow_attribute_list=False, allow_end_marker_padding=True
         )
     except NtfsMetadataError as exc:
-        raise NtfsReplayOverlayError(f"resident target metadata is invalid: {exc}") from exc
-    matches = [attribute for attribute in attributes if attribute.attribute_id == attribute_id]
+        raise NtfsReplayOverlayError(
+            f"resident target metadata is invalid: {exc}"
+        ) from exc
+    matches = [
+        attribute for attribute in attributes if attribute.attribute_id == attribute_id
+    ]
     if len(matches) != 1:
         raise NtfsReplayOverlayError(
             f"resident target attribute id {attribute_id} is not unique"
@@ -259,11 +263,16 @@ def resolve_resident_attribute_target(
         if struct.unpack_from("<I", raw, position)[0] == 0xFFFFFFFF:
             break
         if position + 16 > limit:
-            raise NtfsReplayOverlayError("resident target attribute header is truncated")
+            raise NtfsReplayOverlayError(
+                "resident target attribute header is truncated"
+            )
         attribute_length = struct.unpack_from("<I", raw, position + 4)[0]
         if attribute_length < 24 or position + attribute_length > limit:
             raise NtfsReplayOverlayError("resident target attribute bounds are invalid")
-        if raw[position + 8] == 0 and struct.unpack_from("<H", raw, position + 14)[0] == attribute_id:
+        if (
+            raw[position + 8] == 0
+            and struct.unpack_from("<H", raw, position + 14)[0] == attribute_id
+        ):
             resident_value_length = struct.unpack_from("<I", raw, position + 16)[0]
             resident_value_offset = struct.unpack_from("<H", raw, position + 20)[0]
             start = position + resident_value_offset + value_offset
@@ -298,7 +307,9 @@ def resolve_nonresident_run_target(
     overlay only, never direct publication.
     """
     if not isinstance(attribute, NtfsAttributeSummary) or not attribute.nonresident:
-        raise NtfsReplayOverlayError("nonresident target requires a nonresident attribute")
+        raise NtfsReplayOverlayError(
+            "nonresident target requires a nonresident attribute"
+        )
     values = (volume_offset, cluster_size, byte_offset, length)
     if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
         raise NtfsReplayOverlayError("nonresident target coordinates must be integers")
@@ -325,7 +336,9 @@ def resolve_nonresident_run_target(
     covered_clusters = 0
     for run in attribute.runs:
         if run.vcn != expected_vcn or run.length <= 0:
-            raise NtfsReplayOverlayError("nonresident target runlist has a VCN gap or overlap")
+            raise NtfsReplayOverlayError(
+                "nonresident target runlist has a VCN gap or overlap"
+            )
         if run.lcn is None:
             raise NtfsReplayOverlayError("sparse nonresident target is unsupported")
         expected_vcn += run.length
@@ -333,7 +346,9 @@ def resolve_nonresident_run_target(
     if expected_vcn - 1 != attribute.highest_vcn:
         raise NtfsReplayOverlayError("nonresident target highest VCN is inconsistent")
     if covered_clusters * cluster_size < attribute.data_size:
-        raise NtfsReplayOverlayError("nonresident target runlist does not cover data size")
+        raise NtfsReplayOverlayError(
+            "nonresident target runlist does not cover data size"
+        )
     stream_end = attribute.data_size
     if byte_offset + length > stream_end:
         raise NtfsReplayOverlayError("nonresident target exceeds data size")
@@ -341,7 +356,9 @@ def resolve_nonresident_run_target(
         run_start = run.vcn * cluster_size
         run_end = (run.vcn + run.length) * cluster_size
         if run_start <= byte_offset < run_end:
-            physical = volume_offset + run.lcn * cluster_size + (byte_offset - run_start)
+            physical = (
+                volume_offset + run.lcn * cluster_size + (byte_offset - run_start)
+            )
             if byte_offset + length > run_end:
                 raise NtfsReplayOverlayError(
                     "nonresident target crosses a run boundary"

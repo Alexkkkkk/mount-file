@@ -3,6 +3,13 @@
 
 This is a contract report, not a test runner. It never upgrades a capability
 claim: unsupported or unproven recovery cells remain blockers.
+
+``build_report`` produces the canonical ``recovery-matrix.json`` artifact. The
+trusted generated-status gate compares that artifact with the trusted generator
+and only tolerates a capability schema version bump, so its payload stays
+byte-identical to the trusted output. The finer-grained operation x state x
+checker acceptance matrix is therefore published separately by
+``build_acceptance_report``.
 """
 from __future__ import annotations
 
@@ -27,6 +34,10 @@ _CHECKERS = {
     "FAT32": "fsck.fat -n",
     "exFAT": "fsck.exfat -n",
 }
+_ACCEPTANCE_REASON = (
+    "An acceptance cell stays not production-ready until its checker evidence "
+    "is reproducible; power-loss remains unsupported."
+)
 
 
 def _typed_evidence(value: str) -> dict[str, str]:
@@ -42,14 +53,30 @@ def _typed_evidence(value: str) -> dict[str, str]:
     return {"status": "not_proven", "source": value}
 
 
-def _acceptance_cells(profile, recovery: dict[str, str]) -> list[dict[str, str]]:
+def _writable_profiles() -> list[dict[str, object]]:
+    """Return the writable capability profiles as plain JSON-ready records."""
+    return [
+        {
+            "profile_id": profile.profile_id,
+            "filesystem": profile.filesystem,
+            "write_strategy": profile.write_strategy,
+            "recovery": dict(profile.recovery_contract),
+        }
+        for profile in NATIVE_CAPABILITY_MATRIX
+        if profile.write_capabilities
+    ]
+
+
+def _acceptance_cells(
+    profile: dict[str, object], recovery: dict[str, str]
+) -> list[dict[str, str]]:
     """Expand the compact recovery contract into auditable matrix cells.
 
     Missing evidence is never inferred to be successful.  The expansion copies
     profile-level evidence only to the matching state dimension and leaves all
     other combinations explicitly unavailable or not proven.
     """
-    checker = _CHECKERS.get(profile.filesystem, "unavailable")
+    checker = _CHECKERS.get(str(profile["filesystem"]), "unavailable")
     cells: list[dict[str, str]] = []
     for operation in _OPERATIONS:
         for state in _STATES:
@@ -111,12 +138,6 @@ def build_report() -> dict[str, object]:
                 "evidence": "capability_contract",
                 "parity": "not_claimed",
                 "power_loss": recovery.get("power_loss", "unsupported"),
-                "acceptance_dimensions": {
-                    "operations": list(_OPERATIONS),
-                    "states": list(_STATES),
-                    "checker": _CHECKERS.get(profile.filesystem, "unavailable"),
-                },
-                "acceptance_cells": _acceptance_cells(profile, recovery),
             }
         )
     return {
@@ -128,7 +149,43 @@ def build_report() -> dict[str, object]:
             "A profile is not production-ready until every required recovery cell "
             "has reproducible evidence; power-loss remains unsupported."
         ),
-        "acceptance_dimensions": {
+        "entries": entries,
+    }
+
+
+def build_acceptance_report() -> dict[str, object]:
+    """Build the operation x state x checker acceptance matrix.
+
+    The artifact is deliberately separate from ``recovery-matrix.json``: the
+    trusted generated-status gate only accepts a capability schema version bump
+    for that file, so new evidence is published here instead of silently
+    changing a trusted recovery claim.
+    """
+    entries = []
+    for profile in _writable_profiles():
+        recovery = profile["recovery"]
+        if not isinstance(recovery, dict):
+            raise TypeError("recovery contract must be a mapping")
+        blockers = [key for key in _REQUIRED if recovery.get(key) in _BLOCKING_VALUES]
+        entries.append(
+            {
+                "profile_id": profile["profile_id"],
+                "filesystem": profile["filesystem"],
+                "strategy": profile["write_strategy"],
+                "recovery": recovery,
+                "blocking_cells": blockers,
+                "verdict": "blocked" if blockers else "evidence_bounded",
+                "checker": _CHECKERS.get(str(profile["filesystem"]), "unavailable"),
+                "cells": _acceptance_cells(profile, recovery),
+            }
+        )
+    return {
+        "schema": 1,
+        "report": "mountfile-writer-recovery-acceptance-matrix",
+        "capability_matrix_version": CAPABILITY_MATRIX_VERSION,
+        "production_ready": False,
+        "production_ready_reason": _ACCEPTANCE_REASON,
+        "dimensions": {
             "operations": list(_OPERATIONS),
             "states": list(_STATES),
             "checkers": dict(_CHECKERS),
@@ -137,15 +194,24 @@ def build_report() -> dict[str, object]:
     }
 
 
+def _encode(report: dict[str, object]) -> str:
+    return json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json-out", type=Path)
+    parser.add_argument("--acceptance-out", type=Path)
     args = parser.parse_args()
-    encoded = json.dumps(build_report(), indent=2, sort_keys=True) + "\n"
+    encoded = _encode(build_report())
     if args.json_out:
         args.json_out.write_text(encoded, encoding="utf-8")
     else:
         print(encoded, end="")
+    if args.acceptance_out:
+        args.acceptance_out.write_text(
+            _encode(build_acceptance_report()), encoding="utf-8"
+        )
     return 0
 
 
