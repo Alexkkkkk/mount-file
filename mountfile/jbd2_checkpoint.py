@@ -157,6 +157,88 @@ def scan_classic_jbd2_transactions(
     return tuple(transactions)
 
 
+def read_classic_jbd2_ring(
+    stream: BinaryIO,
+    physical_blocks: Sequence[int],
+    *,
+    block_size: int,
+    max_block: int | None = None,
+) -> tuple[bytes, ...]:
+    """Read a validated logical JBD2 ring through a physical block map.
+
+    ``physical_blocks[position]`` gives the image block containing logical ring
+    position ``position``. The filesystem-aware caller supplies this map after
+    resolving the journal inode extent; this helper deliberately does not
+    assume that the journal is contiguous. Every block is read completely
+    before a scanner can consume it, so sparse/short reads fail closed.
+    """
+    if block_size not in _SUPPORTED_BLOCK_SIZES:
+        raise JBD2WriteProfileError("unsupported JBD2 block size")
+    if not isinstance(physical_blocks, Sequence) or isinstance(
+        physical_blocks, bytes | str
+    ):
+        raise JBD2WriteProfileError("JBD2 physical block map must be a sequence")
+    if not physical_blocks:
+        raise JBD2WriteProfileError("JBD2 physical block map is empty")
+    if max_block is not None and (
+        isinstance(max_block, bool) or not isinstance(max_block, int) or max_block <= 0
+    ):
+        raise JBD2WriteProfileError("JBD2 physical block bound is invalid")
+    result: list[bytes] = []
+    for physical in physical_blocks:
+        if isinstance(physical, bool) or not isinstance(physical, int) or physical < 0:
+            raise JBD2WriteProfileError("JBD2 physical block number is invalid")
+        if max_block is not None and physical >= max_block:
+            raise JBD2WriteProfileError("JBD2 physical block is outside image bounds")
+        try:
+            stream.seek(physical * block_size)
+            block = stream.read(block_size)
+        except (OSError, AttributeError, TypeError) as exc:
+            raise JBD2WriteProfileError(f"cannot read JBD2 physical block: {exc}") from exc
+        if not isinstance(block, bytes) or len(block) != block_size:
+            raise JBD2WriteProfileError("JBD2 physical block is truncated")
+        result.append(block)
+    return tuple(result)
+
+
+def coordinate_classic_jbd2_replay_from_ring(
+    stream: BinaryIO,
+    *,
+    state: JBD2JournalState,
+    physical_blocks: Sequence[int],
+    filesystem_uuid: bytes,
+    filesystem_blocks: int,
+    journal_physical_blocks: Sequence[int],
+    journal_superblock_physical_block: int,
+    sync: Callable[[], None] | None = None,
+    fault_injector: Callable[[JBD2CheckpointWrite], None] | None = None,
+) -> JBD2CheckpointPlan:
+    """Scan and checkpoint a classic JBD2 ring using an explicit block map.
+
+    This is the bridge intended for a future ext4 journal-inode resolver. It
+    requires the caller to provide a validated superblock state and physical
+    mapping; no ext4 inode or extent assumptions are made here.
+    """
+    ring = read_classic_jbd2_ring(
+        stream, physical_blocks, block_size=state.block_size
+    )
+    records = scan_classic_jbd2_transactions(ring, state)
+    superblock = ring[0]
+    return coordinate_classic_jbd2_replay(
+        stream,
+        superblock=superblock,
+        records=records,
+        filesystem_block_size=state.block_size,
+        filesystem_uuid=filesystem_uuid,
+        journal_blocks=state.max_length,
+        filesystem_blocks=filesystem_blocks,
+        journal_physical_blocks=journal_physical_blocks,
+        journal_superblock_physical_block=journal_superblock_physical_block,
+        sync=sync,
+        fault_injector=fault_injector,
+    )
+
+
 def reduce_classic_jbd2_transactions(
     transactions: Sequence[JBD2DecodedTransaction],
 ) -> dict[int, bytes]:
