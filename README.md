@@ -79,6 +79,17 @@ power-loss safety or full filesystem parity.
 > recovery/copy verification for the bounded native profiles. It does **not** enable
 > full ext4/JBD2 replay, NTFS `$LogFile` replay, undo, or power-loss safety.
 
+### Experimental journal integrations
+
+The repository also contains an isolated experimental namespace at
+`mountfile.experimental`. Its optional `dfir_ntfs` adapter can inspect records
+from an externally installed parser, but it is not imported by the production
+path and it has no write or replay method. The external project is GPL-3.0 and
+is therefore not bundled with this MIT project. Missing or incompatible
+optional dependencies return `unavailable`; they never enable a fallback
+writer. This layer is intended for staged acceptance work and is not part of
+the supported capability matrix.
+
 The versioned machine-readable matrix is the source of truth for operations,
 state gates and refusal codes:
 
