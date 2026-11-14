@@ -10,6 +10,7 @@ from mountfile.ntfs_logfile import (
     ReplayStep,
     ReplayTarget,
     replay_analysis_to_overlay,
+    resolve_resident_attribute_target,
 )
 
 
@@ -181,3 +182,38 @@ def test_analysis_executor_refuses_mft_and_index_operations() -> None:
             b"abcdef",
             {(128, 0): target()},
         )
+
+
+def test_resident_target_resolver_returns_record_relative_range() -> None:
+    from test_ntfs_reader import _record_with_attributes, _resident_attribute
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(
+        _record_with_attributes((_resident_attribute(0x80, 7, b"abcdef"),))
+    )
+    resolved = resolve_resident_attribute_target(
+        record, attribute_id=7, value_offset=2, length=3
+    )
+    assert resolved.target_attr == 7
+    assert record.fixed_record[resolved.offset : resolved.offset + resolved.length] == b"cde"
+
+
+def test_resident_target_resolver_refuses_nonresident_and_out_of_bounds_ranges() -> None:
+    from test_ntfs_reader import (
+        _nonresident_attribute,
+        _record_with_attributes,
+        _resident_attribute,
+    )
+    from mountfile.ntfs_mft import parse_ntfs_file_record_header
+
+    record = parse_ntfs_file_record_header(
+        _record_with_attributes((_nonresident_attribute(0x80, 7, 0, 0, 10, 8),))
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="not resident"):
+        resolve_resident_attribute_target(record, attribute_id=7, value_offset=0, length=1)
+
+    resident = parse_ntfs_file_record_header(
+        _record_with_attributes((_resident_attribute(0x80, 7, b"abc"),))
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="exceeds"):
+        resolve_resident_attribute_target(resident, attribute_id=7, value_offset=2, length=2)

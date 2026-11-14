@@ -52,7 +52,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from mountfile.native_write import NativeWriteUnsafe
-from mountfile.ntfs_mft import parse_ntfs_file_record_header
+from mountfile.ntfs_mft import NtfsFileRecordHeader, parse_ntfs_file_record_header
 from mountfile.ntfs_reader import (
     NtfsAttributeSummary,
     NtfsLogFileRestartArea,
@@ -211,6 +211,71 @@ class ReplayTarget:
     target_vcn: int
     offset: int
     length: int
+
+
+def resolve_resident_attribute_target(
+    record: NtfsFileRecordHeader,
+    *,
+    attribute_id: int,
+    value_offset: int,
+    length: int,
+) -> ReplayTarget:
+    """Resolve one bounded resident attribute payload in a validated record.
+
+    This handles only a unique resident attribute in an already-USA-restored
+    FILE record. It rejects attribute lists, nonresident attributes, duplicate
+    ids, and ranges outside the resident value. It never follows runlists,
+    allocates MFT records, updates indexes, or repairs ``$MFTMirr``.
+    """
+    if not isinstance(record, NtfsFileRecordHeader):
+        raise NtfsReplayOverlayError("resident target requires a validated FILE record")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in (attribute_id, value_offset, length)
+    ):
+        raise NtfsReplayOverlayError("resident target coordinates must be integers")
+    if attribute_id < 0 or value_offset < 0 or length <= 0:
+        raise NtfsReplayOverlayError("resident target range is invalid")
+    try:
+        attributes = parse_ntfs_attribute_stream(
+            record, allow_attribute_list=False, allow_end_marker_padding=True
+        )
+    except NtfsMetadataError as exc:
+        raise NtfsReplayOverlayError(f"resident target metadata is invalid: {exc}") from exc
+    matches = [attribute for attribute in attributes if attribute.attribute_id == attribute_id]
+    if len(matches) != 1:
+        raise NtfsReplayOverlayError(
+            f"resident target attribute id {attribute_id} is not unique"
+        )
+    attribute = matches[0]
+    if attribute.nonresident or attribute.resident_value is None:
+        raise NtfsReplayOverlayError("resident target attribute is not resident")
+    raw = record.fixed_record
+    position = record.first_attribute_offset
+    limit = record.bytes_in_use
+    while position + 4 <= limit:
+        if struct.unpack_from("<I", raw, position)[0] == 0xFFFFFFFF:
+            break
+        if position + 16 > limit:
+            raise NtfsReplayOverlayError("resident target attribute header is truncated")
+        attribute_length = struct.unpack_from("<I", raw, position + 4)[0]
+        if attribute_length < 24 or position + attribute_length > limit:
+            raise NtfsReplayOverlayError("resident target attribute bounds are invalid")
+        if raw[position + 8] == 0 and struct.unpack_from("<H", raw, position + 14)[0] == attribute_id:
+            resident_value_length = struct.unpack_from("<I", raw, position + 16)[0]
+            resident_value_offset = struct.unpack_from("<H", raw, position + 20)[0]
+            start = position + resident_value_offset + value_offset
+            end = start + length
+            value_end = position + resident_value_offset + resident_value_length
+            if resident_value_offset < 24 or end > value_end or end > limit:
+                raise NtfsReplayOverlayError(
+                    "resident target range exceeds its attribute value"
+                )
+            return ReplayTarget(attribute_id, 0, start, length)
+        position += attribute_length
+    raise NtfsReplayOverlayError(
+        f"resident target attribute id {attribute_id} is not present"
+    )
 
 
 @dataclass(frozen=True)
@@ -1343,5 +1408,6 @@ __all__ = [
     "parse_clients",
     "parse_restart_pages",
     "replay_analysis_to_overlay",
+    "resolve_resident_attribute_target",
     "read_logfile_stream",
 ]
