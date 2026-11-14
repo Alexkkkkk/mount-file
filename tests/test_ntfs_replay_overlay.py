@@ -314,6 +314,21 @@ def test_nonresident_resolver_refuses_sparse_and_cross_run_ranges() -> None:
             fragmented, volume_offset=0, cluster_size=4096, byte_offset=2048, length=4096
         )
 
+    unsupported = NtfsAttributeSummary(
+        0x80,
+        72,
+        True,
+        "",
+        lowest_vcn=0,
+        runs=(NtfsRun(0, 20, 2),),
+        data_size=8192,
+        content_supported=False,
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="unsupported"):
+        resolve_nonresident_run_target(
+            unsupported, volume_offset=0, cluster_size=4096, byte_offset=0, length=1
+        )
+
 
 def test_nonresident_run_executor_maps_update_and_applies_redo_then_undo() -> None:
     from mountfile.ntfs_reader import NtfsAttributeSummary, NtfsRun
