@@ -1,5 +1,13 @@
 # $LogFile on-disk layout verified against Linux `fs/ntfs3/fslog.c`
 
+> **Implementation boundary:** this document specifies the read-only, MIT
+> implementation in `mountfile.ntfs_logfile`. It is not a replay implementation.
+> The external `dfir_ntfs` project is GPL-3.0 and is therefore not vendored or
+> imported into this MIT project; it is also a parser rather than a complete
+> NTFS metadata mutation engine. Dirty-log replay remains `unavailable` and is
+> rejected fail-closed until an independently licensed executor has complete
+> acceptance evidence.
+
 Source of truth: <https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/fslog.c>
 (fetched 2026-11-14, line numbers below refer to that file). Every offset in this
 note is either taken from a struct comment in that file or confirmed by one of
