@@ -23,10 +23,36 @@ _OPERATIONS = ("write-file", "mkdir", "delete", "rename", "journal-recovery")
 _STATES = ("clean", "dirty", "corrupt", "concurrent-change", "process-killed")
 _CHECKERS = {
     "ext2": "e2fsck -fn",
+    "ext3/ext4": "e2fsck -fn",
+    "NTFS": "ntfs-aware-checker (unavailable)",
     "FAT12": "fsck.fat -n",
     "FAT32": "fsck.fat -n",
     "exFAT": "fsck.exfat -n",
 }
+_EXPERIMENTAL_PROFILES = (
+    {
+        "profile_id": "ext4-native-rw",
+        "filesystem": "ext3/ext4",
+        "write_strategy": "staged-native-with-journal-replay",
+        "recovery": {
+            "rollback": "tested_on_failure",
+            "process_kill": "tested_with_recovery_sidecar",
+            "power_loss": "unsupported",
+            "quarantine": "tested_on_recovery_failure",
+        },
+    },
+    {
+        "profile_id": "ntfs-native-rw",
+        "filesystem": "NTFS",
+        "write_strategy": "staged-native-with-logfile-replay",
+        "recovery": {
+            "rollback": "not_proven",
+            "process_kill": "not_proven",
+            "power_loss": "unsupported",
+            "quarantine": "tested_on_recovery_failure",
+        },
+    },
+)
 
 
 def _typed_evidence(value: str) -> dict[str, str]:
@@ -49,7 +75,10 @@ def _acceptance_cells(profile, recovery: dict[str, str]) -> list[dict[str, str]]
     profile-level evidence only to the matching state dimension and leaves all
     other combinations explicitly unavailable or not proven.
     """
-    checker = _CHECKERS.get(profile.filesystem, "unavailable")
+    filesystem = (
+        profile["filesystem"] if isinstance(profile, dict) else profile.filesystem
+    )
+    checker = _CHECKERS.get(filesystem, "unavailable")
     cells: list[dict[str, str]] = []
     for operation in _OPERATIONS:
         for state in _STATES:
@@ -94,16 +123,24 @@ def _acceptance_cells(profile, recovery: dict[str, str]) -> list[dict[str, str]]
 
 def build_report() -> dict[str, object]:
     entries = []
-    for profile in NATIVE_CAPABILITY_MATRIX:
-        if not profile.write_capabilities:
-            continue
-        recovery = profile.recovery_contract
+    profiles = [
+        {
+            "profile_id": profile.profile_id,
+            "filesystem": profile.filesystem,
+            "write_strategy": profile.write_strategy,
+            "recovery": profile.recovery_contract,
+        }
+        for profile in NATIVE_CAPABILITY_MATRIX
+        if profile.write_capabilities
+    ] + list(_EXPERIMENTAL_PROFILES)
+    for profile in profiles:
+        recovery = profile["recovery"]
         blockers = [key for key in _REQUIRED if recovery.get(key) in _BLOCKING_VALUES]
         entries.append(
             {
-                "profile_id": profile.profile_id,
-                "filesystem": profile.filesystem,
-                "strategy": profile.write_strategy,
+                "profile_id": profile["profile_id"],
+                "filesystem": profile["filesystem"],
+                "strategy": profile["write_strategy"],
                 "recovery": recovery,
                 "required_cells": list(_REQUIRED),
                 "blocking_cells": blockers,
@@ -114,7 +151,7 @@ def build_report() -> dict[str, object]:
                 "acceptance_dimensions": {
                     "operations": list(_OPERATIONS),
                     "states": list(_STATES),
-                    "checker": _CHECKERS.get(profile.filesystem, "unavailable"),
+                    "checker": _CHECKERS.get(profile["filesystem"], "unavailable"),
                 },
                 "acceptance_cells": _acceptance_cells(profile, recovery),
             }

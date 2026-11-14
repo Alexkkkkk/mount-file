@@ -31,10 +31,11 @@ tests:
   pointer lives in the record header, not in the client record.
 
 The module also exposes :class:`NtfsReplayOverlay`, an atomic in-memory reducer
-for a plan whose byte targets were resolved by the caller.  It never opens an
-image, never guesses MFT/attribute/runlist locations, and is not wired into the
-native writer.  It exists so redo/undo ordering and payload selection can be
-proven before any image-level executor is allowed to exist.
+and a bounded ``apply_to_stream`` executor for plans whose byte targets were
+resolved by the caller.  The stream executor is suitable only for a disposable
+copy: it validates the complete plan before writing, then flushes and reads the
+result back.  Neither API guesses MFT/attribute/runlist locations or replaces
+the missing filesystem-aware image executor.
 
 Refusals are typed, never silent: a log page whose size differs from the 4 KiB
 system page, records that cross the page's free-space boundary, multi-page
@@ -48,8 +49,9 @@ from __future__ import annotations
 import bisect
 import os
 import struct
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from typing import BinaryIO
 
 from mountfile.native_write import NativeWriteUnsafe
 from mountfile.ntfs_mft import NtfsFileRecordHeader, parse_ntfs_file_record_header
@@ -178,10 +180,9 @@ _STATE_NAMES = {
     TRANSACTION_COMMITTED: "committed",
 }
 
-# The replay executor is out of scope for this module by design (issue #510
-# audit, section 2.1).  This is the single source of truth for why a plan is
-# evidence rather than an instruction, so tests can assert that nothing here is
-# ever advertised as runnable.
+# The filesystem-aware replay executor remains out of scope for this bounded
+# module (issue #510 audit, section 2.1). These blockers explain why analysis is
+# evidence rather than a runnable native-writer instruction.
 EXECUTION_BLOCKERS = (
     "target byte resolution needs the open attribute table and the per-record "
     "attribute lookup of fslog.c do_action - not implemented",
@@ -198,6 +199,10 @@ class NtfsLogFileError(NativeWriteUnsafe):
 
 class NtfsReplayOverlayError(NtfsLogFileError):
     """A bounded replay overlay cannot be applied atomically."""
+
+
+class NtfsReplayExecutorError(NtfsReplayOverlayError):
+    """A stream executor could not commit a fully validated replay."""
 
 
 @dataclass(frozen=True)
@@ -441,6 +446,61 @@ class NtfsReplayOverlay:
                 )
             )
         return bytes(staged), tuple(provenance)
+
+    def apply_to_stream(
+        self,
+        stream: BinaryIO,
+        steps: Sequence[ReplayStep],
+        targets: Mapping[tuple[int, int], ReplayTarget],
+        *,
+        sync: Callable[[], None] | None = None,
+    ) -> tuple[OverlayProvenance, ...]:
+        """Commit a bounded replay to a seekable stream after full validation.
+
+        The caller owns a disposable copy. The complete resulting byte view is
+        built in memory first, so an unresolved, overlapping, or malformed plan
+        causes zero writes. Only changed explicit ranges are written, followed
+        by a flush, optional durability barrier, and complete read-back. This
+        is deliberately a resolver-backed executor: it never guesses NTFS
+        metadata locations.
+        """
+        if not all(hasattr(stream, name) for name in ("seek", "read", "write")):
+            raise NtfsReplayExecutorError("replay stream must be seekable and writable")
+        try:
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(0)
+            source = stream.read()
+        except (OSError, AttributeError, TypeError) as exc:
+            raise NtfsReplayExecutorError(f"cannot read replay stream: {exc}") from exc
+        if not isinstance(source, (bytes, bytearray)) or len(source) != size:
+            raise NtfsReplayExecutorError("replay stream returned an invalid image view")
+
+        result, provenance = NtfsReplayOverlay(bytes(source)).apply(steps, targets)
+        changed: list[tuple[int, bytes]] = []
+        for item in provenance:
+            start = item.offset
+            end = start + item.length
+            if result[start:end] != source[start:end]:
+                changed.append((start, result[start:end]))
+        try:
+            for start, payload in changed:
+                stream.seek(start)
+                written = stream.write(payload)
+                if written != len(payload):
+                    raise NtfsReplayExecutorError("short write while committing replay")
+            stream.flush()
+            if sync is not None:
+                sync()
+            stream.seek(0)
+            readback = stream.read()
+        except NtfsReplayExecutorError:
+            raise
+        except (OSError, AttributeError, TypeError) as exc:
+            raise NtfsReplayExecutorError(f"replay commit failed: {exc}") from exc
+        if readback != result:
+            raise NtfsReplayExecutorError("replay read-back mismatch")
+        return provenance
 
 
 def replay_analysis_to_overlay(
@@ -1563,6 +1623,7 @@ __all__ = [
     "NTFS_RESTART",
     "NtfsLogFileAnalysis",
     "NtfsLogFileError",
+    "NtfsReplayExecutorError",
     "NtfsReplayOverlay",
     "NtfsReplayOverlayError",
     "RCRD_MAGIC",

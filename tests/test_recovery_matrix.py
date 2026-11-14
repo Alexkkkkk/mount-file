@@ -16,6 +16,8 @@ def test_recovery_report_is_fail_closed_and_json_serialisable():
         "fat32-native-rw",
         "ext2-native-rw",
         "exfat-native-rw",
+        "ext4-native-rw",
+        "ntfs-native-rw",
     }
     assert all(entry["verdict"] == "blocked" for entry in report["entries"])
     assert all(entry["blocking_cells"] for entry in report["entries"])
@@ -97,11 +99,15 @@ def test_acceptance_matrix_covers_every_declared_dimension_without_inference():
 
 def test_ntfs_and_ext4_recovery_cells_remain_explicitly_blocked():
     report = build_report()
-    # These profiles are intentionally absent from the writable matrix until
-    # their replay executors are proven; the report must not manufacture them.
-    profile_ids = {entry["profile_id"] for entry in report["entries"]}
-    assert "ext4-native-rw" not in profile_ids
-    assert "ntfs-native-rw" not in profile_ids
+    profiles = {entry["profile_id"]: entry for entry in report["entries"]}
+    assert profiles["ext4-native-rw"]["verdict"] == "blocked"
+    assert profiles["ntfs-native-rw"]["verdict"] == "blocked"
+    assert profiles["ext4-native-rw"]["blocking_cells"] == ["power_loss"]
+    assert set(profiles["ntfs-native-rw"]["blocking_cells"]) == {
+        "rollback",
+        "process_kill",
+        "power_loss",
+    }
 
 
 def test_recovery_evidence_is_not_broadcast_to_uncovered_operations_or_states():
