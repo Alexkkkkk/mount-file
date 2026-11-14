@@ -329,10 +329,26 @@ def test_active_transaction_is_undone_with_undo_bytes_not_redo_bytes():
     analysis = lf.analyze_logfile(stream, cluster_size=512)
     transaction = analysis.transactions[0]
     assert transaction.state == "active"
-    assert transaction.undo_next_lsn == lsns[0]
+    assert transaction.undo_next_lsn == lsns[1]
     assert [step.kind for step in analysis.undo_plan] == ["undo", "undo"]
-    assert [step.payload for step in analysis.undo_plan] == [b"\x02" * 8, b"\x04" * 8]
+    assert [step.payload for step in analysis.undo_plan] == [b"\x04" * 8, b"\x02" * 8]
     assert analysis.redo_plan == ()  # active transactions are not redone
+
+
+def test_broken_undo_chain_does_not_emit_a_partial_plan():
+    stream, _ = build_log(
+        [
+            update_record(
+                txid=0x18,
+                redo=b"\x01" * 8,
+                undo=b"\x02" * 8,
+                undo_next=0xDEADBEEF,
+            )
+        ]
+    )
+    analysis = lf.analyze_logfile(stream, cluster_size=512)
+    assert analysis.undo_plan == ()
+    assert any("outside its parsed record chain" in note for note in analysis.notes)
 
 
 def test_prepared_transaction_is_not_rolled_back():
@@ -349,7 +365,7 @@ def test_prepared_transaction_is_not_rolled_back():
 
 
 def test_forgotten_transaction_is_neither_redone_nor_undone():
-    """fslog.c:4834-4846 frees the entry; the v1 draft would have rolled it back."""
+    """Forget frees a slot, which may then identify a different transaction."""
 
     stream, lsns = build_log(
         [
@@ -359,9 +375,12 @@ def test_forgotten_transaction_is_neither_redone_nor_undone():
         ]
     )
     analysis = lf.analyze_logfile(stream, cluster_size=512)
-    assert [t.forgotten for t in analysis.transactions] == [True]
-    assert analysis.undo_plan == ()
+    assert [t.forgotten for t in analysis.transactions] == [True, False]
+    assert [t.transaction_id for t in analysis.transactions] == [0x18, 0x18]
+    assert analysis.transactions[0].record_lsns == tuple(lsns[:2])
+    assert analysis.transactions[1].record_lsns == (lsns[2],)
     assert analysis.redo_plan == ()
+    assert [step.payload for step in analysis.undo_plan] == [b"\x06" * 8]
     assert len(analysis.records) == 3
 
 

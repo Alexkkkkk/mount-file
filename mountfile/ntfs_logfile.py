@@ -876,51 +876,51 @@ def _analysis_pass(
 ) -> tuple[Transaction, ...]:
     """Rebuild the transaction table the way the analysis pass of log_replay does."""
 
-    states: dict[int, list] = {}
-    order: list[int] = []
-    forgotten: set[int] = set()
+    active: dict[int, list] = {}
+    generations: list[tuple[int, list]] = []
     for record in records:
         if record.record_type != LFS_CLIENT_RECORD:
             continue
         if checkpoint and record.lsn < checkpoint:
             continue
         txid = record.transaction_id
-        if txid in forgotten:
-            # A freed table entry stays freed: its later records belong to a
-            # recycled transaction id, which is not parsed here.
-            continue
-        entry = states.get(txid)
+        entry = active.get(txid)
         if entry is None:
-            # First sighting -> TransactionActive anchored on this record
-            # (fslog.c:4608-4627).
-            entry = [TRANSACTION_ACTIVE, record.lsn, record.lsn, record.lsn, []]
-            states[txid] = entry
-            order.append(txid)
+            # transact_id is a transaction-table slot, not a globally unique
+            # transaction identifier. ForgetTransaction frees the slot, which
+            # may later be allocated to another transaction (fslog.c:4834-4846).
+            entry = [TRANSACTION_ACTIVE, record.lsn, record.lsn, record.lsn, [], False]
+            active[txid] = entry
+            generations.append((txid, entry))
         else:
             entry[2] = record.lsn
+        # The kernel analysis pass advances the transaction's undo pointer to
+        # each record. CLR records redirect it to their explicit undo-next LSN.
+        entry[3] = record.lsn
         if record.undo_op == 0x01:  # CompensationLogRecord steers undo_next_lsn
             entry[3] = record.undo_next_lsn
         entry[4].append(record.lsn)
         if record.redo_op == 0x18:  # EndTopLevelAction
             entry[2] = record.lsn
-            entry[3] = record.lsn
+            entry[3] = record.undo_next_lsn
         elif record.redo_op == 0x19:  # PrepareTransaction
             entry[0] = TRANSACTION_PREPARED
         elif record.redo_op == 0x1A:  # CommitTransaction
             entry[0] = TRANSACTION_COMMITTED
         elif record.redo_op == 0x1B:  # ForgetTransaction frees the entry
-            forgotten.add(txid)
+            entry[5] = True
+            active.pop(txid, None)
     return tuple(
         Transaction(
             transaction_id=txid,
-            state=_STATE_NAMES[states[txid][0]],
-            first_lsn=states[txid][1],
-            prev_lsn=states[txid][2],
-            undo_next_lsn=states[txid][3],
-            record_lsns=tuple(states[txid][4]),
-            forgotten=txid in forgotten,
+            state=_STATE_NAMES[entry[0]],
+            first_lsn=entry[1],
+            prev_lsn=entry[2],
+            undo_next_lsn=entry[3],
+            record_lsns=tuple(entry[4]),
+            forgotten=entry[5],
         )
-        for txid in order
+        for txid, entry in generations
     )
 
 
@@ -971,33 +971,47 @@ def _build_plans(
             # Prepared, committed and forgotten transactions are never rolled
             # back (fslog.c:5204-5216).
             continue
-        started = transaction.undo_next_lsn == transaction.first_lsn
-        for lsn in transaction.record_lsns:
-            if not started:
-                if lsn != transaction.undo_next_lsn:
-                    continue
-                started = True
-            record = seen[lsn]
-            if record.undo_op in SKIPPABLE_OPERATIONS or not record.undo_len:
-                continue
-            undo.append(
-                ReplayStep(
-                    lsn=lsn,
-                    transaction_id=transaction.transaction_id,
-                    kind="undo",
-                    operation=record.undo_op,
-                    length=record.undo_len,
-                    payload=record.undo_data,
-                    target_attr=record.target_attr,
-                    target_vcn=record.target_vcn,
-                    reasons=_step_reasons(record, record.undo_op),
+        own_lsns = set(transaction.record_lsns)
+        lsn = transaction.undo_next_lsn
+        visited: set[int] = set()
+        chain: list[LogRecord] = []
+        valid_chain = True
+        while lsn:
+            if lsn in visited:
+                notes.append(
+                    f"transaction {transaction.transaction_id} has a cyclic "
+                    f"undo chain at LSN {lsn}"
                 )
-            )
-        if not started:
-            notes.append(
-                f"transaction {transaction.transaction_id} points undo_next_lsn "
-                f"{transaction.undo_next_lsn} outside its own record list"
-            )
+                valid_chain = False
+                break
+            if lsn not in own_lsns or lsn not in seen:
+                notes.append(
+                    f"transaction {transaction.transaction_id} points undo_next_lsn "
+                    f"{lsn} outside its parsed record chain"
+                )
+                valid_chain = False
+                break
+            visited.add(lsn)
+            record = seen[lsn]
+            chain.append(record)
+            lsn = record.undo_next_lsn
+        if valid_chain:
+            for record in chain:
+                if record.undo_op in SKIPPABLE_OPERATIONS or not record.undo_len:
+                    continue
+                undo.append(
+                    ReplayStep(
+                        lsn=record.lsn,
+                        transaction_id=transaction.transaction_id,
+                        kind="undo",
+                        operation=record.undo_op,
+                        length=record.undo_len,
+                        payload=record.undo_data,
+                        target_attr=record.target_attr,
+                        target_vcn=record.target_vcn,
+                        reasons=_step_reasons(record, record.undo_op),
+                    )
+                )
     return tuple(redo), tuple(undo)
 
 
