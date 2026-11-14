@@ -30,11 +30,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from mountfile.ext4_native_writer import normalize_internal_path
 from mountfile.native_write import (
-    NativeWriteError,
     NativeWriteUnsafe,
     _atomic_replace,
     _image_copy,
@@ -45,12 +43,10 @@ from mountfile.native_write import (
     _sha256_file,
     _unlink,
     native_write_enabled,
-    validate_internal_path,
 )
 from mountfile.ntfs_mft import NtfsRecordError
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
-    NtfsLogFileUnused,
     NtfsMetadataError,
     parse_ntfs_volume_state,
 )
@@ -67,7 +63,7 @@ class NtfsLogGate:
     clean: bool
     reason: str
     volume_flags: int = 0
-    log_clean_dismount: Optional[bool] = None
+    log_clean_dismount: bool | None = None
     log_used: bool = True
     mirror_matches: bool = True
 
@@ -89,7 +85,10 @@ def probe_ntfs_log(image_path: str, offset: int = 0) -> NtfsLogGate:
     ``clean=False`` -- the gate is fail-closed by construction.
     """
 
-    size = os.path.getsize(image_path)
+    try:
+        size = os.path.getsize(image_path)
+    except OSError as exc:
+        return NtfsLogGate(False, f"image is not readable: {exc}")
     if offset < 0 or offset >= size:
         return NtfsLogGate(False, "offset is outside the image")
     volume_size = size - offset

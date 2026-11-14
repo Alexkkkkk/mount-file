@@ -464,6 +464,12 @@ def test_ntfs_gate_rejects_offset_outside_image(tmp_path):
     assert "offset" in gate.reason
 
 
+def test_ntfs_gate_fails_closed_when_image_is_unreadable(tmp_path):
+    gate = probe_ntfs_log(str(tmp_path / "missing.img"))
+    assert gate.clean is False
+    assert "not readable" in gate.reason
+
+
 # ------------------------------------------------------------------ NTFS write
 
 
