@@ -25,3 +25,14 @@ def test_missing_external_parser_is_typed_unavailable(
 def test_adapter_does_not_expose_mutation_api() -> None:
     assert not hasattr(DfirNtfsAdapter, "write")
     assert not hasattr(DfirNtfsAdapter, "replay")
+
+
+def test_malformed_external_record_is_typed_unavailable() -> None:
+    class Record:
+        redo_data = b""
+        undo_data = b""
+        transaction_id = None
+        lsn = 1
+
+    with pytest.raises(ExperimentalAdapterUnavailable, match="malformed"):
+        DfirNtfsAdapter._normalize(Record())

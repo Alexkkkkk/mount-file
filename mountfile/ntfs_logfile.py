@@ -916,9 +916,11 @@ def analyze_logfile(stream: bytes, *, cluster_size: int = 1024) -> NtfsLogFileAn
     a record to image bytes (see :data:`EXECUTION_BLOCKERS`).
     """
 
-    if not isinstance(stream, (bytes, bytearray)):
+    if not isinstance(stream, bytes | bytearray):
         raise NtfsLogFileError("$LogFile stream must be bytes")
     stream = bytes(stream)
+    if isinstance(cluster_size, bool) or not isinstance(cluster_size, int):
+        raise NtfsLogFileError("cluster size must be an integer")
     if cluster_size < SECTOR or cluster_size & (cluster_size - 1):
         raise NtfsLogFileError(f"cluster size {cluster_size} is not a power of two")
 

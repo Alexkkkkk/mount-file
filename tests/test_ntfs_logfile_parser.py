@@ -725,3 +725,12 @@ def test_real_formatted_volume_reports_an_unwritten_log(tmp_path):
     assert stream[: 2 * PAGE].strip(b"\xff") == b""
     with pytest.raises(lf.NtfsLogFileError, match="never written"):
         lf.analyze_logfile(stream, cluster_size=cluster)
+
+
+def test_analyze_logfile_refuses_non_integer_cluster_size() -> None:
+    from mountfile.ntfs_logfile import NtfsLogFileError, analyze_logfile
+
+    with pytest.raises(NtfsLogFileError, match="integer"):
+        analyze_logfile(b"", cluster_size="1024")  # type: ignore[arg-type]
+    with pytest.raises(NtfsLogFileError, match="integer"):
+        analyze_logfile(b"", cluster_size=True)  # type: ignore[arg-type]

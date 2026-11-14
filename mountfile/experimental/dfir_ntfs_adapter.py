@@ -92,20 +92,25 @@ class DfirNtfsAdapter:
     def _normalize(cls, record: object) -> ExternalLogRecord:
         redo = cls._value(record, ("get_redo_data", "redo_data"), b"")
         undo = cls._value(record, ("get_undo_data", "undo_data"), b"")
-        if not isinstance(redo, (bytes, bytearray)) or not isinstance(
-            undo, (bytes, bytearray)
+        if not isinstance(redo, bytes | bytearray) or not isinstance(
+            undo, bytes | bytearray
         ):
             raise ExperimentalAdapterUnavailable("dfir_ntfs returned non-byte payload")
         txid = cls._value(record, ("transaction_id", "get_transaction_id"), 0)
         lsn = cls._value(record, ("lsn", "get_this_lsn"), 0)
-        return ExternalLogRecord(
-            transaction_id=int(txid),
-            lsn=int(lsn),
-            redo_data=bytes(redo),
-            undo_data=bytes(undo),
-            redo_operation=cls._optional_int(record, ("get_redo_operation",)),
-            undo_operation=cls._optional_int(record, ("get_undo_operation",)),
-        )
+        try:
+            return ExternalLogRecord(
+                transaction_id=int(txid),
+                lsn=int(lsn),
+                redo_data=bytes(redo),
+                undo_data=bytes(undo),
+                redo_operation=cls._optional_int(record, ("get_redo_operation",)),
+                undo_operation=cls._optional_int(record, ("get_undo_operation",)),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ExperimentalAdapterUnavailable(
+                f"dfir_ntfs returned a malformed record: {exc}"
+            ) from exc
 
     @classmethod
     def _optional_int(cls, record: object, names: tuple[str, ...]) -> int | None:
