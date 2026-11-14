@@ -14,8 +14,8 @@ note is either taken from a struct comment in that file or confirmed by one of
 its `static_assert` calls; nothing here is inferred from memory.
 
 This note backs the bounded `$LogFile` analyzer in
-[`mountfile/ntfs_logfile.py`](../mountfile/ntfs_logfile.py) (issue #510 block C,
-issue #386). The analyzer parses and plans; it does **not** mutate images --
+`mountfile/ntfs_logfile.py` (issue #510 block C, issue #386). The analyzer parses
+and plans; it does **not** mutate images --
 execution stays gated on the acceptance evidence of issue #387.
 
 ## Restart page (`RSTR`)
