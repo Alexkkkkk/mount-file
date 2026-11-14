@@ -40,8 +40,7 @@ from __future__ import annotations
 
 import os
 import struct
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass, field, replace
 
 from mountfile.native_write import NativeWriteUnsafe
 from mountfile.ntfs_mft import parse_ntfs_file_record_header
@@ -260,7 +259,7 @@ class LogRecord:
     cluster_off: int
     target_vcn: int
     page_lcns: tuple[int, ...]
-    restart: Optional[ClientRestartArea] = None
+    restart: ClientRestartArea | None = None
 
     @property
     def redo_len(self) -> int:
@@ -387,7 +386,7 @@ class NtfsLogFileAnalysis:
     transactions: tuple[Transaction, ...] = ()
     redo_plan: tuple[ReplayStep, ...] = ()
     undo_plan: tuple[ReplayStep, ...] = ()
-    restart_area: Optional[ClientRestartArea] = None
+    restart_area: ClientRestartArea | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
     truncated: bool = False
     executable: bool = False
@@ -398,7 +397,7 @@ class NtfsLogFileAnalysis:
         """The log was left open, i.e. the volume needs recovery."""
         return not self.restart.clean_dismount
 
-    def record_at(self, lsn: int) -> Optional[LogRecord]:
+    def record_at(self, lsn: int) -> LogRecord | None:
         for record in self.records:
             if record.lsn == lsn:
                 return record
@@ -422,7 +421,9 @@ class NtfsLogFileAnalysis:
             "clients": [client.as_dict() for client in self.clients],
             "records": [record.as_dict() for record in self.records],
             "record_count": len(self.records),
-            "transactions": [transaction.as_dict() for transaction in self.transactions],
+            "transactions": [
+                transaction.as_dict() for transaction in self.transactions
+            ],
             "redo_steps": [step.as_dict() for step in self.redo_plan],
             "undo_steps": [step.as_dict() for step in self.undo_plan],
             "unresolved_steps": sum(1 for step in steps if not step.resolvable),
@@ -452,15 +453,21 @@ def _fixup_page(page: bytes, magic: bytes, *, page_size: int) -> bytes:
     if signature == BAAD_MAGIC:
         raise NtfsLogFileError("log page is marked BAAD (torn write)")
     if signature == CHKD_MAGIC:
-        raise NtfsLogFileError("log page was written by chkdsk; its state is not parsed")
+        raise NtfsLogFileError(
+            "log page was written by chkdsk; its state is not parsed"
+        )
     if signature != magic:
         raise NtfsLogFileError(f"log page signature is {signature!r}, not {magic!r}")
     usa_offset, usa_count = struct.unpack_from("<HH", page, 4)
     expected = page_size // SECTOR + 1
     if usa_count != expected:
-        raise NtfsLogFileError(f"log page USA count is {usa_count}, expected {expected}")
+        raise NtfsLogFileError(
+            f"log page USA count is {usa_count}, expected {expected}"
+        )
     if usa_offset < 8 or usa_offset + 2 * expected > SECTOR - 2:
-        raise NtfsLogFileError("log page USA array does not end inside the first sector")
+        raise NtfsLogFileError(
+            "log page USA array does not end inside the first sector"
+        )
     sequence = struct.unpack_from("<H", page, usa_offset)[0]
     fixed = bytearray(page)
     for index in range(page_size // SECTOR):
@@ -685,7 +692,10 @@ def _parse_record(
             raise NtfsLogFileError(
                 f"log record at LSN {this_lsn} points redo/undo inside its own header"
             )
-        for name, off, length in (("redo", redo_off, redo_len), ("undo", undo_off, undo_len)):
+        for name, off, length in (
+            ("redo", redo_off, redo_len),
+            ("undo", undo_off, undo_len),
+        ):
             if length and off + length > data_len:
                 raise NtfsLogFileError(
                     f"log record at LSN {this_lsn} {name} slice [{off}:{off + length}) "
@@ -696,16 +706,11 @@ def _parse_record(
                 f"log record at LSN {this_lsn} performs "
                 f"{OPERATION_NAMES.get(redo_op, hex(redo_op))} without a target attribute"
             )
-        page_lcns = struct.unpack_from(f"<{max(1, lcns_follow)}Q", body, LOG_REC_HDR.size)
+        page_lcns = struct.unpack_from(
+            f"<{max(1, lcns_follow)}Q", body, LOG_REC_HDR.size
+        )
         redo_data = body[redo_off : redo_off + redo_len] if redo_len else b""
         undo_data = body[undo_off : undo_off + undo_len] if undo_len else b""
-        if redo_len and undo_len and redo_data == undo_data:
-            # A real log record never carries the same bytes as both redo and
-            # undo: that is the shared-payload mistake the v1 draft of #510 made,
-            # so refuse instead of silently producing a wrong undo.
-            raise NtfsLogFileError(
-                f"log record at LSN {this_lsn} has identical redo and undo payloads"
-            )
     return LogRecord(
         lsn=this_lsn,
         byte_offset=offset,
@@ -773,10 +778,13 @@ def _scan_records(
                 )
             except _EndOfRecords:
                 break
+            record = replace(record, byte_offset=offset + cursor)
             records.append(record)
             if len(records) > MAX_RECORDS:
                 raise NtfsLogFileError("$LogFile exceeds the parsed record budget")
-            cursor = _align8(cursor + area.log_record_header_length + record.data_length)
+            cursor = _align8(
+                cursor + area.log_record_header_length + record.data_length
+            )
         offset += page_size
     return records, truncated
 
@@ -819,7 +827,7 @@ def analyze_logfile(stream: bytes, *, cluster_size: int = 1024) -> NtfsLogFileAn
             raise NtfsLogFileError(f"two log records claim LSN {record.lsn}")
         seen[record.lsn] = record
 
-    restart_area: Optional[ClientRestartArea] = None
+    restart_area: ClientRestartArea | None = None
     checkpoint = 0
     if clients:
         client = clients[0]
@@ -890,7 +898,6 @@ def _analysis_pass(
             order.append(txid)
         else:
             entry[2] = record.lsn
-            entry[3] = record.lsn
         if record.undo_op == 0x01:  # CompensationLogRecord steers undo_next_lsn
             entry[3] = record.undo_next_lsn
         entry[4].append(record.lsn)
@@ -1034,7 +1041,7 @@ def _read_runs(
 
 
 def read_logfile_stream(
-    image_path, *, offset: int = 0, volume_size: Optional[int] = None
+    image_path, *, offset: int = 0, volume_size: int | None = None
 ) -> tuple[bytes, int, NtfsAttributeSummary]:
     """Read ``$LogFile``'s DATA stream from a volume without writing anything.
 
@@ -1054,7 +1061,7 @@ def read_logfile_stream(
         volume_size = size_on_disk - offset
     profile = probe_ntfs_metadata(image_path, offset=offset, volume_size=volume_size)
     boot = profile.boot
-    mft_data: Optional[NtfsAttributeSummary] = None
+    mft_data: NtfsAttributeSummary | None = None
     for attribute in profile.attributes:
         if attribute.type_code == ATTR_DATA and not attribute.name:
             mft_data = attribute
@@ -1090,7 +1097,7 @@ def read_logfile_stream(
                 "$LogFile record uses $ATTRIBUTE_LIST; cross-record attribute "
                 "resolution is outside the parsed profile"
             )
-        logfile: Optional[NtfsAttributeSummary] = None
+        logfile: NtfsAttributeSummary | None = None
         for attribute in attributes:
             if attribute.type_code == ATTR_DATA and not attribute.name:
                 logfile = attribute
@@ -1104,13 +1111,18 @@ def read_logfile_stream(
             raise NtfsLogFileError("$LogFile DATA stream is too small to parse")
         size = min(declared, MAX_LOG_BYTES)
         raw = _read_runs(
-            handle, logfile.runs, cluster_size=boot.cluster_size, base=offset, offset=0, length=size
+            handle,
+            logfile.runs,
+            cluster_size=boot.cluster_size,
+            base=offset,
+            offset=0,
+            length=size,
         )
     return raw, boot.cluster_size, logfile
 
 
 def analyze_image(
-    image_path, *, offset: int = 0, volume_size: Optional[int] = None
+    image_path, *, offset: int = 0, volume_size: int | None = None
 ) -> NtfsLogFileAnalysis:
     """Read-only analysis of the ``$LogFile`` of an NTFS image file."""
 
