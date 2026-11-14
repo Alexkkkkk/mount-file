@@ -273,7 +273,7 @@ def test_mount_ext_does_not_use_debugfs_fallback_without_pytsk3(monkeypatch, tmp
             "-t",
             "ext4",
             "-O",
-            "^fast_commit,^orphan",
+            "^fast_commit,^orphan_file",
             str(partition),
         ],
         check=True,
