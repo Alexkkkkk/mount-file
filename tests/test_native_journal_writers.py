@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+import mountfile.ext4_native_writer as ext4_native_writer
 from mountfile.ext4_native_writer import (
     Ext4NativeWriter,
     Ext4ProfileUnsupported,
@@ -242,6 +243,30 @@ def test_ext4_public_write_verifier_failure_preserves_original(tmp_path, monkeyp
     with pytest.raises(Ext4ProfileUnsupported, match="independent-checker"):
         ext4_write_file_native(str(image), "/f.txt", b"must not publish")
     assert image.read_bytes() == before
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_public_write_refuses_concurrent_source_change(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = make_ext4(tmp_path)
+    before = image.read_bytes()
+    original_write = ext4_native_writer._ext4_write_file_native_in_place
+
+    def mutate_source_after_staging(*args, **kwargs):
+        written = original_write(*args, **kwargs)
+        with image.open("ab") as handle:
+            handle.write(b"external concurrent modification")
+        return written
+
+    monkeypatch.setattr(
+        ext4_native_writer,
+        "_ext4_write_file_native_in_place",
+        mutate_source_after_staging,
+    )
+    with pytest.raises(NativeWriteUnsafe, match="changed concurrently"):
+        ext4_write_file_native(str(image), "/f.txt", b"must not publish")
+    assert image.read_bytes() == before + b"external concurrent modification"
 
 
 @needs_ext

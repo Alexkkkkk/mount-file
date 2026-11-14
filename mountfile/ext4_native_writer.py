@@ -48,8 +48,10 @@ from mountfile.native_write import (
     _fault,
     _image_copy,
     _require_enabled,
+    _require_source_unchanged,
     _require_tools,
     _run,
+    _sha256_file,
     _unlink,
     native_write_enabled,
     validate_internal_path,
@@ -670,6 +672,7 @@ class Ext4NativeWriter:
         _require_tools("e2fsck")
         internal = normalize_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         source_path, temporary = _image_copy(source)
         try:
             require_supported_profile(temporary, 0)
@@ -692,6 +695,7 @@ class Ext4NativeWriter:
                 temporary, internal, data, library=self.library
             )
             self.last_verification = verify_image_after_operation(temporary, 0)
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
             return written

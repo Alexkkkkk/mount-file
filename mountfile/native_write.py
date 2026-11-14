@@ -11,6 +11,7 @@ verification result fails closed.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shlex
 import shutil
@@ -155,6 +156,29 @@ def _image_copy(image_path: str) -> tuple[str, str]:
     return source, temporary
 
 
+def _sha256_file(path: str) -> bytes:
+    """Return a bounded-stream digest used for source identity checks."""
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _require_source_unchanged(source: str, expected: bytes) -> None:
+    """Refuse to publish a stage over a concurrently modified source image."""
+
+    try:
+        actual = _sha256_file(source)
+    except OSError as exc:
+        raise NativeWriteUnsafe(f"cannot verify source image identity: {exc}") from exc
+    if actual != expected:
+        raise NativeWriteUnsafe(
+            "source image changed concurrently; refusing to publish staged write"
+        )
+
+
 def _unlink(path: str) -> None:
     with contextlib.suppress(FileNotFoundError):
         os.unlink(path)
@@ -280,6 +304,7 @@ class Ext4TransactionalWriter:
         _require_zero_offset(offset)
         _require_tools("e2fsck", "debugfs")
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         directory = os.path.dirname(source) or "."
         internal = validate_internal_path(path)
         payload = _payload_file(data, directory)
@@ -297,6 +322,7 @@ class Ext4TransactionalWriter:
                 journal.require_clean(temporary)
             except JournalSafetyError as exc:
                 raise NativeWriteUnsafe(str(exc)) from exc
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
         finally:
@@ -322,6 +348,7 @@ class NtfsTransactionalWriter:
         _require_zero_offset(offset)
         internal = validate_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         source_path, temporary = _image_copy(source)
         payload = _payload_file(data, os.path.dirname(source) or ".")
         try:
@@ -335,6 +362,7 @@ class NtfsTransactionalWriter:
                 log_file.require_clean(temporary, _run)
             except JournalSafetyError as exc:
                 raise NativeWriteUnsafe(str(exc)) from exc
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
         finally:
