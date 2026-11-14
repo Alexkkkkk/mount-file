@@ -49,6 +49,8 @@ def test_data_tag_hashes_sequence_then_complete_block_and_supports_v2_width() ->
 
 def test_deleted_tag_is_explicitly_accepted_without_fabricating_data() -> None:
     assert tag_checksum_matches(1, b"", 0, SEED, deleted=True)
+    with pytest.raises(JBD2ChecksumError):
+        tag_checksum_matches(1, b"", 0, SEED, deleted=True, width=3)
 
 
 def test_commit_checksum_covers_full_block_and_zeroes_header_fields() -> None:

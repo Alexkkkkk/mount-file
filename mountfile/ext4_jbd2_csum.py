@@ -77,10 +77,10 @@ def tag_checksum_matches(
     width: int = 4,
 ) -> bool:
     """Verify a tag checksum; deleted tags have no data payload to verify."""
-    if deleted:
-        return True
     if width not in (2, 4):
         raise JBD2ChecksumError("tag checksum width must be 2 or 4 bytes")
+    if deleted:
+        return True
     expected = tag_checksum(sequence, data_block, seed)
     return (expected & (0xFFFF if width == 2 else 0xFFFFFFFF)) == stored
 
