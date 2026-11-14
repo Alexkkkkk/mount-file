@@ -144,6 +144,28 @@ def test_decoder_restores_escaped_data_and_reducer_applies_revoke():
     }
 
 
+def test_decoder_refuses_corrupted_commit_and_truncated_ring():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"A" * 1024},
+    )
+    corrupted = [bytes(record) for record in records]
+    commit = bytearray(corrupted[-1])
+    struct.pack_into(">I", commit, 8, 18)
+    corrupted[-1] = bytes(commit)
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        decode_classic_jbd2_transaction(
+            corrupted, block_size=1024, filesystem_blocks=100
+        )
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        decode_classic_jbd2_transaction(
+            records[:-1], block_size=1024, filesystem_blocks=100
+        )
+
+
 @pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (0, 1), (True, 2)])
 def test_reducer_rejects_invalid_or_nonforward_transaction_sequences(sequences):
     transactions = [JBD2DecodedTransaction(sequence, (), ()) for sequence in sequences]
