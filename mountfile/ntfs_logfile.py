@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import os
 import struct
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from mountfile.native_write import NativeWriteUnsafe
@@ -176,6 +177,112 @@ EXECUTION_BLOCKERS = (
 
 class NtfsLogFileError(NativeWriteUnsafe):
     """The log stream is outside the parsed-and-proven bounded profile."""
+
+
+class NtfsReplayOverlayError(NtfsLogFileError):
+    """A bounded replay overlay cannot be applied atomically."""
+
+
+@dataclass(frozen=True)
+class ReplayTarget:
+    """Explicit byte target supplied by a caller that already resolved NTFS metadata.
+
+    The parser deliberately cannot infer this mapping from ``target_attr`` alone.
+    Keeping the mapping explicit makes this reducer useful for synthetic fixtures
+    and prevents it from silently guessing MFT/attribute/runlist locations.
+    """
+
+    target_attr: int
+    target_vcn: int
+    offset: int
+    length: int
+
+
+@dataclass(frozen=True)
+class OverlayProvenance:
+    """Evidence describing one applied redo/undo payload."""
+
+    lsn: int
+    transaction_id: int
+    kind: str
+    operation: str
+    target_attr: int
+    target_vcn: int
+    offset: int
+    length: int
+
+
+class NtfsReplayOverlay:
+    """Apply a bounded, explicitly-targeted plan to a private byte overlay.
+
+    This is intentionally not an image writer and is not used by the native
+    NTFS path.  It validates every target and payload before creating the result,
+    then applies all writes to a private copy so malformed plans can never leave
+    a partially modified caller buffer.  A future image executor can reuse this
+    reducer after it proves MFT/attribute/runlist resolution independently.
+    """
+
+    def __init__(self, source: bytes | bytearray):
+        self._source = bytes(source)
+
+    def apply(
+        self,
+        steps: Sequence[ReplayStep],
+        targets: Mapping[tuple[int, int], ReplayTarget],
+    ) -> tuple[bytes, tuple[OverlayProvenance, ...]]:
+        staged = bytearray(self._source)
+        provenance: list[OverlayProvenance] = []
+        validated: list[tuple[ReplayStep, ReplayTarget]] = []
+        occupied: dict[int, tuple[int, int]] = {}
+        for step in steps:
+            if step.operation in SKIPPABLE_OPERATIONS:
+                continue
+            if step.kind not in {"redo", "undo"}:
+                raise NtfsReplayOverlayError(
+                    f"unsupported replay step kind: {step.kind!r}"
+                )
+            target = targets.get((step.target_attr, step.target_vcn))
+            if target is None:
+                raise NtfsReplayOverlayError(
+                    "replay target is unresolved: "
+                    f"attr={step.target_attr} vcn={step.target_vcn}"
+                )
+            if target.target_attr != step.target_attr or target.target_vcn != step.target_vcn:
+                raise NtfsReplayOverlayError("replay target identity mismatch")
+            if target.offset < 0 or target.length < 0:
+                raise NtfsReplayOverlayError("replay target range is negative")
+            if target.offset + target.length > len(staged):
+                raise NtfsReplayOverlayError("replay target range is outside overlay")
+            if len(step.payload) != target.length:
+                raise NtfsReplayOverlayError(
+                    f"replay payload length {len(step.payload)} does not match "
+                    f"target length {target.length}"
+                )
+            range_end = target.offset + target.length
+            target_key = (target.target_attr, target.target_vcn)
+            if any(
+                position in occupied and occupied[position] != target_key
+                for position in range(target.offset, range_end)
+            ):
+                raise NtfsReplayOverlayError("overlapping replay targets are ambiguous")
+            for position in range(target.offset, range_end):
+                occupied[position] = target_key
+            validated.append((step, target))
+        for step, target in validated:
+            staged[target.offset : target.offset + target.length] = step.payload
+            provenance.append(
+                OverlayProvenance(
+                    lsn=step.lsn,
+                    transaction_id=step.transaction_id,
+                    kind=step.kind,
+                    operation=step.operation_name,
+                    target_attr=step.target_attr,
+                    target_vcn=step.target_vcn,
+                    offset=target.offset,
+                    length=target.length,
+                )
+            )
+        return bytes(staged), tuple(provenance)
 
 
 class _UnusedPage(Exception):
@@ -1156,6 +1263,8 @@ __all__ = [
     "NTFS_RESTART",
     "NtfsLogFileAnalysis",
     "NtfsLogFileError",
+    "NtfsReplayOverlay",
+    "NtfsReplayOverlayError",
     "RCRD_MAGIC",
     "RSTR_MAGIC",
     "ClientRestartArea",
@@ -1163,6 +1272,8 @@ __all__ = [
     "LogRecord",
     "OPERATION_NAMES",
     "ReplayStep",
+    "ReplayTarget",
+    "OverlayProvenance",
     "SKIPPABLE_OPERATIONS",
     "Transaction",
     "analyze_image",
