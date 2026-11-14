@@ -27,10 +27,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator, Optional
 
-from mountfile.rw.complete import (
-    Fat32Adapter,
-    VerificationEngine,
-)
+from mountfile.rw.complete import Fat32Adapter, VerificationEngine
 from mountfile.rw.universal import (
     Ext4RW,
     FsType,

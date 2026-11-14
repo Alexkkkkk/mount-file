@@ -132,8 +132,9 @@ from .qt_compat import (
     exec_dialog,
     standard_icon,
 )
-from .updater import StartupUpdater, app_version, auto_install, is_frozen
+from .updater import StartupUpdater, app_version, auto_install
 from .updater import disabled as updates_disabled
+from .updater import is_frozen
 
 #: The five columns of the reference interface, in order.
 COLUMNS = ("Имя", "Тип", "Размер", "Дата", "Атрибуты")

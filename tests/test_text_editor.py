@@ -301,9 +301,7 @@ def test_external_editor_copy_is_imported_only_after_confirmation(
     entry = {"name": "notes.ini", "is_dir": False, "size": len(original)}
 
     def fake_open(path):
-        Path(path).write_bytes(
-            b"\xef\xbb\xbf" + "[main]\r\nname=новый Ш\r\n".encode()
-        )
+        Path(path).write_bytes(b"\xef\xbb\xbf" + "[main]\r\nname=новый Ш\r\n".encode())
         return ["fake-editor", str(path)]
 
     monkeypatch.setattr(text_editor, "open_in_editor", fake_open)

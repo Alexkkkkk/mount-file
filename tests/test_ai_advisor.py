@@ -21,8 +21,8 @@ pytest.importorskip(
     "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
 )
 
+from mountfile.ai_format_advisor_v2 import Calibration  # noqa: E402
 from mountfile.ai_format_advisor_v2 import (
-    Calibration,  # noqa: E402
     FormatAdvisorDialog,
     GitHubReporter,
     HypothesisEngine,

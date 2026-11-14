@@ -9,10 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from mountfile.ai.copilot import (
-    build_summary,  # noqa: E402
-    summary_to_markdown,
-)
+from mountfile.ai.copilot import build_summary  # noqa: E402
+from mountfile.ai.copilot import summary_to_markdown
 
 summary = build_summary(
     image_fingerprint={
