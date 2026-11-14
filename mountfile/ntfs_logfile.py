@@ -278,6 +278,52 @@ def resolve_resident_attribute_target(
     )
 
 
+def resolve_nonresident_run_target(
+    attribute: NtfsAttributeSummary,
+    *,
+    volume_offset: int,
+    cluster_size: int,
+    byte_offset: int,
+    length: int,
+) -> ReplayTarget:
+    """Resolve one bounded byte range from a complete nonresident run.
+
+    Only a single fully mapped run is accepted. Sparse runs, incomplete
+    streams, invalid geometry and ranges crossing a run boundary are refused;
+    compressed/encrypted stream policy is also fail-closed through the
+    parser's ``content_supported`` marker. The returned offset is absolute in
+    the supplied volume byte coordinate system and is intended for a private
+    overlay only, never direct publication.
+    """
+    if not isinstance(attribute, NtfsAttributeSummary) or not attribute.nonresident:
+        raise NtfsReplayOverlayError("nonresident target requires a nonresident attribute")
+    values = (volume_offset, cluster_size, byte_offset, length)
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        raise NtfsReplayOverlayError("nonresident target coordinates must be integers")
+    if volume_offset < 0 or cluster_size <= 0 or byte_offset < 0 or length <= 0:
+        raise NtfsReplayOverlayError("nonresident target range is invalid")
+    if not attribute.content_supported:
+        raise NtfsReplayOverlayError("nonresident target stream is unsupported")
+    if attribute.lowest_vcn != 0 or not attribute.runs or attribute.data_size <= 0:
+        raise NtfsReplayOverlayError("nonresident target stream is incomplete")
+    stream_end = attribute.data_size
+    if byte_offset + length > stream_end:
+        raise NtfsReplayOverlayError("nonresident target exceeds data size")
+    for run in attribute.runs:
+        if run.lcn is None or run.length <= 0:
+            raise NtfsReplayOverlayError("sparse nonresident target is unsupported")
+        run_start = run.vcn * cluster_size
+        run_end = (run.vcn + run.length) * cluster_size
+        if run_start <= byte_offset < run_end:
+            physical = volume_offset + run.lcn * cluster_size + (byte_offset - run_start)
+            if byte_offset + length > run_end:
+                raise NtfsReplayOverlayError(
+                    "nonresident target crosses a run boundary"
+                )
+            return ReplayTarget(attribute.attribute_id, run.vcn, physical, length)
+    raise NtfsReplayOverlayError("nonresident target VCN is not mapped by the runlist")
+
+
 @dataclass(frozen=True)
 class OverlayProvenance:
     """Evidence describing one applied redo/undo payload."""
@@ -1455,5 +1501,6 @@ __all__ = [
     "replay_analysis_to_overlay",
     "replay_analysis_on_resident_record",
     "resolve_resident_attribute_target",
+    "resolve_nonresident_run_target",
     "read_logfile_stream",
 ]

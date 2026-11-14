@@ -11,6 +11,7 @@ from mountfile.ntfs_logfile import (
     ReplayTarget,
     replay_analysis_to_overlay,
     replay_analysis_on_resident_record,
+    resolve_nonresident_run_target,
     resolve_resident_attribute_target,
 )
 
@@ -258,4 +259,56 @@ def test_resident_record_executor_rejects_mixed_attribute_targets() -> None:
                 )
             ),
             record,
+        )
+
+
+def test_nonresident_resolver_maps_one_complete_run() -> None:
+    from mountfile.ntfs_reader import NtfsAttributeSummary, NtfsRun
+
+    attribute = NtfsAttributeSummary(
+        0x80,
+        72,
+        True,
+        "",
+        lowest_vcn=0,
+        highest_vcn=1,
+        runs=(NtfsRun(0, 20, 2),),
+        data_size=8192,
+        attribute_id=9,
+    )
+    resolved = resolve_nonresident_run_target(
+        attribute,
+        volume_offset=4096,
+        cluster_size=4096,
+        byte_offset=4096,
+        length=1024,
+    )
+    assert resolved.target_attr == 9
+    assert resolved.target_vcn == 0
+    assert resolved.offset == 4096 + 20 * 4096 + 4096
+
+
+def test_nonresident_resolver_refuses_sparse_and_cross_run_ranges() -> None:
+    from mountfile.ntfs_reader import NtfsAttributeSummary, NtfsRun
+
+    sparse = NtfsAttributeSummary(
+        0x80, 72, True, "", lowest_vcn=0, runs=(NtfsRun(0, None, 2),), data_size=8192
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="sparse"):
+        resolve_nonresident_run_target(
+            sparse, volume_offset=0, cluster_size=4096, byte_offset=0, length=1
+        )
+
+    fragmented = NtfsAttributeSummary(
+        0x80,
+        72,
+        True,
+        "",
+        lowest_vcn=0,
+        runs=(NtfsRun(0, 20, 1), NtfsRun(1, 30, 1)),
+        data_size=8192,
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="run boundary"):
+        resolve_nonresident_run_target(
+            fragmented, volume_offset=0, cluster_size=4096, byte_offset=2048, length=4096
         )
