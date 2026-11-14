@@ -17,9 +17,8 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import PurePosixPath
-from typing import Callable, Optional
 
 from mountfile.journal_safety import (
     Ext4JournalManager,
@@ -48,7 +47,7 @@ FAULT_POINTS = (
     "publish:done",
 )
 
-FAULT_HOOK: Optional[Callable[[str], None]] = None
+FAULT_HOOK: Callable[[str], None] | None = None
 """Test seam invoked inside every image-touching primitive.
 
 Runtime keeps it ``None``.  Acceptance fixtures install a hook that blocks until
@@ -279,7 +278,7 @@ def fault_point_trace(function, *args, **kwargs) -> list[str]:
     return trace
 
 
-def fault_hook_installed(hook: Optional[Callable[[str], None]]) -> None:
+def fault_hook_installed(hook: Callable[[str], None] | None) -> None:
     """Install (or clear with ``None``) the process-wide fault seam."""
 
     global FAULT_HOOK
