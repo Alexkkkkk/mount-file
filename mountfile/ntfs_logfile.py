@@ -306,14 +306,38 @@ def resolve_nonresident_run_target(
         raise NtfsReplayOverlayError("nonresident target range is invalid")
     if not attribute.content_supported:
         raise NtfsReplayOverlayError("nonresident target stream is unsupported")
-    if attribute.lowest_vcn != 0 or not attribute.runs or attribute.data_size <= 0:
+    if (
+        attribute.lowest_vcn != 0
+        or attribute.highest_vcn is None
+        or not attribute.runs
+        or attribute.data_size <= 0
+    ):
         raise NtfsReplayOverlayError("nonresident target stream is incomplete")
+    if (
+        attribute.allocated_size is not None
+        and attribute.allocated_size < attribute.data_size
+    ) or (
+        attribute.initialized_size is not None
+        and attribute.initialized_size > attribute.data_size
+    ):
+        raise NtfsReplayOverlayError("nonresident target stream sizes are inconsistent")
+    expected_vcn = attribute.lowest_vcn
+    covered_clusters = 0
+    for run in attribute.runs:
+        if run.vcn != expected_vcn or run.length <= 0:
+            raise NtfsReplayOverlayError("nonresident target runlist has a VCN gap or overlap")
+        if run.lcn is None:
+            raise NtfsReplayOverlayError("sparse nonresident target is unsupported")
+        expected_vcn += run.length
+        covered_clusters += run.length
+    if expected_vcn - 1 != attribute.highest_vcn:
+        raise NtfsReplayOverlayError("nonresident target highest VCN is inconsistent")
+    if covered_clusters * cluster_size < attribute.data_size:
+        raise NtfsReplayOverlayError("nonresident target runlist does not cover data size")
     stream_end = attribute.data_size
     if byte_offset + length > stream_end:
         raise NtfsReplayOverlayError("nonresident target exceeds data size")
     for run in attribute.runs:
-        if run.lcn is None or run.length <= 0:
-            raise NtfsReplayOverlayError("sparse nonresident target is unsupported")
         run_start = run.vcn * cluster_size
         run_end = (run.vcn + run.length) * cluster_size
         if run_start <= byte_offset < run_end:

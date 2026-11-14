@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from mountfile.ntfs_reader import NtfsRun
+
 from mountfile.ntfs_logfile import (
     NtfsLogFileAnalysis,
     NtfsReplayOverlay,
@@ -293,7 +295,14 @@ def test_nonresident_resolver_refuses_sparse_and_cross_run_ranges() -> None:
     from mountfile.ntfs_reader import NtfsAttributeSummary, NtfsRun
 
     sparse = NtfsAttributeSummary(
-        0x80, 72, True, "", lowest_vcn=0, runs=(NtfsRun(0, None, 2),), data_size=8192
+        0x80,
+        72,
+        True,
+        "",
+        lowest_vcn=0,
+        highest_vcn=1,
+        runs=(NtfsRun(0, None, 2),),
+        data_size=8192,
     )
     with pytest.raises(NtfsReplayOverlayError, match="sparse"):
         resolve_nonresident_run_target(
@@ -306,6 +315,7 @@ def test_nonresident_resolver_refuses_sparse_and_cross_run_ranges() -> None:
         True,
         "",
         lowest_vcn=0,
+        highest_vcn=1,
         runs=(NtfsRun(0, 20, 1), NtfsRun(1, 30, 1)),
         data_size=8192,
     )
@@ -320,6 +330,7 @@ def test_nonresident_resolver_refuses_sparse_and_cross_run_ranges() -> None:
         True,
         "",
         lowest_vcn=0,
+        highest_vcn=1,
         runs=(NtfsRun(0, 20, 2),),
         data_size=8192,
         content_supported=False,
@@ -327,6 +338,44 @@ def test_nonresident_resolver_refuses_sparse_and_cross_run_ranges() -> None:
     with pytest.raises(NtfsReplayOverlayError, match="unsupported"):
         resolve_nonresident_run_target(
             unsupported, volume_offset=0, cluster_size=4096, byte_offset=0, length=1
+        )
+
+
+@pytest.mark.parametrize(
+    ("attribute", "message"),
+    [
+        (
+            {
+                "highest_vcn": 2,
+                "runs": (NtfsRun(0, 20, 2),),
+            },
+            "highest VCN",
+        ),
+        (
+            {
+                "highest_vcn": 2,
+                "runs": (NtfsRun(0, 20, 1), NtfsRun(2, 30, 1)),
+            },
+            "gap or overlap",
+        ),
+    ],
+)
+def test_nonresident_resolver_rejects_inconsistent_runlist(attribute, message) -> None:
+    from mountfile.ntfs_reader import NtfsAttributeSummary
+
+    candidate = NtfsAttributeSummary(
+        0x80,
+        72,
+        True,
+        "",
+        lowest_vcn=0,
+        highest_vcn=attribute["highest_vcn"],
+        runs=attribute["runs"],
+        data_size=8192,
+    )
+    with pytest.raises(NtfsReplayOverlayError, match=message):
+        resolve_nonresident_run_target(
+            candidate, volume_offset=0, cluster_size=4096, byte_offset=0, length=1
         )
 
 
