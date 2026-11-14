@@ -19,7 +19,7 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | Item | Status | Evidence |
 | --- | --- | --- |
 | `$LogFile` parser: RCRD, restart area, USA, redo/undo | implemented | `mountfile/ntfs_logfile.py`, `tests/test_ntfs_logfile_parser.py`. |
-| Undo for OPEN transactions | partial | `_build_plans()` produces an undo plan from active transactions; `replay_analysis_to_overlay()` now applies it after committed redo to a private overlay with explicit targets. It is not an image writer. |
+| Undo for OPEN transactions | partial | `_build_plans()` produces an undo plan from active transactions; `replay_analysis_to_overlay()` now applies it after committed redo to a private overlay with explicit targets. The executable overlay profile is limited to `UpdateResidentValue`; MFT/index/bitmap/mirror operations are typed refusals. It is not an image writer. |
 | Checkpointing and full redo | partial | Checkpoint LSN, transaction table and redo plan are parsed; the bounded executor applies redo/undo in recovery order, but `executable` stays `False` until MFT/runlist resolution and crash evidence exist. |
 | Safe MFT allocation/reuse and `$MFTMirr` repair | not implemented | The gate only compares `$MFT`/`$MFTMirr` record 0 and refuses a mismatch. |
 | Replay on copied Windows/NTFS crash fixtures | not implemented | Only the read-only fixture exists; dirty/crashed fixtures are not available. |
