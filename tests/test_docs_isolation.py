@@ -36,6 +36,18 @@ def test_proposals_contain_markdown_only() -> None:
     assert not stray, f"non-markdown files in docs/proposals/: {stray}"
 
 
+def test_every_proposal_has_non_production_banner() -> None:
+    """Design notes must not be mistaken for supported replay code."""
+    proposals = sorted(PROPOSALS.glob("*.md"))
+    assert proposals
+    missing = [
+        str(path)
+        for path in proposals
+        if "Review material — not production." not in path.read_text(encoding="utf-8")
+    ]
+    assert not missing, f"proposal safety banner missing from: {missing}"
+
+
 def test_replay_if_needed_is_not_implemented_anywhere() -> None:
     """The draft's unsafe replay_if_needed() must never reach any .py file."""
     offenders = [

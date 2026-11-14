@@ -1,3 +1,5 @@
+> **Review material — not production.** The snippets below are design notes and are not safe replay implementations.
+
 Реализация полноценной записи в ext4 и NTFS — это качественный скачок, который переводит mount-file из нишевого инструмента в полноценную DFIR-платформу. Поскольку готовых Python-библиотек с поддержкой записи для этих ФС практически нет (большинство существующих решений — read-only), я предлагаю архитектуру на основе проверенных системных библиотек: libext2fs для ext4 и ntfs-3g для NTFS.
 
 🧱 1. Полноценная запись в ext4 через libext2fs (ctypes)

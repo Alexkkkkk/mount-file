@@ -75,6 +75,10 @@ unsupported. Limited writes are available only through the explicitly enabled
 bounded profiles above. Backup, rollback and benchmark evidence do not imply
 power-loss safety or full filesystem parity.
 
+> **Guarded recovery warning:** `MOUNTFILE_ENABLE_NATIVE_WRITE=1` enables only guarded
+> recovery/copy verification for the bounded native profiles. It does **not** enable
+> full ext4/JBD2 replay, NTFS `$LogFile` replay, undo, or power-loss safety.
+
 The versioned machine-readable matrix is the source of truth for operations,
 state gates and refusal codes:
 

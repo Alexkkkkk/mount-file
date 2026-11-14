@@ -1,3 +1,5 @@
+> **Review material — not production.** The snippets below are design notes and are not safe replay implementations.
+
 > **⚠️ Не реализовывать как есть.** Функция `replay_if_needed()` из этого
 > документа обнуляет `s_start` и снимает `EXT4_FEATURE_INCOMPAT_RECOVER`,
 > не проигрывая журнал: это отбрасывает зафиксированные транзакции и
