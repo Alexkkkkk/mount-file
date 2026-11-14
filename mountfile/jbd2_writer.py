@@ -71,16 +71,36 @@ def decode_classic_jbd2_transaction(
     block_size: int,
     filesystem_blocks: int,
     journal_blocks: Sequence[int] = (),
+    journal_features: tuple[int, int, int] = (0, 0, 0),
 ) -> JBD2DecodedTransaction:
     """Decode one already-committed classic transaction without applying it.
 
     The existing structural validator remains the authority for record shape.
     This function only extracts the validated target/data pairs and restores
     ESCAPE-tagged magic prefixes. It never writes an image and rejects targets
-    outside the filesystem or inside journal-owned blocks.
+    outside the filesystem or inside journal-owned blocks. The optional
+    ``journal_features`` tuple is the parsed ``(compat, incompat, ro)``
+    superblock feature set; any nonzero value is refused so a checksum-enabled
+    transaction cannot pass through the no-checksum decoder unchecked.
     """
     if block_size not in _SUPPORTED_BLOCK_SIZES:
         raise JBD2WriteProfileError("unsupported JBD2 block size")
+    if (
+        not isinstance(journal_features, tuple)
+        or len(journal_features) != 3
+        or any(
+            isinstance(feature, bool) or not isinstance(feature, int)
+            for feature in journal_features
+        )
+    ):
+        raise JBD2WriteProfileError(
+            "JBD2 journal features must be a (compat, incompat, ro) tuple"
+        )
+    if any(journal_features):
+        raise JBD2WriteProfileError(
+            "checksum or other JBD2 journal features are unsupported by the "
+            "classic decoder"
+        )
     if not isinstance(records, Sequence) or isinstance(records, bytes | str):
         raise JBD2WriteProfileError("JBD2 records must be a sequence of blocks")
     forbidden = set(journal_blocks)

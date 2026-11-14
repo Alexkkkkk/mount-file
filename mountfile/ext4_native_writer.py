@@ -471,6 +471,8 @@ def verify_image_after_operation(
     * the JBD2 probe must be :class:`~mountfile.journal_safety.JournalState.CLEAN`;
     * the ``RECOVER`` incompatibility bit must be clear in the on-disk
       superblock, read back without trusting either of the two above.
+    * the checkpoint sequence must be zero, proving that no transaction remains
+      pending after the operation.
 
     Returns machine-readable evidence for the acceptance matrix.
     """
@@ -482,11 +484,17 @@ def verify_image_after_operation(
             "ext4 RECOVER flag is still set after the operation"
         )
     probe = probe_journal(image_path, offset)
+    if probe.journal_sequence != 0:
+        raise Ext4ProfileUnsupported(
+            "ext4 checkpoint is not empty after the operation: "
+            f"s_sequence={probe.journal_sequence}"
+        )
     return {
         "checker": "e2fsck -fn",
         "exit_code": getattr(result, "returncode", 0),
         "journal_state": probe.state.value,
         "recover_flag": False,
+        "journal_sequence": probe.journal_sequence,
         "block_size": probe.block_size,
     }
 

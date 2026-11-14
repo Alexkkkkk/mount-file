@@ -22,19 +22,24 @@ Replay limitation (issue #386)
 Redo/undo replay of ``$LogFile`` LFS records is **not** implemented.  Unlike the
 ext4 path there is no utility in the repository's tool belt that replays NTFS
 logs on a disposable copy (``ntfsfix`` only resets the dirty bit).  Therefore a
-volume whose log needs replay is refused even when ``recover="copy"`` is
-requested; only ``recover="refuse"`` semantics are honest for NTFS today.
+volume whose log needs replay is never modified.  ``recover="refuse"`` reports a
+typed refusal; ``recover="copy"`` preserves the evidence in a content-addressed
+quarantine copy plus a JSON marker and then refuses with
+:class:`NtfsReplayQuarantined`.  Neither mode claims replay support.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from mountfile.ext4_native_writer import normalize_internal_path
 from mountfile.native_write import (
     NativeWriteUnsafe,
     _atomic_replace,
+    _fsync_path,
     _image_copy,
     _require_enabled,
     _require_source_unchanged,
@@ -54,6 +59,102 @@ from mountfile.ntfs_reader import (
 
 class NtfsProfileUnsupported(NativeWriteUnsafe):
     """The image layout or state is outside the validated write profile."""
+
+
+@dataclass(frozen=True)
+class NtfsQuarantine:
+    """Evidence-preserving copy of an image whose replay is not implemented."""
+
+    source: str
+    copy: str
+    marker: str
+    sha256: str
+    reason: str
+
+    def as_dict(self) -> dict:
+        return {
+            "source": self.source,
+            "copy": self.copy,
+            "marker": self.marker,
+            "sha256": self.sha256,
+            "reason": self.reason,
+            "replay": "not_implemented",
+        }
+
+
+class NtfsReplayQuarantined(NtfsProfileUnsupported):
+    """The dirty image was quarantined instead of being replayed or written."""
+
+    def __init__(self, quarantine: NtfsQuarantine) -> None:
+        super().__init__(
+            "NTFS log replay is not implemented; dirty image was quarantined at "
+            f"{quarantine.copy} (marker {quarantine.marker})"
+        )
+        self.quarantine = quarantine
+
+
+def quarantine_ntfs_image(
+    image_path: str, *, reason: str, offset: int = 0
+) -> NtfsQuarantine:
+    """Copy an unproven NTFS image next to itself and write a durable marker.
+
+    The source is opened read-only and is never renamed or replaced.  The copy
+    name is derived from the source digest, so repeated calls for the same
+    content reuse the same evidence.  A same-named file whose digest differs is
+    treated as tampering and refused.
+    """
+
+    source = os.path.abspath(os.fspath(image_path))
+    if not os.path.isfile(source):
+        raise NtfsProfileUnsupported(f"cannot quarantine unreadable image: {source}")
+    try:
+        digest = _sha256_file(source).hex()
+    except OSError as exc:
+        raise NtfsProfileUnsupported(
+            f"cannot read image for quarantine: {exc}"
+        ) from exc
+    copy = f"{source}.mountfile-ntfs-quarantine-{digest[:12]}"
+    marker = f"{copy}.json"
+    if os.path.exists(copy):
+        if _sha256_file(copy).hex() != digest:
+            raise NtfsProfileUnsupported(
+                f"quarantine copy {copy} does not match the source digest"
+            )
+    else:
+        temporary = f"{copy}.partial-{os.getpid()}"
+        try:
+            with open(source, "rb") as reader, open(temporary, "wb") as writer:
+                while chunk := reader.read(1 << 20):
+                    writer.write(chunk)
+                writer.flush()
+                os.fsync(writer.fileno())
+            os.replace(temporary, copy)
+        finally:
+            if os.path.exists(temporary):
+                _unlink(temporary)
+    record = {
+        "schema": "mountfile-ntfs-quarantine-v1",
+        "source": source,
+        "copy": copy,
+        "sha256": digest,
+        "reason": reason,
+        "offset": offset,
+        "replay": "not_implemented",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    temporary_marker = f"{marker}.partial-{os.getpid()}"
+    try:
+        with open(temporary_marker, "w", encoding="utf-8") as stream:
+            json.dump(record, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_marker, marker)
+    finally:
+        if os.path.exists(temporary_marker):
+            _unlink(temporary_marker)
+    _fsync_path(copy)
+    return NtfsQuarantine(source, copy, marker, digest, reason)
 
 
 @dataclass(frozen=True)
@@ -199,13 +300,10 @@ class NtfsNativeWriter:
     """Copy -> $LogFile/$Volume gate -> ntfscp -> re-gate -> atomic publish."""
 
     def __init__(self, *, require_flag: bool = True, recover: str = "refuse") -> None:
-        if recover == "copy":
-            raise ValueError(
-                "NTFS log replay is not implemented (issue #386); use recover='refuse'"
-            )
-        if recover != "refuse":
-            raise ValueError("recover must be 'refuse'")
+        if recover not in ("copy", "refuse"):
+            raise ValueError("recover must be 'copy' or 'refuse'")
         self.require_flag = require_flag
+        self.recover = recover
 
     def write_file(
         self, image_path: str, path: str, data: bytes, offset: int = 0
@@ -216,10 +314,23 @@ class NtfsNativeWriter:
             raise NtfsProfileUnsupported(
                 "nonzero offsets are not supported by the bounded NTFS profile"
             )
-        _require_tools("ntfscp")
         internal = normalize_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
-        source_identity = _sha256_file(source)
+        if not os.path.isfile(source):
+            raise NtfsProfileUnsupported(f"image is not readable: {source}")
+        try:
+            source_identity = _sha256_file(source)
+        except OSError as exc:
+            raise NtfsProfileUnsupported(f"image is not readable: {exc}") from exc
+        if self.recover == "copy":
+            # Dirty volumes are never replayed or written: preserve evidence in
+            # a quarantine copy and report a typed refusal.
+            gate = probe_ntfs_log(source, 0)
+            if not gate.clean:
+                raise NtfsReplayQuarantined(
+                    quarantine_ntfs_image(source, reason=gate.reason)
+                )
+        _require_tools("ntfscp")
         source_path, temporary = _image_copy(source)
         try:
             gate = probe_ntfs_log(temporary, 0)
@@ -251,6 +362,7 @@ def logfile_gate_summary(image_path: str, offset: int = 0) -> dict:
     summary["native_write_enabled"] = enabled
     summary["writable"] = bool(enabled and gate.clean)
     summary["replay_implemented"] = False
+    summary["quarantine_supported"] = True
     return summary
 
 
@@ -258,7 +370,10 @@ __all__ = [
     "NtfsLogGate",
     "NtfsNativeWriter",
     "NtfsProfileUnsupported",
+    "NtfsQuarantine",
+    "NtfsReplayQuarantined",
     "logfile_gate_summary",
     "ntfs_write_file_native",
     "probe_ntfs_log",
+    "quarantine_ntfs_image",
 ]

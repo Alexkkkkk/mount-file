@@ -83,6 +83,7 @@ def test_sync_writes_all_canonical_status_artifacts(tmp_path):
     assert names == {
         "capability-matrix.json",
         "checker-matrix.json",
+        "recovery-acceptance.json",
         "recovery-matrix.json",
         "product-status.json",
     }

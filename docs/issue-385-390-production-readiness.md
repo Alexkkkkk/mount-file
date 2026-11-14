@@ -8,7 +8,7 @@
 - ext4 semantic read-back повторно открывает изменённый inode через libext2fs и сравнивает фактическое содержимое до atomic replace.
 - ext4 profile validation отклоняет отрицательные и выходящие за пределы образа offsets.
 - Для ext4 recovery используется только `e2fsck -fy` на disposable-копии; исходный образ не ремонтируется напрямую.
-- NTFS `$LogFile` replay остаётся явно отключённым: `recover="copy"` отвергается, а dirty/unknown состояния fail closed.
+- NTFS `$LogFile` replay остаётся явно отключённым: dirty/unknown состояния fail closed, а `recover="copy"` сохраняет content-addressed quarantine-копию с JSON-маркером и затем отвергает запись через `NtfsReplayQuarantined`.
 
 ## Что намеренно не объявляется готовым
 

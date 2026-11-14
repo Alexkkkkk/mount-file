@@ -5,6 +5,7 @@ import pytest
 
 from mountfile.jbd2_checkpoint import (
     JBD2CheckpointExecutionError,
+    coordinate_classic_jbd2_replay,
     execute_classic_jbd2_checkpoint,
     plan_classic_jbd2_checkpoint,
     reduce_classic_jbd2_transactions,
@@ -68,6 +69,68 @@ def test_checkpoint_orders_data_before_single_clean_superblock():
     )
     assert clean_state.empty is True
     assert clean_state.sequence == 0
+
+
+def test_coordinate_classic_replay_decodes_reduces_and_checkpoints_atomically():
+    records = [
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+            journal_blocks=[40, 41, 42, 43],
+        )
+    ]
+    stream = io.BytesIO(b"\x00" * (100 * 1024))
+    stream.seek(40 * 1024)
+    stream.write(journal_superblock())
+    stream.seek(0)
+    plan = coordinate_classic_jbd2_replay(
+        stream,
+        superblock=journal_superblock(),
+        records=records,
+        filesystem_block_size=1024,
+        filesystem_uuid=UUID,
+        journal_blocks=32,
+        filesystem_blocks=100,
+        journal_physical_blocks=[40, 41, 42, 43],
+        journal_superblock_physical_block=40,
+        sync=lambda: None,
+    )
+    assert plan.state_before.start == 5
+    assert stream.getvalue()[8 * 1024 : 9 * 1024] == b"R" * 1024
+    assert struct.unpack_from(">I", stream.getvalue(), 40 * 1024 + 24)[0] == 0
+
+
+def test_coordinate_classic_replay_rejects_checksum_features_before_writes():
+    records = [
+        encode_classic_jbd2_transaction(
+            block_size=1024,
+            sequence=17,
+            filesystem_blocks=100,
+            journal_uuid=UUID,
+            writes={8: b"R" * 1024},
+            journal_blocks=[40, 41, 42, 43],
+        )
+    ]
+    stream = io.BytesIO(b"\x00" * (100 * 1024))
+    before = stream.getvalue()
+    with pytest.raises(JBD2WriteProfileError, match="features"):
+        coordinate_classic_jbd2_replay(
+            stream,
+            superblock=journal_superblock(),
+            records=records,
+            filesystem_block_size=1024,
+            filesystem_uuid=UUID,
+            journal_blocks=32,
+            filesystem_blocks=100,
+            journal_physical_blocks=[40, 41, 42, 43],
+            journal_superblock_physical_block=40,
+            journal_features=(1, 0, 0),
+            sync=lambda: None,
+        )
+    assert stream.getvalue() == before
 
 
 def test_checkpoint_is_deterministic_and_does_not_mutate_input():
@@ -142,6 +205,52 @@ def test_decoder_restores_escaped_data_and_reducer_applies_revoke():
         12: b"B" * 1024,
         20: b"C" * 1024,
     }
+
+
+def test_decoder_refuses_corrupted_commit_and_truncated_ring():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"A" * 1024},
+    )
+    corrupted = [bytes(record) for record in records]
+    commit = bytearray(corrupted[-1])
+    struct.pack_into(">I", commit, 8, 18)
+    corrupted[-1] = bytes(commit)
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        decode_classic_jbd2_transaction(
+            corrupted, block_size=1024, filesystem_blocks=100
+        )
+    with pytest.raises(JBD2WriteProfileError, match="commit"):
+        decode_classic_jbd2_transaction(
+            records[:-1], block_size=1024, filesystem_blocks=100
+        )
+
+
+def test_classic_decoder_refuses_checksum_enabled_journal_features():
+    records = encode_classic_jbd2_transaction(
+        block_size=1024,
+        sequence=17,
+        filesystem_blocks=100,
+        journal_uuid=UUID,
+        writes={8: b"A" * 1024},
+    )
+    with pytest.raises(JBD2WriteProfileError, match="checksum"):
+        decode_classic_jbd2_transaction(
+            records,
+            block_size=1024,
+            filesystem_blocks=100,
+            journal_features=(0, 1, 0),
+        )
+    with pytest.raises(JBD2WriteProfileError, match="features"):
+        decode_classic_jbd2_transaction(
+            records,
+            block_size=1024,
+            filesystem_blocks=100,
+            journal_features=[0, 0, 0],
+        )
 
 
 @pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (0, 1), (True, 2)])

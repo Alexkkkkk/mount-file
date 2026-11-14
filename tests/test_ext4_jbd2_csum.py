@@ -7,6 +7,10 @@ import struct
 import pytest
 
 from mountfile.ext4_jbd2_csum import (
+    TAG_FLAG_DELETED,
+    TAG_FLAG_ESCAPE,
+    TAG_FLAG_LAST,
+    TAG_FLAG_SAME_UUID,
     DescriptorLayout,
     JBD2ChecksumError,
     commit_checksum,
@@ -21,6 +25,15 @@ from mountfile.ext4_jbd2_csum import (
 
 UUID = bytes.fromhex("00112233445566778899aabbccddeeff")
 SEED = uuid_seed(UUID)
+
+
+def test_tag_flags_match_linux_jbd2_values() -> None:
+    assert (TAG_FLAG_ESCAPE, TAG_FLAG_SAME_UUID, TAG_FLAG_DELETED, TAG_FLAG_LAST) == (
+        1,
+        2,
+        4,
+        8,
+    )
 
 
 def test_uuid_seed_is_stable_and_requires_raw_uuid() -> None:

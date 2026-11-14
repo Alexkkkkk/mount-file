@@ -16,7 +16,10 @@ from dataclasses import dataclass
 from mountfile.ext_checksum import crc32c_raw
 
 MAGIC = 0xC03B3998
-TAG_FLAG_DELETED = 0x00000008
+TAG_FLAG_ESCAPE = 0x00000001
+TAG_FLAG_SAME_UUID = 0x00000002
+TAG_FLAG_DELETED = 0x00000004
+TAG_FLAG_LAST = 0x00000008
 TAIL_SIZE = 4
 HEADER_SIZE = 12
 
@@ -135,6 +138,9 @@ __all__ = [
     "DescriptorLayout",
     "JBD2ChecksumError",
     "MAGIC",
+    "TAG_FLAG_ESCAPE",
+    "TAG_FLAG_LAST",
+    "TAG_FLAG_SAME_UUID",
     "TAG_FLAG_DELETED",
     "commit_checksum",
     "descriptor_checksum",
