@@ -11,6 +11,7 @@ writer that only *claims* success fails here.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import struct
@@ -34,10 +35,13 @@ from mountfile.ext4_native_writer import (
 from mountfile.journal_safety import JournalState
 from mountfile.native_write import ENABLE_ENV, NativeWriteDisabled, NativeWriteUnsafe
 from mountfile.ntfs_native_writer import (
+    NtfsLogGate,
     NtfsNativeWriter,
     NtfsProfileUnsupported,
+    NtfsReplayQuarantined,
     logfile_gate_summary,
     probe_ntfs_log,
+    quarantine_ntfs_image,
 )
 
 needs_ext = pytest.mark.skipif(
@@ -536,9 +540,63 @@ def test_ntfs_native_writer_refuses_dirty_volume(tmp_path, monkeypatch):
     assert image.read_bytes() == before
 
 
-def test_ntfs_native_writer_rejects_replay_mode():
-    with pytest.raises(ValueError, match="not implemented"):
-        NtfsNativeWriter(recover="copy")
+def test_ntfs_native_writer_rejects_unknown_recover_mode():
+    with pytest.raises(ValueError, match="copy.*refuse"):
+        NtfsNativeWriter(recover="repair")
+
+
+def test_ntfs_quarantine_is_content_addressed_and_durable(tmp_path):
+    image = tmp_path / "volume.img"
+    image.write_bytes(b"dirty ntfs evidence")
+    first = quarantine_ntfs_image(str(image), reason="dirty volume")
+    second = quarantine_ntfs_image(str(image), reason="dirty volume")
+    assert first.copy == second.copy
+    assert first.marker == second.marker
+    assert Path(first.copy).read_bytes() == image.read_bytes()
+    marker = json.loads(Path(first.marker).read_text(encoding="utf-8"))
+    assert marker["schema"] == "mountfile-ntfs-quarantine-v1"
+    assert marker["sha256"] == first.sha256
+    assert marker["replay"] == "not_implemented"
+    assert marker["source"] == str(image.resolve())
+
+
+def test_ntfs_quarantine_refuses_a_tampered_copy(tmp_path):
+    image = tmp_path / "volume.img"
+    image.write_bytes(b"dirty ntfs evidence")
+    first = quarantine_ntfs_image(str(image), reason="dirty volume")
+    Path(first.copy).write_bytes(b"tampered")
+    with pytest.raises(NtfsProfileUnsupported, match="does not match"):
+        quarantine_ntfs_image(str(image), reason="dirty volume")
+
+
+def test_ntfs_quarantine_and_writer_refuse_missing_image(tmp_path, monkeypatch):
+    missing = tmp_path / "missing.img"
+    with pytest.raises(NtfsProfileUnsupported, match="unreadable"):
+        quarantine_ntfs_image(str(missing), reason="dirty volume")
+    monkeypatch.setattr(
+        "mountfile.ntfs_native_writer._require_tools", lambda *_args: None
+    )
+    with pytest.raises(NtfsProfileUnsupported, match="not readable"):
+        NtfsNativeWriter(require_flag=False).write_file(str(missing), "/f.txt", b"x")
+
+
+def test_ntfs_writer_quarantines_dirty_volume_in_copy_mode(tmp_path, monkeypatch):
+    image = tmp_path / "volume.img"
+    image.write_bytes(b"dirty ntfs evidence")
+    before = image.read_bytes()
+    monkeypatch.setattr(
+        "mountfile.ntfs_native_writer.probe_ntfs_log",
+        lambda *_args, **_kwargs: NtfsLogGate(False, "dirty volume"),
+    )
+    monkeypatch.setattr(
+        "mountfile.ntfs_native_writer._require_tools", lambda *_args: None
+    )
+    with pytest.raises(NtfsReplayQuarantined) as raised:
+        NtfsNativeWriter(require_flag=False, recover="copy").write_file(
+            str(image), "/f.txt", b"x"
+        )
+    assert image.read_bytes() == before
+    assert Path(raised.value.quarantine.copy).read_bytes() == before
 
 
 @needs_ntfs

@@ -9,7 +9,8 @@ not have.  This module is that parser.  It is deliberately **not** a replay
 engine: the super-audit of 2026-11-14 concluded that wiring an executor before
 the acceptance invariants of issue #387 exist would make the tree *less* safe
 than today's fail-closed gate, so :mod:`mountfile.ntfs_native_writer` still
-refuses ``recover="copy"`` and nothing here opens an image read-write.  Every
+never replays a dirty volume: ``recover="copy"`` quarantines the evidence and
+then refuses, and nothing here opens an image read-write.  Every
 :class:`ReplayStep` carries a blocker, ``executable`` stays ``False``
 unconditionally, and :data:`EXECUTION_BLOCKERS` names what is still missing.
 
