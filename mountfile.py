@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Mount File — mount any disk image with one action.
 
@@ -141,7 +140,7 @@ class AtomicIO:
     @staticmethod
     def read_json(path: Path, default: Any = None) -> Any:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except FileNotFoundError:
             return default

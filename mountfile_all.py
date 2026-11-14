@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 mountfile_all.py — единый скрипт для запуска ВСЕГО функционала Mount File.
 

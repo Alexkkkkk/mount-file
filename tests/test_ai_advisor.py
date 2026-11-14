@@ -29,7 +29,7 @@ from mountfile.ai_format_advisor_v2 import (
     assess_consensus,
     build_fingerprint,
 )
-from mountfile.qt_compat import QApplication, QEvent, QTimer  # noqa: E402
+from mountfile.qt_compat import QApplication, QEvent  # noqa: E402
 
 
 def test_fingerprint_of_a_text_file(tmp_path):

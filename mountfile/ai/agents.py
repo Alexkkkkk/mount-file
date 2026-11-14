@@ -296,9 +296,9 @@ def _coerce_tool_call(raw: Any) -> ToolCall:
         tool = raw.get("tool", raw.get("name"))
         return ToolCall(tool=tool, args=raw.get("args", {}))
     if hasattr(raw, "tool"):
-        return ToolCall(tool=getattr(raw, "tool"), args=getattr(raw, "args", {}))
+        return ToolCall(tool=raw.tool, args=getattr(raw, "args", {}))
     if hasattr(raw, "name"):
-        return ToolCall(tool=getattr(raw, "name"), args=getattr(raw, "args", {}))
+        return ToolCall(tool=raw.name, args=getattr(raw, "args", {}))
     raise TypeError("each planned step must be a ToolCall or mapping")
 
 
@@ -329,8 +329,8 @@ def _coerce_claim(raw: Any) -> Claim:
         )
     if hasattr(raw, "statement") and hasattr(raw, "execution_id"):
         return Claim(
-            statement=getattr(raw, "statement"),
-            execution_id=getattr(raw, "execution_id"),
+            statement=raw.statement,
+            execution_id=raw.execution_id,
             confidence=getattr(raw, "confidence", 0.5),
             type=getattr(raw, "type", "claim"),
         )

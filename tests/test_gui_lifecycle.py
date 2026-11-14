@@ -60,7 +60,7 @@ def test_panel_list_error_has_visible_retry_button(app, monkeypatch):
         # delivered. Remove it before the next MainWindow reapplies the global
         # application stylesheet (which can access-violate on Windows/PyQt).
         win.deleteLater()
-        deferred_delete = getattr(getattr(QEvent, "Type", QEvent), "DeferredDelete")
+        deferred_delete = getattr(QEvent, "Type", QEvent).DeferredDelete
         app.sendPostedEvents(None, deferred_delete)
         app.processEvents()
 

@@ -15,8 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from test_fat32 import make_fat32_image
 
 from mountfile.fat32_vfs import Fat32VFS
-from mountfile.native_vfs_adapters import Ext4VFS, NtfsVFS
-from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
+from mountfile.vfs_contract import ErrorCode, Operation, VFSResult
 
 
 class TestFat32VFS:

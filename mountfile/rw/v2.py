@@ -27,22 +27,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator, Optional
 
-from mountfile.rw.complete import (
-    CrashRecovery,
-    Fat32Adapter,
-    VerificationEngine,
-    create_rw_full,
-)
+from mountfile.rw.complete import Fat32Adapter, VerificationEngine
 from mountfile.rw.universal import (
     Ext4RW,
-    Fat32RW,
-    FileStat,
     FsType,
     Mode,
     NtfsRW,
     RWError,
     StrategyUnavailable,
-    create_rw,
     detect_fs,
 )
 

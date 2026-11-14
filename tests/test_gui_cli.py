@@ -126,7 +126,7 @@ def test_worker_captures_read_range_without_binary_stdout_buffer(app, monkeypatc
 
         def read_file_range(self, path, offset, length):
             assert (path, offset, length) == ("/payload.bin", 2, 6)
-            return "café!".encode("utf-8")
+            return "café!".encode()
 
         def close(self):
             self.closed = True
