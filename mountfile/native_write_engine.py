@@ -268,8 +268,13 @@ def _snapshot(image: Path, workdir: Path | None) -> Path:
 def _atomic_replace(staged: Path, image: Path) -> None:
     """Flush staged bytes and atomically replace the source in its directory."""
 
-    with staged.open("rb") as handle:
-        os.fsync(handle.fileno())
+    # fsync() on a read-only fd fails with EBADF on Windows (works on POSIX),
+    # so the flush opens the staged copy read-write.
+    fd = os.open(staged, os.O_RDWR)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     os.replace(staged, image)
     if os.name != "nt":
         with contextlib.suppress(OSError):
