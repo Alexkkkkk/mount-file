@@ -161,3 +161,23 @@ def test_analysis_executor_refuses_truncated_log_before_overlay() -> None:
             b"abcdef",
             {(128, 0): target()},
         )
+
+
+def test_analysis_executor_refuses_mft_and_index_operations() -> None:
+    metadata_step = step(kind="redo", payload=b"XYZ")
+    metadata_step = ReplayStep(
+        lsn=metadata_step.lsn,
+        transaction_id=metadata_step.transaction_id,
+        kind=metadata_step.kind,
+        operation=0x0C,  # AddIndexEntryRoot
+        length=metadata_step.length,
+        payload=metadata_step.payload,
+        target_attr=metadata_step.target_attr,
+        target_vcn=metadata_step.target_vcn,
+    )
+    with pytest.raises(NtfsReplayOverlayError, match="image-level metadata"):
+        replay_analysis_to_overlay(
+            _analysis(redo=(metadata_step,)),
+            b"abcdef",
+            {(128, 0): target()},
+        )

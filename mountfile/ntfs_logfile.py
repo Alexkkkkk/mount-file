@@ -162,6 +162,13 @@ TRANSACTION_ACTIVE = 1
 TRANSACTION_PREPARED = 2
 TRANSACTION_COMMITTED = 3
 
+# The overlay executor is intentionally narrower than the parser. Resident
+# value updates are the only operation with a bounded byte payload that can be
+# applied after an independently validated target is supplied. MFT
+# allocation/reuse, bitmap changes, index updates and mirror repair require a
+# filesystem-aware metadata executor and remain typed refusals.
+BOUNDED_OVERLAY_OPERATIONS = frozenset((0x07,))  # UpdateResidentValue
+
 _STATE_NAMES = {
     TRANSACTION_UNINITIALIZED: "uninitialized",
     TRANSACTION_ACTIVE: "active",
@@ -323,6 +330,17 @@ def replay_analysis_to_overlay(
     if not isinstance(targets, Mapping):
         raise NtfsReplayOverlayError("replay targets must be an explicit mapping")
     steps = (*analysis.redo_plan, *analysis.undo_plan)
+    unsupported = [
+        step.operation_name
+        for step in steps
+        if step.operation not in SKIPPABLE_OPERATIONS
+        and step.operation not in BOUNDED_OVERLAY_OPERATIONS
+    ]
+    if unsupported:
+        raise NtfsReplayOverlayError(
+            "NTFS replay operation requires an image-level metadata executor: "
+            + ", ".join(sorted(set(unsupported)))
+        )
     return NtfsReplayOverlay(source).apply(steps, targets)
 
 
@@ -1298,6 +1316,7 @@ def analyze_image(
 
 __all__ = [
     "BAAD_MAGIC",
+    "BOUNDED_OVERLAY_OPERATIONS",
     "CHKD_MAGIC",
     "CLIENT_REC",
     "EXECUTION_BLOCKERS",
