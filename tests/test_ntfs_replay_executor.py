@@ -38,6 +38,10 @@ def _step(payload: bytes = b"XYZ") -> ReplayStep:
         payload=payload,
         target_attr=128,
         target_vcn=0,
+        record_off=1024,
+        attr_off=96,
+        cluster_off=8,
+        page_lcns=(42,),
     )
 
 
@@ -57,6 +61,14 @@ def test_resolution_failure_happens_before_source_publication(tmp_path) -> None:
 
     assert hashlib.sha256(image.read_bytes()).digest() == before
     assert list(tmp_path.glob(".mountfile-image-*")) == []
+
+
+def test_replay_step_preserves_filesystem_target_hints() -> None:
+    step = _step()
+    assert step.record_off == 1024
+    assert step.attr_off == 96
+    assert step.cluster_off == 8
+    assert step.page_lcns == (42,)
 
 
 def test_resolver_backed_replay_publishes_only_after_readback(tmp_path) -> None:

@@ -855,7 +855,13 @@ class Transaction:
 
 @dataclass(frozen=True)
 class ReplayStep:
-    """One planned byte write; the byte target is intentionally unresolved."""
+    """One planned byte write with validated NTFS target hints.
+
+    The hints are copied from the LFS client record. They are not an implicit
+    byte mapping: a filesystem-aware resolver must still validate the target
+    FILE record, attribute list, runlist and USA before returning a
+    :class:`ReplayTarget`.
+    """
 
     lsn: int
     transaction_id: int
@@ -865,6 +871,10 @@ class ReplayStep:
     payload: bytes
     target_attr: int
     target_vcn: int
+    record_off: int = 0
+    attr_off: int = 0
+    cluster_off: int = 0
+    page_lcns: tuple[int, ...] = ()
     reasons: tuple[str, ...] = ()
 
     @property
@@ -885,6 +895,10 @@ class ReplayStep:
             "length": self.length,
             "target_attr": self.target_attr,
             "target_vcn": self.target_vcn,
+            "record_off": self.record_off,
+            "attr_off": self.attr_off,
+            "cluster_off": self.cluster_off,
+            "page_lcns": list(self.page_lcns),
             "resolvable": self.resolvable,
             "reasons": list(self.reasons),
         }
@@ -1487,6 +1501,10 @@ def _build_plans(
                         payload=record.redo_data,
                         target_attr=record.target_attr,
                         target_vcn=record.target_vcn,
+                        record_off=record.record_off,
+                        attr_off=record.attr_off,
+                        cluster_off=record.cluster_off,
+                        page_lcns=record.page_lcns,
                         reasons=_step_reasons(record, record.redo_op),
                     )
                 )
@@ -1532,6 +1550,10 @@ def _build_plans(
                         payload=record.undo_data,
                         target_attr=record.target_attr,
                         target_vcn=record.target_vcn,
+                        record_off=record.record_off,
+                        attr_off=record.attr_off,
+                        cluster_off=record.cluster_off,
+                        page_lcns=record.page_lcns,
                         reasons=_step_reasons(record, record.undo_op),
                     )
                 )
