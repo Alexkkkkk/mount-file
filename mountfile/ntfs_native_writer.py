@@ -39,8 +39,10 @@ from mountfile.native_write import (
     _atomic_replace,
     _image_copy,
     _require_enabled,
+    _require_source_unchanged,
     _require_tools,
     _run,
+    _sha256_file,
     _unlink,
     native_write_enabled,
     validate_internal_path,
@@ -218,6 +220,7 @@ class NtfsNativeWriter:
         _require_tools("ntfscp")
         internal = normalize_internal_path(path)
         source = os.path.abspath(os.fspath(image_path))
+        source_identity = _sha256_file(source)
         source_path, temporary = _image_copy(source)
         try:
             gate = probe_ntfs_log(temporary, 0)
@@ -231,6 +234,7 @@ class NtfsNativeWriter:
                 raise NtfsProfileUnsupported(
                     f"volume is not clean after the write: {after.reason}"
                 )
+            _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""
             return written
