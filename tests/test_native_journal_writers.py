@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 import mountfile.ext4_native_writer as ext4_native_writer
-from mountfile.jbd2_writer import encode_classic_jbd2_transaction
 from mountfile.ext4_native_writer import (
     Ext4NativeWriter,
     Ext4ProfileUnsupported,
@@ -34,6 +33,7 @@ from mountfile.ext4_native_writer import (
     require_supported_profile,
     resolve_journal_physical_blocks,
 )
+from mountfile.jbd2_writer import encode_classic_jbd2_transaction
 from mountfile.journal_safety import JournalState
 from mountfile.native_write import ENABLE_ENV, NativeWriteDisabled, NativeWriteUnsafe
 from mountfile.ntfs_native_writer import (
@@ -369,10 +369,9 @@ def test_ext4_native_writer_replays_then_writes_on_the_native_path(
     monkeypatch.setenv(ENABLE_ENV, "1")
     image, _commit = _dirty_journal_image(tmp_path)
     payload = b"after native replay\n"
-    assert (
-        Ext4NativeWriter(recover="native").write_file(str(image), "/f.txt", payload)
-        == len(payload)
-    )
+    assert Ext4NativeWriter(recover="native").write_file(
+        str(image), "/f.txt", payload
+    ) == len(payload)
     assert ext4_read(image) == payload.decode()
     assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
 

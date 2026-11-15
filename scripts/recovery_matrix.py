@@ -49,6 +49,10 @@ _EXPERIMENTAL_PROFILES = (
             "process_kill": "tested_with_recovery_sidecar",
             "power_loss": "unsupported",
             "quarantine": "tested_on_recovery_failure",
+            # Not part of ``_REQUIRED``: this records that the classic JBD2
+            # replay path is proven end to end, while the checksummed profile
+            # and power-loss evidence below remain blockers.
+            "journal_replay": "tested_native_classic_end_to_end",
         },
     },
     {
@@ -60,6 +64,9 @@ _EXPERIMENTAL_PROFILES = (
             "process_kill": "not_proven",
             "power_loss": "unsupported",
             "quarantine": "tested_on_recovery_failure",
+            # The $LogFile parser, plans and staged publisher exist, but no
+            # filesystem-aware target resolver or crash fixture proves a replay.
+            "journal_replay": "not_proven",
         },
     },
 )

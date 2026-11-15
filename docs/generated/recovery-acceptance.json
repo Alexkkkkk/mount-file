@@ -988,6 +988,7 @@
       "filesystem": "ext3/ext4",
       "profile_id": "ext4-native-rw",
       "recovery": {
+        "journal_replay": "tested_native_classic_end_to_end",
         "power_loss": "unsupported",
         "process_kill": "tested_with_recovery_sidecar",
         "quarantine": "tested_on_recovery_failure",
@@ -1183,6 +1184,7 @@
       "filesystem": "NTFS",
       "profile_id": "ntfs-native-rw",
       "recovery": {
+        "journal_replay": "not_proven",
         "power_loss": "unsupported",
         "process_kill": "not_proven",
         "quarantine": "tested_on_recovery_failure",
