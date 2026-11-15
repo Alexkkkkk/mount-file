@@ -360,3 +360,45 @@ def test_unified_sync_schedule_is_read_only_and_write_modes_are_explicit():
     # scheduled runs never write: verify-only
     assert "github.event_name == 'schedule'" not in text
     assert "issues: write" in text
+
+
+def _pytest_running_workflows():
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        if "python -m pytest" in text:
+            yield path.name, text
+
+
+def test_pytest_hang_guard_is_declared_and_actually_installed():
+    """A declared ``timeout`` ini option needs the pytest-timeout plugin.
+
+    pyproject.toml pins ``timeout``/``timeout_method`` so that one hanging test
+    fails by itself instead of burning the whole job budget. pytest does not
+    enforce that: without the plugin it only warns
+    "Unknown config option: timeout" and silently drops the guard, so a workflow
+    that installs a hand-written pip list instead of the shared test stack loses
+    the protection while still looking green. Every workflow that runs pytest
+    must therefore pull the plugin from the shared action or install it itself.
+    """
+
+    config = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "timeout = 120" in config
+    assert 'timeout_method = "thread"' in config
+
+    reviewed = []
+    unprotected = []
+    for name, text in _pytest_running_workflows():
+        reviewed.append(name)
+        if "pytest-timeout" in text:
+            continue
+        if "./.github/actions/python-test-env" in text:
+            continue
+        if (
+            "./.github/actions/setup-python-env" in text
+            and "install-test-stack: 'false'" not in text
+        ):
+            continue
+        unprotected.append(name)
+    # The guard is only meaningful if it actually covers real pytest jobs.
+    assert {"ci.yml", "ci-nightly.yml", "release.yml", "autofix.yml"} <= set(reviewed)
+    assert unprotected == []

@@ -334,7 +334,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov hypothesis pytsk3 'setuptools>=68' wheel
+          python -m pip install pytest pytest-cov pytest-timeout hypothesis pytsk3 'setuptools>=68' wheel
           python -m pip install -r requirements.txt
 
       - name: Run the full suite with pytsk3 available
@@ -516,7 +516,7 @@ jobs:
             libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
       - name: Install GUI smoke-test dependencies
         run: |
-          python -m pip install --upgrade pip pytest PyQt6
+          python -m pip install --upgrade pip pytest pytest-timeout PyQt6
           python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0'
       - name: Run focused headless GUI smoke tests
         run: python -m pytest tests/test_gui_smoke.py -v
@@ -539,7 +539,7 @@ jobs:
           cache: pip
 
       - name: Install deterministic test dependencies
-        run: python -m pip install pytest hypothesis 'pydantic>=2.0'
+        run: python -m pip install pytest pytest-timeout hypothesis 'pydantic>=2.0'
 
       - name: Run AI safety and structured-output contracts
         run: >-

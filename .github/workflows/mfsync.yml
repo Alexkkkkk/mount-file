@@ -37,7 +37,7 @@ jobs:
         uses: ./.github/actions/setup-python-env
         with:
           install-test-stack: 'false'
-          extra-pip: 'pytest'
+          extra-pip: 'pytest pytest-timeout'
       - name: Sync report
         run: python tools/mfsync.py status
       - name: Secret scan
