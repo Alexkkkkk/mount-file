@@ -43,10 +43,7 @@ from dataclasses import dataclass
 from mountfile.ext4_jbd2_csum import JBD2_FEATURE_INCOMPAT_CHECKSUMS
 from mountfile.ext_checksum import ext4_superblock_checksum
 from mountfile.jbd2_checkpoint import coordinate_jbd2_replay_from_ring
-from mountfile.jbd2_writer import (
-    parse_classic_jbd2_superblock,
-    parse_jbd2_superblock,
-)
+from mountfile.jbd2_writer import parse_classic_jbd2_superblock, parse_jbd2_superblock
 from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.native_write import (
     NativeWriteError,
@@ -353,7 +350,9 @@ def resolve_journal_physical_blocks(
     return tuple(blocks[index] for index in range(len(blocks)))
 
 
-def _native_jbd2_recover(image_path: str, offset: int, *, allow_checksums: bool) -> None:
+def _native_jbd2_recover(
+    image_path: str, offset: int, *, allow_checksums: bool
+) -> None:
     """Replay a validated JBD2 journal on a disposable image copy.
 
     The journal inode mapping comes from libext2fs, while the bounded scanner
@@ -712,9 +711,7 @@ def _clear_recover_flag(image_path: str, offset: int) -> None:
         stream.seek(superblock_offset)
         superblock = bytearray(stream.read(1024))
         if len(superblock) != 1024:
-            raise Ext4ProfileUnsupported(
-                "short ext4 superblock while clearing RECOVER"
-            )
+            raise Ext4ProfileUnsupported("short ext4 superblock while clearing RECOVER")
         incompat = struct.unpack_from("<I", superblock, 0x60)[0]
         ro_compat = struct.unpack_from("<I", superblock, 0x64)[0]
         struct.pack_into(
@@ -1003,11 +1000,7 @@ class Ext4NativeWriter:
                     native_coordinator=(
                         self.native_coordinator
                         if self.native_coordinator is not None
-                        else (
-                            native_jbd2_recover
-                            if self.recover == "native"
-                            else None
-                        )
+                        else (native_jbd2_recover if self.recover == "native" else None)
                     ),
                 )
             # A clean journal is a precondition, not a formality: the library below

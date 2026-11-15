@@ -1,12 +1,16 @@
 """End-to-end JBD2 checksum v2/v3 replay tests on real ext4 images.
 
 The fixture starts from a normal ``mkfs.ext4`` filesystem (metadata_csum is on
-by default), then writes a synthetic but JBD2-shaped dirty journal: a v3
-superblock with a valid CRC32C, one committed descriptor/data/commit
-transaction that overwrites a file block, and the ext4 RECOVER bit set.  The
-native coordinator must replay the committed block, refresh both checksums,
-checkpoint the ring, clear RECOVER, and leave ``e2fsck -fn`` clean.
+by default, and ``metadata_csum_seed`` is explicitly disabled so the image
+stays inside the writer's validated profile on e2fsprogs 1.47+, which turns
+metadata_csum_seed on by default), then writes a synthetic but JBD2-shaped
+dirty journal: a v3 superblock with a valid CRC32C, one committed
+descriptor/data/commit transaction that overwrites a file block, and the
+ext4 RECOVER bit set.  The native coordinator must replay the committed
+block, refresh both checksums, checkpoint the ring, clear RECOVER, and leave
+``e2fsck -fn`` clean.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -23,14 +27,13 @@ from mountfile.ext4_jbd2_csum import (
     journal_superblock_checksum,
     verify_journal_superblock_checksum,
 )
-from mountfile.ext_checksum import ext4_superblock_checksum
 from mountfile.ext4_native_writer import (
     native_jbd2_recover,
     probe_journal,
     recover_journal_on_copy,
     resolve_journal_physical_blocks,
 )
-from mountfile.journal_safety import JournalState
+from mountfile.ext_checksum import ext4_superblock_checksum
 from mountfile.jbd2_checkpoint import scan_jbd2_transactions
 from mountfile.jbd2_writer import (
     JBD2JournalState,
@@ -39,6 +42,7 @@ from mountfile.jbd2_writer import (
     encode_checksummed_jbd2_transaction,
     parse_jbd2_superblock,
 )
+from mountfile.journal_safety import JournalState
 
 needs_ext = pytest.mark.skipif(
     shutil.which("mkfs.ext4") is None
@@ -59,7 +63,27 @@ def _make_image(tmp_path):
     image = tmp_path / "fs.img"
     with open(image, "wb") as handle:
         handle.truncate(32 << 20)
-    assert _run(["mkfs.ext4", "-q", "-F", "-b", str(BLOCK_SIZE), str(image)]).returncode == 0
+    assert (
+        _run(
+            [
+                "mkfs.ext4",
+                "-q",
+                "-F",
+                "-b",
+                str(BLOCK_SIZE),
+                # e2fsprogs >= 1.47 enables metadata_csum_seed by default;
+                # the native writer's validated profile rejects it
+                # (EXT4_FEATURE_INCOMPAT_CSUM_SEED), so pin it off while
+                # keeping metadata_csum itself enabled.
+                "-O",
+                "^metadata_csum_seed",
+                str(image),
+            ]
+        ).returncode
+        == 0
+    )
+    incompat = struct.unpack_from("<I", image.read_bytes(), 1024 + 0x60)[0]
+    assert not incompat & 0x2000, "metadata_csum_seed must be off for this fixture"
     payload = tmp_path / "payload.bin"
     payload.write_bytes(OLD + b"p" * BLOCK_SIZE)
     assert (
@@ -194,7 +218,7 @@ def test_scanner_selects_checksummed_profile():
         writes={8: b"B" * 1024},
     )
     ring = [bytes(1024)] * 8
-    ring[1:1 + len(records)] = list(records)
+    ring[1 : 1 + len(records)] = list(records)
     state = JBD2JournalState(
         block_size=1024,
         max_length=8,

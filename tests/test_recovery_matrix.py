@@ -66,14 +66,16 @@ def test_ext2_recovery_evidence_is_more_complete_but_not_production_ready():
 def test_ntfs_process_kill_evidence_is_recorded_without_claiming_power_loss():
     acceptance = build_acceptance_report()
     ntfs = next(
-        entry for entry in acceptance["entries"]
+        entry
+        for entry in acceptance["entries"]
         if entry["profile_id"] == "ntfs-native-rw"
     )
     assert ntfs["recovery"]["rollback"] == "tested_on_failure"
     assert ntfs["recovery"]["process_kill"] == "tested_staged_writer_boundaries"
     assert ntfs["recovery"]["power_loss"] == "unsupported"
     process_kill = next(
-        cell for cell in ntfs["cells"]
+        cell
+        for cell in ntfs["cells"]
         if cell["operation"] == "write-file" and cell["state"] == "process-killed"
     )
     assert process_kill["status"] == "pass"

@@ -152,9 +152,7 @@ def verify_journal_superblock_checksum(block: bytes) -> bool:
     if len(block) < 1024:
         raise JBD2ChecksumError("JBD2 superblock is too small for its checksum")
     if block[SUPERBLOCK_CHECKSUM_TYPE_OFFSET] != JBD2_CRC32C_CHKSUM:
-        raise JBD2ChecksumError(
-            "JBD2 journal superblock checksum type is not CRC32C"
-        )
+        raise JBD2ChecksumError("JBD2 journal superblock checksum type is not CRC32C")
     return _be32(block, SUPERBLOCK_CHECKSUM_OFFSET) == journal_superblock_checksum(
         block
     )
@@ -185,9 +183,7 @@ def tag_bytes_for_features(feature_incompat: int) -> int:
     return size - 4
 
 
-def parse_tag(
-    block: bytes, offset: int, tag_size: int
-) -> tuple[int, int, int, int]:
+def parse_tag(block: bytes, offset: int, tag_size: int) -> tuple[int, int, int, int]:
     """Decode one descriptor tag.
 
     Returns ``(target_block, flags, checksum, next_offset)``.  The v2 layout is

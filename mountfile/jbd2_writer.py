@@ -279,8 +279,7 @@ def decode_checksummed_jbd2_transaction(
     if len(records) < 2:
         raise JBD2WriteProfileError("JBD2 transaction lacks records or commit")
     if any(
-        not isinstance(record, bytes) or len(record) != block_size
-        for record in records
+        not isinstance(record, bytes) or len(record) != block_size for record in records
     ):
         raise JBD2WriteProfileError("JBD2 ring records must be full-size byte blocks")
     forbidden = set(journal_blocks)
@@ -298,9 +297,7 @@ def decode_checksummed_jbd2_transaction(
     if record_type == _JBD2_DESCRIPTOR:
         try:
             if not verify_descriptor_checksum(first, seed):
-                raise JBD2WriteProfileError(
-                    "JBD2 descriptor checksum does not match"
-                )
+                raise JBD2WriteProfileError("JBD2 descriptor checksum does not match")
         except JBD2ChecksumError as exc:
             raise JBD2WriteProfileError(
                 f"JBD2 descriptor checksum is malformed: {exc}"
@@ -321,9 +318,7 @@ def decode_checksummed_jbd2_transaction(
                 )
             if first_tag:
                 if flags & _JBD2_TAG_SAME_UUID:
-                    raise JBD2WriteProfileError(
-                        "JBD2 first tag lacks its journal UUID"
-                    )
+                    raise JBD2WriteProfileError("JBD2 first tag lacks its journal UUID")
                 if cursor + 16 > block_size - 4:
                     raise JBD2WriteProfileError("JBD2 descriptor UUID is truncated")
                 if first[cursor : cursor + 16] != bytes(filesystem_uuid):
@@ -345,23 +340,17 @@ def decode_checksummed_jbd2_transaction(
                 "JBD2 descriptor is missing data blocks or commit"
             )
         width = 4 if checksum_bits == JBD2_FEATURE_INCOMPAT_CSUM_V3 else 2
-        for (target, flags, stored), data in zip(
-            tags, records[1:index], strict=True
-        ):
+        for (target, flags, stored), data in zip(tags, records[1:index], strict=True):
             journal_data = data
             if flags & _JBD2_TAG_ESCAPE:
                 if data[:4] != b"\x00" * 4:
-                    raise JBD2WriteProfileError(
-                        "escaped JBD2 data lacks zero prefix"
-                    )
+                    raise JBD2WriteProfileError("escaped JBD2 data lacks zero prefix")
             try:
                 expected = tag_checksum(sequence, journal_data, seed)
             except JBD2ChecksumError as exc:
                 raise JBD2WriteProfileError(str(exc)) from exc
             if (expected & (0xFFFF if width == 2 else 0xFFFFFFFF)) != stored:
-                raise JBD2WriteProfileError(
-                    "JBD2 data tag checksum does not match"
-                )
+                raise JBD2WriteProfileError("JBD2 data tag checksum does not match")
             _validate_target(target, filesystem_blocks, forbidden)
             if flags & _JBD2_TAG_ESCAPE:
                 data = _JBD2_MAGIC_BYTES + data[4:]
@@ -479,9 +468,7 @@ def encode_checksummed_jbd2_transaction(
         raise JBD2WriteProfileError(str(exc)) from exc
 
     incompat = (
-        JBD2_FEATURE_INCOMPAT_CSUM_V3
-        if checksum_v3
-        else JBD2_FEATURE_INCOMPAT_CSUM_V2
+        JBD2_FEATURE_INCOMPAT_CSUM_V3 if checksum_v3 else JBD2_FEATURE_INCOMPAT_CSUM_V2
     )
     if feature_64bit:
         incompat |= JBD2_FEATURE_INCOMPAT_64BIT
@@ -529,7 +516,12 @@ def encode_checksummed_jbd2_transaction(
                 descriptor[cursor : cursor + 16] = journal_uuid
                 cursor += 16
             data_blocks.append(journal_data)
-        struct.pack_into(">I", descriptor, block_size - 4, descriptor_checksum(bytes(descriptor), seed))
+        struct.pack_into(
+            ">I",
+            descriptor,
+            block_size - 4,
+            descriptor_checksum(bytes(descriptor), seed),
+        )
         records.append(bytes(descriptor))
         records.extend(data_blocks)
 
@@ -677,9 +669,7 @@ def parse_jbd2_superblock(
                     "JBD2 checksum v2 and v3 are mutually exclusive"
                 )
             if len(raw) < filesystem_block_size:
-                raise JBD2WriteProfileError(
-                    "checksummed JBD2 superblock is truncated"
-                )
+                raise JBD2WriteProfileError("checksummed JBD2 superblock is truncated")
             try:
                 verify_journal_superblock_checksum(raw[:filesystem_block_size])
             except JBD2ChecksumError as exc:

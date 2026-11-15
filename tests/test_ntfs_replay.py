@@ -20,12 +20,12 @@ import pytest
 
 from mountfile.ntfs_logfile import analyze_image, read_logfile_stream
 from mountfile.ntfs_mft import parse_ntfs_file_record_header
-from mountfile.ntfs_reader import probe_ntfs_metadata
 from mountfile.ntfs_native_writer import (
     NtfsNativeWriter,
     NtfsProfileUnsupported,
     probe_ntfs_log,
 )
+from mountfile.ntfs_reader import probe_ntfs_metadata
 from mountfile.ntfs_replay import (
     NtfsReplayError,
     native_ntfs_recover,
@@ -209,7 +209,14 @@ def test_mft_mirror_is_repaired_on_the_volume(tmp_path):
     assert probe_ntfs_log(str(image)).clean is True
 
 
-def _log_record(op: int, payload: bytes, *, record_off: int = 0, attr_off: int = 0, lsn: int = 0x12345678):
+def _log_record(
+    op: int,
+    payload: bytes,
+    *,
+    record_off: int = 0,
+    attr_off: int = 0,
+    lsn: int = 0x12345678,
+):
     from mountfile.ntfs_logfile import LogRecord
 
     return LogRecord(
@@ -259,6 +266,7 @@ def _named_resident_data(attribute_id: int) -> bytes:
 
 @needs_ntfs
 def test_create_and_delete_attribute_handlers_round_trip(tmp_path):
+    from mountfile.ntfs_reader import parse_ntfs_attribute_stream
     from mountfile.ntfs_replay import (
         OP_CREATE_ATTRIBUTE,
         OP_DELETE_ATTRIBUTE,
@@ -266,20 +274,30 @@ def test_create_and_delete_attribute_handlers_round_trip(tmp_path):
         _apply_usa,
         _Mft,
     )
-    from mountfile.ntfs_reader import parse_ntfs_attribute_stream
 
     fixture = make_crash_fixture(tmp_path)
-    profile = probe_ntfs_metadata(str(fixture.image), volume_size=os.path.getsize(fixture.image), validate_mirror=False)
+    profile = probe_ntfs_metadata(
+        str(fixture.image),
+        volume_size=os.path.getsize(fixture.image),
+        validate_mirror=False,
+    )
     mft_data = [a for a in profile.attributes if a.type_code == 0x80 and not a.name][0]
     with open(fixture.image, "r+b") as handle:
         mft = _Mft(handle, profile.boot, mft_data, base_offset=0)
         header = mft.read_record(fixture.record_number)
         end_marker = header.first_attribute_offset
         while end_marker + 4 <= header.bytes_in_use:
-            if struct.unpack_from("<I", header.fixed_record, end_marker)[0] == 0xFFFFFFFF:
+            if (
+                struct.unpack_from("<I", header.fixed_record, end_marker)[0]
+                == 0xFFFFFFFF
+            ):
                 break
-            end_marker += struct.unpack_from("<I", header.fixed_record, end_marker + 4)[0]
-        assert struct.unpack_from("<I", header.fixed_record, end_marker)[0] == 0xFFFFFFFF
+            end_marker += struct.unpack_from("<I", header.fixed_record, end_marker + 4)[
+                0
+            ]
+        assert (
+            struct.unpack_from("<I", header.fixed_record, end_marker)[0] == 0xFFFFFFFF
+        )
         payload = _named_resident_data(header.next_attribute_id)
         created, _kind = _apply_mft_operation(
             header,
@@ -288,7 +306,12 @@ def test_create_and_delete_attribute_handlers_round_trip(tmp_path):
             redo=True,
         )
         created_header = parse_ntfs_file_record_header(_apply_usa(created))
-        names = [a.name for a in parse_ntfs_attribute_stream(created_header, allow_end_marker_padding=True)]
+        names = [
+            a.name
+            for a in parse_ntfs_attribute_stream(
+                created_header, allow_end_marker_padding=True
+            )
+        ]
         assert "test" in names
         assert created_header.bytes_in_use == header.bytes_in_use + len(payload)
         deleted, _kind = _apply_mft_operation(
@@ -298,7 +321,12 @@ def test_create_and_delete_attribute_handlers_round_trip(tmp_path):
             redo=True,
         )
         deleted_header = parse_ntfs_file_record_header(_apply_usa(deleted))
-        assert "test" not in [a.name for a in parse_ntfs_attribute_stream(deleted_header, allow_end_marker_padding=True)]
+        assert "test" not in [
+            a.name
+            for a in parse_ntfs_attribute_stream(
+                deleted_header, allow_end_marker_padding=True
+            )
+        ]
         assert deleted_header.bytes_in_use == header.bytes_in_use
 
 
@@ -312,14 +340,23 @@ def test_initialize_and_deallocate_record_handlers(tmp_path):
     )
 
     fixture = make_crash_fixture(tmp_path)
-    profile = probe_ntfs_metadata(str(fixture.image), volume_size=os.path.getsize(fixture.image), validate_mirror=False)
+    profile = probe_ntfs_metadata(
+        str(fixture.image),
+        volume_size=os.path.getsize(fixture.image),
+        validate_mirror=False,
+    )
     mft_data = [a for a in profile.attributes if a.type_code == 0x80 and not a.name][0]
     with open(fixture.image, "r+b") as handle:
         mft = _Mft(handle, profile.boot, mft_data, base_offset=0)
         source = mft.read_record(fixture.record_number)
         initialized, _kind = _apply_mft_operation(
             source,
-            _log_record(OP_INITIALIZE_FILE_RECORD, source.fixed_record, record_off=0, lsn=0xABCDEF),
+            _log_record(
+                OP_INITIALIZE_FILE_RECORD,
+                source.fixed_record,
+                record_off=0,
+                lsn=0xABCDEF,
+            ),
             source.fixed_record,
             redo=True,
         )
@@ -335,4 +372,7 @@ def test_initialize_and_deallocate_record_handlers(tmp_path):
         mft.write_record(30, deallocated)
         raw = mft.read_record_raw(30)
         assert struct.unpack_from("<H", raw, 0x16)[0] & 0x0001 == 0
-        assert struct.unpack_from("<H", raw, 0x10)[0] == (read_back.sequence_number + 1) & 0xFFFF
+        assert (
+            struct.unpack_from("<H", raw, 0x10)[0]
+            == (read_back.sequence_number + 1) & 0xFFFF
+        )

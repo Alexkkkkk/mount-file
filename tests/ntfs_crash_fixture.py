@@ -8,6 +8,7 @@ treats the image exactly like an interrupted mount.  The log layout follows
 ``fs/ntfs3/fslog.c`` (RSTR/RCRD headers, USA, LFS_RECORD_HDR, LOG_REC_HDR,
 RESTART_TABLE entries); it is not a byte-for-byte Windows capture.
 """
+
 from __future__ import annotations
 
 import os
@@ -30,7 +31,7 @@ from mountfile.ntfs_reader import (
     parse_ntfs_file_name,
     probe_ntfs_metadata,
 )
-from mountfile.ntfs_replay import NtfsReplayError, _Mft, _attribute_offset
+from mountfile.ntfs_replay import NtfsReplayError, _attribute_offset, _Mft
 
 SECTOR = 512
 PAGE = 4096
@@ -159,7 +160,14 @@ def _transaction_table(lsn: int, *, active: bool) -> bytes:
     return _table(0x28, bytes(entry))
 
 
-def _write_rstr(stream: bytearray, offset: int, *, current_lsn: int, restart_lsn: int, file_size: int) -> None:
+def _write_rstr(
+    stream: bytearray,
+    offset: int,
+    *,
+    current_lsn: int,
+    restart_lsn: int,
+    file_size: int,
+) -> None:
     page = bytearray(PAGE)
     page[0:4] = b"RSTR"
     struct.pack_into("<II", page, 0x10, PAGE, PAGE)
@@ -207,7 +215,9 @@ def _write_rcrd(stream: bytearray, offset: int, records: list[bytes]) -> None:
     stream[offset : offset + PAGE] = page
 
 
-def _read_run_data(handle, attribute, cluster_size: int, offset: int, length: int) -> bytes:
+def _read_run_data(
+    handle, attribute, cluster_size: int, offset: int, length: int
+) -> bytes:
     result = bytearray()
     cursor = offset
     while len(result) < length:
@@ -281,10 +291,10 @@ def make_crash_fixture(
         )[0]
         if nonresident:
             if data_attribute.resident_value is not None:
-                raise RuntimeError("fixture requested nonresident but $DATA is resident")
-            old_data = _read_run_data(
-                handle, data_attribute, boot.cluster_size, 0, 64
-            )
+                raise RuntimeError(
+                    "fixture requested nonresident but $DATA is resident"
+                )
+            old_data = _read_run_data(handle, data_attribute, boot.cluster_size, 0, 64)
             new_data = b"NEW!" + old_data[4:]
             target_vcn = 0
             cluster_off = 0
@@ -318,9 +328,7 @@ def make_crash_fixture(
         fixed_volume = bytearray(volume.fixed_record)
         value = struct.unpack_from("<H", fixed_volume, volume_offset + 20)[0]
         flags = struct.unpack_from("<H", fixed_volume, volume_offset + value + 10)[0]
-        struct.pack_into(
-            "<H", fixed_volume, volume_offset + value + 10, flags | 0x0001
-        )
+        struct.pack_into("<H", fixed_volume, volume_offset + value + 10, flags | 0x0001)
         mft.write_record(3, bytes(fixed_volume))
 
         log_stream, _cluster, logfile = read_logfile_stream(str(image))

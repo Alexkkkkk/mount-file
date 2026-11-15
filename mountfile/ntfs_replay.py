@@ -25,8 +25,8 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass
-from mountfile.native_write import _fault
 
+from mountfile.native_write import _fault
 from mountfile.ntfs_logfile import (
     ATTR_DATA,
     LOG_REC_HDR,
@@ -293,16 +293,16 @@ class NtfsReplayResult:
 # ---------------------------------------------------------------- restart tables
 
 
-def _restart_table_body(stream: bytes, analysis: NtfsLogFileAnalysis, lsn: int) -> bytes:
+def _restart_table_body(
+    stream: bytes, analysis: NtfsLogFileAnalysis, lsn: int
+) -> bytes:
     record = analysis.record_at(lsn)
     if record is None:
         raise NtfsReplayError(
             f"restart table LSN 0x{lsn:x} is not present in the parsed log"
         )
     if not record.is_client_record:
-        raise NtfsReplayError(
-            f"restart table LSN 0x{lsn:x} is not a client record"
-        )
+        raise NtfsReplayError(f"restart table LSN 0x{lsn:x} is not a client record")
     start = record.byte_offset + analysis.restart.log_record_header_length
     end = start + record.data_length
     if start < 0 or end > len(stream):
@@ -419,7 +419,9 @@ def _parse_transaction_table(body: bytes) -> tuple[TransactionEntry, ...]:
             continue
         state = struct.unpack_from("<I", entry, 4)[0]
         if state > 3:
-            raise NtfsReplayError(f"transaction entry {index} has invalid state {state}")
+            raise NtfsReplayError(
+                f"transaction entry {index} has invalid state {state}"
+            )
         first_lsn, prev_lsn, undo_next = struct.unpack_from("<QQQ", entry, 8)
         undo_records, undo_len = struct.unpack_from("<II", entry, 0x20)
         result.append(
@@ -489,9 +491,7 @@ def plan_ntfs_replay(
     if not tables.dirty_pages and not tables.transactions:
         return NtfsReplayPlan(0, (), (), (), ())
 
-    candidates = [
-        page.oldest_lsn for page in tables.dirty_pages if page.oldest_lsn
-    ] + [
+    candidates = [page.oldest_lsn for page in tables.dirty_pages if page.oldest_lsn] + [
         transaction.first_lsn
         for transaction in tables.transactions
         if transaction.first_lsn
@@ -566,10 +566,10 @@ def _apply_usa(fixed: bytes) -> bytes:
 def _record_attribute(
     header: NtfsFileRecordHeader, type_code: int, *, unique: bool = True
 ) -> tuple[int, NtfsAttributeSummary]:
-    attributes = parse_ntfs_attribute_stream(
-        header, allow_end_marker_padding=True
-    )
-    matches = [attribute for attribute in attributes if attribute.type_code == type_code]
+    attributes = parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
+    matches = [
+        attribute for attribute in attributes if attribute.type_code == type_code
+    ]
     if not matches:
         raise NtfsReplayError(
             f"FILE record {header.fixed_record[:0]} has no attribute 0x{type_code:x}"
@@ -833,7 +833,9 @@ def _apply_mft_operation(
         if dlen < 32:
             raise NtfsReplayError("SetNewAttributeSizes payload is truncated")
         for field, offset in ((0x28, 0), (0x30, 8), (0x38, 16), (0x40, 24)):
-            struct.pack_into("<Q", fixed, roff + field, struct.unpack_from("<Q", payload, offset)[0])
+            struct.pack_into(
+                "<Q", fixed, roff + field, struct.unpack_from("<Q", payload, offset)[0]
+            )
         _set_record_lsn(fixed, record.lsn)
         return bytes(fixed), "record"
 
@@ -902,9 +904,7 @@ def _apply_stream_operation(
     dlen = len(payload)
     if op == OP_UPDATE_NONRESIDENT_VALUE:
         length = roff + dlen
-        segments = _run_segments(
-            attribute, cluster_size, vbo, length, base_offset
-        )
+        segments = _run_segments(attribute, cluster_size, vbo, length, base_offset)
         buffer = bytearray()
         for offset, physical, size in segments:
             stream.seek(physical)
@@ -961,9 +961,7 @@ def _apply_stream_operation(
 # ---------------------------------------------------------------- clean markers
 
 
-def _clean_restart_page(
-    fixed_page: bytes, analysis: NtfsLogFileAnalysis
-) -> bytes:
+def _clean_restart_page(fixed_page: bytes, analysis: NtfsLogFileAnalysis) -> bytes:
     page_size = analysis.restart.log_page_size
     if len(fixed_page) != page_size:
         raise NtfsReplayError("restart page has the wrong size")
@@ -1043,14 +1041,12 @@ def _open_attribute_entry(
 def _find_attribute_by_type(
     header: NtfsFileRecordHeader, type_code: int
 ) -> NtfsAttributeSummary:
-    attributes = parse_ntfs_attribute_stream(
-        header, allow_end_marker_padding=True
-    )
-    matches = [attribute for attribute in attributes if attribute.type_code == type_code]
+    attributes = parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
+    matches = [
+        attribute for attribute in attributes if attribute.type_code == type_code
+    ]
     if not matches:
-        raise NtfsReplayError(
-            f"FILE record has no attribute of type 0x{type_code:x}"
-        )
+        raise NtfsReplayError(f"FILE record has no attribute of type 0x{type_code:x}")
     unnamed = [attribute for attribute in matches if not attribute.name]
     if len(matches) == 1:
         return matches[0]
@@ -1168,9 +1164,7 @@ def _clear_volume_dirty(mft: "_Mft") -> tuple[int, int]:
     """Clear ``VOLUME_FLAG_DIRTY`` in ``$Volume`` and return (before, after)."""
 
     header = mft.read_record(MFT_RECORD_VOLUME)
-    attributes = parse_ntfs_attribute_stream(
-        header, allow_end_marker_padding=True
-    )
+    attributes = parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
     if any(attribute.type_code == ATTR_ATTRIBUTE_LIST for attribute in attributes):
         raise NtfsReplayError("$Volume uses $ATTRIBUTE_LIST; replay refuses it")
     matches = [
@@ -1223,7 +1217,9 @@ def _find_mft_data(profile) -> NtfsAttributeSummary:
     raise NtfsReplayError("$MFT has no bounded unnamed nonresident DATA stream")
 
 
-def _repair_volume_markers(image_path: str, profile, offset: int) -> tuple[int, int, bool]:
+def _repair_volume_markers(
+    image_path: str, profile, offset: int
+) -> tuple[int, int, bool]:
     """Clear ``$Volume`` and refresh ``$MFTMirr`` without replaying records."""
 
     mft_data = _find_mft_data(profile)
@@ -1265,9 +1261,7 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
         # A never-written $LogFile carries no restart page.  The only replay
         # work is the dirty-bit/$MFTMirr repair that a mount would perform.
         _fault("mutation:start")
-        before, after, mirror = _repair_volume_markers(
-            image_path, profile, offset
-        )
+        before, after, mirror = _repair_volume_markers(image_path, profile, offset)
         _fault("mutation:flush")
         verified_profile = probe_ntfs_metadata(
             image_path, offset=offset, volume_size=volume_size
@@ -1313,9 +1307,9 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
         )
     tables = parse_restart_tables(stream, analysis)
     plan = plan_ntfs_replay(analysis, tables)
-    unsupported = {
-        record.redo_op for record in plan.redo
-    } | {record.undo_op for record in plan.undo}
+    unsupported = {record.redo_op for record in plan.redo} | {
+        record.undo_op for record in plan.undo
+    }
     unsupported -= SKIPPABLE
     unsupported -= SUPPORTED_OPERATIONS
     if unsupported:
@@ -1377,9 +1371,7 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
     )
     verified = analyze_logfile(verify_stream, cluster_size=verify_cluster)
     if verified.dirty:
-        raise NtfsReplayError(
-            "$LogFile still reports a dirty dismount after replay"
-        )
+        raise NtfsReplayError("$LogFile still reports a dirty dismount after replay")
     verified_profile = probe_ntfs_metadata(
         image_path, offset=offset, volume_size=volume_size
     )

@@ -51,12 +51,12 @@ from mountfile.native_write import (
     native_write_enabled,
 )
 from mountfile.ntfs_mft import NtfsRecordError
-from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsMetadataError,
     parse_ntfs_volume_state,
 )
+from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
 
 
 class NtfsProfileUnsupported(NativeWriteUnsafe):

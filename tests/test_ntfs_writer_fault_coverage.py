@@ -1,8 +1,10 @@
 """Real process-kill coverage for the staged NTFS native writer."""
+
 from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,7 +18,7 @@ from tests.ntfs_crash_fixture import make_crash_fixture
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-_KILL_CHILD = r'''
+_KILL_CHILD = r"""
 import os
 import signal
 import sys
@@ -31,7 +33,7 @@ def hook(name):
 fault_hook_installed(hook)
 from mountfile.ntfs_native_writer import NtfsNativeWriter
 NtfsNativeWriter(recover="native").write_file(sys.argv[2], "/target", b"killed write\n")
-'''
+"""
 
 
 def _sha256(path: Path) -> str:
@@ -43,6 +45,10 @@ def _sha256(path: Path) -> str:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
+@pytest.mark.skipif(
+    shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
+    reason="ntfs-3g tools (mkntfs/ntfscp) are unavailable",
+)
 def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
     monkeypatch.setenv(ENABLE_ENV, "1")
     fixture = make_crash_fixture(tmp_path)
@@ -60,6 +66,10 @@ def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
+@pytest.mark.skipif(
+    shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
+    reason="ntfs-3g tools (mkntfs/ntfscp) are unavailable",
+)
 @pytest.mark.parametrize("point", FAULT_POINTS)
 def test_ntfs_process_kill_preserves_source_until_atomic_publish(
     tmp_path, point

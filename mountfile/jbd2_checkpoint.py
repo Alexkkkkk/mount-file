@@ -16,17 +16,6 @@ from dataclasses import dataclass
 from os import fsync
 from typing import BinaryIO
 
-from .jbd2_writer import (
-    _JBD2_MAGIC,
-    _SUPPORTED_BLOCK_SIZES,
-    JBD2DecodedTransaction,
-    JBD2JournalState,
-    JBD2WriteProfileError,
-    decode_classic_jbd2_transaction,
-    decode_jbd2_transaction,
-    parse_jbd2_superblock,
-    parse_classic_jbd2_superblock,
-)
 from .ext4_jbd2_csum import (
     JBD2_FEATURE_INCOMPAT_CSUM_V2,
     JBD2_FEATURE_INCOMPAT_CSUM_V3,
@@ -40,6 +29,17 @@ from .ext4_jbd2_csum import (
     uuid_seed,
     verify_commit_checksum,
     verify_descriptor_checksum,
+)
+from .jbd2_writer import (
+    _JBD2_MAGIC,
+    _SUPPORTED_BLOCK_SIZES,
+    JBD2DecodedTransaction,
+    JBD2JournalState,
+    JBD2WriteProfileError,
+    decode_classic_jbd2_transaction,
+    decode_jbd2_transaction,
+    parse_classic_jbd2_superblock,
+    parse_jbd2_superblock,
 )
 
 
@@ -335,9 +335,7 @@ def scan_checksummed_jbd2_transactions(
                 )
             try:
                 if not verify_commit_checksum(control, seed):
-                    raise JBD2WriteProfileError(
-                        "JBD2 commit checksum does not match"
-                    )
+                    raise JBD2WriteProfileError("JBD2 commit checksum does not match")
             except JBD2ChecksumError as exc:
                 raise JBD2WriteProfileError(
                     f"JBD2 commit checksum is malformed: {exc}"
@@ -731,9 +729,7 @@ def plan_classic_jbd2_checkpoint(
         # A v2/v3 journal superblock carries its own CRC32C over [0, 0xFC).
         # Zeroing the head without refreshing it makes e2fsck refuse the
         # journal, so the clean marker is recomputed after every field change.
-        struct.pack_into(
-            ">I", clean, 0xFC, journal_superblock_checksum(bytes(clean))
-        )
+        struct.pack_into(">I", clean, 0xFC, journal_superblock_checksum(bytes(clean)))
     writes.append(
         JBD2CheckpointWrite(
             journal_superblock_physical_block,
