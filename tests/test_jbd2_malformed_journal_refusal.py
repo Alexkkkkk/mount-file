@@ -70,7 +70,10 @@ def _make_image(tmp_path):
     )
     payload = tmp_path / "payload.bin"
     payload.write_bytes(b"payload" + b"p" * (BLOCK_SIZE - 7))
-    assert _run(["debugfs", "-w", "-R", f"write {payload} /target", str(image)]).returncode == 0
+    assert (
+        _run(["debugfs", "-w", "-R", f"write {payload} /target", str(image)]).returncode
+        == 0
+    )
     return image
 
 
@@ -88,9 +91,9 @@ def _assert_refused(image):
     result = Ext4JournalGate(image).check()
     after = _sha256(image)
     assert after == before, "the journal gate modified the image"
-    assert result.state is not JournalState.CLEAN, (
-        f"malformed journal reported as clean: {result.state} {result.message!r}"
-    )
+    assert (
+        result.state is not JournalState.CLEAN
+    ), f"malformed journal reported as clean: {result.state} {result.message!r}"
     return result
 
 
