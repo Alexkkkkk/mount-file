@@ -16,13 +16,15 @@ Licensed under the MIT License - see the LICENSE file for details.
 
 # Mount File
 
-**Mount File** — desktop file manager and DFIR toolkit for raw disk images,
-NAND/eMMC dumps and filesystem analysis. It can inspect partitions, browse and
-extract files, run bounded read-only analysis, and perform limited native writes
-only for explicitly validated filesystem profiles.
+**Mount File** — десктопный файловый менеджер и DFIR-инструмент для работы с
+raw-образами дисков, дампами NAND/eMMC и анализа файловых систем. Программа
+читает таблицы разделов, показывает и извлекает файлы, выполняет ограниченный
+read-only анализ и умеет ограниченно писать — только для явно проверенных
+профилей файловых систем.
 
-The project works on image files. It does **not** flash data back to physical
-devices and does not claim complete filesystem or forensic-tool parity.
+Инструмент работает с файлами-образами: он **не** записывает данные обратно на
+физические носители и не заявляет полного соответствия спецификациям файловых
+систем или возможностям специализированных forensic-продуктов.
 
 > **English:** Mount File is a cross-platform desktop application for browsing,
 > extracting and analyzing raw disk images and NAND/eMMC dumps. Native readers
@@ -31,11 +33,30 @@ devices and does not claim complete filesystem or forensic-tool parity.
 
 | | |
 |---|---|
-| Current package version | `1.81.0` on `main`; see [Releases](https://github.com/Alexkkkkk/mount-file/releases) for packaged binaries |
-| Documentation | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
-| Repository | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
-| License | [MIT](LICENSE) |
-| Platforms | Windows 10/11, Linux and macOS |
+| Версия пакета | `1.95.0` — синхронизирована в `pyproject.toml` и `mountfile/__init__.py`; готовые сборки в [Releases](https://github.com/Alexkkkkk/mount-file/releases) |
+| Документация | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
+| Репозиторий | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
+| Лицензия | [MIT](LICENSE) |
+| Python | 3.10, 3.11, 3.12 |
+| Платформы | Windows 10/11, Linux, macOS |
+
+## Содержание
+
+- [Генерируемый статус проекта](#генерируемый-статус-проекта)
+- [Что поддерживается сейчас](#что-поддерживается-сейчас)
+- [Установка](#установка)
+- [Графический интерфейс](#графический-интерфейс)
+- [Командная строка](#командная-строка)
+- [Переменные окружения](#переменные-окружения)
+- [Отдельный помощник монтирования](#отдельный-помощник-монтирования)
+- [Опциональные AI-, API- и layer-компоненты](#опциональные-ai-api--и-layer-компоненты)
+- [Границы безопасности](#границы-безопасности)
+- [Разработка](#разработка)
+- [Структура репозитория](#структура-репозитория)
+- [Участие и безопасность](#участие-и-безопасность)
+- [Поддержка проекта](#поддержка-проекта)
+- [Лицензия](#лицензия)
+- [Заметки для мейнтейнера: MCP-серверы для Copilot](#заметки-для-мейнтейнера-mcp-серверы-для-copilot)
 
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
@@ -51,73 +72,81 @@ Capability profiles currently declared: capability matrix available.
 This generated summary is informational: unsupported, dirty, ambiguous and recovery-required profiles remain fail-closed; benchmark and fixture evidence do not claim full filesystem parity or power-loss safety.
 <!-- MOUNTFILE-AUTO-STATUS:END -->
 
-## What is supported today
+## Что поддерживается сейчас
 
-Mount File has two related layers:
+В проекте два взаимосвязанных слоя:
 
-- a Qt desktop application in `main.py`;
-- a package CLI available as `python -m mountfile` and, after installation,
-  as `mountfile`.
+- Qt-приложение в `main.py`;
+- CLI пакета — `python -m mountfile`, после установки также команда `mountfile`.
 
-The native filesystem layer supports **validated bounded profiles**, not every
-layout accepted by a filesystem specification:
+Нативный слой файловых систем поддерживает **проверенные ограниченные
+профили**, а не любые раскладки, допустимые спецификацией:
 
-| Family | Native read | Native write | Scope |
+| Семейство | Нативное чтение | Нативная запись | Область применения |
 |---|---:|---:|---|
-| FAT12/16/32 | Yes | Limited | Bounded geometry and metadata; FAT12/16 use fixed-root constraints |
-| exFAT | Yes | Limited | One-FAT profile with validated metadata and volume state |
-| ext2 | Yes | Limited | Allowlisted metadata and bounded direct/indirect capacity |
-| ext3/ext4 | Read-only | No | Conservative profiles; journal/recovery and unsupported features fail closed |
-| NTFS | Read-only | No | Bounded reader; native writer is intentionally disabled |
+| FAT12/16/32 | Да | Ограниченно | Ограниченная геометрия и метаданные; для FAT12/16 — фиксированный корневой каталог |
+| exFAT | Да | Ограниченно | Профиль с одной FAT, проверенные метаданные и состояние тома |
+| ext2 | Да | Ограниченно | Метаданные из allow-list, ограниченная прямая/косвенная ёмкость |
+| ext3/ext4 | Read-only | No | Консервативные профили; журнал, recovery и неподдерживаемые возможности → отказ |
+| NTFS | Read-only | No | Ограниченный читатель; нативный писатель намеренно отключён |
 
-Native ext3/ext4 and NTFS writes are unsupported; power-loss safety is
-unsupported. Limited writes are available only through the explicitly enabled
-bounded profiles above. Backup, rollback and benchmark evidence do not imply
-power-loss safety or full filesystem parity.
+> Ячейки `Read-only` / `No` намеренно оставлены на английском: это машинно
+> проверяемые токены гейта статуса (`tests/test_readme_status_gate.py`,
+> `scripts/product_status_contract.py`). Смысл по-русски — «только чтение» и
+> «запись не поддерживается».
 
-> **Guarded recovery warning:** `MOUNTFILE_ENABLE_NATIVE_WRITE=1` enables only guarded
-> recovery/copy verification for the bounded native profiles. It does **not** enable
-> the experimental ext4/JBD2 or NTFS `$LogFile` replay paths by itself; those
-> require an explicit `recover="native"` writer option and remain outside the
-> product-level support claim. Power-loss safety is still unsupported.
+Нативная запись в ext3/ext4 и NTFS не поддерживается, устойчивость к потере
+питания не заявляется (канонические машинно-проверяемые формулировки:
+*native ext3/ext4 and NTFS writes are unsupported*; *power-loss safety is
+unsupported*). Ограниченная запись доступна только в перечисленных
+профилях, и включать её нужно осознанно. Резервные копии, откаты и
+бенчмарк-отчёты не означают ни устойчивости к сбоям питания, ни полного
+соответствия спецификациям.
 
-### Experimental journal integrations
+> **Предупреждение о guarded recovery:** `MOUNTFILE_ENABLE_NATIVE_WRITE=1` включает
+> только проверочное восстановление и копирование для ограниченных нативных
+> профилей. Он сам по себе **не** включает экспериментальные пути воспроизведения
+> журнала ext4/JBD2 и NTFS `$LogFile` — для них нужен явный параметр писателя
+> `recover="native"`, и они остаются вне заявленной поддержки продукта.
+> Устойчивость к потере питания по-прежнему не поддерживается.
 
-The repository also contains an isolated experimental namespace at
-`mountfile.experimental`. Its optional `dfir_ntfs` adapter can inspect records
-from an externally installed parser, but it is not imported by the production
-path and it has no write or replay method. The external project is GPL-3.0 and
-is therefore not bundled with this MIT project. Missing or incompatible
-optional dependencies return `unavailable`; they never enable a fallback
-writer. This layer is intended for staged acceptance work and is not part of
-the supported capability matrix.
-
-The versioned machine-readable matrix is the source of truth for operations,
-state gates and refusal codes:
+Версионируемая машиночитаемая матрица — источник истины по операциям, условиям
+состояния и кодам отказа:
 
 ```bash
 python -m mountfile capabilities
 ```
 
-A selected image can be checked without mutation:
+Выбранный образ можно проверить без изменения:
 
 ```bash
 python -m mountfile status dump.img
+python -m mountfile preflight dump.img
 ```
 
-For the detailed status and remaining acceptance work, see
-[`docs/issue-182-status.md`](docs/issue-182-status.md) and
+### Экспериментальные интеграции с журналами
+
+В репозитории есть изолированное экспериментальное пространство
+`mountfile.experimental`. Его опциональный адаптер `dfir_ntfs` умеет читать
+записи из внешне установленного парсера, но не импортируется в продакшн-путь и
+не имеет методов записи или воспроизведения. Внешний проект распространяется
+под GPL-3.0 и поэтому не поставляется вместе с этим MIT-проектом. Отсутствующие
+или несовместимые опциональные зависимости дают статус `unavailable` и никогда
+не включают резервный писатель. Слой предназначен для поэтапной приёмки и не
+входит в поддерживаемую матрицу возможностей.
+
+Подробный статус и оставшаяся работа по приёмке —
+[`docs/issue-182-status.md`](docs/issue-182-status.md) и
 [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
+Про управление самообучающимися слоями, обратную связь, границы приватности и
+гейт починки кода OLMA — [`docs/self-learning-layers.md`](docs/self-learning-layers.md).
 
-For self-learning layer controls, explicit feedback, privacy boundaries and
-the OLMA code-repair gate, see [`docs/self-learning-layers.md`](docs/self-learning-layers.md).
+## Установка
 
-## Quick start
+### Из исходников
 
-### Install from source
-
-Python 3.10 or newer is required. The basic package installs the Qt application
-and native bounded readers:
+Нужен Python 3.10 или новее. Базовая установка (единственная зависимость —
+`PyQt6`) даёт Qt-приложение и нативные читатели с ограничениями:
 
 ```bash
 git clone https://github.com/Alexkkkkk/mount-file.git
@@ -126,8 +155,7 @@ python -m venv .venv
 
 # Linux/macOS
 source .venv/bin/activate
-
-# Windows PowerShell
+# Windows PowerShell:
 # .venv\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip
@@ -135,87 +163,107 @@ python -m pip install .
 python main.py
 ```
 
-You can open an image directly:
+Открыть образ сразу:
 
 ```bash
 python main.py path/to/image.img
 ```
 
-The project installer can prepare the Python environment and optional system
-components:
+Установщик-помощник подготовит окружение Python и опциональные системные
+компоненты:
 
 ```bash
-python install_mountfile.py
-python install_mountfile.py --minimal
-python install_mountfile.py --dry-run
-python install_mountfile.py --dev
+python install_mountfile.py                # полная интерактивная установка
+python install_mountfile.py --minimal      # минимальный нативный профиль
+python install_mountfile.py --dry-run      # показать план, ничего не меняя
+python install_mountfile.py --dev          # добавить инструменты разработчика
+python install_mountfile.py --system-only  # только системные пакеты
+python install_mountfile.py --no-sys       # пропустить установку системных пакетов
 ```
 
-Use `--minimal` for the smallest native profile. Use `--no-sys` to skip system
-package installation. The installer does not install AI models, API keys or
-external forensic databases. Full installer options are documented in
-[`docs/install.md`](docs/install.md).
+Дополнительные ключи: `--legacy-tsk`, `--skip-ext`, `--skip-imdisk`, `--upgrade`.
+Установщик не ставит AI-модели, API-ключи и внешние forensic-базы. Полное
+описание: [`docs/install.md`](docs/install.md).
 
-### Install optional features
+### Опциональные наборы зависимостей
+
+Наборы объявлены в `pyproject.toml`. Ставьте только нужное:
+
+| Набор | Что добавляет |
+|---|---|
+| `.[legacy-tsk]` | `pytsk3` — явный устаревший совместимый fallback |
+| `.[dfir]` | `python-dateutil`, `yara-python` |
+| `.[api]` | FastAPI, uvicorn, httpx для REST API |
+| `.[ai]` | MCP, pydantic, OpenAI-совместимые бэкенды, regex |
+| `.[images]` | проверки изображений на Pillow |
+| `.[rw]`, `.[rw-ext]`, `.[rw-ntfs]` | опциональные нативные RW-бэкенды |
+| `.[fuzz]` | инструменты фаззинга для Linux |
+| `.[dev]` | pytest, coverage, hypothesis, ruff, black, isort, pre-commit, PyInstaller |
 
 ```bash
-python -m pip install '.[api]'       # FastAPI/uvicorn/httpx
-python -m pip install '.[ai]'        # MCP and AI backends
-python -m pip install '.[dfir]'      # dateutil and YARA support
-python -m pip install '.[legacy-tsk]'# explicit pytsk3 compatibility fallback
-python -m pip install '.[dev]'       # tests, formatters and build tools
-python -m pip install '.[images]'    # Pillow-based image checks
-python -m pip install '.[fuzz]'      # Linux fuzzing tools
-python -m pip install -r requirements-all.txt  # all optional features and contributor tools
+python -m pip install '.[dfir]'
+python -m pip install -r requirements-all.txt   # всё сразу, для контрибьюторов
 ```
 
-`pytsk3` is not an automatic fallback for a recognized but unsupported or dirty
-native profile. Enable legacy compatibility explicitly when it is appropriate
-for the investigation.
+`pytsk3` не является автоматическим fallback для распознанного, но
+неподдерживаемого или «грязного» нативного профиля. Устаревшую совместимость
+включают явно — когда это уместно для конкретного исследования.
 
-### Download a packaged build
+### Готовые сборки
 
-Stable Windows, Linux and macOS artifacts are published on
-[GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases). Release
-artifacts include SHA-256 files. Always verify the checksum and work on a copy
-of the evidence image.
+Артефакты для Windows, Linux и macOS публикуются в
+[GitHub Releases](https://github.com/Alexkkkkk/mount-file/releases) вместе с
+SHA-256. Проверяйте контрольную сумму и работайте с копией образа-доказательства.
 
-## GUI
+### Docker
 
-Run:
+Точка входа образа — `python -m mountfile`; команда по умолчанию — безопасная
+проверка конфигурации.
 
 ```bash
-python main.py                 # open the desktop application
-python main.py dump.img        # open an image immediately
-python main.py --version       # print the version
-python main.py --diag          # diagnose the local environment
+docker build -t mountfile .
+docker run --rm -v "$PWD/evidence:/evidence:ro" mountfile info /evidence/dump.img
+docker compose run --rm mountfile info /evidence/dump.img
 ```
 
-The GUI provides a two-panel file-manager workflow, partition and volume
-selection, directory browsing, extraction, a HEX editor, image summary,
-autopick for ambiguous NAND/eMMC dumps, optional AI analysis and bounded write
-operations where the selected profile allows them.
+Держите примонтированные каталоги с доказательствами в режиме read-only. Для
+команды записи работайте с копией и осознанно переводите в `read_only: false`
+только этот монтированный каталог.
 
-Writing changes the image file. Before using **Import**, **New folder**,
-**Rename**, **Delete** or HEX save:
+## Графический интерфейс
 
-1. make an independent copy of the image;
-2. verify the selected volume and offset;
-3. keep sufficient free space for the configured backup;
-4. confirm that the operation belongs to the active native profile.
+```bash
+python main.py                 # запустить десктопное приложение
+python main.py dump.img        # сразу открыть образ
+python main.py --version       # вывести версию
+python main.py --diag          # диагностика локального окружения
+python main.py --check-updates # одна проверка обновлений на GitHub Releases и выход
+```
 
-The GUI creates a backup before its first mutation in a session. This backup is
-a safety aid, not a filesystem journal and not a power-loss guarantee.
+В GUI есть двухпанельный файловый менеджер, выбор раздела и тома, просмотр
+каталогов, извлечение файлов, HEX-редактор, сводка по образу, autopick для
+неоднозначных дампов NAND/eMMC, опциональный AI-анализ и ограниченные операции
+записи там, где это разрешает выбранный профиль.
 
-Useful shortcuts include `Tab` to switch panels, `Space` to select an entry,
-`F5`/`F6` to copy or move, `F7` to create a directory, `F8` to delete,
-`Ctrl+O` to open an image, `Ctrl+R` to refresh and `Ctrl+Shift+X` to open the
-command center. The complete GUI guide is in
-[`docs/gui.md`](docs/gui.md).
+Запись изменяет файл образа. Перед **Import**, **New folder**, **Rename**,
+**Delete** или сохранением из HEX:
 
-## Command line
+1. сделайте независимую копию образа;
+2. проверьте выбранный том и смещение;
+3. убедитесь, что места хватает для настроенной резервной копии;
+4. подтвердите, что операция входит в активный нативный профиль.
 
-The package CLI does not require Qt:
+Перед первым изменением за сессию GUI создаёт резервную копию. Это страховка,
+а не журнал файловой системы и не гарантия сохранности при сбое питания.
+
+Горячие клавиши: `Tab` — переключение панелей, `Space` — выделить,
+`F5`/`F6` — копировать/переместить, `F7` — создать каталог, `F8` — удалить,
+`Ctrl+O` — открыть образ, `Ctrl+R` — обновить, `Ctrl+Shift+X` — командный центр.
+Полное руководство: [`docs/gui.md`](docs/gui.md).
+
+## Командная строка
+
+CLI пакета не требует Qt:
 
 ```bash
 python -m mountfile --help
@@ -228,57 +276,81 @@ python -m mountfile stat dump.img /etc/hosts
 python -m mountfile get dump.img /photos -o ./evidence/photos
 ```
 
-After `pip install .`, the equivalent installed command is `mountfile`.
-`python main.py <same command>` is also supported by the desktop entry point.
+После `pip install .` доступны команды `mountfile` (тот же CLI), а также
+`mountfile-ai`, `mountfile-rw` и `mountfile-rw-v2`. Вариант
+`python main.py <команда> ...` — поддерживаемый мост к тому же CLI.
 
-### Read and evidence commands
+### Общие параметры выбора цели
 
-| Command | Purpose | Changes source image |
+Любая команда, работающая с образом (`ls`, `stat`, `read-range`, `get`, `put`,
+`write-range`, `append`, `truncate`, `mkdir`, `mv`, `ln`, `rm`, `preflight`,
+`status`, `volumes`, `info`, `autopick`), принимает:
+
+| Параметр | Смысл |
+|---|---|
+| `-V`, `--volume N` | номер тома из вывода `volumes` (нумерация с 1) |
+| `-O`, `--offset 0x400000` | сырое байтовое смещение файловой системы |
+| `--scan-limit N` | сколько байт сканировать в поисках сигнатур ФС |
+| `--auto` | автоматический выбор рабочего тома |
+| `-u`, `--udev FILE` | файл раскладки разделов с авторитетными экстентами для `--auto` |
+| `--backup` | скопировать образ в `<image>.bak` перед записью |
+| `--allow-libguestfs` | явно включить опциональный писатель libguestfs |
+
+### Команды чтения и работы с доказательствами
+
+| Команда | Назначение | Меняет исходный образ |
 |---|---|---:|
-| `volumes` | list detected partitions and filesystem volumes | No |
-| `info` | print image and volume summary | No |
-| `capabilities` | print the versioned native profile matrix | No |
-| `status` | report selected backend, profile and typed refusal status | No |
-| `ls`, `stat` | list or inspect a filesystem path | No |
-| `read-range` | read a bounded range from a regular file | No |
-| `get` | extract a file or directory | No |
-| `autopick` | choose a validated volume automatically | No |
-| `hash` | calculate a SHA-256 identity hash | No |
-| `evidence-manifest` | create a separate JSON manifest for one evidence file | No |
-| `grep`, `search` | search raw bytes or filesystem files | No |
-| `timeline`, `timeline-export` | inspect or normalize caller-supplied timeline CSV | No |
-| `timeline-build`, `timeline-query` | build/query a filesystem-aware timeline | Output only |
-| `yara`, `yara-scan` | run YARA rules against permitted targets | No |
-| `timestomp`, `timestomp-scan` | inspect timestamp anomalies | No |
-| `unallocated-scan` | scan explicitly supplied unallocated ranges | No |
-| `slack`, `slack-extract` | inspect or extract explicitly resolved file slack | Output only |
-| `live-diff` | compare images and write a Markdown report | Output only |
+| `volumes` | список найденных разделов и томов | Нет |
+| `info` | сводка по образу и томам | Нет |
+| `capabilities` | матрица нативных профилей с версией | Нет |
+| `status` | выбранный бэкенд, профиль и типизированный статус отказа | Нет |
+| `preflight` | проверка профиля и состояния в режиме read-only с отчётом об отказах | Нет |
+| `ls`, `stat` | список или метаданные пути внутри ФС | Нет |
+| `read-range` | чтение ограниченного диапазона байт из обычного файла (не более 16 MiB) | Нет |
+| `get` | извлечь файл или каталог | Нет |
+| `autopick` | автоматически выбрать проверенный том | Нет |
+| `hash` | read-only SHA-256 идентичность | Нет |
+| `evidence-manifest` | отдельный JSON-манифест для одного файла-доказательства | Нет |
+| `grep`, `search` | поиск по сырым байтам образа (`grep`) или по файлам ФС (`search`) | Нет |
+| `timeline`, `timestomp` | просмотр или поиск аномалий в переданном CSV-таймлайне | Нет |
+| `timeline-export` | приведение отметок времени из CSV к UTC | Только вывод |
+| `timeline-build`, `timeline-query` | построение и запросы к таймлайну с учётом ФС (SQLite/CSV) | Только вывод |
+| `yara`, `yara-scan` | проверка разрешённых целей правилами YARA | Нет |
+| `unallocated-scan` | сканирование явно указанных нераспределённых диапазонов | Нет |
+| `slack`, `slack-extract` | просмотр или извлечение явно определённого file slack | Только вывод |
+| `live-diff` | сравнение образов с отчётом в Markdown | Только вывод |
 
-Filesystem-aware DFIR commands may require `pytsk3`/`libtsk`; YARA commands
-also require `yara-python`. They do not replace a validated allocation map,
-carving workflow or chain-of-custody system.
+DFIR-командам, работающим через ФС, могут понадобиться `pytsk3`/`libtsk`,
+командам YARA — `yara-python` (набор `.[dfir]`). Они не заменяют проверенную
+карту размещения, карвинг и систему цепочки сохранности доказательств.
 
-### Limited write commands
+Правила в `rules/`: `anti_forensics.yar`, `pii.yar`.
 
-Write commands require `--yes` and refuse unsupported profiles instead of
-silently falling back:
+### Команды ограниченной записи
+
+Команды записи требуют `--yes` и отказываются работать с неподдерживаемым
+профилем вместо тихого отката на другой бэкенд:
 
 ```bash
 python -m mountfile put dump.img ./hello.txt --dest /docs --backup --yes
+python -m mountfile write-range dump.img /config/settings.ini --input ./new.ini --file-offset 0 --backup --yes
+python -m mountfile append dump.img /log/app.log --input ./tail.log --backup --yes
+python -m mountfile truncate dump.img /log/app.log --size 4096 --backup --yes
 python -m mountfile mkdir dump.img /docs/new --backup --yes
 python -m mountfile mv dump.img /hello.txt renamed.txt --backup --yes
 python -m mountfile ln dump.img /hello.txt /docs/hello-link.txt --yes
 python -m mountfile rm dump.img /docs/new --recursive --backup --yes
 ```
 
-The `ln` hard-link operation is available only for the validated native ext2
-write profile; other filesystems refuse it through the capability gate.
+Жёсткая ссылка `ln` доступна только в проверенном нативном профиле записи ext2;
+для остальных файловых систем операция отклоняется гейтом возможностей.
 
-`--backup` creates a neighboring `<image>.bak`; it is not a transaction. The
-usual exit codes are `0` for success, `1` for an error, `2` when confirmation is
-missing and `130` for interruption.
+`--backup` создаёт соседний файл `<image>.bak`; это не транзакция.
 
-### RT809H and NAND/eMMC helpers
+Коды возврата: `0` — успех, `1` — ошибка, `2` — нет подтверждения,
+`130` — прерывание.
+
+### Помощники для RT809H и NAND/eMMC
 
 ```bash
 python -m mountfile decode dump.bin
@@ -287,17 +359,61 @@ python -m mountfile autopick dump.bin --json > candidates.json
 python -m mountfile autopick dump.bin --hint system --extract ./rootfs
 ```
 
-`autopick` combines MBR/GPT, `udev` metadata and filesystem signatures, then
-verifies candidates by opening them. `--no-verify` is faster but less safe.
-Raw NAND OOB/ECC interleaving is outside this tool's scope.
+`decode` работает с зашифрованными RT809H дампами eMMC MST/MTK (`--table-dir`
+подменяет встроенные XOR-таблицы). `autopick` объединяет MBR/GPT, метаданные
+`udev` и сигнатуры файловых систем, а затем проверяет кандидатов открытием;
+`--no-verify` быстрее, но менее безопасно. Чередование OOB/ECC для raw NAND —
+вне области задач этого инструмента.
 
-For the complete option reference, see [`docs/cli.md`](docs/cli.md).
+Полный справочник параметров: [`docs/cli.md`](docs/cli.md).
 
-## Standalone mount helper
+### Консультативные самообучающиеся слои
 
-`mountfile.py` is a separate single-file utility for mounting supported image
-containers through the host operating system. It is not the same as the native
-reader/writer path described above:
+```bash
+python -m mountfile layers status --json
+# слои: volume, preflight, cache, advisor, code_repair, operations
+python -m mountfile layers disable volume
+python -m mountfile layers decide ./dump.img --operation inspect --fs fat32 --json
+python -m mountfile layers feedback <decision-id> --success --latency-ms 12
+```
+
+Вывод слоёв носит рекомендательный характер и никогда не отменяет отказ,
+выданный по матрице возможностей. `MOUNTFILE_DISABLE_LAYERS=1` полностью
+отключает слои.
+
+## Переменные окружения
+
+Переключатели, которые действительно читает код. Незаданная переменная
+оставляет безопасное значение по умолчанию.
+
+| Переменная | Действие |
+|---|---|
+| `MOUNTFILE_ENABLE_NATIVE_WRITE=1` | включить проверочную нативную запись и копирование — только для ограниченных профилей |
+| `MOUNTFILE_ALLOW_LEGACY_TSK=1` | явно разрешить совместимость через `pytsk3` |
+| `MOUNTFILE_NO_UPDATE=1` | отключить проверку обновлений при старте |
+| `MOUNTFILE_ENABLE_UPDATE_CHECK=1` | разрешить сетевую проверку обновлений при старте |
+| `MOUNTFILE_AUTO_UPDATE=1` | устанавливать обновление без вопроса и перезапускаться |
+| `MOUNTFILE_UPDATE_REPO=owner/repo` | другой репозиторий как источник релизов |
+| `MOUNTFILE_UPDATE_URL=…` | прямой URL на JSON последнего релиза (внутренний сервер) |
+| `MOUNTFILE_GIT_PULL=1` | в git-чекауте разрешить `git pull` при обновлении |
+| `MOUNTFILE_LAYERS_DIR=…` | корневой каталог хранилища обучающихся слоёв |
+| `MOUNTFILE_DISABLE_LAYERS=1` | отключить консультативные слои |
+| `MOUNTFILE_AI_BACKEND`, `MOUNTFILE_AI_MODEL` | выбор опционального AI-бэкенда и модели |
+| `MOUNTFILE_AI_URL`, `MOUNTFILE_AI_URL_OPENAI`, `MOUNTFILE_AI_KEY` | эндпоинт и ключ AI (`.[ai]`) |
+| `MOUNTFILE_AI_MAX_BYTES=N` | ограничение размера отправляемых в AI данных |
+| `MOUNTFILE_API_TOKEN=…` | bearer-токен для опционального REST API (`.[api]`) |
+| `MOUNTFILE_EDITOR=…` | внешний текстовый редактор для GUI (также учитываются `$VISUAL`/`$EDITOR`) |
+| `MOUNTFILE_OLMA_TOKEN`, `MOUNTFILE_OLMA_REPO`, `MOUNTFILE_OLMA_WATCH` | настройки самоанализа OLMA |
+
+Сеть используется только по явному включению: проверка обновлений, AI-бэкенды
+и API-интеграции. Нативные читатели и ограниченные писатели работают локально с
+выбранным образом.
+
+## Отдельный помощник монтирования
+
+`mountfile.py` — отдельная утилита в один файл, которая монтирует контейнеры
+образов средствами ОС. Это не тот же путь, что нативные читатели и писатели
+выше:
 
 ```bash
 python mountfile.py                  # GUI
@@ -305,55 +421,50 @@ python mountfile.py dump.img --to /mnt/x
 python mountfile.py dump.img --open
 python mountfile.py --list
 python mountfile.py --unmount /mnt/x
+python mountfile.py --version
 ```
 
-It uses platform tools such as `udisksctl`/`mount` on Linux, `hdiutil` on macOS
-and PowerShell disk-image commands on Windows. Availability and permissions
-depend on the host OS.
+Прочие ключи: `--read-only`, `--verbose`, `--help`. Утилита опирается на
+системные инструменты: `udisksctl`/`mount` в Linux, `hdiutil` в macOS,
+команды PowerShell для дисковых образов в Windows. Доступность и права зависят
+от хоста.
 
-## Optional AI, API and automation layers
+## Опциональные AI-, API- и layer-компоненты
 
-These are opt-in components and are not required for offline image browsing:
+Всё перечисленное включается по желанию и не требуется для офлайн-просмотра
+образов:
 
-- `.[api]` provides the authenticated REST API. Its capability endpoint is
-  documented in [`docs/api.md`](docs/api.md).
-- `.[ai]` provides MCP/AI helpers and local/OpenAI-compatible backends. See
-  [`docs/ai.md`](docs/ai.md).
-- OLMA provides project self-analysis and reports; it is an engineering tool,
-  not a forensic recovery guarantee.
-- `mountfile_all.py` runs a broad local smoke flow; it is useful for
-  development and CI, not a replacement for independent filesystem checkers.
+- `.[api]` — REST API с аутентификацией; эндпоинт возможностей описан в [`docs/api.md`](docs/api.md).
+- `.[ai]` — MCP- и AI-помощники, локальные и OpenAI-совместимые бэкенды, плюс команды `ai-guard`, `ai-schemas`, `ai-analyze`. См. [`docs/ai.md`](docs/ai.md).
+- OLMA — самоанализ проекта и отчёты; это инженерный инструмент, а не гарантия восстановления данных.
+- `mountfile_all.py` — широкий локальный smoke-прогон; полезен для разработки и CI, но не заменяет независимые проверки файловых систем.
 
-Network access is opt-in for update checks, AI backends and API integrations.
-The native reader and bounded writer paths operate locally on the selected image.
+## Границы безопасности
 
-## Safety boundaries
+Mount File намеренно отказывается работать (fail closed) в случаях, когда:
 
-Mount File intentionally fails closed in these situations:
+- выбранные экстенты или метаданные выходят за границы образа;
+- распознанная файловая система «грязная», повреждена, неоднозначна или выходит за allow-list возможностей;
+- запрошенной операции нет в матрице возможностей выбранного профиля;
+- устаревший fallback не был включён явно;
+- резервную копию или промежуточное изменение не удаётся выполнить безопасно.
 
-- selected extents or metadata exceed image bounds;
-- a recognized filesystem is dirty, malformed, ambiguous or outside its
-  allowlisted feature profile;
-- a requested operation is not present in the selected profile's capability
-  matrix;
-- a legacy fallback was not explicitly enabled;
-- a backup or staged mutation cannot be completed safely.
+Проект **не** заявляет:
 
-The project does **not** currently claim:
+- полного соответствия спецификациям файловых систем;
+- нативной записи в ext3/ext4 и NTFS;
+- полного восстановления журналов JBD2 и NTFS;
+- универсальной атомарности при сбоях и потере питания;
+- полной кросс-платформенной матрицы внешних чекеров;
+- выполнения форензик-изъятия, цепочки сохранности или юридической допустимости.
 
-- full filesystem specification parity;
-- native ext3/ext4 or NTFS writing;
-- complete JBD2 or NTFS journal recovery;
-- universal crash/power-loss atomicity;
-- a complete cross-platform external-checker matrix;
-- forensic acquisition, chain-of-custody or legal admissibility.
-
-The full acceptance status and roadmap are tracked in
+Статус приёмки и план:
 [`docs/issue-182-status.md`](docs/issue-182-status.md),
-[`docs/issue-182-full-filesystem-parity-task.md`](docs/issue-182-full-filesystem-parity-task.md)
-and [issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
+[`docs/issue-182-full-filesystem-parity-task.md`](docs/issue-182-full-filesystem-parity-task.md),
+[`docs/issue-510-acceptance-status.md`](docs/issue-510-acceptance-status.md),
+[issue #182](https://github.com/Alexkkkkk/mount-file/issues/182).
 
-## Development
+## Разработка
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -364,94 +475,112 @@ make lint-correctness
 make fmt
 ```
 
-Useful targets:
+Полезные цели `make`:
 
-| Command | Purpose |
+| Команда | Назначение |
 |---|---|
-| `make test` | run the pytest suite |
-| `make test-standalone` | test the single-file mount helper |
-| `make lint` | run the CI syntax/error lint gate |
-| `make lint-correctness` | run repository-wide correctness rules |
-| `make fmt` | apply Ruff, isort and Black |
-| `make sample` | build sample images when `dosfstools` and `mtools` are available |
-| `make all-in-one` | run the broad no-GUI smoke flow |
-| `make smoke-images` | end-to-end CLI and GUI checks on freshly built images, verified by `mtools`, `fsck.vfat`, `fsck.exfat` and `e2fsck` |
-| `make exe` | build the main PyInstaller binary |
-| `make mountfile-exe` | build the standalone binary |
+| `make help` | список доступных целей |
+| `make install` | установить пакет в активное окружение |
+| `make test` | запустить набор pytest |
+| `make test-fast` | быстрый поднабор тестов |
+| `make test-ai` | тесты AI-слоя |
+| `make test-standalone` | тесты отдельного помощника монтирования |
+| `make lint` | синтаксический/ошибочный lint-гейт CI |
+| `make lint-correctness` | правила корректности по всему репозиторию |
+| `make fmt` | применить Ruff, isort и Black |
+| `make sample` | собрать тестовые образы, если есть `dosfstools`/`mtools` |
+| `make smoke-images` | сквозные проверки CLI и GUI на свежих образах, верифицированные `mtools`, `fsck.vfat`, `fsck.exfat`, `e2fsck` |
+| `make all-in-one` | широкий smoke-прогон без GUI |
+| `make exe` | собрать основной бинарник PyInstaller |
+| `make mountfile-exe` | собрать бинарник отдельного помощника |
+| `make tools`, `make tools-check` | показать и проверить опциональные системные инструменты |
+| `make sync*` | помощники синхронизации репозитория — см. [`docs/sync.md`](docs/sync.md) |
+| `make clean` | удалить артефакты сборки |
 
-CI covers Linux, Windows and macOS across the supported Python versions, with
-additional security, dependency, documentation and build checks. Optional real-
-image tests may be skipped locally when tools such as `pytsk3`, `dosfstools`,
-`exfatprogs`, `ntfs-3g`, YARA or PowerShell are unavailable.
+CI покрывает Linux, Windows и macOS на Python 3.10–3.12, плюс отдельные
+проверки безопасности, зависимостей, документации и сборки. Опциональные тесты
+на реальных образах могут пропускаться локально, если нет `pytsk3`,
+`dosfstools`, `exfatprogs`, `ntfs-3g`, YARA или PowerShell.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md),
-[`docs/structure.md`](docs/structure.md),
-[`docs/quality.md`](docs/quality.md) and [`docs/sync.md`](docs/sync.md) before
-opening a pull request.
+Перед пул-реквестом прочитайте [`CONTRIBUTING.md`](CONTRIBUTING.md),
+[`docs/structure.md`](docs/structure.md), [`docs/quality.md`](docs/quality.md) и
+[`docs/sync.md`](docs/sync.md).
 
-Проверка исправленных пользовательских сценариев, команды повторного тестирования
-и оставшиеся ограничения описаны в
+Проверка исправленных пользовательских сценариев, команды повторного
+тестирования и оставшиеся ограничения описаны в
 [`docs/functional-validation.md`](docs/functional-validation.md).
 
-## Repository map
+## Структура репозитория
 
 ```text
-main.py                 Qt application and CLI bridge
-mountfile.py            standalone mount helper
-mountfile/cli.py        package CLI
-mountfile/vfs.py        native/compatibility VFS routing
-mountfile/capabilities.py versioned capability/refusal matrix
-mountfile/*_reader.py   bounded filesystem readers
-mountfile/*_writer.py   bounded native writer implementations
-mountfile/extract.py    containment-safe extraction
-mountfile/dfir*.py      DFIR commands and analysis helpers
-mountfile/ai/           optional AI/MCP layer
-mountfile/olma/         optional engineering self-analysis
-scripts/                build, sample and release helpers
-tools/                  maintenance utilities
-tests/                  pytest suite
-docs/                   user, API, quality and roadmap documentation
+main.py                  Qt-приложение и мост к CLI
+mountfile.py             отдельный помощник монтирования средствами ОС
+auto_mountfile.py        помощник autopick
+mountfile/cli.py         CLI пакета: чтение, ограниченная запись, DFIR, слои
+mountfile/capabilities.py версионируемая матрица возможностей и отказов
+mountfile/vfs.py         маршрутизация нативного/совместимого VFS
+mountfile/*_reader.py    читатели ФС с ограничениями (FAT, exFAT, ext2/3/4, NTFS)
+mountfile/*_writer.py    реализации нативных писателей с ограничениями
+mountfile/extract.py     безопасное извлечение с контролем путей
+mountfile/dfir*.py       DFIR-команды (таймлайн, slack, yara, unallocated)
+mountfile/api.py         опциональный REST API
+mountfile/ai/            опциональный слой AI/MCP
+mountfile/layers/        консультативные самообучающиеся слои
+mountfile/olma/          опциональный инженерный самоанализ
+mountfile/android/       помощники по Android
+mountfile/experimental/  изолированные неподдерживаемые эксперименты
+mountfile/data/          встроенные данные и таблицы
+scripts/                 сборка, генерация образов, релизные помощники
+tools/                   утилиты обслуживания
+benchmarks/              стенд и артефакты бенчмарков
+examples/                примеры входных данных
+rules/                   правила YARA (anti_forensics, pii)
+archive/legacy/          исторический код, сохранённый для справки
+tests/                   набор pytest (180 модулей тестов)
+docs/                    пользовательская документация, API, качество, роадмап
 ```
 
-## Contributing and security
+## Участие и безопасность
 
-Fork the repository, create a focused branch, add tests for behavior changes and
-open a pull request using [Conventional Commits](https://www.conventionalcommits.org/).
-Do not include real evidence images, credentials, tokens or private dumps in
-issues or pull requests.
+Форкните репозиторий, создайте локальную ветку под конкретную задачу, добавьте
+тесты на изменение поведения и откройте пул-реквест в стиле
+[Conventional Commits](https://www.conventionalcommits.org/). Не публикуйте в
+issue и пул-реквестах реальные образы-доказательства, учётные данные, токены и
+приватные дампы.
 
-Report vulnerabilities privately according to [SECURITY.md](SECURITY.md), not
-through a public issue. Community standards are in
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Об уязвимостях сообщайте приватно по [SECURITY.md](SECURITY.md), не через
+публичный issue. Правила сообщества — [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+История изменений — [CHANGELOG.md](CHANGELOG.md).
 
-## Support the project
+## Поддержка проекта
 
-If Mount File is useful, a GitHub star, reproducible bug report, documentation
-fix or code contribution is welcome. Optional donation information is maintained
-in [`docs/donations.md`](docs/donations.md).
+Если Mount File полезен, приветствуются звезда на GitHub, воспроизводимый
+баг-репорт, правка документации или код. Информация о добровольных
+пожертвованиях — в [`docs/donations.md`](docs/donations.md).
 
-The project donation wallet is **TON**: `UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv`.
-Verify the same address in [TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
-or use [the TON transfer link](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation).
-Never share a seed phrase or private key; see [`docs/donations.md`](docs/donations.md)
-for the full safety note.
+Кошелёк проекта в сети **TON**: `UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv`.
+Проверьте тот же адрес в [TON Viewer](https://tonviewer.com/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv)
+или используйте [ссылку на перевод](ton://transfer/UQCZ10Eh8IJ5sFC6JKn-YralMF45Bk5fkNT6SqTHSIRGxfQv?text=MountFile%20donation).
+Никогда не передавайте seed-фразу или приватный ключ; полное предупреждение — в
+[`docs/donations.md`](docs/donations.md).
 
-## License
+## Лицензия
 
-Mount File is distributed under the [MIT License](LICENSE).
+Mount File распространяется по [лицензии MIT](LICENSE).
+Copyright (c) 2026 Alexkkkkk.
 
-## Copilot coding agent: MCP servers
+## Заметки для мейнтейнера: MCP-серверы для Copilot
 
-Free, no-API-key MCP servers for the [GitHub Copilot coding agent](https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers)
-are pre-configured in [`.github/copilot-mcp-config.json`](.github/copilot-mcp-config.json)
-(GitHub and Playwright MCP servers are built in and are not duplicated).
+Бесплатные MCP-серверы без API-ключей для
+[GitHub Copilot coding agent](https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers)
+преднастроены в [`.github/copilot-mcp-config.json`](.github/copilot-mcp-config.json)
+(серверы GitHub и Playwright встроены и не дублируются).
 
-Setup: open **Settings → Copilot → MCP servers** in this repository, paste the
-JSON from that file into the "MCP configuration" field and click
-**Save MCP configuration**. No secrets are required — every server below works
-without an API key.
+Настройка: **Settings → Copilot → MCP servers** в этом репозитории, вставьте
+JSON из файла в поле «MCP configuration» и нажмите **Save MCP configuration**.
+Секреты не нужны — все серверы в файле работают без API-ключа.
 
-Added no-key reasoning helpers (`sequential-thinking`, `memory`), the Context7
-docs server, and switched `cloudflare_docs` to its current Streamable HTTP
-endpoint (`https://docs.mcp.cloudflare.com/mcp`; the legacy `/sse` URL is
-retired).
+Файл добавляет вспомогательные серверы рассуждений без ключей
+(`sequential-thinking`, `memory`), сервер документации Context7 и использует
+актуальный Streamable HTTP эндпоинт для `cloudflare_docs`
+(`https://docs.mcp.cloudflare.com/mcp`; устаревший `/sse` больше не работает).

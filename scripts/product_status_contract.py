@@ -18,6 +18,24 @@ from mountfile.capabilities import (
 from scripts.checker_matrix import build_report as build_checker_report
 from scripts.recovery_matrix import build_report as build_recovery_report
 
+# The README is Russian-first, so the surface contract must understand both the
+# English tokens used by older fixtures and the Russian ones used in the docs.
+_READ_ONLY_CELLS = frozenset({"read-only", "read only", "только чтение"})
+_NO_WRITE_CELLS = frozenset({"no", "нет", "—", "-", ""})
+_NO_NATIVE_WRITE_PHRASES = (
+    "native ext3/ext4 and ntfs writes are unsupported",
+    "нативная запись в ext3/ext4 и ntfs не поддерживается",
+)
+_NO_POWER_LOSS_PHRASES = (
+    "power-loss safety is unsupported",
+    "устойчивость к потере питания не заявляется",
+)
+
+
+def _has_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+    """Return True when any accepted wording of a claim is present."""
+    return any(phrase in text for phrase in phrases)
+
 
 def _execution_artifact_blockers(
     artifact: object,
@@ -83,14 +101,14 @@ def _surface_contract(root: Path) -> tuple[dict[str, bool], list[str]]:
             rows[cells[0]] = cells
     readme_safe = all(
         family in rows
-        and rows[family][1].lower() == "read-only"
-        and rows[family][2].lower() == "no"
+        and rows[family][1].lower() in _READ_ONLY_CELLS
+        and rows[family][2].lower() in _NO_WRITE_CELLS
         for family in ("ext3/ext4", "NTFS")
     )
     readme_lower = " ".join(readme.lower().split())
     readme_safe = readme_safe and (
-        "native ext3/ext4 and ntfs writes are unsupported" in readme_lower
-        and "power-loss safety is unsupported" in readme_lower
+        _has_phrase(readme_lower, _NO_NATIVE_WRITE_PHRASES)
+        and _has_phrase(readme_lower, _NO_POWER_LOSS_PHRASES)
     )
     if not readme_safe:
         blockers.append("README advertises an unsupported native write profile")
