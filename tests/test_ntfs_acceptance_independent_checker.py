@@ -142,9 +142,7 @@ def test_concurrent_source_modification_is_refused_and_source_preserved(
 
 
 @needs_ntfs
-def test_default_writer_is_fail_closed_and_refuses_dirty_image(
-    tmp_path, monkeypatch
-):
+def test_default_writer_is_fail_closed_and_refuses_dirty_image(tmp_path, monkeypatch):
     """C1: ``NtfsNativeWriter()`` with no arguments refuses by default.
 
     The default profile must be ``recover='refuse'`` with the enable flag
@@ -176,9 +174,7 @@ def test_recover_copy_quarantines_dirty_image_and_preserves_source(
     fixture = make_crash_fixture(tmp_path)
     before = _sha256(fixture.image)
     with pytest.raises(NtfsReplayQuarantined) as excinfo:
-        NtfsNativeWriter(recover="copy").write_file(
-            str(fixture.image), "/target", b"x"
-        )
+        NtfsNativeWriter(recover="copy").write_file(str(fixture.image), "/target", b"x")
     quarantine = excinfo.value.quarantine
     assert Path(quarantine.copy).is_file()
     assert _sha256(Path(quarantine.copy)) == before
