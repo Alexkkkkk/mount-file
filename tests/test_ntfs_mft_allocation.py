@@ -12,7 +12,9 @@ from mountfile.ntfs_mft_allocation import (
 )
 
 
-def _raw_record(sequence: int, in_use: bool = True, usa_mismatch: bool = False) -> bytes:
+def _raw_record(
+    sequence: int, in_use: bool = True, usa_mismatch: bool = False
+) -> bytes:
     """Build one minimal valid 512-byte FILE record for planner tests."""
     flags = 0x0001 if in_use else 0x0000
     buf = bytearray(512)
