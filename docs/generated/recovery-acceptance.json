@@ -999,8 +999,6 @@
     },
     {
       "blocking_cells": [
-        "rollback",
-        "process_kill",
         "power_loss"
       ],
       "cells": [
@@ -1028,16 +1026,16 @@
         {
           "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
-          "source": "not_proven",
+          "source": "tested_on_failure",
           "state": "concurrent-change",
-          "status": "not_proven"
+          "status": "pass"
         },
         {
           "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
-          "source": "not_proven",
+          "source": "tested_staged_writer_boundaries",
           "state": "process-killed",
-          "status": "not_proven"
+          "status": "pass"
         },
         {
           "checker": "ntfscat + $LogFile gate",
@@ -1186,9 +1184,9 @@
       "recovery": {
         "journal_replay": "tested_native_synthetic_crash_fixture",
         "power_loss": "unsupported",
-        "process_kill": "not_proven",
+        "process_kill": "tested_staged_writer_boundaries",
         "quarantine": "tested_on_recovery_failure",
-        "rollback": "not_proven"
+        "rollback": "tested_on_failure"
       },
       "strategy": "staged-native-with-logfile-replay",
       "verdict": "blocked"

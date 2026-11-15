@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass
+from mountfile.native_write import _fault
 
 from mountfile.ntfs_logfile import (
     ATTR_DATA,
@@ -1263,14 +1264,17 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             raise
         # A never-written $LogFile carries no restart page.  The only replay
         # work is the dirty-bit/$MFTMirr repair that a mount would perform.
+        _fault("mutation:start")
         before, after, mirror = _repair_volume_markers(
             image_path, profile, offset
         )
+        _fault("mutation:flush")
         verified_profile = probe_ntfs_metadata(
             image_path, offset=offset, volume_size=volume_size
         )
         if not verified_profile.mirror_matches_mft:
             raise NtfsReplayError("$MFT and $MFTMirr still differ after repair")
+        _fault("mutation:done")
         return NtfsReplayResult(
             changed=before != after or mirror,
             redo_applied=0,
@@ -1285,12 +1289,15 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             notes=("$LogFile has no restart page; repaired $Volume/$MFTMirr only",),
         )
     if not analysis.dirty:
+        _fault("mutation:start")
         before, after, mirror = _repair_volume_markers(image_path, profile, offset)
+        _fault("mutation:flush")
         verified_profile = probe_ntfs_metadata(
             image_path, offset=offset, volume_size=volume_size
         )
         if not verified_profile.mirror_matches_mft:
             raise NtfsReplayError("$MFT and $MFTMirr still differ after repair")
+        _fault("mutation:done")
         return NtfsReplayResult(
             changed=before != after or mirror,
             redo_applied=0,
@@ -1321,6 +1328,7 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
     undo_applied = 0
     records_written = 0
     stream_writes = 0
+    _fault("mutation:start")
     with open(image_path, "r+b") as handle:
         mft = _Mft(handle, profile.boot, mft_data, base_offset=offset)
         for record in plan.redo:
@@ -1363,6 +1371,7 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
         )
         handle.flush()
         os.fsync(handle.fileno())
+    _fault("mutation:flush")
     verify_stream, verify_cluster, _verify_logfile = read_logfile_stream(
         image_path, offset=offset
     )
@@ -1376,6 +1385,7 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
     )
     if not verified_profile.mirror_matches_mft:
         raise NtfsReplayError("$MFT and $MFTMirr still differ after replay")
+    _fault("mutation:done")
     return NtfsReplayResult(
         changed=True,
         redo_applied=redo_applied,

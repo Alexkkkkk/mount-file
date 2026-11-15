@@ -60,8 +60,8 @@ _EXPERIMENTAL_PROFILES = (
         "filesystem": "NTFS",
         "write_strategy": "staged-native-with-logfile-replay",
         "recovery": {
-            "rollback": "not_proven",
-            "process_kill": "not_proven",
+            "rollback": "tested_on_failure",
+            "process_kill": "tested_staged_writer_boundaries",
             "power_loss": "unsupported",
             "quarantine": "tested_on_recovery_failure",
             # The bounded executor replays resident/nonresident updates,
