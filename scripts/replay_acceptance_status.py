@@ -116,7 +116,9 @@ def verify(manifest: Dict[str, Any], root: Path) -> List[str]:
             problems.append("%s: нет доказательства %s" % (ident, entry))
 
         if status in NEEDS_EVIDENCE and not evidence:
-            problems.append("%s: статус %s требует хотя бы одного файла" % (ident, status))
+            problems.append(
+                "%s: статус %s требует хотя бы одного файла" % (ident, status)
+            )
         if status in FORBIDS_EVIDENCE and evidence:
             problems.append(
                 "%s: статус %s не может ссылаться на доказательства (%s)"
@@ -186,7 +188,11 @@ def render_markdown(manifest: Dict[str, Any]) -> str:
             evidence = item.get("evidence") or []
             shown = ", ".join("`%s`" % entry for entry in evidence) or "—"
             note = (item.get("note") or "").strip()
-            cell = "%s %s" % (STATUS_GLYPH[item["status"]], note) if note else STATUS_GLYPH[item["status"]]
+            cell = (
+                "%s %s" % (STATUS_GLYPH[item["status"]], note)
+                if note
+                else STATUS_GLYPH[item["status"]]
+            )
             lines.append(
                 "| %s | %s | %s | %s |" % (item["id"], item["title"], cell, shown)
             )

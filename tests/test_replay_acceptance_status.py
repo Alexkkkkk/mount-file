@@ -116,7 +116,13 @@ def test_load_manifest_rejects_unknown_status(tmp_path):
             {
                 "schema": 1,
                 "items": [
-                    {"id": "X3", "block": "A", "title": "t", "status": "done", "evidence": []}
+                    {
+                        "id": "X3",
+                        "block": "A",
+                        "title": "t",
+                        "status": "done",
+                        "evidence": [],
+                    }
                 ],
             }
         ),
