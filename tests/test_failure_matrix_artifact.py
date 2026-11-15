@@ -5,11 +5,7 @@ import json
 
 import pytest
 
-from scripts.failure_matrix_artifact import (
-    SCHEMA,
-    build_report,
-    validate_report,
-)
+from scripts.failure_matrix_artifact import SCHEMA, build_report, validate_report
 
 
 def test_report_types_every_cell_without_skips(tmp_path):
