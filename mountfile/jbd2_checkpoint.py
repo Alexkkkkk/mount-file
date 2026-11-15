@@ -23,7 +23,23 @@ from .jbd2_writer import (
     JBD2JournalState,
     JBD2WriteProfileError,
     decode_classic_jbd2_transaction,
+    decode_jbd2_transaction,
+    parse_jbd2_superblock,
     parse_classic_jbd2_superblock,
+)
+from .ext4_jbd2_csum import (
+    JBD2_FEATURE_INCOMPAT_CSUM_V2,
+    JBD2_FEATURE_INCOMPAT_CSUM_V3,
+    JBD2ChecksumError,
+    commit_checksum,
+    descriptor_checksum,
+    journal_superblock_checksum,
+    parse_tag,
+    tag_bytes_for_features,
+    tag_checksum,
+    uuid_seed,
+    verify_commit_checksum,
+    verify_descriptor_checksum,
 )
 
 
@@ -157,6 +173,183 @@ def scan_classic_jbd2_transactions(
     return tuple(transactions)
 
 
+def scan_jbd2_transactions(
+    journal: Sequence[bytes],
+    state: JBD2JournalState,
+    *,
+    max_transactions: int = 1 << 16,
+) -> tuple[tuple[bytes, ...], ...]:
+    """Dispatch the ring scanner by the validated journal feature profile."""
+    if state.checksummed:
+        return scan_checksummed_jbd2_transactions(
+            journal, state, max_transactions=max_transactions
+        )
+    return scan_classic_jbd2_transactions(
+        journal, state, max_transactions=max_transactions
+    )
+
+
+def scan_checksummed_jbd2_transactions(
+    journal: Sequence[bytes],
+    state: JBD2JournalState,
+    *,
+    max_transactions: int = 1 << 16,
+) -> tuple[tuple[bytes, ...], ...]:
+    """Extract complete v2/v3 transactions after per-block checksum validation.
+
+    The scanner mirrors the kernel recovery pass: a descriptor tail checksum is
+    verified before its tags are trusted, every data tag hashes the sequence
+    and the complete journal copy of the block, revoke tails and the final
+    commit block are verified, and a torn or mismatching control block refuses
+    the whole scan instead of returning a partial transaction set.
+    """
+    if not isinstance(state, JBD2JournalState):
+        raise JBD2WriteProfileError("JBD2 scanner state has the wrong type")
+    if not state.checksummed:
+        raise JBD2WriteProfileError("JBD2 scanner state is not checksummed")
+    if not isinstance(journal, Sequence) or isinstance(journal, bytes | str):
+        raise JBD2WriteProfileError("JBD2 journal must be a sequence of blocks")
+    if len(journal) != state.max_length:
+        raise JBD2WriteProfileError("JBD2 journal ring length disagrees with state")
+    if not isinstance(max_transactions, int) or isinstance(max_transactions, bool):
+        raise JBD2WriteProfileError("JBD2 scanner transaction limit is invalid")
+    if max_transactions <= 0:
+        raise JBD2WriteProfileError("JBD2 scanner transaction limit is invalid")
+    if state.start == 0:
+        return ()
+    block_size = state.block_size
+    if any(
+        not isinstance(block, bytes) or len(block) != block_size for block in journal
+    ):
+        raise JBD2WriteProfileError("JBD2 journal contains a partial block")
+    try:
+        seed = uuid_seed(state.uuid)
+    except JBD2ChecksumError as exc:
+        raise JBD2WriteProfileError(f"JBD2 UUID seed is invalid: {exc}") from exc
+    tag_size = tag_bytes_for_features(state.feature_incompat)
+    width = 4 if state.feature_incompat & JBD2_FEATURE_INCOMPAT_CSUM_V3 else 2
+
+    def at(position: int) -> bytes:
+        if not state.first <= position < state.max_length:
+            raise JBD2WriteProfileError("JBD2 scanner position escaped the ring")
+        return journal[position]
+
+    def advance(position: int) -> int:
+        return state.first if position + 1 >= state.max_length else position + 1
+
+    position = state.start
+    transactions: list[tuple[bytes, ...]] = []
+    visited: set[int] = set()
+    while position not in visited and len(transactions) < max_transactions:
+        visited.add(position)
+        descriptor = at(position)
+        if not any(descriptor):
+            break
+        magic, record_type, sequence = struct.unpack_from(">III", descriptor, 0)
+        if magic != _JBD2_MAGIC or record_type != 1:
+            raise JBD2WriteProfileError("JBD2 scanner expected a descriptor")
+        if sequence != state.sequence and not transactions:
+            raise JBD2WriteProfileError("JBD2 descriptor sequence disagrees with state")
+        try:
+            if not verify_descriptor_checksum(descriptor, seed):
+                raise JBD2WriteProfileError("JBD2 descriptor checksum does not match")
+        except JBD2ChecksumError as exc:
+            raise JBD2WriteProfileError(
+                f"JBD2 descriptor checksum is malformed: {exc}"
+            ) from exc
+        cursor = 12
+        tags: list[tuple[int, int, int]] = []
+        first_tag = True
+        while True:
+            if cursor + tag_size > block_size - 4:
+                raise JBD2WriteProfileError("JBD2 descriptor tags are truncated")
+            try:
+                target, flags, stored, cursor = parse_tag(descriptor, cursor, tag_size)
+            except JBD2ChecksumError as exc:
+                raise JBD2WriteProfileError(str(exc)) from exc
+            if first_tag:
+                if flags & 0x00000002:
+                    raise JBD2WriteProfileError("JBD2 first tag lacks its journal UUID")
+                if cursor + 16 > block_size - 4:
+                    raise JBD2WriteProfileError("JBD2 descriptor UUID is truncated")
+                if descriptor[cursor : cursor + 16] != state.uuid:
+                    raise JBD2WriteProfileError(
+                        "JBD2 descriptor UUID does not match the journal"
+                    )
+                cursor += 16
+                first_tag = False
+            elif not flags & 0x00000002:
+                raise JBD2WriteProfileError("JBD2 later tag lacks SAME_UUID")
+            tags.append((target, flags, stored))
+            if flags & 0x00000008:
+                break
+            if len(tags) > (block_size - 12) // tag_size:
+                raise JBD2WriteProfileError("JBD2 descriptor has too many tags")
+        records = [descriptor]
+        position = advance(position)
+        for target, flags, stored in tags:
+            data = at(position)
+            try:
+                expected = tag_checksum(sequence, data, seed)
+            except JBD2ChecksumError as exc:
+                raise JBD2WriteProfileError(str(exc)) from exc
+            if (expected & (0xFFFF if width == 2 else 0xFFFFFFFF)) != stored:
+                raise JBD2WriteProfileError("JBD2 data tag checksum does not match")
+            if flags & 0x00000001 and data[:4] != b"\x00" * 4:
+                raise JBD2WriteProfileError("JBD2 escaped data lacks zero prefix")
+            records.append(data)
+            position = advance(position)
+        while True:
+            control = at(position)
+            if not any(control):
+                raise JBD2WriteProfileError(
+                    "JBD2 transaction is missing a commit record"
+                )
+            control_magic, control_type, control_sequence = struct.unpack_from(
+                ">III", control, 0
+            )
+            if control_magic != _JBD2_MAGIC or control_sequence != sequence:
+                raise JBD2WriteProfileError("JBD2 control record sequence is invalid")
+            if control_type == 5:
+                try:
+                    if not verify_descriptor_checksum(control, seed):
+                        raise JBD2WriteProfileError(
+                            "JBD2 revoke checksum does not match"
+                        )
+                except JBD2ChecksumError as exc:
+                    raise JBD2WriteProfileError(
+                        f"JBD2 revoke checksum is malformed: {exc}"
+                    ) from exc
+                byte_count = struct.unpack_from(">I", control, 12)[0]
+                if byte_count < 16 or byte_count > block_size or byte_count % 4:
+                    raise JBD2WriteProfileError("JBD2 revoke record length is invalid")
+                records.append(control)
+                position = advance(position)
+                continue
+            if control_type != 2:
+                raise JBD2WriteProfileError(
+                    "JBD2 transaction is missing a commit record"
+                )
+            try:
+                if not verify_commit_checksum(control, seed):
+                    raise JBD2WriteProfileError(
+                        "JBD2 commit checksum does not match"
+                    )
+            except JBD2ChecksumError as exc:
+                raise JBD2WriteProfileError(
+                    f"JBD2 commit checksum is malformed: {exc}"
+                ) from exc
+            records.append(control)
+            transactions.append(tuple(records))
+            position = advance(position)
+            break
+    if not transactions:
+        raise JBD2WriteProfileError("JBD2 scanner found no complete transaction")
+    if len(transactions) >= max_transactions and position not in visited:
+        raise JBD2WriteProfileError("JBD2 scanner transaction limit exceeded")
+    return tuple(transactions)
+
+
 def read_classic_jbd2_ring(
     stream: BinaryIO,
     physical_blocks: Sequence[int],
@@ -221,10 +414,46 @@ def coordinate_classic_jbd2_replay_from_ring(
     requires the caller to provide a validated superblock state and physical
     mapping; no ext4 inode or extent assumptions are made here.
     """
+    if state.checksummed:
+        raise JBD2WriteProfileError(
+            "classic JBD2 coordinator received a checksummed journal state"
+        )
+    return coordinate_jbd2_replay_from_ring(
+        stream,
+        state=state,
+        physical_blocks=physical_blocks,
+        filesystem_uuid=filesystem_uuid,
+        filesystem_blocks=filesystem_blocks,
+        journal_physical_blocks=journal_physical_blocks,
+        journal_superblock_physical_block=journal_superblock_physical_block,
+        sync=sync,
+        fault_injector=fault_injector,
+    )
+
+
+def coordinate_jbd2_replay_from_ring(
+    stream: BinaryIO,
+    *,
+    state: JBD2JournalState,
+    physical_blocks: Sequence[int],
+    filesystem_uuid: bytes,
+    filesystem_blocks: int,
+    journal_physical_blocks: Sequence[int],
+    journal_superblock_physical_block: int,
+    sync: Callable[[], None] | None = None,
+    fault_injector: Callable[[JBD2CheckpointWrite], None] | None = None,
+) -> JBD2CheckpointPlan:
+    """Scan and checkpoint a classic or checksummed JBD2 ring.
+
+    The ring is read through the caller's physical map, the scanner selected by
+    ``state`` validates every control block, and the decoder is chosen from the
+    same feature word.  Checksummed profiles therefore cannot fall back to the
+    classic decoder, and vice versa.
+    """
     ring = read_classic_jbd2_ring(stream, physical_blocks, block_size=state.block_size)
-    records = scan_classic_jbd2_transactions(ring, state)
+    records = scan_jbd2_transactions(ring, state)
     superblock = ring[0]
-    return coordinate_classic_jbd2_replay(
+    return coordinate_jbd2_replay(
         stream,
         superblock=superblock,
         records=records,
@@ -277,6 +506,13 @@ def reduce_classic_jbd2_transactions(
     return dict(sorted(reduced.items()))
 
 
+def reduce_jbd2_transactions(
+    transactions: Sequence[JBD2DecodedTransaction],
+) -> dict[int, bytes]:
+    """Profile-independent revoke/write reduction over decoded transactions."""
+    return reduce_classic_jbd2_transactions(transactions)
+
+
 def coordinate_classic_jbd2_replay(
     stream: BinaryIO,
     *,
@@ -302,20 +538,76 @@ def coordinate_classic_jbd2_replay(
     It never publishes a filesystem image and refuses an empty or malformed
     transaction set.
     """
+    raw = bytes(superblock)
+    if len(raw) >= 48:
+        _compat, incompat, _ro = struct.unpack_from(">III", raw, 36)
+        if incompat & (JBD2_FEATURE_INCOMPAT_CSUM_V2 | JBD2_FEATURE_INCOMPAT_CSUM_V3):
+            raise JBD2WriteProfileError(
+                "classic JBD2 coordinator received a checksummed superblock"
+            )
+    return coordinate_jbd2_replay(
+        stream,
+        superblock=superblock,
+        records=records,
+        filesystem_block_size=filesystem_block_size,
+        filesystem_uuid=filesystem_uuid,
+        journal_blocks=journal_blocks,
+        filesystem_blocks=filesystem_blocks,
+        journal_physical_blocks=journal_physical_blocks,
+        journal_superblock_physical_block=journal_superblock_physical_block,
+        journal_features=journal_features,
+        sync=sync,
+        fault_injector=fault_injector,
+    )
+
+
+def coordinate_jbd2_replay(
+    stream: BinaryIO,
+    *,
+    superblock: bytes | bytearray | memoryview,
+    records: Sequence[Sequence[bytes]],
+    filesystem_block_size: int,
+    filesystem_uuid: bytes,
+    journal_blocks: int,
+    filesystem_blocks: int,
+    journal_physical_blocks: Sequence[int],
+    journal_superblock_physical_block: int,
+    journal_features: tuple[int, int, int] | None = None,
+    sync: Callable[[], None] | None = None,
+    fault_injector: Callable[[JBD2CheckpointWrite], None] | None = None,
+) -> JBD2CheckpointPlan:
+    """Run the bounded replay/checkpoint pipeline for either JBD2 profile.
+
+    ``journal_features`` defaults to the feature words read from the supplied
+    superblock.  The decoder is selected by those words: checksummed v2/v3
+    transactions are verified block by block, while the classic profile keeps
+    its 32-bit no-checksum rules.
+    """
     if not isinstance(records, Sequence) or isinstance(records, bytes | str):
         raise JBD2WriteProfileError("JBD2 replay records must be a sequence")
+    raw = bytes(superblock)
+    if len(raw) < 48:
+        raise JBD2WriteProfileError("short JBD2 journal superblock")
+    parsed_features = struct.unpack_from(">III", raw, 36)
+    if journal_features is None:
+        journal_features = parsed_features
+    if journal_features != parsed_features:
+        raise JBD2WriteProfileError(
+            "JBD2 journal features disagree with the supplied superblock"
+        )
     decoded = tuple(
-        decode_classic_jbd2_transaction(
+        decode_jbd2_transaction(
             transaction,
             block_size=filesystem_block_size,
             filesystem_blocks=filesystem_blocks,
             journal_blocks=journal_physical_blocks,
             journal_features=journal_features,
+            filesystem_uuid=filesystem_uuid,
         )
         for transaction in records
     )
-    data_writes = reduce_classic_jbd2_transactions(decoded)
-    plan = plan_classic_jbd2_checkpoint(
+    data_writes = reduce_jbd2_transactions(decoded)
+    plan = plan_jbd2_checkpoint(
         superblock=superblock,
         filesystem_block_size=filesystem_block_size,
         filesystem_uuid=filesystem_uuid,
@@ -387,17 +679,29 @@ def plan_classic_jbd2_checkpoint(
     if journal_superblock_physical_block not in journal_owned:
         raise JBD2WriteProfileError("journal superblock is outside journal blocks")
 
-    state = parse_classic_jbd2_superblock(
-        superblock,
-        filesystem_block_size=filesystem_block_size,
-        filesystem_uuid=filesystem_uuid,
-        journal_blocks=journal_blocks,
-    )
-    if state.empty or state.start == 0:
-        raise JBD2WriteProfileError("cannot checkpoint an already-clean JBD2 journal")
     raw = bytes(superblock)
     if len(raw) != filesystem_block_size:
         raise JBD2WriteProfileError("JBD2 superblock must be exactly one block")
+    feature_incompat = struct.unpack_from(">I", raw, 40)[0]
+    if feature_incompat & (
+        JBD2_FEATURE_INCOMPAT_CSUM_V2 | JBD2_FEATURE_INCOMPAT_CSUM_V3
+    ):
+        state = parse_jbd2_superblock(
+            raw,
+            filesystem_block_size=filesystem_block_size,
+            filesystem_uuid=filesystem_uuid,
+            journal_blocks=journal_blocks,
+            allow_checksums=True,
+        )
+    else:
+        state = parse_classic_jbd2_superblock(
+            raw,
+            filesystem_block_size=filesystem_block_size,
+            filesystem_uuid=filesystem_uuid,
+            journal_blocks=journal_blocks,
+        )
+    if state.empty or state.start == 0:
+        raise JBD2WriteProfileError("cannot checkpoint an already-clean JBD2 journal")
     if struct.unpack_from(">I", raw, 0)[0] != _JBD2_MAGIC:
         raise JBD2WriteProfileError("invalid JBD2 superblock magic")
 
@@ -419,6 +723,13 @@ def plan_classic_jbd2_checkpoint(
     struct.pack_into(">I", clean, 8, 0)
     struct.pack_into(">I", clean, 24, 0)
     struct.pack_into(">I", clean, 28, 0)
+    if state.checksummed:
+        # A v2/v3 journal superblock carries its own CRC32C over [0, 0xFC).
+        # Zeroing the head without refreshing it makes e2fsck refuse the
+        # journal, so the clean marker is recomputed after every field change.
+        struct.pack_into(
+            ">I", clean, 0xFC, journal_superblock_checksum(bytes(clean))
+        )
     writes.append(
         JBD2CheckpointWrite(
             journal_superblock_physical_block,
@@ -432,6 +743,16 @@ def plan_classic_jbd2_checkpoint(
         state_before=state,
         flush_boundaries=(len(writes) - 1,),
     )
+
+
+def plan_jbd2_checkpoint(**kwargs) -> JBD2CheckpointPlan:
+    """Profile-dispatching alias of :func:`plan_classic_jbd2_checkpoint`.
+
+    The classic name is kept because existing callers and tests use it; the
+    implementation now detects a validated checksummed superblock and refreshes
+    its trailing checksum when it writes the clean marker.
+    """
+    return plan_classic_jbd2_checkpoint(**kwargs)
 
 
 def _write_full_block(

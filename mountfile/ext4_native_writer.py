@@ -40,8 +40,13 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from mountfile.jbd2_checkpoint import coordinate_classic_jbd2_replay_from_ring
-from mountfile.jbd2_writer import parse_classic_jbd2_superblock
+from mountfile.ext4_jbd2_csum import JBD2_FEATURE_INCOMPAT_CHECKSUMS
+from mountfile.ext_checksum import ext4_superblock_checksum
+from mountfile.jbd2_checkpoint import coordinate_jbd2_replay_from_ring
+from mountfile.jbd2_writer import (
+    parse_classic_jbd2_superblock,
+    parse_jbd2_superblock,
+)
 from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.native_write import (
     NativeWriteError,
@@ -73,10 +78,13 @@ EXT4_FEATURE_COMPAT_HAS_JOURNAL = 0x0004
 EXT4_FEATURE_INCOMPAT_RECOVER = 0x0004
 EXT4_FEATURE_INCOMPAT_JOURNAL_DEV = 0x0008
 EXT4_FEATURE_INCOMPAT_META_BG = 0x0010
-EXT4_FEATURE_INCOMPAT_CSUM_V2 = 0x0800
-EXT4_FEATURE_INCOMPAT_CSUM_V3 = 0x1000
+# 0x0800 is not an ext4 incompatibility feature; 0x1000 is DIRDATA.  Both are
+# outside the validated layout and stay rejected.  Journal checksum features
+# live in the JBD2 superblock, not here.
+EXT4_FEATURE_INCOMPAT_UNSUPPORTED = 0x1800
 EXT4_FEATURE_COMPAT_CSUM_SEED = 0x2000
 EXT4_FEATURE_INCOMPAT_CSUM_SEED = 0x2000
+EXT4_FEATURE_RO_COMPAT_METADATA_CSUM = 0x0400
 
 SUPPORTED_BLOCK_SIZES = frozenset((1024, 2048, 4096))
 
@@ -102,6 +110,8 @@ class Ext4JournalProbe:
     block_size: int = 0
     journal_start: int = 0
     journal_sequence: int = 0
+    journal_features: tuple[int, int, int] = (0, 0, 0)
+    checksummed: bool = False
 
     @property
     def clean(self) -> bool:
@@ -343,13 +353,15 @@ def resolve_journal_physical_blocks(
     return tuple(blocks[index] for index in range(len(blocks)))
 
 
-def native_classic_jbd2_recover(image_path: str, offset: int = 0) -> None:
-    """Replay a supported classic JBD2 journal on a disposable image copy.
+def _native_jbd2_recover(image_path: str, offset: int, *, allow_checksums: bool) -> None:
+    """Replay a validated JBD2 journal on a disposable image copy.
 
     The journal inode mapping comes from libext2fs, while the bounded scanner
     and checkpoint coordinator own all record validation and durable ordering.
-    Profiles with 64-bit filesystem block counts, checksums, external journals,
-    or malformed UUID/state are refused before any write is attempted.
+    Profiles with 64-bit filesystem block counts, external journals, or a
+    malformed UUID/state are refused before any write is attempted.  When
+    ``allow_checksums`` is false a checksummed journal superblock is refused
+    instead of being decoded by the classic profile.
     """
     profile = require_supported_profile(image_path, offset)
     if offset % profile["block_size"]:
@@ -375,13 +387,28 @@ def native_classic_jbd2_recover(image_path: str, offset: int = 0) -> None:
             if len(block) != profile["block_size"]:
                 raise Ext4ProfileUnsupported("journal physical block is truncated")
             ring.append(block)
-        state = parse_classic_jbd2_superblock(
-            ring[0],
-            filesystem_block_size=profile["block_size"],
-            filesystem_uuid=filesystem_uuid,
-            journal_blocks=len(physical_blocks),
-        )
-        coordinate_classic_jbd2_replay_from_ring(
+        feature_incompat = struct.unpack_from(">I", ring[0], 40)[0]
+        checksummed = bool(feature_incompat & JBD2_FEATURE_INCOMPAT_CHECKSUMS)
+        if checksummed and not allow_checksums:
+            raise Ext4ProfileUnsupported(
+                "JBD2 journal checksum v2/v3 is outside the classic replay profile"
+            )
+        if checksummed:
+            state = parse_jbd2_superblock(
+                ring[0],
+                filesystem_block_size=profile["block_size"],
+                filesystem_uuid=filesystem_uuid,
+                journal_blocks=len(physical_blocks),
+                allow_checksums=True,
+            )
+        else:
+            state = parse_classic_jbd2_superblock(
+                ring[0],
+                filesystem_block_size=profile["block_size"],
+                filesystem_uuid=filesystem_uuid,
+                journal_blocks=len(physical_blocks),
+            )
+        coordinate_jbd2_replay_from_ring(
             stream,
             state=state,
             physical_blocks=tuple(
@@ -399,6 +426,23 @@ def native_classic_jbd2_recover(image_path: str, offset: int = 0) -> None:
             ),
             sync=lambda: os.fsync(stream.fileno()),
         )
+
+
+def native_jbd2_recover(image_path: str, offset: int = 0) -> None:
+    """Replay a classic or checksummed v2/v3 JBD2 journal on a disposable copy.
+
+    This is the writer-facing coordinator: the journal inode is resolved
+    through libext2fs, the superblock selects the classic or checksummed
+    scanner/decoder pair, and every data write precedes the durable clean
+    marker.  The caller still owns the disposable copy and the independent
+    ``e2fsck -fn`` verification.
+    """
+    _native_jbd2_recover(image_path, offset, allow_checksums=True)
+
+
+def native_classic_jbd2_recover(image_path: str, offset: int = 0) -> None:
+    """Replay a classic (no-checksum) JBD2 journal on a disposable copy."""
+    _native_jbd2_recover(image_path, offset, allow_checksums=False)
 
 
 def _read_superblock(image_path: str, offset: int) -> bytes:
@@ -440,9 +484,10 @@ def require_supported_profile(image_path: str, offset: int = 0) -> dict:
         raise Ext4ProfileUnsupported("external journal device is not supported")
     if incompat & EXT4_FEATURE_INCOMPAT_META_BG:
         raise Ext4ProfileUnsupported("meta_bg layout is not supported")
-    if incompat & (EXT4_FEATURE_INCOMPAT_CSUM_V2 | EXT4_FEATURE_INCOMPAT_CSUM_V3):
+    if incompat & EXT4_FEATURE_INCOMPAT_UNSUPPORTED:
         raise Ext4ProfileUnsupported(
-            "journal/metadata checksum features are outside the validated profile"
+            "dirdata or unknown ext4 incompatibility features are outside the "
+            "validated profile"
         )
     if incompat & EXT4_FEATURE_INCOMPAT_CSUM_SEED:
         raise Ext4ProfileUnsupported("checksum seed is not supported")
@@ -457,7 +502,7 @@ def require_supported_profile(image_path: str, offset: int = 0) -> dict:
     return {"block_size": block_size, "journal_inode": journal_inode}
 
 
-def _read_journal_head(image_path: str, offset: int) -> bytes:
+def _read_journal_head(image_path: str, offset: int, size: int = 64) -> bytes:
     """Read the first bytes of the journal through the journal inode.
 
     The inode number comes from the superblock (``s_journal_inum``), so no path
@@ -475,11 +520,11 @@ def _read_journal_head(image_path: str, offset: int) -> bytes:
             f"ext2fs_file_open2(journal inode {journal_inode})",
         )
         try:
-            header = ctypes.create_string_buffer(64)
+            header = ctypes.create_string_buffer(size)
             read = ctypes.c_uint(0)
             _check(
                 lib,
-                lib.lib.ext2fs_file_read(handle, header, 64, ctypes.byref(read)),
+                lib.lib.ext2fs_file_read(handle, header, size, ctypes.byref(read)),
                 "ext2fs_file_read(journal)",
             )
         finally:
@@ -501,7 +546,7 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
 
     try:
         profile = require_supported_profile(image_path, offset)
-        raw = _read_journal_head(image_path, offset)
+        raw = _read_journal_head(image_path, offset, 4096)
     except (NativeWriteError, OSError) as exc:
         # A host without libext2fs still gets the conservative superblock answer.
         return Ext4JournalProbe(
@@ -529,6 +574,9 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
     start = struct.unpack_from(">I", raw, 0x1C)[0]
     max_length = struct.unpack_from(">I", raw, 0x10)[0]
     first = struct.unpack_from(">I", raw, 0x14)[0]
+    feature_compat, feature_incompat, feature_ro = struct.unpack_from(">III", raw, 36)
+    features = (feature_compat, feature_incompat, feature_ro)
+    checksummed = bool(feature_incompat & JBD2_FEATURE_INCOMPAT_CHECKSUMS)
     # ``journal_superblock_t`` puts ``s_sequence`` at 0x18 and ``s_start`` at
     # 0x1C (see :func:`jbd2_checkpoint.plan_classic_jbd2_checkpoint`, which
     # clears 8/24/28, and the ``test_ext3_reader`` fixtures, which pack
@@ -554,6 +602,41 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
             block_size,
             start,
             sequence,
+            features,
+            checksummed,
+        )
+    # The checksummed profile is validated in full here: a bad journal
+    # superblock checksum, an unknown feature word or a mixed v2/v3 tuple is an
+    # ERROR, never a clean gate.
+    try:
+        filesystem_superblock = _read_superblock(image_path, offset)
+        filesystem_uuid = filesystem_superblock[0x68:0x78]
+        if len(raw) < block_size:
+            raise ValueError("journal superblock is shorter than one block")
+        if checksummed:
+            parse_jbd2_superblock(
+                raw[:block_size],
+                filesystem_block_size=block_size,
+                filesystem_uuid=filesystem_uuid,
+                journal_blocks=max_length,
+                allow_checksums=True,
+            )
+        else:
+            parse_classic_jbd2_superblock(
+                raw[:block_size],
+                filesystem_block_size=block_size,
+                filesystem_uuid=filesystem_uuid,
+                journal_blocks=max_length,
+            )
+    except (ValueError, OSError) as exc:
+        return Ext4JournalProbe(
+            JournalState.ERROR,
+            f"JBD2 journal superblock is outside the parsed profile: {exc}",
+            block_size,
+            start,
+            sequence,
+            features,
+            checksummed,
         )
     if base.state is JournalState.NEEDS_REPLAY:
         return Ext4JournalProbe(
@@ -563,6 +646,8 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
             block_size,
             start,
             sequence,
+            features,
+            checksummed,
         )
     if start:
         # The recovery bit was cleared without the journal being checkpointed:
@@ -576,6 +661,8 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
             block_size,
             start,
             sequence,
+            features,
+            checksummed,
         )
     return Ext4JournalProbe(
         JournalState.CLEAN,
@@ -583,6 +670,8 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
         block_size,
         start,
         sequence,
+        features,
+        checksummed,
     )
 
 
@@ -612,16 +701,31 @@ def _clear_recover_flag(image_path: str, offset: int) -> None:
     PR #504 bug that discarded committed transactions, so this helper is private
     and is called exclusively from :func:`recover_journal_on_copy` after the
     coordinator returned successfully and before the independent checker runs.
-    It is only reachable for the checksum-free classic profile enforced by
-    :func:`require_supported_profile`, so no superblock checksum needs updating.
+    Metadata-checksum filesystems store ``s_checksum`` at 0x3FC over bytes
+    ``[0, 0x3FC)``.  Clearing ``RECOVER`` without refreshing that word makes
+    e2fsck reject the primary superblock, so the checksum is recomputed in the
+    same write for the RO_COMPAT ``metadata_csum`` profile.
     """
 
     superblock_offset = offset + 1024
     with open(image_path, "r+b") as stream:
-        stream.seek(superblock_offset + 0x60)
-        incompat = struct.unpack("<I", stream.read(4))[0]
-        stream.seek(superblock_offset + 0x60)
-        stream.write(struct.pack("<I", incompat & ~EXT4_FEATURE_INCOMPAT_RECOVER))
+        stream.seek(superblock_offset)
+        superblock = bytearray(stream.read(1024))
+        if len(superblock) != 1024:
+            raise Ext4ProfileUnsupported(
+                "short ext4 superblock while clearing RECOVER"
+            )
+        incompat = struct.unpack_from("<I", superblock, 0x60)[0]
+        ro_compat = struct.unpack_from("<I", superblock, 0x64)[0]
+        struct.pack_into(
+            "<I", superblock, 0x60, incompat & ~EXT4_FEATURE_INCOMPAT_RECOVER
+        )
+        if ro_compat & EXT4_FEATURE_RO_COMPAT_METADATA_CSUM:
+            struct.pack_into(
+                "<I", superblock, 0x3FC, ext4_superblock_checksum(bytes(superblock))
+            )
+        stream.seek(superblock_offset)
+        stream.write(superblock)
         stream.flush()
         os.fsync(stream.fileno())
 
@@ -679,8 +783,9 @@ def recover_journal_on_copy(
     """Replay JBD2 on a disposable copy and independently verify the result.
 
     ``native_coordinator`` is the integration seam for a filesystem-aware
-    scanner plus :func:`jbd2_checkpoint.coordinate_classic_jbd2_replay`. It
-    must decode the complete journal before mutating this copy. When absent,
+    scanner plus :func:`jbd2_checkpoint.coordinate_jbd2_replay_from_ring`. It
+    must decode the complete journal before mutating this copy and selects the
+    classic or checksummed decoder from the validated superblock. When absent,
     the established ``e2fsck -fy`` recovery path remains the conservative
     fallback; either path is always followed by the independent checker.
     """
@@ -899,7 +1004,7 @@ class Ext4NativeWriter:
                         self.native_coordinator
                         if self.native_coordinator is not None
                         else (
-                            native_classic_jbd2_recover
+                            native_jbd2_recover
                             if self.recover == "native"
                             else None
                         )
@@ -968,6 +1073,8 @@ def journal_gate_summary(image_path: str, offset: int = 0) -> dict:
         "block_size": probe.block_size,
         "journal_start": probe.journal_start,
         "journal_sequence": probe.journal_sequence,
+        "journal_features": list(probe.journal_features),
+        "journal_checksummed": probe.checksummed,
         "libext2fs": libext2fs_available(),
         "native_write_enabled": enabled,
         "post_operation_checker": "e2fsck -fn",
@@ -994,6 +1101,7 @@ __all__ = [
     "libext2fs_available",
     "normalize_internal_path",
     "native_classic_jbd2_recover",
+    "native_jbd2_recover",
     "probe_journal",
     "recover_journal_on_copy",
     "resolve_journal_physical_blocks",
