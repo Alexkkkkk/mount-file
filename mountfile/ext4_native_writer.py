@@ -36,10 +36,12 @@ import ctypes
 import ctypes.util
 import os
 import struct
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from mountfile.jbd2_checkpoint import coordinate_classic_jbd2_replay_from_ring
+from mountfile.jbd2_writer import parse_classic_jbd2_superblock
 from mountfile.journal_safety import Ext4JournalManager, JournalState
 from mountfile.native_write import (
     NativeWriteError,
@@ -157,6 +159,7 @@ class LibExt2fs:
             "ext2fs_file_close",
             "ext2fs_flush",
             "ext2fs_close",
+            "ext2fs_block_iterate3",
         )
         missing = [symbol for symbol in required if not hasattr(lib, symbol)]
         if missing:
@@ -183,6 +186,16 @@ class LibExt2fs:
             ctypes.POINTER(ctypes.c_uint),  # ext2_ino_t *inode
         ]
         lib.ext2fs_namei.restype = ctypes.c_int
+
+        lib.ext2fs_block_iterate3.argtypes = [
+            ctypes.c_void_p,  # ext2_filsys fs
+            ctypes.c_uint,  # ext2_ino_t ino
+            ctypes.c_int,  # flags
+            ctypes.c_void_p,  # block buffer
+            ctypes.c_void_p,  # callback
+            ctypes.c_void_p,  # private data
+        ]
+        lib.ext2fs_block_iterate3.restype = ctypes.c_int
 
         lib.ext2fs_file_open2.argtypes = [
             ctypes.c_void_p,  # ext2_filsys fs
@@ -270,6 +283,122 @@ def normalize_internal_path(path: str) -> str:
     if not isinstance(path, str):
         raise NativeWriteUnsafe("filesystem path is not a valid text path")
     return validate_internal_path(path.lstrip("/"))
+
+
+def resolve_journal_physical_blocks(
+    image_path: str,
+    *,
+    offset: int = 0,
+    journal_inode: int = EXT4_JOURNAL_INO,
+    library: LibExt2fs | None = None,
+) -> tuple[int, ...]:
+    """Resolve the data blocks of the internal journal inode through libext2fs.
+
+    ``ext2fs_block_iterate3`` is the filesystem-aware boundary needed by the
+    JBD2 ring bridge. Only data callbacks (non-negative logical block numbers)
+    are accepted; indirect metadata callbacks, duplicate logical positions,
+    holes and gaps are refused. The returned tuple is ordered by logical block
+    number and can be passed as the bridge's ``physical_blocks`` map. No image
+    bytes are modified.
+    """
+    if isinstance(journal_inode, bool) or not isinstance(journal_inode, int):
+        raise Ext4ProfileUnsupported("journal inode must be an integer")
+    if journal_inode <= 0:
+        raise Ext4ProfileUnsupported("journal inode is invalid")
+    lib = library or libext2fs()
+    blocks: dict[int, int] = {}
+    callback_type = ctypes.CFUNCTYPE(
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.c_longlong,
+        ctypes.c_uint64,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    )
+
+    @callback_type
+    def collect(_fs, block_ptr, logical, _ref_block, _ref_offset, _private):
+        if logical < 0:
+            return 0
+        if not block_ptr:
+            return 1
+        physical = int(block_ptr[0])
+        if physical <= 0 or logical in blocks:
+            return 1
+        blocks[int(logical)] = physical
+        return 0
+
+    require_supported_profile(image_path, offset)
+    with _open_fs(lib, image_path, offset, 0) as fs:
+        _check(
+            lib,
+            lib.lib.ext2fs_block_iterate3(fs, journal_inode, 0, None, collect, None),
+            f"ext2fs_block_iterate3(journal inode {journal_inode})",
+        )
+    if not blocks or min(blocks) != 0 or set(blocks) != set(range(len(blocks))):
+        raise Ext4ProfileUnsupported(
+            "journal inode data blocks are sparse, incomplete, or non-contiguous"
+        )
+    return tuple(blocks[index] for index in range(len(blocks)))
+
+
+def native_classic_jbd2_recover(image_path: str, offset: int = 0) -> None:
+    """Replay a supported classic JBD2 journal on a disposable image copy.
+
+    The journal inode mapping comes from libext2fs, while the bounded scanner
+    and checkpoint coordinator own all record validation and durable ordering.
+    Profiles with 64-bit filesystem block counts, checksums, external journals,
+    or malformed UUID/state are refused before any write is attempted.
+    """
+    profile = require_supported_profile(image_path, offset)
+    if offset % profile["block_size"]:
+        raise Ext4ProfileUnsupported("filesystem offset is not block aligned")
+    superblock = _read_superblock(image_path, offset)
+    blocks_lo = struct.unpack_from("<I", superblock, 0x04)[0]
+    blocks_hi = struct.unpack_from("<I", superblock, 0x150)[0]
+    if blocks_hi:
+        raise Ext4ProfileUnsupported(
+            "native classic JBD2 recovery does not support 64-bit filesystem blocks"
+        )
+    filesystem_uuid = superblock[0x68:0x78]
+    if len(filesystem_uuid) != 16 or not any(filesystem_uuid):
+        raise Ext4ProfileUnsupported("ext4 filesystem UUID is invalid")
+    physical_blocks = resolve_journal_physical_blocks(
+        image_path, offset=offset, journal_inode=profile["journal_inode"]
+    )
+    with open(image_path, "r+b") as stream:
+        ring = []
+        for physical in physical_blocks:
+            stream.seek(offset + physical * profile["block_size"])
+            block = stream.read(profile["block_size"])
+            if len(block) != profile["block_size"]:
+                raise Ext4ProfileUnsupported("journal physical block is truncated")
+            ring.append(block)
+        state = parse_classic_jbd2_superblock(
+            ring[0],
+            filesystem_block_size=profile["block_size"],
+            filesystem_uuid=filesystem_uuid,
+            journal_blocks=len(physical_blocks),
+        )
+        coordinate_classic_jbd2_replay_from_ring(
+            stream,
+            state=state,
+            physical_blocks=tuple(
+                offset // profile["block_size"] + physical
+                for physical in physical_blocks
+            ),
+            filesystem_uuid=filesystem_uuid,
+            filesystem_blocks=blocks_lo,
+            journal_physical_blocks=tuple(
+                offset // profile["block_size"] + physical
+                for physical in physical_blocks
+            ),
+            journal_superblock_physical_block=(
+                offset // profile["block_size"] + physical_blocks[0]
+            ),
+            sync=lambda: os.fsync(stream.fileno()),
+        )
 
 
 def _read_superblock(image_path: str, offset: int) -> bytes:
@@ -499,11 +628,20 @@ def verify_image_after_operation(
     }
 
 
-def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
-    """Replay JBD2 with ``e2fsck -fy`` on the disposable copy.
+def recover_journal_on_copy(
+    image_path: str,
+    offset: int,
+    runner=_run,
+    *,
+    native_coordinator: Callable[[str, int], None] | None = None,
+) -> bool:
+    """Replay JBD2 on a disposable copy and independently verify the result.
 
-    This is the only supported recovery path: real journal records are applied by
-    e2fsprogs itself.  Returns ``True`` when a replay actually ran.
+    ``native_coordinator`` is the integration seam for a filesystem-aware
+    scanner plus :func:`jbd2_checkpoint.coordinate_classic_jbd2_replay`. It
+    must decode the complete journal before mutating this copy. When absent,
+    the established ``e2fsck -fy`` recovery path remains the conservative
+    fallback; either path is always followed by the independent checker.
     """
 
     require_supported_profile(image_path, offset)
@@ -512,7 +650,15 @@ def recover_journal_on_copy(image_path: str, offset: int, runner=_run) -> bool:
         raise Ext4ProfileUnsupported(before.message)
     if before.clean:
         return False
-    runner(["e2fsck", "-fy", image_path], allowed={0, 1, 2, 3})
+    if native_coordinator is not None:
+        try:
+            native_coordinator(image_path, offset)
+        except Exception as exc:
+            raise Ext4ProfileUnsupported(
+                f"native JBD2 coordinator refused recovery: {exc}"
+            ) from exc
+    else:
+        runner(["e2fsck", "-fy", image_path], allowed={0, 1, 2, 3})
     # A replay that leaves the copy dirty, uncorrectable or structurally broken
     # (a torn commit record, a bad descriptor, an out-of-ring head) must never be
     # treated as recovery success: the checker is re-run with repair disabled.
@@ -639,6 +785,7 @@ def ext4_write_file_native(
     *,
     offset: int = 0,
     library: LibExt2fs | None = None,
+    native_coordinator: Callable[[str, int], None] | None = None,
 ) -> int:
     """Safely overwrite an existing file through copy, verify, and publication.
 
@@ -646,9 +793,9 @@ def ext4_write_file_native(
     :class:`Ext4NativeWriter`; direct in-place mutation is kept private.
     """
 
-    return Ext4NativeWriter(library=library).write_file(
-        image_path, internal_path, data, offset
-    )
+    return Ext4NativeWriter(
+        library=library, native_coordinator=native_coordinator
+    ).write_file(image_path, internal_path, data, offset)
 
 
 class Ext4NativeWriter:
@@ -660,12 +807,14 @@ class Ext4NativeWriter:
         require_flag: bool = True,
         recover: str = "copy",
         library: LibExt2fs | None = None,
+        native_coordinator: Callable[[str, int], None] | None = None,
     ) -> None:
-        if recover not in ("copy", "refuse"):
-            raise ValueError("recover must be 'copy' or 'refuse'")
+        if recover not in ("copy", "native", "refuse"):
+            raise ValueError("recover must be 'copy', 'native' or 'refuse'")
         self.require_flag = require_flag
         self.recover = recover
         self.library = library
+        self.native_coordinator = native_coordinator
         self.last_verification: dict | None = None
 
     def write_file(
@@ -694,7 +843,19 @@ class Ext4NativeWriter:
                     raise Ext4ProfileUnsupported(
                         "journal needs replay; refusing to write a dirty filesystem"
                     )
-                recover_journal_on_copy(temporary, 0)
+                recover_journal_on_copy(
+                    temporary,
+                    0,
+                    native_coordinator=(
+                        self.native_coordinator
+                        if self.native_coordinator is not None
+                        else (
+                            native_classic_jbd2_recover
+                            if self.recover == "native"
+                            else None
+                        )
+                    ),
+                )
             # A clean journal is a precondition, not a formality: the library below
             # writes metadata outside any JBD2 transaction.
             _require_clean(temporary, 0)
@@ -783,8 +944,10 @@ __all__ = [
     "libext2fs",
     "libext2fs_available",
     "normalize_internal_path",
+    "native_classic_jbd2_recover",
     "probe_journal",
     "recover_journal_on_copy",
+    "resolve_journal_physical_blocks",
     "require_supported_profile",
     "verify_image_after_operation",
 ]

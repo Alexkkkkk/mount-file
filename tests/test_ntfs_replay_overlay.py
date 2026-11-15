@@ -4,6 +4,7 @@ import pytest
 
 from mountfile.ntfs_logfile import (
     NtfsLogFileAnalysis,
+    NtfsReplayExecutorError,
     NtfsReplayOverlay,
     NtfsReplayOverlayError,
     OverlayProvenance,
@@ -12,6 +13,7 @@ from mountfile.ntfs_logfile import (
     replay_analysis_on_nonresident_run,
     replay_analysis_on_resident_record,
     replay_analysis_to_overlay,
+    replay_analysis_to_stream,
     resolve_nonresident_run_target,
     resolve_resident_attribute_target,
 )
@@ -130,6 +132,65 @@ def test_overlay_handles_large_payload_without_per_byte_state() -> None:
     assert provenance[0].length == len(payload)
 
 
+def test_stream_executor_validates_then_commits_and_reads_back() -> None:
+    from io import BytesIO
+
+    stream = BytesIO(b"abcdef")
+    sync_calls: list[int] = []
+    provenance = NtfsReplayOverlay(b"").apply_to_stream(
+        stream,
+        [step(kind="redo", payload=b"XYZ")],
+        {(128, 0): target()},
+        sync=lambda: sync_calls.append(1),
+    )
+    assert stream.getvalue() == b"abXYZf"
+    assert len(provenance) == 1
+    assert sync_calls == [1]
+
+
+def test_stream_executor_rejects_unresolved_plan_before_first_write() -> None:
+    from io import BytesIO
+
+    stream = BytesIO(b"abcdef")
+    with pytest.raises(NtfsReplayOverlayError, match="unresolved"):
+        NtfsReplayOverlay(b"").apply_to_stream(
+            stream,
+            [step(kind="redo", payload=b"XYZ")],
+            {},
+        )
+    assert stream.getvalue() == b"abcdef"
+
+
+def test_stream_executor_rejects_short_write() -> None:
+    class ShortWrite:
+        def __init__(self) -> None:
+            self.data = bytearray(b"abcdef")
+            self.position = 0
+
+        def seek(self, position: int, whence: int = 0) -> int:
+            self.position = position if whence == 0 else len(self.data)
+            return self.position
+
+        def tell(self) -> int:
+            return self.position
+
+        def read(self) -> bytes:
+            return bytes(self.data)
+
+        def write(self, payload: bytes) -> int:
+            return max(0, len(payload) - 1)
+
+        def flush(self) -> None:
+            pass
+
+    with pytest.raises(NtfsReplayExecutorError, match="short write"):
+        NtfsReplayOverlay(b"").apply_to_stream(
+            ShortWrite(),
+            [step(kind="redo", payload=b"XYZ")],
+            {(128, 0): target()},
+        )
+
+
 def _analysis(*, redo=(), undo=(), truncated=False) -> NtfsLogFileAnalysis:
     return NtfsLogFileAnalysis(
         restart=object(),
@@ -156,6 +217,22 @@ def test_analysis_executor_applies_committed_redo_before_active_undo() -> None:
         {(128, 0): ReplayTarget(128, 0, 2, 3)},
     )
     assert result == b"abUNDf"
+    assert [item.kind for item in provenance] == ["redo", "undo"]
+
+
+def test_analysis_stream_executor_applies_recovery_order_and_reads_back() -> None:
+    from io import BytesIO
+
+    stream = BytesIO(b"abcdef")
+    provenance = replay_analysis_to_stream(
+        _analysis(
+            redo=(step(kind="redo", payload=b"RED", lsn=1),),
+            undo=(step(kind="undo", payload=b"UND", lsn=2),),
+        ),
+        stream,
+        {(128, 0): ReplayTarget(128, 0, 2, 3)},
+    )
+    assert stream.getvalue() == b"abUNDf"
     assert [item.kind for item in provenance] == ["redo", "undo"]
 
 

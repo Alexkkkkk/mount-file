@@ -98,6 +98,8 @@ def test_acceptance_matrix_covers_every_declared_dimension_without_inference():
         "fat32-native-rw",
         "ext2-native-rw",
         "exfat-native-rw",
+        "ext4-native-rw",
+        "ntfs-native-rw",
     }
     for entry in report["entries"]:
         cells = entry["cells"]
@@ -128,11 +130,22 @@ def test_acceptance_artifact_matches_the_committed_file():
 
 def test_ntfs_and_ext4_recovery_cells_remain_explicitly_blocked():
     report = build_acceptance_report()
-    # These profiles are intentionally absent from the writable matrix until
-    # their replay executors are proven; the report must not manufacture them.
-    profile_ids = {entry["profile_id"] for entry in report["entries"]}
-    assert "ext4-native-rw" not in profile_ids
-    assert "ntfs-native-rw" not in profile_ids
+    profiles = {entry["profile_id"]: entry for entry in report["entries"]}
+    assert profiles["ext4-native-rw"]["verdict"] == "blocked"
+    assert profiles["ntfs-native-rw"]["verdict"] == "blocked"
+    assert profiles["ext4-native-rw"]["blocking_cells"] == ["power_loss"]
+    assert set(profiles["ntfs-native-rw"]["blocking_cells"]) == {
+        "rollback",
+        "process_kill",
+        "power_loss",
+    }
+    # The experimental replay profiles never enter the trusted capability set.
+    assert {entry["profile_id"] for entry in build_report()["entries"]} == {
+        "fat12-16-native-rw",
+        "fat32-native-rw",
+        "ext2-native-rw",
+        "exfat-native-rw",
+    }
 
 
 def test_recovery_evidence_is_not_broadcast_to_uncovered_operations_or_states():

@@ -20,7 +20,7 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | --- | --- | --- |
 | `$LogFile` parser: RCRD, restart area, USA, redo/undo | implemented | `mountfile/ntfs_logfile.py`, `tests/test_ntfs_logfile_parser.py`. |
 | Undo for OPEN transactions | partial | `_build_plans()` produces an undo plan from active transactions; `replay_analysis_on_resident_record()` derives the target from a validated FILE record and applies committed redo before undo in a private overlay. The profile is limited to `UpdateResidentValue`; MFT/index/bitmap/mirror operations are typed refusals. It is not an image writer. |
-| Checkpointing and full redo | partial | Checkpoint LSN, transaction table and redo plan are parsed; the bounded executor applies redo/undo in recovery order, but `executable` stays `False` until MFT/runlist resolution and crash evidence exist. |
+| Checkpointing and full redo | partial | Checkpoint LSN, transaction table and redo plan are parsed; `NtfsReplayOverlay.apply_to_stream()` now validates the complete explicit-target plan before writing, flushes/syncs and performs full read-back on a disposable stream. `executable` stays `False` until dirty-page-table replay start, MFT/runlist resolution and crash evidence exist. |
 | Safe resident target resolution | partial | `resolve_resident_attribute_target()` validates a USA-restored FILE record, unique resident attribute id, value bounds and rejects `$ATTRIBUTE_LIST`/nonresident targets. |
 | Bounded nonresident run resolution | partial | `resolve_nonresident_run_target()` validates contiguous VCN coverage, `highest_vcn`, allocated/data/initialized sizes and one fully mapped non-sparse run; incomplete, sparse, unsupported and cross-run ranges refuse. `replay_analysis_on_nonresident_run()` is private-overlay only and not wired to image publication. |
 | Safe MFT allocation/reuse and `$MFTMirr` repair | not implemented | The gate only compares `$MFT`/`$MFTMirr` record 0 and refuses a mismatch; allocation, reuse, index and mirror operations remain typed refusals. |
@@ -36,8 +36,8 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | Process-kill for each transaction phase | partial | ext4 has real process-kill coverage; other writers keep their existing tests. |
 | Hash preservation on failure | verified | ext4 tests assert the source hash is unchanged; NTFS staged writes use the same source-identity guard. |
 | Source identity / concurrent modification | verified | SHA-256 is captured before staging and re-checked before atomic replace in ext4 and NTFS writers. |
-| Independent checker + read-back per operation | partial | ext4 uses `e2fsck -fn` plus journal gate after every operation; NTFS uses the `$LogFile` gate but has no replay checker. |
-| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses into `docs/generated/recovery-acceptance.json`. The canonical `docs/generated/recovery-matrix.json` stays byte-identical to the trusted generator, because the trusted status gate only accepts a one-step capability schema bump for it; a unit test pins both artifacts to their generators. |
+| Independent checker + read-back per operation | partial | ext4 uses `e2fsck -fn` plus journal gate after every operation; the bounded NTFS executor adds stream flush/read-back, but NTFS still has no filesystem-aware replay checker. |
+| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses into `docs/generated/recovery-acceptance.json`, including the experimental ext4/NTFS replay profiles. The canonical `docs/generated/recovery-matrix.json` stays byte-identical to the trusted generator, because the trusted status gate only accepts a one-step capability schema bump for it; a unit test pins both artifacts to their generators. |
 | Unsupported cells as typed refusals | partial | Capability contracts and NTFS quarantine are typed; not every profile has an end-to-end assertion. |
 
 ## Block E — parity and status
@@ -50,7 +50,7 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 ## Conclusion
 
 Replay must not be declared supported. The remaining blockers are the NTFS
-image-level executor (MFT allocation, `$MFTMirr`, indexes), full JBD2
+filesystem-aware image executor (MFT allocation, `$MFTMirr`, indexes), full JBD2
 checksum/checkpoint integration in the writer, and real NTFS crash fixtures with
 an independent checker. Until then the writers stay fail-closed, and dirty NTFS
 volumes are quarantined rather than modified.
