@@ -44,7 +44,7 @@ PROFILES: dict[str, dict[str, object]] = {
     "ntfs": {
         "operation": "write_file",
         "evidence": "tests/test_ntfs_writer_fault_coverage.py",
-        "checker": "not_claimed",
+        "checker": "ntfsfix (check-only, -n)",
     },
 }
 
@@ -88,7 +88,7 @@ def build_report(root: Path) -> dict[str, object]:
         ),
         "refused_cells": sum(1 for c in cells if c["status"] == "refused_no_evidence"),
         "skipped_cells": 0,
-        "checker_claims": "ext4 checker per B2/B10; others not_claimed",
+        "checker_claims": "ext4 checker per B2/B10; ntfs ntfsfix check-only per C6; fat32/exfat/ext2 not_claimed",
     }
 
 
