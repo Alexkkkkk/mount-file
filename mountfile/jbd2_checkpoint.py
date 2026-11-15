@@ -240,6 +240,7 @@ def scan_checksummed_jbd2_transactions(
     position = state.start
     transactions: list[tuple[bytes, ...]] = []
     visited: set[int] = set()
+    expected_sequence = state.sequence & 0xFFFFFFFF
     while position not in visited and len(transactions) < max_transactions:
         visited.add(position)
         descriptor = at(position)
@@ -248,8 +249,10 @@ def scan_checksummed_jbd2_transactions(
         magic, record_type, sequence = struct.unpack_from(">III", descriptor, 0)
         if magic != _JBD2_MAGIC or record_type != 1:
             raise JBD2WriteProfileError("JBD2 scanner expected a descriptor")
-        if sequence != state.sequence and not transactions:
-            raise JBD2WriteProfileError("JBD2 descriptor sequence disagrees with state")
+        if sequence != expected_sequence:
+            raise JBD2WriteProfileError(
+                "JBD2 descriptor sequence disagrees with expected sequence"
+            )
         try:
             if not verify_descriptor_checksum(descriptor, seed):
                 raise JBD2WriteProfileError("JBD2 descriptor checksum does not match")
@@ -341,6 +344,7 @@ def scan_checksummed_jbd2_transactions(
                 ) from exc
             records.append(control)
             transactions.append(tuple(records))
+            expected_sequence = (sequence + 1) & 0xFFFFFFFF
             position = advance(position)
             break
     if not transactions:
@@ -490,7 +494,7 @@ def reduce_classic_jbd2_transactions(
         if (
             isinstance(sequence, bool)
             or not isinstance(sequence, int)
-            or not 0 < sequence <= 0xFFFFFFFF
+            or not 0 <= sequence <= 0xFFFFFFFF
         ):
             raise JBD2WriteProfileError("invalid JBD2 transaction sequence")
         if previous_sequence is not None:

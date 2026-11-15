@@ -424,7 +424,7 @@ def test_classic_decoder_refuses_checksum_enabled_journal_features():
         )
 
 
-@pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (0, 1), (True, 2)])
+@pytest.mark.parametrize("sequences", [(17, 17), (18, 17), (True, 2)])
 def test_reducer_rejects_invalid_or_nonforward_transaction_sequences(sequences):
     transactions = [JBD2DecodedTransaction(sequence, (), ()) for sequence in sequences]
 
@@ -435,7 +435,7 @@ def test_reducer_rejects_invalid_or_nonforward_transaction_sequences(sequences):
 def test_reducer_accepts_forward_sequence_wraparound():
     transactions = [
         JBD2DecodedTransaction(0xFFFFFFFF, (), ()),
-        JBD2DecodedTransaction(1, (), ()),
+        JBD2DecodedTransaction(0, (), ()),
     ]
 
     assert reduce_classic_jbd2_transactions(transactions) == {}

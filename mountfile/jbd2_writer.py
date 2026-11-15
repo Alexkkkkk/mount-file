@@ -291,8 +291,6 @@ def decode_checksummed_jbd2_transaction(
     magic, record_type, sequence = struct.unpack_from(">III", first, 0)
     if magic != _JBD2_MAGIC or record_type not in (_JBD2_DESCRIPTOR, _JBD2_REVOKE):
         raise JBD2WriteProfileError("JBD2 transaction has an invalid first record")
-    if sequence == 0:
-        raise JBD2WriteProfileError("JBD2 transaction sequence must be nonzero")
 
     writes: list[tuple[int, bytes]] = []
     revokes: list[int] = []
@@ -442,7 +440,7 @@ def encode_checksummed_jbd2_transaction(
     journal_uuid = _normalize_journal_uuid(journal_uuid)
     if isinstance(sequence, bool) or not isinstance(sequence, int):
         raise JBD2WriteProfileError("JBD2 sequence must be an integer")
-    if not 1 <= sequence <= _U32_MAX:
+    if not 0 <= sequence <= _U32_MAX:
         raise JBD2WriteProfileError("JBD2 sequence is outside 32-bit bounds")
     if (
         isinstance(filesystem_blocks, bool)
@@ -751,7 +749,7 @@ def encode_classic_jbd2_transaction(
     journal_uuid = _normalize_journal_uuid(journal_uuid)
     if isinstance(sequence, bool) or not isinstance(sequence, int):
         raise JBD2WriteProfileError("JBD2 sequence must be an integer")
-    if not 1 <= sequence <= _U32_MAX:
+    if not 0 <= sequence <= _U32_MAX:
         raise JBD2WriteProfileError("JBD2 sequence is outside 32-bit bounds")
     if (
         isinstance(filesystem_blocks, bool)

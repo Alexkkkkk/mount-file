@@ -211,6 +211,61 @@ def test_scanner_selects_checksummed_profile():
     assert transactions[0] == records
 
 
+def _checksummed_rollover_ring(second_sequence: int):
+    uuid = bytes(range(16))
+    first = encode_checksummed_jbd2_transaction(
+        block_size=1024,
+        sequence=0xFFFFFFFF,
+        filesystem_blocks=256,
+        journal_uuid=uuid,
+        writes={8: b"A" * 1024},
+    )
+    second = encode_checksummed_jbd2_transaction(
+        block_size=1024,
+        sequence=second_sequence,
+        filesystem_blocks=256,
+        journal_uuid=uuid,
+        writes={9: b"B" * 1024},
+    )
+    ring = [bytes(1024)] * 12
+    ring[1 : 1 + len(first)] = list(first)
+    ring[1 + len(first) : 1 + len(first) + len(second)] = list(second)
+    state = JBD2JournalState(
+        block_size=1024,
+        max_length=len(ring),
+        first=1,
+        sequence=0xFFFFFFFF,
+        start=1,
+        uuid=uuid,
+        empty=False,
+        feature_incompat=JBD2_FEATURE_INCOMPAT_CSUM_V3,
+        checksum_type=JBD2_CRC32C_CHKSUM,
+    )
+    return ring, state
+
+
+def test_checksummed_scanner_accepts_sequence_wrap_at_u32_boundary():
+    ring, state = _checksummed_rollover_ring(0)
+    transactions = scan_jbd2_transactions(ring, state)
+    assert len(transactions) == 2
+    assert struct.unpack_from(">I", transactions[0][0], 8)[0] == 0xFFFFFFFF
+    assert struct.unpack_from(">I", transactions[1][0], 8)[0] == 0
+    decoded = decode_checksummed_jbd2_transaction(
+        transactions[1],
+        block_size=state.block_size,
+        filesystem_blocks=256,
+        journal_features=(0, JBD2_FEATURE_INCOMPAT_CSUM_V3, 0),
+        filesystem_uuid=state.uuid,
+    )
+    assert decoded.sequence == 0
+
+
+def test_checksummed_scanner_rejects_wrong_sequence_after_u32_wrap():
+    ring, state = _checksummed_rollover_ring(1)
+    with pytest.raises(JBD2WriteProfileError, match="expected sequence"):
+        scan_jbd2_transactions(ring, state)
+
+
 @needs_ext
 def test_native_v3_replay_restores_committed_block(tmp_path):
     image, target_block, uuid, journal_blocks, records = _dirty_v3_image(tmp_path)

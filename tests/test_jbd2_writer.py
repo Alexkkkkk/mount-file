@@ -381,7 +381,6 @@ def test_ring_planner_rejects_data_and_revoke_target_overlap():
     "kwargs",
     [
         {"block_size": 512},
-        {"sequence": 0},
         {"filesystem_blocks": 0},
         {"writes": {0: b"A" * 1024}},
         {"writes": {4096: b"A" * 1024}},
