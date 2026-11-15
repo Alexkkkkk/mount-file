@@ -9,9 +9,11 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 | Item | Status | Evidence |
 | --- | --- | --- |
 | Checksums end-to-end | partial | v2/v3 primitives in `mountfile/ext4_jbd2_csum.py`; the classic decoder and `coordinate_classic_jbd2_replay()` reject any nonzero JBD2 feature tuple, while corrupted commits and truncated rings fail closed. A checksummed replay engine is still not wired into the ext4 writer. |
-| Checkpointing in the writer cycle | verified | Every ext4 write ends with `JournalState.CLEAN` and `s_sequence == 0`, checked by `e2fsck -fn` in `tests/test_writer_fault_coverage.py`. |
+| Journal head is read correctly | verified | `journal_superblock_t` puts `s_sequence` at 0x18 and `s_start` at 0x1C. `probe_journal()` had them swapped (`7b48efe`), which applied the ring-geometry guard to the transaction id, so any filesystem with more transactions than journal blocks (the default journal is 1024 blocks) was reported `ERROR` and every native write was refused on a healthy image. `tests/test_native_journal_writers.py` pins both offsets against the `jbd2_writer` parser, the checkpoint planner that zeroes 8/24/28 and the `test_ext3_reader` fixtures. |
+| Checkpointing in the writer cycle | verified | Every ext4 write ends with `JournalState.CLEAN` and `s_start == 0` (the durable empty marker the checkpoint writes), checked by `e2fsck -fn` in `tests/test_writer_fault_coverage.py`. |
 | Process-kill at every transaction boundary | verified | Real `SIGKILL` at every `FAULT_POINTS` boundary; the source image is byte-identical until `publish:done` (`tests/test_writer_fault_coverage.py`). |
-| Interrupted commit / malformed journal refusal | partial | Structural decoder refusal is tested; `e2fsck -fy` recovery on a disposable copy is re-verified with `e2fsck -fn` and the journal gate. |
+| Interrupted commit / malformed journal refusal | verified | A zero-filled commit block (interrupted) and a commit whose sequence disagrees are both refused by the scanner, the refusal surfaces as `Ext4ProfileUnsupported` and the source image is byte-identical afterwards with no staging file left behind (`test_ext4_native_writer_refuses_malformed_journal_and_keeps_original`). `e2fsck -fy` recovery on a disposable copy remains re-verified with `e2fsck -fn` and the journal gate. |
+| Native replay applied to the filesystem | verified (classic profile) | `recover="native"` + `native_classic_jbd2_recover` reads the ring through the journal inode's resolved extents, applies a committed transaction and checkpoints the head; an independent `debugfs cat` shows the journaled payload rather than the on-disk one, the gate reports `CLEAN` and `e2fsck -fn` exits 0 (`test_ext4_native_replay_applies_the_committed_transaction`, `test_ext4_native_writer_replays_then_writes_on_the_native_path`). `RECOVER` is cleared on the copy only after the coordinator succeeded. The checksummed v2/v3 profile still refuses. |
 | `e2fsck -f -n` after every writer operation | verified | `verify_image_after_operation()` runs after every libext2fs write and after delegated `create_file`, before atomic publication. |
 
 ## Block C — NTFS / `$LogFile`
@@ -32,13 +34,19 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Failure injection after each step | partial | Runtime fault seam covers copy/helper/mutation/publish; per-metadata-step injection is not complete for every profile. |
+| Failure injection after each step | partial | Runtime fault seam covers copy/helper/mutation/publish; per-metadata-step injection is not complete for every profile. The NTFS atomic-replace owner emitted each publication boundary twice through two overlapping seams, so an injected stop recorded a phase the executor never ran; both paths now share one seam and `test_ntfs_replay_publish_fault_boundary_is_emitted_once` asserts the trace contains exactly the expected boundary once (`3492988`). |
 | Process-kill for each transaction phase | partial | ext4 has real process-kill coverage; other writers keep their existing tests. |
-| Hash preservation on failure | verified | ext4 tests assert the source hash is unchanged; NTFS staged writes use the same source-identity guard. |
+| Hash preservation on failure | verified | ext4 tests assert the source hash is unchanged; the recovery path now does too, because a malformed journal is refused before any block is applied (`test_ext4_native_writer_refuses_malformed_journal_and_keeps_original`). NTFS staged writes use the same source-identity guard. |
 | Source identity / concurrent modification | verified | SHA-256 is captured before staging and re-checked before atomic replace in ext4 and NTFS writers. |
 | Independent checker + read-back per operation | partial | ext4 uses `e2fsck -fn` plus journal gate after every operation; the bounded NTFS executor adds stream flush/read-back, but NTFS still has no filesystem-aware replay checker. |
-| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses into `docs/generated/recovery-acceptance.json`, including the experimental ext4/NTFS replay profiles. The canonical `docs/generated/recovery-matrix.json` stays byte-identical to the trusted generator, because the trusted status gate only accepts a one-step capability schema bump for it; a unit test pins both artifacts to their generators. |
+| CI artifact profile × operation × state × checker | implemented | `scripts/recovery_matrix.py` emits explicit operation/state/checker cells with typed `pass`, `unavailable`, and `not_proven` statuses into `docs/generated/recovery-acceptance.json`, including the experimental ext4/NTFS replay profiles. A `journal_replay` evidence key now records `tested_native_classic_end_to_end` for ext4 and an explicit `not_proven` for NTFS, so the gap is machine-visible rather than absent; the key is outside `_REQUIRED`, so no cell verdict or blocking set changes (`e058d96`). The canonical `docs/generated/recovery-matrix.json` stays byte-identical to the trusted generator, because the trusted status gate only accepts a one-step capability schema bump for it; a unit test pins both artifacts to their generators. |
 | Unsupported cells as typed refusals | partial | Capability contracts and NTFS quarantine are typed; not every profile has an end-to-end assertion. |
+
+## Tooling contracts
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Hang guard is really installed | verified | `pyproject.toml` declares `timeout`/`timeout_method`, but pytest only warns on an unknown ini option, so the jobs that wrote their own pip line were running with no per-test timeout. Every workflow that invokes `python -m pytest` now provisions `pytest-timeout`, and `test_pytest_hang_guard_is_declared_and_actually_installed` walks the workflows and fails on the drift (`0942b63`). |
 
 ## Block E — parity and status
 
@@ -49,8 +57,16 @@ only when a test exercises the mechanism; planning-only code is marked `plan`.
 
 ## Conclusion
 
-Replay must not be declared supported. The remaining blockers are the NTFS
-filesystem-aware image executor (MFT allocation, `$MFTMirr`, indexes), full JBD2
-checksum/checkpoint integration in the writer, and real NTFS crash fixtures with
-an independent checker. Until then the writers stay fail-closed, and dirty NTFS
+The ext4 blocker in the checklist is closed for the classic JBD2 profile: the
+journal gate reads the head correctly, an uncheckpointed head is refused instead
+of published, and a committed transaction is replayed to the filesystem image and
+confirmed by an independent checker and reader. It is still not a product-level
+"Replay supported" claim: the checksummed v2/v3 profile refuses, the capability
+matrix is unchanged, and README keeps ext3/ext4 and NTFS read-only until the
+trusted generated-status gate can close row by row.
+
+The remaining blockers are the NTFS filesystem-aware image executor (MFT
+allocation, `$MFTMirr`, indexes) with dirty-page-table replay start and real NTFS
+crash fixtures, JBD2 checksum integration into the writer, and the Windows/macOS
+replay fixtures of #389. Until then the writers stay fail-closed, and dirty NTFS
 volumes are quarantined rather than modified.
