@@ -23,13 +23,14 @@ from mountfile.ntfs_logfile import (
     NTFS_RESTART,
     read_logfile_stream,
 )
-from mountfile.ntfs_mft import parse_ntfs_file_record_header
+from mountfile.ntfs_mft import NtfsRecordError, parse_ntfs_file_record_header
 from mountfile.ntfs_reader import (
+    NtfsMetadataError,
     parse_ntfs_attribute_stream,
     parse_ntfs_file_name,
     probe_ntfs_metadata,
 )
-from mountfile.ntfs_replay import _Mft, _attribute_offset
+from mountfile.ntfs_replay import NtfsReplayError, _Mft, _attribute_offset
 
 SECTOR = 512
 PAGE = 4096
@@ -254,7 +255,7 @@ def make_crash_fixture(
                 attributes = parse_ntfs_attribute_stream(
                     header, allow_end_marker_padding=True
                 )
-            except Exception:
+            except (NtfsMetadataError, NtfsRecordError, NtfsReplayError):
                 continue
             names = [
                 parse_ntfs_file_name(attribute.resident_value).name
