@@ -217,9 +217,13 @@
       "id": "C5",
       "block": "C",
       "title": "Safe MFT record allocation/reuse и $MFTMirr",
-      "status": "not_started",
-      "evidence": [],
-      "note": "не начато"
+      "status": "partial",
+      "evidence": [
+        "mountfile/ntfs_mft_allocation.py",
+        "tests/test_ntfs_mft_allocation.py"
+      ],
+      "note": "не начато",
+      "reproduced": "2026-11-15: планировщик reuse добавлен (plan_mft_record_reuse: $MFT+$MFTMirr USA-валидация, free-запись, sequence+1 c wrap, 7 typed refusals; тесты 7 passed). Подключение к write-пути и независимый чекер — не сделаны, потому partial, а не verified"
     },
     {
       "id": "C6",
@@ -312,13 +316,14 @@
       "id": "D6",
       "block": "D",
       "title": "CI-артефакт profile × operation × state × checker",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "docs/generated/recovery-matrix.json",
-        "scripts/recovery_matrix.py",
-        "tests/test_recovery_matrix.py"
+        "scripts/failure_matrix_artifact.py",
+        "tests/test_failure_matrix_artifact.py",
+        ".github/workflows/ci.yml"
       ],
-      "note": "заготовка есть, покрытие ограничено"
+      "note": "заготовка есть, покрытие ограничено",
+      "reproduced": "2026-11-15: machine-readable артефакт profile x operation x state x checker добавлен; CI эмитит и валидирует failure-matrix.json на каждой ноге; skipped_cells всегда 0, typed refused_no_evidence вместо скрытых skip; тесты 5 passed"
     },
     {
       "id": "D7",

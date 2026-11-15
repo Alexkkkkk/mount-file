@@ -74,7 +74,9 @@ class NtfsFileRecordHeader:
         return bool(self.flags & _FLAG_DIRECTORY)
 
 
-def parse_ntfs_file_record_header(raw_record) -> NtfsFileRecordHeader:
+def parse_ntfs_file_record_header(
+    raw_record, require_in_use: bool = True
+) -> NtfsFileRecordHeader:
     """Validate and restore the USA of one in-use NTFS FILE record.
 
     USA trailer protection is evaluated at fixed 512-byte strides, matching the
@@ -121,7 +123,7 @@ def parse_ntfs_file_record_header(raw_record) -> NtfsFileRecordHeader:
 
     if sequence_number == 0:
         raise NtfsRecordError("in-use FILE record has a zero sequence number")
-    if not flags & _FLAG_IN_USE:
+    if require_in_use and not flags & _FLAG_IN_USE:
         raise NtfsRecordError("FILE record is not marked in use")
     if flags & ~_KNOWN_RECORD_FLAGS:
         raise NtfsRecordError("FILE record contains unsupported flag bits")

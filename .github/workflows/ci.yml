@@ -212,6 +212,23 @@ jobs:
         if: always()
         run: python scripts/checker_matrix.py --json-out checker-matrix.json
 
+      - name: Emit failure coverage matrix
+        if: always()
+        run: python scripts/failure_matrix_artifact.py --repo-root . --json-out failure-matrix.json
+
+      - name: Validate failure coverage matrix
+        if: always()
+        run: python scripts/failure_matrix_artifact.py --repo-root . --validate failure-matrix.json
+
+      - name: Upload failure coverage matrix
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: failure-matrix-${{ matrix.os }}-py${{ matrix.python }}
+          path: failure-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload platform checker inventory
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
