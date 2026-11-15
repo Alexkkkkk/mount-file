@@ -117,7 +117,7 @@
       "evidence": [
         "tests/test_jbd2_csum_replay.py"
       ],
-      "note": "файл в main есть; независимый прогон убит OOM — воспроизвести на машине с запасом RAM",
+      "note": "8 passed независимо воспроизведено 2026-11-15 вне исходной машины (Python 3.12.3, без OOM)",
       "reproduced": "2026-11-15: независимое воспроизведение вне исходной машины — python -m pytest tests/test_jbd2_csum_replay.py → 8 passed (Python 3.12.3, без OOM); ранее 8 passed по отчёту 2026-11-15"
     },
     {
