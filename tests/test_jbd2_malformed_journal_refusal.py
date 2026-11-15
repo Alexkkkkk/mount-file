@@ -53,23 +53,24 @@ def _make_image(tmp_path):
     image = tmp_path / "fs.img"
     with open(image, "wb") as handle:
         handle.truncate(32 << 20)
-    assert _run(
-        [
-            "mkfs.ext4",
-            "-q",
-            "-F",
-            "-b",
-            str(BLOCK_SIZE),
-            "-O",
-            "^metadata_csum_seed",
-            str(image),
-        ]
-    ).returncode == 0
+    assert (
+        _run(
+            [
+                "mkfs.ext4",
+                "-q",
+                "-F",
+                "-b",
+                str(BLOCK_SIZE),
+                "-O",
+                "^metadata_csum_seed",
+                str(image),
+            ]
+        ).returncode
+        == 0
+    )
     payload = tmp_path / "payload.bin"
     payload.write_bytes(b"payload" + b"p" * (BLOCK_SIZE - 7))
-    assert _run(
-        ["debugfs", "-w", "-R", f"write {payload} /target", str(image)]
-    ).returncode == 0
+    assert _run(["debugfs", "-w", "-R", f"write {payload} /target", str(image)]).returncode == 0
     return image
 
 
