@@ -151,10 +151,12 @@ def publish_ntfs_replay(
                 verify(temporary)
             _fsync_path(temporary)
         _require_source_unchanged(source_path, before)
-        _fault("publish:start")
+        # ``_atomic_replace`` owns the publication boundary and emits both
+        # publish fault points.  Do not emit them here as well: duplicate
+        # boundaries make process-kill acceptance ambiguous and can kill a
+        # caller twice at the same logical point.
         _atomic_replace(source_path, temporary)
         temporary = ""
-        _fault("publish:done")
     finally:
         if temporary:
             _unlink(temporary)

@@ -4,6 +4,7 @@ import hashlib
 
 import pytest
 
+import mountfile.native_write as native_write
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
 from mountfile.ntfs_replay_executor import (
     NtfsReplayResolutionError,
@@ -85,3 +86,19 @@ def test_resolver_backed_replay_publishes_only_after_readback(tmp_path) -> None:
     assert publication.sha256_before == hashlib.sha256(b"abcdef").hexdigest()
     assert publication.sha256_after == hashlib.sha256(b"abXYZf").hexdigest()
     assert len(publication.provenance) == 1
+
+
+def test_publication_boundaries_are_emitted_once(tmp_path, monkeypatch) -> None:
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    trace: list[str] = []
+    monkeypatch.setattr(native_write, "_fault", trace.append)
+
+    publish_ntfs_replay(
+        str(image),
+        _analysis(_step()),
+        lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, step.length),
+    )
+
+    assert trace.count("publish:start") == 1
+    assert trace.count("publish:done") == 1
