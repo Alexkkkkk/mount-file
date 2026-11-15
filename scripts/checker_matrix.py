@@ -53,12 +53,27 @@ MATRIX = (
         ],
     },
     {
+        "profile": "ext4-native-rw",
+        "native": True,
+        "checker": "e2fsck",
+        "checker_package": "e2fsprogs",
+        "checker_authoritative": True,
+        "fixture_tests": [
+            "test_ext4_writer_emits_declared_fault_boundaries",
+            "test_ext4_process_kill_preserves_source_until_atomic_publish",
+            "test_recovery_after_checkpoint_interruption_succeeds",
+        ],
+    },
+    {
         "profile": "ntfs-native-ro",
         "native": False,
         "checker": "ntfsfix",
         "checker_package": "ntfs-3g",
         "checker_authoritative": False,
-        "fixture_tests": ["test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"],
+        "fixture_tests": [
+            "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix",
+            "test_ntfs_crash_oracle_matrix",
+        ],
     },
     {
         "profile": "all-native-readers",

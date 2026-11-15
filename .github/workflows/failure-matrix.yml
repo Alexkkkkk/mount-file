@@ -1,0 +1,54 @@
+name: Writer Failure Matrix
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: failure-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  failure-matrix:
+    name: Failure injection + process-kill matrix (#387, #530 P2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install filesystem tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools exfatprogs e2fsprogs ntfs-3g
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-timeout hypothesis
+      - name: Run failure-injection and process-kill matrix
+        run: |
+          python -m pytest \
+            tests/test_native_writer_failure_matrix.py \
+            tests/test_ntfs_writer_fault_coverage.py \
+            tests/test_ext4_writer_fault_coverage.py \
+            tests/test_ntfs_crash_oracle_matrix.py \
+            tests/test_jbd2_checkpoint_interruption.py \
+            -q --junitxml=failure-matrix.xml
+      - name: Regenerate status artifacts
+        run: python scripts/sync_repository_status.py --repo-root . --output-dir docs/generated
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: failure-matrix-${{ github.sha }}
+          path: |
+            failure-matrix.xml
+            docs/generated/
+          if-no-files-found: error
+          retention-days: 14

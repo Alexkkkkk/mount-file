@@ -85,25 +85,52 @@
       "reason": "required checker/runtime is unavailable on this runner"
     },
     {
-      "availability": "unavailable",
-      "checker": "ntfsfix",
-      "checker_authoritative": false,
-      "checker_package": "ntfs-3g",
-      "checker_path": null,
-      "checker_version": null,
+      "availability": "available",
+      "checker": "e2fsck",
+      "checker_authoritative": true,
+      "checker_package": "e2fsprogs",
+      "checker_path": "/usr/sbin/e2fsck",
+      "checker_version": "e2fsck 1.47.0 (5-Feb-2023)",
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
       "fixture_tests": [
-        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+        "test_ext4_writer_emits_declared_fault_boundaries",
+        "test_ext4_process_kill_preserves_source_until_atomic_publish",
+        "test_recovery_after_checkpoint_interruption_succeeds"
       ],
       "fixture_tests_found": [
-        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+        "test_ext4_writer_emits_declared_fault_boundaries",
+        "test_ext4_process_kill_preserves_source_until_atomic_publish",
+        "test_recovery_after_checkpoint_interruption_succeeds"
+      ],
+      "fixture_tests_missing": [],
+      "native": true,
+      "parity": "not_claimed",
+      "profile": "ext4-native-rw",
+      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
+    },
+    {
+      "availability": "available",
+      "checker": "ntfsfix",
+      "checker_authoritative": false,
+      "checker_package": "ntfs-3g",
+      "checker_path": "/usr/bin/ntfsfix",
+      "checker_version": "ntfsfix v2022.10.3",
+      "evidence": "fixture_required",
+      "fixture_status": "fixture_declared",
+      "fixture_tests": [
+        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix",
+        "test_ntfs_crash_oracle_matrix"
+      ],
+      "fixture_tests_found": [
+        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix",
+        "test_ntfs_crash_oracle_matrix"
       ],
       "fixture_tests_missing": [],
       "native": false,
       "parity": "not_claimed",
       "profile": "ntfs-native-ro",
-      "reason": "required checker/runtime is unavailable on this runner"
+      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
     },
     {
       "availability": "unavailable",
