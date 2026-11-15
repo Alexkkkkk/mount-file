@@ -225,9 +225,14 @@
       "id": "C6",
       "block": "C",
       "title": "Replay на dirty/crashed фикстурах с независимым чекером",
-      "status": "not_started",
-      "evidence": [],
-      "note": "есть только read-only фикстура tests/fixtures/ntfs-readonly-32m.img.gz; dirty/crash нет"
+      "status": "partial",
+      "evidence": [
+        "tests/ntfs_crash_fixture.py",
+        "tests/test_ntfs_replay.py",
+        "tests/test_ntfs_writer_fault_coverage.py"
+      ],
+      "note": "есть только read-only фикстура tests/fixtures/ntfs-readonly-32m.img.gz; dirty/crash нет",
+      "reproduced": "2026-11-15: генератор dirty-фикстуры существует (tests/ntfs_crash_fixture.py: mkntfs-том + JBD-подобный LSN-лог + $Volume dirty); test_ntfs_replay.py — 4 passed, test_ntfs_writer_fault_coverage.py — в общем прогоне 57 passed. Независимая проверка восстановленного тома внешним чекером (ntfsfix) в этой среде не выполнялась (ntfs-3g tools недоступны) — потому partial, а не verified"
     },
     {
       "id": "C7",
