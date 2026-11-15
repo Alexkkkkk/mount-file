@@ -1,0 +1,303 @@
+{
+  "schema": 1,
+  "tracker": 510,
+  "slice": {
+    "branch": "main",
+    "commit": "de319ea",
+    "version": "1.95.0",
+    "checked": "2026-11-15"
+  },
+  "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
+  "items": [
+    {
+      "id": "A1",
+      "block": "A",
+      "title": "Небезопасный replay-подход удалён из runtime",
+      "status": "verified",
+      "evidence": ["tests/test_docs_isolation.py"],
+      "reproduced": "2026-11-15: grep -rn replay_if_needed --include=*.py → 5 вхождений, все в guard-тесте",
+      "note": "guard-тест запрещает возврат"
+    },
+    {
+      "id": "A2",
+      "block": "A",
+      "title": "Релиз содержит безопасный код",
+      "status": "verified",
+      "evidence": ["pyproject.toml", "mountfile/__init__.py"],
+      "reproduced": "2026-11-15: version = 1.95.0 в pyproject.toml и __version__ = 1.95.0",
+      "note": "v1.95.0 = d31b4dc"
+    },
+    {
+      "id": "A3",
+      "block": "A",
+      "title": "Черновики из docs/proposals/ не подключены к runtime",
+      "status": "verified",
+      "evidence": ["docs/proposals", "tests/test_docs_isolation.py"],
+      "reproduced": "2026-11-15: каталог содержит только *.md; импортов docs/ в mountfile/ нет",
+      "note": "закреплено CI-тестом"
+    },
+    {
+      "id": "A4",
+      "block": "A",
+      "title": "Таблица README отражает фактический статус",
+      "status": "not_started",
+      "evidence": [],
+      "note": "README: ext3/ext4 и NTFS = Read-only/No; закрывается вместе с #390"
+    },
+    {
+      "id": "B1",
+      "block": "B",
+      "title": "Journal gate на RECOVER + отказ вместо тихого сброса",
+      "status": "verified",
+      "evidence": ["mountfile/ext4_journal_gate.py"],
+      "reproduced": "2026-11-15: gate read-only; при исключении ERROR, состояние не становится CLEAN",
+      "note": "fail-closed"
+    },
+    {
+      "id": "B2",
+      "block": "B",
+      "title": "Recovery через независимый чекер на копии",
+      "status": "verified",
+      "evidence": ["mountfile/ext4_journal_gate.py", "tests/test_checker_acceptance.py"],
+      "reproduced": "2026-11-15: e2fsck -fy на disposable copy, e2fsck -fn до и после",
+      "note": "независимый чекер"
+    },
+    {
+      "id": "B3",
+      "block": "B",
+      "title": "Descriptor/data/commit-записи и ring-планировщик",
+      "status": "verified",
+      "evidence": ["tests/test_jbd2_writer.py"],
+      "reproduced": "2026-11-15: golden-байты, escape-tag, кольцевое размещение",
+      "note": "golden-байты"
+    },
+    {
+      "id": "B4",
+      "block": "B",
+      "title": "Revoke-записи",
+      "status": "verified",
+      "evidence": ["tests/test_jbd2_writer.py"],
+      "reproduced": "2026-11-15: revoke-only и multi-block revoke тесты, overlap-кейсы",
+      "note": "revoke + overlap"
+    },
+    {
+      "id": "B5",
+      "block": "B",
+      "title": "Sequence wrap / rollover",
+      "status": "verified",
+      "evidence": [
+        "tests/test_ext3_jbd2_sequence_rollover.py",
+        "tests/test_jbd2_checkpoint.py"
+      ],
+      "reproduced": "2026-11-15: целевой прогон rollover + checkpoint зелёный",
+      "note": "28 passed по отчёту в треде"
+    },
+    {
+      "id": "B6",
+      "block": "B",
+      "title": "Transaction checksums (JBD2 csum) end-to-end",
+      "status": "partial",
+      "evidence": ["tests/test_jbd2_csum_replay.py"],
+      "note": "файл в main есть; независимый прогон убит OOM — воспроизвести на машине с запасом RAM"
+    },
+    {
+      "id": "B7",
+      "block": "B",
+      "title": "Checkpointing внутри writer-цикла",
+      "status": "verified",
+      "evidence": ["mountfile/ext4_native_writer.py", "mountfile/jbd2_checkpoint.py"],
+      "reproduced": "2026-11-15: coordinate_jbd2_replay_from_ring вызывается в боевом пути (строки 410, 783)",
+      "note": "не только в тестах"
+    },
+    {
+      "id": "B8",
+      "block": "B",
+      "title": "Process-kill на каждой transaction boundary",
+      "status": "verified",
+      "evidence": ["mountfile/native_write.py", "tests/test_jbd2_interrupted_commit.py"],
+      "reproduced": "2026-11-15: FAULT_HOOK в mountfile/native_write.py; 6 точек + сохранение источника",
+      "note": "FAULT_HOOK = seam"
+    },
+    {
+      "id": "B9",
+      "block": "B",
+      "title": "Прерванный commit и malformed-journal",
+      "status": "verified",
+      "evidence": [
+        "tests/test_jbd2_interrupted_commit.py",
+        "tests/test_jbd2_malformed_journal_refusal.py"
+      ],
+      "reproduced": "2026-11-15: #522 влит в main (de319ea), файл отказа присутствует",
+      "note": "закрыто #522"
+    },
+    {
+      "id": "B10",
+      "block": "B",
+      "title": "e2fsck -f -n после каждой операции writer'а",
+      "status": "verified",
+      "evidence": ["mountfile/ext4_native_writer.py", "tests/test_checker_acceptance.py"],
+      "reproduced": "2026-11-15: verify_image_after_operation() до _atomic_replace в write_file и create_file",
+      "note": "post-operation checker"
+    },
+    {
+      "id": "C1",
+      "block": "C",
+      "title": "Честный fail-closed по умолчанию",
+      "status": "partial",
+      "evidence": ["mountfile/ntfs_replay_executor.py", "mountfile/ntfs_native_writer.py"],
+      "note": "bounded executor появился в #513/#514; нужен свежий вердикт CI, что путь по умолчанию остаётся fail-closed"
+    },
+    {
+      "id": "C2",
+      "block": "C",
+      "title": "Парсер $LogFile",
+      "status": "verified",
+      "evidence": [
+        "mountfile/ntfs_logfile.py",
+        "tests/test_ntfs_logfile_parser.py",
+        "tests/test_ntfs_logfile_draft_golden.py"
+      ],
+      "reproduced": "2026-11-15: LogClient/ClientRestartArea/LogRecord/Transaction, RCRD, USA — файлы и тесты в main",
+      "note": "утверждение об отсутствии парсера устарело"
+    },
+    {
+      "id": "C3",
+      "block": "C",
+      "title": "Применение redo/undo к $MFT, $BITMAP, индексам",
+      "status": "partial",
+      "evidence": ["mountfile/ntfs_replay.py", "mountfile/ntfs_replay_executor.py"],
+      "note": "код есть; независимого подтверждения применения к метаданным нет"
+    },
+    {
+      "id": "C4",
+      "block": "C",
+      "title": "$ATTRIBUTE_LIST",
+      "status": "blocked",
+      "evidence": ["mountfile/ntfs_replay.py"],
+      "note": "отказ по проекту: NtfsReplayError при ATTR_ATTRIBUTE_LIST (строка 1168)"
+    },
+    {
+      "id": "C5",
+      "block": "C",
+      "title": "Safe MFT record allocation/reuse и $MFTMirr",
+      "status": "not_started",
+      "evidence": [],
+      "note": "не начато"
+    },
+    {
+      "id": "C6",
+      "block": "C",
+      "title": "Replay на dirty/crashed фикстурах с независимым чекером",
+      "status": "not_started",
+      "evidence": [],
+      "note": "есть только read-only фикстура tests/fixtures/ntfs-readonly-32m.img.gz; dirty/crash нет"
+    },
+    {
+      "id": "C7",
+      "block": "C",
+      "title": "Quarantine при недоказанном replay",
+      "status": "verified",
+      "evidence": ["mountfile/ntfs_native_writer.py"],
+      "reproduced": "2026-11-15: quarantine_ntfs_image() на строке 98 — копия, SHA-256 имя, JSON-маркер",
+      "note": "сквозного acceptance-прогона всё ещё нет"
+    },
+    {
+      "id": "C8",
+      "block": "C",
+      "title": "MIT-совместимая граница с внешним dfir_ntfs",
+      "status": "verified",
+      "evidence": ["mountfile/experimental/dfir_ntfs_adapter.py"],
+      "reproduced": "2026-11-15: адаптер read-only, динамическая загрузка, без write()/replay()",
+      "note": "GPL-3.0 не вендорится"
+    },
+    {
+      "id": "D1",
+      "block": "D",
+      "title": "Failure injection после каждого шага (data, bitmap, directory, inode, journal, commit)",
+      "status": "partial",
+      "evidence": ["mountfile/native_write.py"],
+      "note": "fault seam есть, полная матрица шагов не пройдена"
+    },
+    {
+      "id": "D2",
+      "block": "D",
+      "title": "Process-kill для каждой transaction phase",
+      "status": "partial",
+      "evidence": ["tests/test_jbd2_interrupted_commit.py"],
+      "note": "для ext4 сделано (B8); для NTFS — нет"
+    },
+    {
+      "id": "D3",
+      "block": "D",
+      "title": "Hash preservation оригинала на каждом отказе",
+      "status": "partial",
+      "evidence": ["mountfile/ntfs_native_writer.py", "tests/test_jbd2_malformed_journal_refusal.py"],
+      "note": "проверено для сбоев публикации и ext4; систематически по всем путям — нет"
+    },
+    {
+      "id": "D4",
+      "block": "D",
+      "title": "Source identity / concurrent modification",
+      "status": "partial",
+      "evidence": ["mountfile/native_write.py"],
+      "note": "guard по SHA-256 перед atomic replace; отдельного acceptance-прогона в треде нет"
+    },
+    {
+      "id": "D5",
+      "block": "D",
+      "title": "Independent checker + read-back после каждой поддержанной операции",
+      "status": "partial",
+      "evidence": ["tests/_independent_checkers.py", "tests/test_checker_acceptance.py"],
+      "note": "в recovery-пути ext4 — да, вне его — нет"
+    },
+    {
+      "id": "D6",
+      "block": "D",
+      "title": "CI-артефакт profile × operation × state × checker",
+      "status": "partial",
+      "evidence": [
+        "docs/generated/recovery-matrix.json",
+        "scripts/recovery_matrix.py",
+        "tests/test_recovery_matrix.py"
+      ],
+      "note": "заготовка есть, покрытие ограничено"
+    },
+    {
+      "id": "D7",
+      "block": "D",
+      "title": "Unsupported-ячейки как typed refusals, а не скрытые skip",
+      "status": "partial",
+      "evidence": ["scripts/product_status_contract.py"],
+      "note": "подтверждено для NTFS; для остальных профилей — нет"
+    },
+    {
+      "id": "E1",
+      "block": "E",
+      "title": "#389: Windows/macOS evidence, unavailable vs pass как typed outcome",
+      "status": "partial",
+      "evidence": ["tests/_independent_checkers.py", "scripts/native_read_evidence.py"],
+      "note": "macos_read_only_adapter_contract → not_collected/blocked; macOS-раннер только для бинарника"
+    },
+    {
+      "id": "E2",
+      "block": "E",
+      "title": "#390: CI-гейт на расхождение README / CLI / runtime",
+      "status": "partial",
+      "evidence": [
+        "scripts/product_status_contract.py",
+        "scripts/verify_generated_status.py",
+        ".github/workflows/status-sync.yml"
+      ],
+      "note": "verdict pass, артефакты совпадают; job отсутствует в required status checks main"
+    },
+    {
+      "id": "E3",
+      "block": "E",
+      "title": "#388: единый capability/refusal-контракт GUI/CLI/VFS",
+      "status": "verified",
+      "evidence": ["mountfile/capabilities.py", "mountfile/safety.py"],
+      "reproduced": "2026-11-15: #388 закрыт; matrix печатается через python -m mountfile capabilities",
+      "note": "контракт един"
+    }
+  ]
+}
