@@ -32,7 +32,7 @@ _STATES = ("clean", "dirty", "corrupt", "concurrent-change", "process-killed")
 _CHECKERS = {
     "ext2": "e2fsck -fn",
     "ext3/ext4": "e2fsck -fn",
-    "NTFS": "ntfs-aware-checker (unavailable)",
+    "NTFS": "ntfscat + $LogFile gate",
     "FAT12": "fsck.fat -n",
     "FAT32": "fsck.fat -n",
     "exFAT": "fsck.exfat -n",
@@ -64,9 +64,11 @@ _EXPERIMENTAL_PROFILES = (
             "process_kill": "not_proven",
             "power_loss": "unsupported",
             "quarantine": "tested_on_recovery_failure",
-            # The $LogFile parser, plans and staged publisher exist, but no
-            # filesystem-aware target resolver or crash fixture proves a replay.
-            "journal_replay": "not_proven",
+            # The bounded executor replays resident/nonresident updates,
+            # undo, clean restart pages, $Volume and $MFTMirr on a synthetic
+            # fslog.c-shaped crash fixture.  Real Windows captures are still
+            # unavailable, so this is not a product-level claim.
+            "journal_replay": "tested_native_synthetic_crash_fixture",
         },
     },
 )

@@ -17,15 +17,16 @@ The verdict comes from :mod:`mountfile.ntfs_reader`, i.e. from validated on-disk
 structures rather than from a command's exit code.  A volume that fails any check
 is refused; there is no "repair the log" shortcut here.
 
-Replay limitation (issue #386)
-------------------------------
-Redo/undo replay of ``$LogFile`` LFS records is **not** implemented.  Unlike the
-ext4 path there is no utility in the repository's tool belt that replays NTFS
-logs on a disposable copy (``ntfsfix`` only resets the dirty bit).  Therefore a
-volume whose log needs replay is never modified.  ``recover="refuse"`` reports a
-typed refusal; ``recover="copy"`` preserves the evidence in a content-addressed
-quarantine copy plus a JSON marker and then refuses with
-:class:`NtfsReplayQuarantined`.  Neither mode claims replay support.
+Replay (issue #510 block C)
+---------------------------
+``recover="native"`` runs the filesystem-aware executor in
+:mod:`mountfile.ntfs_replay` on the disposable copy: it consumes the open
+attribute, dirty page and transaction tables, applies bounded redo/undo, writes
+the clean restart pages, clears ``$Volume`` and refreshes ``$MFTMirr``.  The
+copy is re-gated before ``ntfscp`` runs, and the source image is never touched
+until the final atomic publication.  ``recover="refuse"`` keeps the fail-closed
+default; ``recover="copy"`` preserves a dirty image in a content-addressed
+quarantine copy plus a JSON marker instead of replaying it.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ from mountfile.native_write import (
     native_write_enabled,
 )
 from mountfile.ntfs_mft import NtfsRecordError
+from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsMetadataError,
@@ -78,7 +80,7 @@ class NtfsQuarantine:
             "marker": self.marker,
             "sha256": self.sha256,
             "reason": self.reason,
-            "replay": "not_implemented",
+            "replay": "not_requested",
         }
 
 
@@ -87,7 +89,7 @@ class NtfsReplayQuarantined(NtfsProfileUnsupported):
 
     def __init__(self, quarantine: NtfsQuarantine) -> None:
         super().__init__(
-            "NTFS log replay is not implemented; dirty image was quarantined at "
+            "NTFS log replay was not requested; dirty image was quarantined at "
             f"{quarantine.copy} (marker {quarantine.marker})"
         )
         self.quarantine = quarantine
@@ -139,7 +141,7 @@ def quarantine_ntfs_image(
         "sha256": digest,
         "reason": reason,
         "offset": offset,
-        "replay": "not_implemented",
+        "replay": "not_requested",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     temporary_marker = f"{marker}.partial-{os.getpid()}"
@@ -300,8 +302,8 @@ class NtfsNativeWriter:
     """Copy -> $LogFile/$Volume gate -> ntfscp -> re-gate -> atomic publish."""
 
     def __init__(self, *, require_flag: bool = True, recover: str = "refuse") -> None:
-        if recover not in ("copy", "refuse"):
-            raise ValueError("recover must be 'copy' or 'refuse'")
+        if recover not in ("copy", "native", "refuse"):
+            raise ValueError("recover must be 'copy', 'native' or 'refuse'")
         self.require_flag = require_flag
         self.recover = recover
 
@@ -335,9 +337,19 @@ class NtfsNativeWriter:
         try:
             gate = probe_ntfs_log(temporary, 0)
             if not gate.clean:
-                raise NtfsProfileUnsupported(
-                    f"refusing to write a volume that needs log recovery: {gate.reason}"
-                )
+                if self.recover == "native":
+                    try:
+                        native_ntfs_recover(temporary, 0)
+                    except NtfsReplayError as exc:
+                        raise NtfsProfileUnsupported(
+                            f"native NTFS replay refused: {exc}"
+                        ) from exc
+                    gate = probe_ntfs_log(temporary, 0)
+                if not gate.clean:
+                    raise NtfsProfileUnsupported(
+                        "refusing to write a volume that needs log recovery: "
+                        f"{gate.reason}"
+                    )
             written = ntfs_write_file_native(temporary, internal, data)
             after = probe_ntfs_log(temporary, 0)
             if not after.clean:
@@ -361,7 +373,8 @@ def logfile_gate_summary(image_path: str, offset: int = 0) -> dict:
     summary = gate.as_dict()
     summary["native_write_enabled"] = enabled
     summary["writable"] = bool(enabled and gate.clean)
-    summary["replay_implemented"] = False
+    summary["replay_implemented"] = True
+    summary["replay_modes"] = ["native", "copy", "refuse"]
     summary["quarantine_supported"] = True
     return summary
 

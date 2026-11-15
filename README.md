@@ -77,7 +77,9 @@ power-loss safety or full filesystem parity.
 
 > **Guarded recovery warning:** `MOUNTFILE_ENABLE_NATIVE_WRITE=1` enables only guarded
 > recovery/copy verification for the bounded native profiles. It does **not** enable
-> full ext4/JBD2 replay, NTFS `$LogFile` replay, undo, or power-loss safety.
+> the experimental ext4/JBD2 or NTFS `$LogFile` replay paths by itself; those
+> require an explicit `recover="native"` writer option and remain outside the
+> product-level support claim. Power-loss safety is still unsupported.
 
 ### Experimental journal integrations
 

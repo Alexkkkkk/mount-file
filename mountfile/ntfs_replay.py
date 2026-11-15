@@ -27,8 +27,11 @@ import struct
 from dataclasses import dataclass
 
 from mountfile.ntfs_logfile import (
+    ATTR_DATA,
+    LOG_REC_HDR,
     LogRecord,
     NtfsLogFileAnalysis,
+    NtfsLogFileError,
     NtfsReplayExecutorError,
     analyze_logfile,
     parse_restart_pages,
@@ -41,8 +44,6 @@ from mountfile.ntfs_mft import (
 )
 from mountfile.ntfs_probe import NtfsBootProfile
 from mountfile.ntfs_reader import (
-    ATTR_ATTRIBUTE_LIST,
-    ATTR_DATA,
     NtfsAttributeSummary,
     NtfsMetadataError,
     NtfsRun,
@@ -57,6 +58,7 @@ MFT_MIRROR_RECORDS = 4
 
 # NTFS attribute type codes used by the replay profile.
 ATTR_STANDARD_INFORMATION = 0x10
+ATTR_ATTRIBUTE_LIST = 0x20
 ATTR_FILE_NAME = 0x30
 ATTR_INDEX_ROOT = 0x90
 ATTR_INDEX_ALLOCATION = 0xA0
@@ -306,21 +308,36 @@ def _restart_table_body(stream: bytes, analysis: NtfsLogFileAnalysis, lsn: int) 
         raise NtfsReplayError(
             f"restart table LSN 0x{lsn:x} body is outside the $LogFile stream"
         )
-    return stream[start:end]
+    body = stream[start:end]
+    if len(body) < LOG_REC_HDR.size:
+        raise NtfsReplayError(
+            f"restart table LSN 0x{lsn:x} body is shorter than LOG_REC_HDR"
+        )
+    redo_op, _undo_op, redo_off, redo_len = struct.unpack_from("<HHHH", body, 0)
+    if redo_op not in (0x1D, 0x1F, 0x20):
+        raise NtfsReplayError(
+            f"restart table LSN 0x{lsn:x} carries operation 0x{redo_op:02x}, "
+            "not a table dump"
+        )
+    if redo_off < LOG_REC_HDR.size or redo_off + redo_len > len(body):
+        raise NtfsReplayError(
+            f"restart table LSN 0x{lsn:x} redo slice is outside its record"
+        )
+    return body[redo_off : redo_off + redo_len]
 
 
 def _parse_restart_table(
-    body: bytes, *, entry_size: int, table_name: str
+    body: bytes, *, minimum_entry_size: int, table_name: str
 ) -> tuple[bytes, int, int]:
     if len(body) < 0x18:
         raise NtfsReplayError(f"{table_name} dump is shorter than its header")
     size, used, total, _free_goal, _first_free, _last_free = struct.unpack_from(
         "<6I", body, 0
     )
-    if size != entry_size:
+    if size < minimum_entry_size:
         raise NtfsReplayError(
-            f"{table_name} entry size {size} does not match the 64-bit profile "
-            f"({entry_size})"
+            f"{table_name} entry size {size} is smaller than its header "
+            f"({minimum_entry_size})"
         )
     if total > 0x10000 or used > total:
         raise NtfsReplayError(f"{table_name} table geometry is invalid")
@@ -331,7 +348,7 @@ def _parse_restart_table(
 
 def _parse_open_attribute_table(body: bytes) -> tuple[OpenAttributeEntry, ...]:
     entries, size, total = _parse_restart_table(
-        body, entry_size=0x28, table_name="open attribute table"
+        body, minimum_entry_size=0x28, table_name="open attribute table"
     )
     result: list[OpenAttributeEntry] = []
     for index in range(total):
@@ -361,8 +378,11 @@ def _parse_open_attribute_table(body: bytes) -> tuple[OpenAttributeEntry, ...]:
 
 def _parse_dirty_page_table(body: bytes) -> tuple[DirtyPageEntry, ...]:
     entries, size, total = _parse_restart_table(
-        body, entry_size=0x20, table_name="dirty page table"
+        body, minimum_entry_size=0x20, table_name="dirty page table"
     )
+    if (size - 0x20) % 8:
+        raise NtfsReplayError("dirty page entry size is not 8-byte aligned")
+    capacity = (size - 0x20) // 8
     result: list[DirtyPageEntry] = []
     for index in range(total):
         entry = entries[index * size : (index + 1) * size]
@@ -370,7 +390,7 @@ def _parse_dirty_page_table(body: bytes) -> tuple[DirtyPageEntry, ...]:
             continue
         target_attr, transfer_len, lcns_follow = struct.unpack_from("<III", entry, 4)
         vcn, oldest_lsn = struct.unpack_from("<QQ", entry, 0x10)
-        if lcns_follow > 0x1000 or 0x20 + lcns_follow * 8 > len(entry):
+        if lcns_follow > capacity or 0x20 + lcns_follow * 8 > len(entry):
             raise NtfsReplayError("dirty page entry LCN count is outside its record")
         lcns = struct.unpack_from(f"<{lcns_follow}Q", entry, 0x20)
         result.append(
@@ -389,7 +409,7 @@ def _parse_dirty_page_table(body: bytes) -> tuple[DirtyPageEntry, ...]:
 
 def _parse_transaction_table(body: bytes) -> tuple[TransactionEntry, ...]:
     entries, size, total = _parse_restart_table(
-        body, entry_size=0x28, table_name="transaction table"
+        body, minimum_entry_size=0x28, table_name="transaction table"
     )
     result: list[TransactionEntry] = []
     for index in range(total):
@@ -679,11 +699,21 @@ class _Mft:
     def write_record(self, record_number: int, fixed_record: bytes) -> None:
         if len(fixed_record) != self.record_size:
             raise NtfsReplayError("modified FILE record has the wrong size")
+        raw = _apply_usa(fixed_record)
         try:
-            parse_ntfs_file_record_header(fixed_record)
+            probe = bytearray(raw)
+            flags = struct.unpack_from("<H", probe, 0x16)[0]
+            if not flags & 0x0001:
+                # DeallocateFileRecordSegment clears IN_USE; the header parser
+                # intentionally accepts only in-use records, so validate the
+                # structure with the bit restored and write the cleared form.
+                struct.pack_into("<H", probe, 0x16, flags | 0x0001)
+                parse_ntfs_file_record_header(bytes(probe))
+            else:
+                parse_ntfs_file_record_header(raw)
         except NtfsRecordError as exc:
             raise NtfsReplayError(f"modified FILE record is invalid: {exc}") from exc
-        self.write(record_number * self.record_size, _apply_usa(fixed_record))
+        self.write(record_number * self.record_size, raw)
 
 
 # ---------------------------------------------------------------- operation helpers
@@ -997,27 +1027,282 @@ def _write_clean_restart_pages(
 # ---------------------------------------------------------------- entry point
 
 
+def _open_attribute_entry(
+    tables: NtfsRestartTables, record: LogRecord
+) -> OpenAttributeEntry:
+    for entry in tables.open_attributes:
+        if entry.index == record.target_attr:
+            return entry
+    raise NtfsReplayError(
+        f"log record 0x{record.lsn:x} targets open attribute table slot "
+        f"{record.target_attr}, which is not allocated"
+    )
+
+
+def _find_attribute_by_type(
+    header: NtfsFileRecordHeader, type_code: int
+) -> NtfsAttributeSummary:
+    attributes = parse_ntfs_attribute_stream(
+        header, allow_end_marker_padding=True
+    )
+    matches = [attribute for attribute in attributes if attribute.type_code == type_code]
+    if not matches:
+        raise NtfsReplayError(
+            f"FILE record has no attribute of type 0x{type_code:x}"
+        )
+    unnamed = [attribute for attribute in matches if not attribute.name]
+    if len(matches) == 1:
+        return matches[0]
+    if len(unnamed) == 1:
+        return unnamed[0]
+    raise NtfsReplayError(
+        f"FILE record has {len(matches)} attributes of type 0x{type_code:x}; "
+        "named attribute disambiguation is outside the replay profile"
+    )
+
+
+def _validate_attribute_type(
+    header: NtfsFileRecordHeader, offset: int, expected: int
+) -> None:
+    if offset < header.first_attribute_offset or offset + 16 > header.bytes_in_use:
+        raise NtfsReplayError("attribute offset is outside the FILE record")
+    actual = struct.unpack_from("<I", header.fixed_record, offset)[0]
+    if actual != expected:
+        raise NtfsReplayError(
+            f"attribute at record offset 0x{offset:x} has type 0x{actual:x}, "
+            f"not the open-table type 0x{expected:x}"
+        )
+
+
+def _apply_one(
+    mft: "_Mft",
+    tables: NtfsRestartTables,
+    record: LogRecord,
+    payload: bytes,
+    *,
+    redo: bool,
+    cluster_size: int,
+    base_offset: int,
+) -> tuple[int, int]:
+    """Apply one redo/undo record; return (record writes, stream writes)."""
+
+    op = record.redo_op if redo else record.undo_op
+    entry = _open_attribute_entry(tables, record)
+    if op in MFT_OPERATIONS:
+        cluster_bits = cluster_size.bit_length() - 1
+        if (1 << cluster_bits) != cluster_size:
+            raise NtfsReplayError("cluster size is not a power of two")
+        vbo = (record.target_vcn << cluster_bits) + (record.cluster_off << 9)
+        rno = vbo >> (mft.record_size.bit_length() - 1)
+        if rno * mft.record_size != vbo:
+            raise NtfsReplayError(
+                f"log record 0x{record.lsn:x} targets an unaligned MFT record"
+            )
+        if rno >= mft.record_count:
+            raise NtfsReplayError(
+                f"log record 0x{record.lsn:x} targets MFT record {rno}, outside "
+                "the existing $MFT DATA stream"
+            )
+        if (
+            op == OP_INITIALIZE_FILE_RECORD
+            and record.record_off == 0
+            and len(payload) == mft.record_size
+        ):
+            try:
+                initialized = parse_ntfs_file_record_header(payload)
+            except NtfsRecordError as exc:
+                raise NtfsReplayError(
+                    f"InitializeFileRecordSegment payload is invalid: {exc}"
+                ) from exc
+            fixed = bytearray(initialized.fixed_record)
+            _set_record_lsn(fixed, record.lsn)
+            mft.write_record(rno, bytes(fixed))
+            return 1, 0
+        header = mft.read_record(rno)
+        if op in (
+            OP_UPDATE_RESIDENT_VALUE,
+            OP_UPDATE_MAPPING_PAIRS,
+            OP_SET_NEW_ATTRIBUTE_SIZES,
+            OP_ZERO_END_OF_FILE_RECORD,
+        ):
+            if rno != entry.record_number:
+                raise NtfsReplayError(
+                    f"log record 0x{record.lsn:x} resolves to MFT record {rno}, "
+                    f"but its open attribute entry references record "
+                    f"{entry.record_number}"
+                )
+            _validate_attribute_type(header, record.record_off, entry.type_code)
+        modified, _kind = _apply_mft_operation(header, record, payload, redo=redo)
+        mft.write_record(rno, modified)
+        return 1, 0
+    if op in STREAM_OPERATIONS:
+        if entry.record_number >= mft.record_count:
+            raise NtfsReplayError(
+                f"open attribute entry references MFT record {entry.record_number}, "
+                "which is outside the existing $MFT DATA stream"
+            )
+        header = mft.read_record(entry.record_number)
+        if header.sequence_number != (entry.reference >> 48) & 0xFFFF:
+            raise NtfsReplayError(
+                "open attribute entry sequence does not match the FILE record"
+            )
+        attribute = _find_attribute_by_type(header, entry.type_code)
+        _apply_stream_operation(
+            mft._stream,
+            header,
+            attribute,
+            record,
+            payload,
+            cluster_size=cluster_size,
+            base_offset=base_offset,
+            redo=redo,
+        )
+        return 0, 1
+    raise NtfsReplayError(
+        f"operation 0x{op:02x} at LSN 0x{record.lsn:x} has no image-level handler"
+    )
+
+
+def _clear_volume_dirty(mft: "_Mft") -> tuple[int, int]:
+    """Clear ``VOLUME_FLAG_DIRTY`` in ``$Volume`` and return (before, after)."""
+
+    header = mft.read_record(MFT_RECORD_VOLUME)
+    attributes = parse_ntfs_attribute_stream(
+        header, allow_end_marker_padding=True
+    )
+    if any(attribute.type_code == ATTR_ATTRIBUTE_LIST for attribute in attributes):
+        raise NtfsReplayError("$Volume uses $ATTRIBUTE_LIST; replay refuses it")
+    matches = [
+        attribute
+        for attribute in attributes
+        if attribute.type_code == ATTR_VOLUME_INFORMATION and not attribute.name
+    ]
+    if len(matches) != 1 or matches[0].resident_value is None:
+        raise NtfsReplayError("$Volume has no unique resident volume information")
+    if len(matches[0].resident_value) != 12:
+        raise NtfsReplayError("$Volume information has an invalid length")
+    offset = _attribute_offset(header, matches[0].attribute_id)
+    fixed = bytearray(header.fixed_record)
+    value_offset = struct.unpack_from("<H", fixed, offset + 20)[0]
+    flags = struct.unpack_from("<H", fixed, offset + value_offset + 10)[0]
+    if not flags & 0x0001:
+        return flags, flags
+    struct.pack_into("<H", fixed, offset + value_offset + 10, flags & ~0x0001)
+    mft.write_record(MFT_RECORD_VOLUME, bytes(fixed))
+    return flags, flags & ~0x0001
+
+
+def _update_mft_mirror(
+    stream, mft: "_Mft", boot: NtfsBootProfile, *, base_offset: int
+) -> bool:
+    """Copy the first four MFT records to ``$MFTMirr`` (ntfs_update_mftmirr)."""
+
+    changed = False
+    mirror = base_offset + boot.mft_mirror_offset
+    for index in range(MFT_MIRROR_RECORDS):
+        raw = mft.read_record_raw(index)
+        target = mirror + index * mft.record_size
+        stream.seek(target)
+        existing = stream.read(len(raw))
+        if existing != raw:
+            stream.seek(target)
+            written = stream.write(raw)
+            if written != len(raw):
+                raise NtfsReplayError("short write to $MFTMirr")
+            changed = True
+    return changed
+
+
+def _find_mft_data(profile) -> NtfsAttributeSummary:
+    for attribute in profile.attributes:
+        if attribute.type_code == ATTR_DATA and not attribute.name:
+            if not attribute.nonresident or not attribute.runs:
+                break
+            return attribute
+    raise NtfsReplayError("$MFT has no bounded unnamed nonresident DATA stream")
+
+
+def _repair_volume_markers(image_path: str, profile, offset: int) -> tuple[int, int, bool]:
+    """Clear ``$Volume`` and refresh ``$MFTMirr`` without replaying records."""
+
+    mft_data = _find_mft_data(profile)
+    with open(image_path, "r+b") as handle:
+        mft = _Mft(handle, profile.boot, mft_data, base_offset=offset)
+        before, after = _clear_volume_dirty(mft)
+        mirror_updated = _update_mft_mirror(
+            handle, mft, profile.boot, base_offset=offset
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+    return before, after, mirror_updated
+
+
 def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
     """Replay a dirty ``$LogFile`` on the image handed in (a disposable copy)."""
 
     image_path = os.fspath(image_path)
     if offset < 0:
         raise NtfsReplayError("volume offset is negative")
-    stream, cluster_size, logfile = read_logfile_stream(image_path, offset=offset)
-    analysis = analyze_logfile(stream, cluster_size=cluster_size)
-    if not analysis.dirty:
+    volume_size = os.path.getsize(image_path) - offset
+    try:
+        profile = probe_ntfs_metadata(
+            image_path,
+            offset=offset,
+            volume_size=volume_size,
+            validate_mirror=False,
+        )
+    except NtfsMetadataError as exc:
+        raise NtfsReplayError(f"cannot inspect NTFS metadata: {exc}") from exc
+    try:
+        stream, cluster_size, logfile = read_logfile_stream(
+            image_path, offset=offset, validate_mirror=False
+        )
+        analysis = analyze_logfile(stream, cluster_size=cluster_size)
+    except NtfsLogFileError:
+        if profile.logfile_restart is not None:
+            raise
+        # A never-written $LogFile carries no restart page.  The only replay
+        # work is the dirty-bit/$MFTMirr repair that a mount would perform.
+        before, after, mirror = _repair_volume_markers(
+            image_path, profile, offset
+        )
+        verified_profile = probe_ntfs_metadata(
+            image_path, offset=offset, volume_size=volume_size
+        )
+        if not verified_profile.mirror_matches_mft:
+            raise NtfsReplayError("$MFT and $MFTMirr still differ after repair")
         return NtfsReplayResult(
-            changed=False,
+            changed=before != after or mirror,
             redo_applied=0,
             undo_applied=0,
             redo_start=0,
             records_written=0,
             stream_writes=0,
             clean_restart_pages=0,
-            volume_flags_before=0,
-            volume_flags_after=0,
-            mirror_updated=False,
-            notes=("$LogFile is already clean",),
+            volume_flags_before=before,
+            volume_flags_after=after,
+            mirror_updated=mirror,
+            notes=("$LogFile has no restart page; repaired $Volume/$MFTMirr only",),
+        )
+    if not analysis.dirty:
+        before, after, mirror = _repair_volume_markers(image_path, profile, offset)
+        verified_profile = probe_ntfs_metadata(
+            image_path, offset=offset, volume_size=volume_size
+        )
+        if not verified_profile.mirror_matches_mft:
+            raise NtfsReplayError("$MFT and $MFTMirr still differ after repair")
+        return NtfsReplayResult(
+            changed=before != after or mirror,
+            redo_applied=0,
+            undo_applied=0,
+            redo_start=0,
+            records_written=0,
+            stream_writes=0,
+            clean_restart_pages=0,
+            volume_flags_before=before,
+            volume_flags_after=after,
+            mirror_updated=mirror,
+            notes=("$LogFile is already clean; repaired $Volume/$MFTMirr only",),
         )
     tables = parse_restart_tables(stream, analysis)
     plan = plan_ntfs_replay(analysis, tables)
@@ -1031,4 +1316,75 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             "unsupported NTFS replay operations: "
             + ", ".join(f"0x{op:02x}" for op in sorted(unsupported))
         )
-    raise NotImplementedError
+    mft_data = _find_mft_data(profile)
+    redo_applied = 0
+    undo_applied = 0
+    records_written = 0
+    stream_writes = 0
+    with open(image_path, "r+b") as handle:
+        mft = _Mft(handle, profile.boot, mft_data, base_offset=offset)
+        for record in plan.redo:
+            writes, streamed = _apply_one(
+                mft,
+                tables,
+                record,
+                record.redo_data,
+                redo=True,
+                cluster_size=cluster_size,
+                base_offset=offset,
+            )
+            records_written += writes
+            stream_writes += streamed
+            redo_applied += 1
+        for record in plan.undo:
+            writes, streamed = _apply_one(
+                mft,
+                tables,
+                record,
+                record.undo_data,
+                redo=False,
+                cluster_size=cluster_size,
+                base_offset=offset,
+            )
+            records_written += writes
+            stream_writes += streamed
+            undo_applied += 1
+        clean_pages = _write_clean_restart_pages(
+            handle,
+            logfile,
+            stream,
+            analysis,
+            cluster_size=cluster_size,
+            base_offset=offset,
+        )
+        volume_before, volume_after = _clear_volume_dirty(mft)
+        mirror_updated = _update_mft_mirror(
+            handle, mft, profile.boot, base_offset=offset
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+    verify_stream, verify_cluster, _verify_logfile = read_logfile_stream(
+        image_path, offset=offset
+    )
+    verified = analyze_logfile(verify_stream, cluster_size=verify_cluster)
+    if verified.dirty:
+        raise NtfsReplayError(
+            "$LogFile still reports a dirty dismount after replay"
+        )
+    verified_profile = probe_ntfs_metadata(
+        image_path, offset=offset, volume_size=volume_size
+    )
+    if not verified_profile.mirror_matches_mft:
+        raise NtfsReplayError("$MFT and $MFTMirr still differ after replay")
+    return NtfsReplayResult(
+        changed=True,
+        redo_applied=redo_applied,
+        undo_applied=undo_applied,
+        redo_start=plan.redo_start,
+        records_written=records_written,
+        stream_writes=stream_writes,
+        clean_restart_pages=clean_pages,
+        volume_flags_before=volume_before,
+        volume_flags_after=volume_after,
+        mirror_updated=mirror_updated,
+    )

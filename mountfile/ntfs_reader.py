@@ -1135,9 +1135,19 @@ def _validate_nonresident_data_stream(
 
 
 def probe_ntfs_metadata(
-    image_path, *, offset: int = 0, volume_size: int | None = None
+    image_path,
+    *,
+    offset: int = 0,
+    volume_size: int | None = None,
+    validate_mirror: bool = True,
 ) -> NtfsMetadataProfile:
-    """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror."""
+    """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror.
+
+    ``validate_mirror=False`` keeps the boot/record-0 validation but tolerates
+    a missing or damaged ``$MFTMirr`` record.  The replay executor needs that
+    relaxed view so it can reach the mirror and repair it; every read-only
+    caller keeps the fail-closed default.
+    """
     try:
         with FileImageSource(image_path) as source:
             volume = BoundedImageSource(source, offset, volume_size)
@@ -1193,8 +1203,13 @@ def probe_ntfs_metadata(
                 boot.mft_mirror_offset, boot.file_record_size
             )
         mft_record = parse_ntfs_file_record_header(raw_record)
-        mirror_record = parse_ntfs_file_record_header(raw_mirror)
-        if mft_record.fixed_record != mirror_record.fixed_record:
+        try:
+            mirror_record = parse_ntfs_file_record_header(raw_mirror)
+        except NtfsRecordError:
+            if validate_mirror:
+                raise
+            mirror_record = mft_record
+        if validate_mirror and mft_record.fixed_record != mirror_record.fixed_record:
             raise NtfsMetadataError(
                 "NTFS MFT mirror record does not match primary record"
             )

@@ -4,7 +4,7 @@
     "checkers": {
       "FAT12": "fsck.fat -n",
       "FAT32": "fsck.fat -n",
-      "NTFS": "ntfs-aware-checker (unavailable)",
+      "NTFS": "ntfscat + $LogFile gate",
       "exFAT": "fsck.exfat -n",
       "ext2": "e2fsck -fn",
       "ext3/ext4": "e2fsck -fn"
@@ -1005,186 +1005,186 @@
       ],
       "cells": [
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
           "source": "not_proven",
           "state": "clean",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
           "source": "not_proven",
           "state": "dirty",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
           "source": "not_proven",
           "state": "corrupt",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
           "source": "not_proven",
           "state": "concurrent-change",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "write-file",
           "source": "not_proven",
           "state": "process-killed",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "mkdir",
           "source": "not_proven",
           "state": "clean",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "mkdir",
           "source": "not_proven",
           "state": "dirty",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "mkdir",
           "source": "not_proven",
           "state": "corrupt",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "mkdir",
           "source": "not_proven",
           "state": "concurrent-change",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "mkdir",
           "source": "not_proven",
           "state": "process-killed",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "delete",
           "source": "not_proven",
           "state": "clean",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "delete",
           "source": "not_proven",
           "state": "dirty",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "delete",
           "source": "not_proven",
           "state": "corrupt",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "delete",
           "source": "not_proven",
           "state": "concurrent-change",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "delete",
           "source": "not_proven",
           "state": "process-killed",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "rename",
           "source": "not_proven",
           "state": "clean",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "rename",
           "source": "not_proven",
           "state": "dirty",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "rename",
           "source": "not_proven",
           "state": "corrupt",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "rename",
           "source": "not_proven",
           "state": "concurrent-change",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "rename",
           "source": "not_proven",
           "state": "process-killed",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "journal-recovery",
           "source": "not_applicable",
           "state": "clean",
           "status": "unavailable"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "journal-recovery",
           "source": "tested_on_recovery_failure",
           "state": "dirty",
           "status": "pass"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "journal-recovery",
           "source": "not_proven",
           "state": "corrupt",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "journal-recovery",
           "source": "not_proven",
           "state": "concurrent-change",
           "status": "not_proven"
         },
         {
-          "checker": "ntfs-aware-checker (unavailable)",
+          "checker": "ntfscat + $LogFile gate",
           "operation": "journal-recovery",
           "source": "not_proven",
           "state": "process-killed",
           "status": "not_proven"
         }
       ],
-      "checker": "ntfs-aware-checker (unavailable)",
+      "checker": "ntfscat + $LogFile gate",
       "filesystem": "NTFS",
       "profile_id": "ntfs-native-rw",
       "recovery": {
-        "journal_replay": "not_proven",
+        "journal_replay": "tested_native_synthetic_crash_fixture",
         "power_loss": "unsupported",
         "process_kill": "not_proven",
         "quarantine": "tested_on_recovery_failure",
