@@ -150,9 +150,10 @@ def test_ext4_writer_finishes_with_a_clean_checkpointed_journal(
     ext4_write_file_native(str(image), "/f.txt", b"checkpoint evidence\n")
     probe = probe_journal(str(image))
     assert probe.state is JournalState.CLEAN
-    # A cleanly unmounted ext4 keeps a nonzero ring head; ``s_sequence == 0``
-    # is the actual "no pending transaction" checkpoint marker.
-    assert probe.journal_sequence == 0
+    # ``s_start == 0`` is the durable empty marker written by the checkpoint
+    # (``plan_classic_jbd2_checkpoint`` zeroes 8/24/28); ``s_sequence`` is the
+    # next transaction id and is legitimately non-zero on a healthy image.
+    assert probe.journal_start == 0
     from mountfile.native_write import _run
 
     assert _run(["e2fsck", "-fn", str(image)]).returncode == 0

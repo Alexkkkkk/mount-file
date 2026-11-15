@@ -525,15 +525,20 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
         return Ext4JournalProbe(
             JournalState.ERROR, "JBD2 superblock V2 header is truncated", block_size
         )
-    start = struct.unpack_from(">I", raw, 0x18)[0]
-    sequence = struct.unpack_from(">I", raw, 0x1C)[0]
+    sequence = struct.unpack_from(">I", raw, 0x18)[0]
+    start = struct.unpack_from(">I", raw, 0x1C)[0]
     max_length = struct.unpack_from(">I", raw, 0x10)[0]
     first = struct.unpack_from(">I", raw, 0x14)[0]
-    # ``RECOVER`` in the ext4 superblock is the authoritative "journal must be
-    # replayed" marker.  ``s_start`` is NOT: a freshly made filesystem and a
-    # cleanly unmounted one both keep a non-zero head (typically 1 or 2) inside
-    # the ring.  Treating ``s_start != 0`` as dirty would refuse every healthy
-    # image, so it is only reported, and a head outside the ring is corruption.
+    # ``journal_superblock_t`` puts ``s_sequence`` at 0x18 and ``s_start`` at
+    # 0x1C (see :func:`jbd2_checkpoint.plan_classic_jbd2_checkpoint`, which
+    # clears 8/24/28, and the ``test_ext3_reader`` fixtures, which pack
+    # ``(sequence, start)`` at 24).  The two were read swapped here, which had
+    # two consequences: the ring-geometry test below was applied to the
+    # *transaction id* (so any filesystem with more transactions than journal
+    # blocks was misreported as corrupt), and a non-zero ``s_start`` -- a real
+    # uncheckpointed transaction -- was silently accepted as clean.
+    # ``RECOVER`` stays authoritative for "replay is required"; ``s_start`` is
+    # now the secondary dirty marker and a head outside the ring is corruption.
     if not max_length or first <= 0 or first >= max_length:
         return Ext4JournalProbe(
             JournalState.ERROR,
@@ -555,6 +560,19 @@ def probe_journal(image_path: str, offset: int = 0) -> Ext4JournalProbe:
             JournalState.NEEDS_REPLAY,
             f"ext4 RECOVER flag is set; journal replay required "
             f"(head s_start={start}, s_sequence={sequence})",
+            block_size,
+            start,
+            sequence,
+        )
+    if start:
+        # The recovery bit was cleared without the journal being checkpointed:
+        # the ring still holds a transaction whose blocks have not been written
+        # to their filesystem locations.  That is exactly the state PR #504
+        # produced by zeroing ``s_start``; it must never be called clean.
+        return Ext4JournalProbe(
+            JournalState.NEEDS_REPLAY,
+            f"JBD2 head s_start={start} is non-zero while RECOVER is clear; "
+            f"journal holds an uncheckpointed transaction (s_sequence={sequence})",
             block_size,
             start,
             sequence,
@@ -586,6 +604,28 @@ def _recover_flag_set(image_path: str, offset: int) -> bool:
     return bool(incompat & EXT4_FEATURE_INCOMPAT_RECOVER)
 
 
+def _clear_recover_flag(image_path: str, offset: int) -> None:
+    """Clear ``RECOVER`` durably after a *verified* replay of the journal.
+
+    The kernel does the same thing on mount: JBD2 replays the ring, and only
+    then is the incompatibility bit dropped.  Doing it without replay is the
+    PR #504 bug that discarded committed transactions, so this helper is private
+    and is called exclusively from :func:`recover_journal_on_copy` after the
+    coordinator returned successfully and before the independent checker runs.
+    It is only reachable for the checksum-free classic profile enforced by
+    :func:`require_supported_profile`, so no superblock checksum needs updating.
+    """
+
+    superblock_offset = offset + 1024
+    with open(image_path, "r+b") as stream:
+        stream.seek(superblock_offset + 0x60)
+        incompat = struct.unpack("<I", stream.read(4))[0]
+        stream.seek(superblock_offset + 0x60)
+        stream.write(struct.pack("<I", incompat & ~EXT4_FEATURE_INCOMPAT_RECOVER))
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def verify_image_after_operation(
     image_path: str, offset: int = 0, *, runner=_run
 ) -> dict:
@@ -600,8 +640,8 @@ def verify_image_after_operation(
     * the JBD2 probe must be :class:`~mountfile.journal_safety.JournalState.CLEAN`;
     * the ``RECOVER`` incompatibility bit must be clear in the on-disk
       superblock, read back without trusting either of the two above.
-    * the checkpoint sequence must be zero, proving that no transaction remains
-      pending after the operation.
+    * ``s_start`` must be zero, proving that no transaction remains pending
+      after the operation (a non-zero head means the ring still holds work).
 
     Returns machine-readable evidence for the acceptance matrix.
     """
@@ -613,16 +653,17 @@ def verify_image_after_operation(
             "ext4 RECOVER flag is still set after the operation"
         )
     probe = probe_journal(image_path, offset)
-    if probe.journal_sequence != 0:
+    if probe.journal_start != 0:
         raise Ext4ProfileUnsupported(
             "ext4 checkpoint is not empty after the operation: "
-            f"s_sequence={probe.journal_sequence}"
+            f"s_start={probe.journal_start}"
         )
     return {
         "checker": "e2fsck -fn",
         "exit_code": getattr(result, "returncode", 0),
         "journal_state": probe.state.value,
         "recover_flag": False,
+        "journal_start": probe.journal_start,
         "journal_sequence": probe.journal_sequence,
         "block_size": probe.block_size,
     }
@@ -657,6 +698,14 @@ def recover_journal_on_copy(
             raise Ext4ProfileUnsupported(
                 f"native JBD2 coordinator refused recovery: {exc}"
             ) from exc
+        # The coordinator applied the committed blocks and left the journal
+        # head checkpointed, but it does not own the *ext4* recovery marker:
+        # only ``e2fsck`` clears it, and the classic native profile is exactly
+        # the one where an external replay must do so.  Clear it after the
+        # replay succeeded and let the independent checker below decide whether
+        # the volume is actually consistent.
+        if _recover_flag_set(image_path, offset):
+            _clear_recover_flag(image_path, offset)
     else:
         runner(["e2fsck", "-fy", image_path], allowed={0, 1, 2, 3})
     # A replay that leaves the copy dirty, uncorrectable or structurally broken

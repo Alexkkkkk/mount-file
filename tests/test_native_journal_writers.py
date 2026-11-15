@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 import mountfile.ext4_native_writer as ext4_native_writer
+from mountfile.jbd2_writer import encode_classic_jbd2_transaction
 from mountfile.ext4_native_writer import (
     Ext4NativeWriter,
     Ext4ProfileUnsupported,
@@ -200,6 +201,207 @@ def test_ext4_replay_on_copy_uses_e2fsck_and_clears_recover(tmp_path):
     assert probe_journal(str(image), 0).state is JournalState.CLEAN
     # The replay really ran: the recovery bit is gone on disk.
     assert struct.unpack_from("<I", image.read_bytes(), 1024 + 0x60)[0] & 0x0004 == 0
+
+
+def _journal_geometry(image):
+    """Journal ring map plus the filesystem facts the scanner needs."""
+
+    profile = require_supported_profile(str(image))
+    superblock = image.read_bytes()[1024 : 1024 + 1024]
+    physical = resolve_journal_physical_blocks(str(image))
+    return {
+        "block_size": profile["block_size"],
+        "journal_physical": physical,
+        "filesystem_blocks": struct.unpack_from("<I", superblock, 0x04)[0],
+        "uuid": superblock[0x68:0x78],
+    }
+
+
+def _find_data_block(image, marker, block_size, filesystem_blocks):
+    data = image.read_bytes()
+    for block in range(1, filesystem_blocks):
+        start = block * block_size
+        if data[start : start + len(marker)] == marker:
+            return block
+    raise AssertionError(f"no block starts with {marker!r}")
+
+
+def _dirty_journal_image(tmp_path, *, seed=b"seed\n", replayed=b"RPXD\n"):
+    """Build a dirty image whose ring holds one committed classic transaction.
+
+    The transaction targets the real data block of ``/f.txt``, so a replay that
+    actually works changes what an independent reader (``debugfs cat``) sees.
+    """
+
+    image = make_ext4(tmp_path, seed=seed)
+    geo = _journal_geometry(image)
+    block_size = geo["block_size"]
+    target = _find_data_block(image, seed, block_size, geo["filesystem_blocks"])
+    payload = bytes(replayed).ljust(block_size, b"\x00")
+    records = encode_classic_jbd2_transaction(
+        block_size=block_size,
+        sequence=1,
+        filesystem_blocks=geo["filesystem_blocks"],
+        journal_uuid=geo["uuid"],
+        writes={target: payload},
+        journal_blocks=geo["journal_physical"],
+    )
+    physical = geo["journal_physical"]
+    with image.open("r+b") as handle:
+        head = physical[0] * block_size
+        handle.seek(head)
+        raw = bytearray(handle.read(block_size))
+        first = struct.unpack_from(">I", raw, 0x14)[0]
+        struct.pack_into(">I", raw, 0x08, 1)  # h_sequence
+        struct.pack_into(">I", raw, 0x18, 1)  # s_sequence
+        struct.pack_into(">I", raw, 0x1C, first)  # s_start
+        handle.seek(head)
+        handle.write(bytes(raw))
+        position = first
+        for record in records:
+            handle.seek(physical[position] * block_size)
+            handle.write(record)
+            position += 1
+        commit_block = physical[position - 1] * block_size
+    set_recover_bit(image)
+    return image, commit_block
+
+
+def _clear_recover_bit_raw(image):
+    """Drop ``RECOVER`` without letting ``tune2fs`` touch the journal head.
+
+    ``set_recover_bit`` prefers ``tune2fs``, which rewrites the journal
+    superblock and therefore destroys the uncheckpointed-head state a test is
+    trying to reproduce, so this raw patch mirrors its checksum-free fallback.
+    """
+
+    data = bytearray(image.read_bytes())
+    flags = struct.unpack_from("<I", data, 1024 + 0x60)[0]
+    struct.pack_into("<I", data, 1024 + 0x60, flags & ~0x0004)
+    image.write_bytes(bytes(data))
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_probe_reads_sequence_and_start_at_their_real_offsets(tmp_path):
+    """``s_sequence`` lives at 0x18 and ``s_start`` at 0x1C (journal_superblock_t).
+
+    Reading them swapped made every filesystem whose transaction id exceeded
+    the journal length look corrupt, because the ring-geometry test was applied
+    to the transaction id instead of to the journal head.
+    """
+
+    image = make_ext4(tmp_path)
+    geo = _journal_geometry(image)
+    head = geo["journal_physical"][0] * geo["block_size"]
+    with image.open("r+b") as handle:
+        handle.seek(head)
+        raw = bytearray(handle.read(geo["block_size"]))
+        struct.pack_into(">I", raw, 0x18, 5000)  # s_sequence far past maxlen
+        handle.seek(head)
+        handle.write(bytes(raw))
+    probe = probe_journal(str(image), 0)
+    assert probe.state is JournalState.CLEAN, probe.message
+    assert probe.journal_sequence == 5000
+    assert probe.journal_start == 0
+    assert "outside the ring" not in probe.message
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_probe_reports_uncheckpointed_head_as_needs_replay(tmp_path):
+    """A non-zero ``s_start`` with a clear RECOVER bit is not clean.
+
+    That is exactly the state PR #504 produced by zeroing the head without
+    replaying: the ring still holds committed-but-unapplied blocks.
+    """
+
+    image, _commit = _dirty_journal_image(tmp_path)
+    _clear_recover_bit_raw(image)
+    probe = probe_journal(str(image), 0)
+    assert probe.state is JournalState.NEEDS_REPLAY
+    assert "uncheckpointed" in probe.message
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_probe_reports_head_outside_ring_as_error(tmp_path):
+    image = make_ext4(tmp_path)
+    geo = _journal_geometry(image)
+    head = geo["journal_physical"][0] * geo["block_size"]
+    with image.open("r+b") as handle:
+        handle.seek(head)
+        raw = bytearray(handle.read(geo["block_size"]))
+        struct.pack_into(">I", raw, 0x1C, 99_999)
+        handle.seek(head)
+        handle.write(bytes(raw))
+    probe = probe_journal(str(image), 0)
+    assert probe.state is JournalState.ERROR
+    assert "outside the ring" in probe.message
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_native_replay_applies_the_committed_transaction(tmp_path):
+    """Issue #510 block B: the native coordinator is a working end-to-end path."""
+
+    image, _commit = _dirty_journal_image(tmp_path)
+    assert ext4_read(image) == "seed\n"
+    assert (
+        recover_journal_on_copy(
+            str(image),
+            0,
+            native_coordinator=ext4_native_writer.native_classic_jbd2_recover,
+        )
+        is True
+    )
+    # An independent reader sees the journaled bytes, not the on-disk ones.
+    assert ext4_read(image) == "RPXD\n"
+    assert probe_journal(str(image), 0).state is JournalState.CLEAN
+    assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
+
+
+@needs_ext
+@needs_libext2fs
+def test_ext4_native_writer_replays_then_writes_on_the_native_path(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image, _commit = _dirty_journal_image(tmp_path)
+    payload = b"after native replay\n"
+    assert (
+        Ext4NativeWriter(recover="native").write_file(str(image), "/f.txt", payload)
+        == len(payload)
+    )
+    assert ext4_read(image) == payload.decode()
+    assert _run(["e2fsck", "-fn", str(image)]).returncode == 0
+
+
+@needs_ext
+@needs_libext2fs
+@pytest.mark.parametrize("damage", ("torn_commit", "sequence_mismatch"))
+def test_ext4_native_writer_refuses_malformed_journal_and_keeps_original(
+    tmp_path, monkeypatch, damage
+):
+    """Interrupted or invalid commit -> typed refusal, source byte-identical."""
+
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image, commit_block = _dirty_journal_image(tmp_path)
+    with image.open("r+b") as handle:
+        handle.seek(commit_block)
+        block = bytearray(handle.read(4096))
+        if damage == "torn_commit":
+            block[:] = b"\x00" * len(block)
+        else:
+            struct.pack_into(">I", block, 0x08, 4242)
+        handle.seek(commit_block)
+        handle.write(bytes(block))
+    before = image.read_bytes()
+    with pytest.raises(Ext4ProfileUnsupported, match="coordinator refused"):
+        Ext4NativeWriter(recover="native").write_file(str(image), "/f.txt", b"x")
+    assert image.read_bytes() == before
+    assert ext4_read(image) == "seed\n"
+    assert list(tmp_path.glob(".mountfile-image-*")) == []
 
 
 # ---------------------------------------------------------------- ext4 writing
