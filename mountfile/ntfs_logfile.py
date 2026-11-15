@@ -1236,7 +1236,9 @@ def _parse_record(
                     f"log record at LSN {this_lsn} {name} slice [{off}:{off + length}) "
                     f"leaves the {data_len}-byte body"
                 )
-        if not target_attr and _requires_target_attr(redo_op):
+        # target_attr is an index into the open attribute table; slot 0 is a
+        # valid target.  LFS_NO_CLIENT (0xFFFF) is the only "no target" value.
+        if target_attr == LFS_NO_CLIENT and _requires_target_attr(redo_op):
             raise NtfsLogFileError(
                 f"log record at LSN {this_lsn} performs "
                 f"{OPERATION_NAMES.get(redo_op, hex(redo_op))} without a target attribute"
@@ -1600,7 +1602,11 @@ def _read_runs(
 
 
 def read_logfile_stream(
-    image_path, *, offset: int = 0, volume_size: int | None = None
+    image_path,
+    *,
+    offset: int = 0,
+    volume_size: int | None = None,
+    validate_mirror: bool = True,
 ) -> tuple[bytes, int, NtfsAttributeSummary]:
     """Read ``$LogFile``'s DATA stream from a volume without writing anything.
 
@@ -1618,7 +1624,12 @@ def read_logfile_stream(
         if offset < 0 or offset >= size_on_disk:
             raise NtfsLogFileError("volume offset is outside the image")
         volume_size = size_on_disk - offset
-    profile = probe_ntfs_metadata(image_path, offset=offset, volume_size=volume_size)
+    profile = probe_ntfs_metadata(
+        image_path,
+        offset=offset,
+        volume_size=volume_size,
+        validate_mirror=validate_mirror,
+    )
     boot = profile.boot
     mft_data: NtfsAttributeSummary | None = None
     for attribute in profile.attributes:

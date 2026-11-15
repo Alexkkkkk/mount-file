@@ -63,6 +63,26 @@ def test_ext2_recovery_evidence_is_more_complete_but_not_production_ready():
     assert ext2["blocking_cells"] == ["power_loss"]
 
 
+def test_ntfs_process_kill_evidence_is_recorded_without_claiming_power_loss():
+    acceptance = build_acceptance_report()
+    ntfs = next(
+        entry
+        for entry in acceptance["entries"]
+        if entry["profile_id"] == "ntfs-native-rw"
+    )
+    assert ntfs["recovery"]["rollback"] == "tested_on_failure"
+    assert ntfs["recovery"]["process_kill"] == "tested_staged_writer_boundaries"
+    assert ntfs["recovery"]["power_loss"] == "unsupported"
+    process_kill = next(
+        cell
+        for cell in ntfs["cells"]
+        if cell["operation"] == "write-file" and cell["state"] == "process-killed"
+    )
+    assert process_kill["status"] == "pass"
+    assert process_kill["source"] == "tested_staged_writer_boundaries"
+    assert ntfs["verdict"] == "blocked"
+
+
 def test_trusted_recovery_report_matches_the_committed_artifact():
     """The trusted gate only accepts a schema bump for recovery-matrix.json."""
     committed = json.loads(
@@ -134,11 +154,7 @@ def test_ntfs_and_ext4_recovery_cells_remain_explicitly_blocked():
     assert profiles["ext4-native-rw"]["verdict"] == "blocked"
     assert profiles["ntfs-native-rw"]["verdict"] == "blocked"
     assert profiles["ext4-native-rw"]["blocking_cells"] == ["power_loss"]
-    assert set(profiles["ntfs-native-rw"]["blocking_cells"]) == {
-        "rollback",
-        "process_kill",
-        "power_loss",
-    }
+    assert profiles["ntfs-native-rw"]["blocking_cells"] == ["power_loss"]
     # The experimental replay profiles never enter the trusted capability set.
     assert {entry["profile_id"] for entry in build_report()["entries"]} == {
         "fat12-16-native-rw",

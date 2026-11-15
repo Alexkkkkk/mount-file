@@ -767,7 +767,7 @@ def test_ntfs_quarantine_is_content_addressed_and_durable(tmp_path):
     marker = json.loads(Path(first.marker).read_text(encoding="utf-8"))
     assert marker["schema"] == "mountfile-ntfs-quarantine-v1"
     assert marker["sha256"] == first.sha256
-    assert marker["replay"] == "not_implemented"
+    assert marker["replay"] == "not_requested"
     assert marker["source"] == str(image.resolve())
 
 
@@ -811,13 +811,14 @@ def test_ntfs_writer_quarantines_dirty_volume_in_copy_mode(tmp_path, monkeypatch
 
 
 @needs_ntfs
-def test_ntfs_gate_summary_reports_replay_is_not_implemented(tmp_path, monkeypatch):
+def test_ntfs_gate_summary_reports_replay_is_implemented(tmp_path, monkeypatch):
     monkeypatch.setenv(ENABLE_ENV, "1")
     image = _make_ntfs(tmp_path)
     summary = logfile_gate_summary(str(image), 0)
     assert summary["clean"] is True
     assert summary["writable"] is True
-    assert summary["replay_implemented"] is False
+    assert summary["replay_implemented"] is True
+    assert summary["replay_modes"] == ["native", "copy", "refuse"]
 
 
 @needs_ntfs

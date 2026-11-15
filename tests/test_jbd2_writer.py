@@ -381,7 +381,6 @@ def test_ring_planner_rejects_data_and_revoke_target_overlap():
     "kwargs",
     [
         {"block_size": 512},
-        {"sequence": 0},
         {"filesystem_blocks": 0},
         {"writes": {0: b"A" * 1024}},
         {"writes": {4096: b"A" * 1024}},
@@ -407,7 +406,9 @@ def test_rejects_unsupported_or_unsafe_transaction_shapes(kwargs):
 
 def _superblock(*, block_size=1024, max_length=64, first=1, sequence=17, start=0):
     raw = bytearray(block_size)
-    struct.pack_into(">III", raw, 0, _MAGIC, 3, sequence)
+    # h_sequence is unused in a journal superblock; s_sequence at 0x18 is the
+    # expected transaction ID.
+    struct.pack_into(">III", raw, 0, _MAGIC, 3, 0)
     struct.pack_into(">IIIII", raw, 12, block_size, max_length, first, sequence, start)
     raw[48:64] = _UUID
     return bytes(raw)
@@ -436,14 +437,14 @@ def test_parse_classic_jbd2_superblock_validates_empty_ring_state():
     [
         (lambda raw: struct.pack_into(">I", raw, 12, 2048), "block size"),
         (lambda raw: struct.pack_into(">I", raw, 16, 63), "ring length"),
-        (lambda raw: struct.pack_into(">I", raw, 8, 0), "sequence"),
+        (lambda raw: struct.pack_into(">I", raw, 24, 0), "sequence"),
         (lambda raw: raw.__setitem__(slice(48, 64), b"x" * 16), "UUID"),
         (lambda raw: struct.pack_into(">I", raw, 36, 1), "feature"),
         (lambda raw: struct.pack_into(">I", raw, 28, 64), "start"),
     ],
 )
 def test_parse_classic_jbd2_superblock_rejects_unsafe_state(mutates, message):
-    raw = bytearray(_superblock())
+    raw = bytearray(_superblock(start=1))
     mutates(raw)
     with pytest.raises(JBD2WriteProfileError, match=message):
         parse_classic_jbd2_superblock(
