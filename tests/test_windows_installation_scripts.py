@@ -57,6 +57,10 @@ def test_powershell_mock_suite():
         ],
         capture_output=True,
         text=True,
+        # PowerShell emits UTF-8; decoding with the Windows ANSI code page
+        # raised UnicodeDecodeError on non-ASCII output.
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     output = (result.stdout or "") + (result.stderr or "")
