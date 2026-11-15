@@ -16,6 +16,9 @@ from mountfile.capabilities import get_native_capability_matrix
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 
+# The README is Russian-first: "нет" is the documented "no" cell.
+_NO_WRITE_CELLS = frozenset({"no", "нет", "—", "-", ""})
+
 # README native-support table row -> profiles whose write capabilities count.
 ROWS = {
     "ext3/ext4": ("ext3", "ext4"),
@@ -29,7 +32,7 @@ def _readme_write_claims() -> dict[str, bool]:
         for row in ROWS:
             if line.startswith(f"| {row} "):
                 cells = [cell.strip() for cell in line.strip("|").split("|")]
-                claims[row] = cells[2].lower() not in {"no", "—", "-", ""}
+                claims[row] = cells[2].lower() not in _NO_WRITE_CELLS
     return claims
 
 
