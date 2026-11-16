@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "main",
-    "commit": "de319ea",
+    "branch": "fix/issue-510-acceptance",
+    "commit": "bb85658",
     "version": "1.95.0",
     "checked": "2026-11-15"
   },
@@ -172,12 +172,14 @@
       "id": "C1",
       "block": "C",
       "title": "Честный fail-closed по умолчанию",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
         "mountfile/ntfs_replay_executor.py",
-        "mountfile/ntfs_native_writer.py"
+        "mountfile/ntfs_native_writer.py",
+        "tests/test_ntfs_acceptance_independent_checker.py"
       ],
-      "note": "bounded executor появился в #513/#514; нужен свежий вердикт CI, что путь по умолчанию остаётся fail-closed"
+      "note": "путь по умолчанию fail-closed закреплён тестом: NtfsNativeWriter() без аргументов = recover=\"refuse\" + require_flag, dirty-образ → typed NtfsProfileUnsupported без записи и без карантина; recover=\"copy\" → карантин с сохранением источника байт-в-байт",
+      "reproduced": "2026-11-15: tests/test_ntfs_acceptance_independent_checker.py — 9 passed (test_default_writer_is_fail_closed_and_refuses_dirty_image, test_recover_copy_quarantines_dirty_image_and_preserves_source; Python 3.12.3, mkntfs/ntfscp 2022.10.3)"
     },
     {
       "id": "C2",
@@ -229,14 +231,15 @@
       "id": "C6",
       "block": "C",
       "title": "Replay на dirty/crashed фикстурах с независимым чекером",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
         "tests/ntfs_crash_fixture.py",
         "tests/test_ntfs_replay.py",
-        "tests/test_ntfs_writer_fault_coverage.py"
+        "tests/test_ntfs_writer_fault_coverage.py",
+        "tests/test_ntfs_acceptance_independent_checker.py"
       ],
-      "note": "есть только read-only фикстура tests/fixtures/ntfs-readonly-32m.img.gz; dirty/crash нет",
-      "reproduced": "2026-11-15: генератор dirty-фикстуры существует (tests/ntfs_crash_fixture.py: mkntfs-том + JBD-подобный LSN-лог + $Volume dirty); test_ntfs_replay.py — 4 passed, test_ntfs_writer_fault_coverage.py — в общем прогоне 57 passed. Независимая проверка восстановленного тома внешним чекером (ntfsfix) в этой среде не выполнялась (ntfs-3g tools недоступны) — потому partial, а не verified"
+      "note": "dirty/crash-фикстура из mkntfs-тома; независимый чекер ntfsfix -n (ntfs-3g, не разделяет код с replay): dirty → rc=1 ($MFTMirr mismatch), после native_ntfs_recover → rc=0 \"processed successfully\"",
+      "reproduced": "2026-11-15: test_replayed_crash_volume_passes_independent_ntfsfix_checker — ntfsfix -n на dirty фикстуре rc=1, после replay rc=0; ntfs-3g 2022.10.3, Python 3.12.3"
     },
     {
       "id": "C7",
@@ -274,32 +277,40 @@
       "id": "D2",
       "block": "D",
       "title": "Process-kill для каждой transaction phase",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "tests/test_jbd2_interrupted_commit.py"
+        "tests/test_jbd2_interrupted_commit.py",
+        "tests/test_ntfs_writer_fault_coverage.py"
       ],
-      "note": "для ext4 сделано (B8); для NTFS — нет"
+      "note": "process-kill закрыт для обоих профилей: ext4 (B8, SIGKILL на границах FAULT_HOOK) и NTFS (SIGKILL на каждой из 9 FAULT_POINTS через fault_hook_installed в дочернем процессе; источник байт-в-байт сохранён до publish:done)",
+      "reproduced": "2026-11-15: python -m pytest tests/test_ntfs_writer_fault_coverage.py → 10 passed (trace покрывает все FAULT_POINTS; process-kill тесты на 9 точках, mkntfs/ntfscp доступны) + tests/test_jbd2_interrupted_commit.py — 1 passed"
     },
     {
       "id": "D3",
       "block": "D",
       "title": "Hash preservation оригинала на каждом отказе",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
         "mountfile/ntfs_native_writer.py",
+        "mountfile/native_write.py",
+        "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_jbd2_malformed_journal_refusal.py"
       ],
-      "note": "проверено для сбоев публикации и ext4; систематически по всем путям — нет"
+      "note": "hash preservation систематичен для обоих нативных профилей: NTFS — SHA-256 до/после SIGKILL на каждой из 9 точек отказа (источник неизменен до publish:done); ext4 — отказные матрицы test_native_writer_failure_matrix/test_jbd2_malformed_journal_refusal",
+      "reproduced": "2026-11-15: tests/test_ntfs_writer_fault_coverage.py — 10 passed (assert after == before на каждой точке кроме publish:done, после publish probe_ntfs_log clean); test_native_writer_failure_matrix.py — 11 passed"
     },
     {
       "id": "D4",
       "block": "D",
       "title": "Source identity / concurrent modification",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "mountfile/native_write.py"
+        "mountfile/native_write.py",
+        "tests/test_ntfs_acceptance_independent_checker.py",
+        "tests/test_ext2_native.py"
       ],
-      "note": "guard по SHA-256 перед atomic replace; отдельного acceptance-прогона в треде нет"
+      "note": "guard по SHA-256 перед atomic replace получил acceptance-прогон: конкурентная модификация источника во время staging → NativeWriteUnsafe \"changed concurrently\", источник отличается от эталона ровно внешней правкой offset 512, staged-контент и временные файлы не публикуются (NTFS; ext2-аналог test_native_ext2_rejects_concurrent_change_before_commit)",
+      "reproduced": "2026-11-15: test_concurrent_source_modification_is_refused_and_source_preserved — 1 passed (diff против pristine-эталона = ровно [512]); test_native_ext2_rejects_concurrent_change_before_commit — 1 passed"
     },
     {
       "id": "D5",
@@ -322,8 +333,8 @@
         "tests/test_failure_matrix_artifact.py",
         ".github/workflows/ci.yml"
       ],
-      "note": "заготовка есть, покрытие ограничено",
-      "reproduced": "2026-11-15: machine-readable артефакт profile x operation x state x checker добавлен; CI эмитит и валидирует failure-matrix.json на каждой ноге; skipped_cells всегда 0, typed refused_no_evidence вместо скрытых skip; тесты 5 passed"
+      "note": "machine-readable артефакт profile x operation x state x checker (5 профилей x 4 состояния = 20 ячеек); skipped_cells всегда 0, недоказанные ячейки — typed refused_no_evidence; checker-претензии: ext4=e2fsck, ntfs=ntfsfix (check-only, -n), остальные not_claimed",
+      "reproduced": "2026-11-15: tests/test_failure_matrix_artifact.py — 5 passed после добавления ntfsfix-претензии; тест checker-ячейки ext4 расширен по аналогии"
     },
     {
       "id": "D7",
@@ -350,13 +361,14 @@
       "id": "E2",
       "block": "E",
       "title": "#390: CI-гейт на расхождение README / CLI / runtime",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
         "scripts/product_status_contract.py",
         "scripts/verify_generated_status.py",
-        ".github/workflows/status-sync.yml"
+        ".github/workflows/ci.yml"
       ],
-      "note": "verdict pass, артефакты совпадают; job отсутствует в required status checks main"
+      "note": "механизм гейта закрыт: job \"Verify (status, secrets, versions, tests)\" в ci.yml на каждый push/PR и добавлен в required status checks main (подтверждено через GET /branches/main: 12 контекстов включая Verify); финальный README-флип (A4) остаётся за #390",
+      "reproduced": "2026-11-15: GitHub API /repos/Alexkkkkk/mount-file/branches/main → required_status_checks.contexts содержит \"Verify (status, secrets, versions, tests)\"; локально product_status_contract verdict=pass, verify_generated_status exit 0"
     },
     {
       "id": "E3",
