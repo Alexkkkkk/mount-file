@@ -87,8 +87,8 @@ This generated summary is informational: unsupported, dirty, ambiguous and recov
 | FAT12/16/32 | Да | Ограниченно | Ограниченная геометрия и метаданные; для FAT12/16 — фиксированный корневой каталог |
 | exFAT | Да | Ограниченно | Профиль с одной FAT, проверенные метаданные и состояние тома |
 | ext2 | Да | Ограниченно | Метаданные из allow-list, ограниченная прямая/косвенная ёмкость |
-| ext3/ext4 | Read-only | No | Консервативные профили; журнал, recovery и неподдерживаемые возможности → отказ |
-| NTFS | Read-only | No | Ограниченный читатель; нативный писатель намеренно отключён |
+| ext3/ext4 | Read-only | No | Продуктовая запись не поддерживается; bounded JBD2 replay экспериментальный, требует явного opt-in и не прошёл полный acceptance |
+| NTFS | Read-only | No | Продуктовая запись не поддерживается; bounded replay включается явно, проверен на synthetic fixtures, parity с Windows/chkdsk отсутствует |
 
 > Ячейки `Read-only` / `No` намеренно оставлены на английском: это машинно
 > проверяемые токены гейта статуса (`tests/test_readme_status_gate.py`,

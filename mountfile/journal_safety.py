@@ -117,7 +117,7 @@ class NTFSLogFileManager:
             return NTFSLogCheckResult(NTFSLogState.NEEDS_REPLAY, str(exc))
         return NTFSLogCheckResult(
             NTFSLogState.ERROR,
-            "ntfsfix is diagnostic only; authoritative $LogFile replay is not implemented",
+            "ntfsfix is diagnostic only and cannot establish Windows chkdsk parity",
         )
 
     def require_clean(self, image_path: str, runner: CommandRunner) -> None:
