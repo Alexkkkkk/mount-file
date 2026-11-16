@@ -1,25 +1,28 @@
 # $LogFile on-disk layout verified against Linux `fs/ntfs3/fslog.c`
 
-> **Implementation boundary:** this document specifies the read-only, MIT
-> implementation in `mountfile.ntfs_logfile`. It is not an image-level replay
-> implementation. `NtfsReplayOverlay` applies a plan only to a private in-memory
-> byte buffer when the caller has already resolved every target; it never opens
-> an image for writing and does not guess MFT/attribute/runlist locations.
-> The external `dfir_ntfs` project is GPL-3.0 and is therefore not vendored or
-> imported into this MIT project; it is also a parser rather than a complete
-> NTFS metadata mutation engine. Dirty-log replay remains `unavailable` and is
-> rejected fail-closed until an independently licensed executor has complete
-> acceptance evidence.
+> **Implementation boundary:** `mountfile.ntfs_logfile` parses and plans log
+> records; the repository also has a bounded image-level executor in
+> `mountfile.ntfs_replay` that is invoked by the native writer for
+> `recover="native"`. Replay is limited to a supported operation set, operates
+> on a disposable copy, and fails closed on unsupported targets or mutations.
+> The synthetic crash fixtures are not Windows-generated captures.
+>
+> This executor is experimental, not a product-level NTFS write-support claim.
+> `ntfsfix -n` is auxiliary evidence only; Windows `chkdsk` parity and byte-level
+> `$MFT`/`$BITMAP` comparison have not been established. The external
+> `dfir_ntfs` project is GPL-3.0 and is not vendored or imported into this MIT
+> project.
 
 Source of truth: <https://raw.githubusercontent.com/torvalds/linux/master/fs/ntfs3/fslog.c>
 (fetched 2026-11-14, line numbers below refer to that file). Every offset in this
 note is either taken from a struct comment in that file or confirmed by one of
 its `static_assert` calls; nothing here is inferred from memory.
 
-This note backs the bounded `$LogFile` analyzer in
-`mountfile/ntfs_logfile.py` (issue #510 block C, issue #386). The analyzer parses
-and plans; it does **not** mutate images --
-execution stays gated on the acceptance evidence of issue #387.
+This note backs the bounded `$LogFile` analyzer and replay work in
+`mountfile/ntfs_logfile.py` and `mountfile/ntfs_replay.py` (issue #510 block C,
+issue #386). Parser/replay tests use synthetic images. Image-level replay exists,
+but production support remains gated on the external acceptance evidence in
+issue #387.
 
 ## Restart page (`RSTR`)
 

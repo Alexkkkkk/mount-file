@@ -214,11 +214,19 @@ jobs:
 
       - name: Emit failure coverage matrix
         if: always()
-        run: python scripts/failure_matrix_artifact.py --repo-root . --json-out failure-matrix.json
+        run: >-
+          python scripts/failure_matrix_artifact.py
+          --repo-root .
+          --junitxml test-results.xml
+          --json-out failure-matrix.json
 
       - name: Validate failure coverage matrix
         if: always()
-        run: python scripts/failure_matrix_artifact.py --repo-root . --validate failure-matrix.json
+        run: >-
+          python scripts/failure_matrix_artifact.py
+          --repo-root .
+          --junitxml test-results.xml
+          --validate failure-matrix.json
 
       - name: Upload failure coverage matrix
         if: always()
@@ -288,9 +296,8 @@ jobs:
           merge-multiple: false
       - name: Aggregate platform evidence fail-closed
         env:
-          # The speed-layer matrix intentionally retains Linux and Windows.
-          # The script still defaults to all three platforms outside CI.
-          MOUNTFILE_EXPECTED_PLATFORMS: linux,windows
+          # PR/merge-queue speed tier is Linux + Windows; main/full runs include macOS.
+          MOUNTFILE_EXPECTED_PLATFORMS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'linux,windows' || 'linux,windows,macos' }}
         run: |
           python scripts/cross_platform_evidence.py \
             platform-evidence \

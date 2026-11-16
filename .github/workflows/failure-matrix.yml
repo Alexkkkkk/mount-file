@@ -36,19 +36,47 @@ jobs:
       - name: Run failure-injection and process-kill matrix
         run: |
           python -m pytest \
+            tests/test_fat1216_writer.py \
             tests/test_native_writer_failure_matrix.py \
+            tests/test_ext2_native.py::test_native_ext2_staging_failure_does_not_modify_original \
+            tests/test_ext2_native.py::test_native_ext2_rolls_back_and_verifies_restored_extent_hash \
+            tests/test_ext2_native.py::test_native_ext2_short_rollback_write_is_not_claimed_as_restored \
+            tests/test_ext2_native.py::test_native_ext2_recovers_after_process_dies_mid_commit \
+            tests/test_ext2_native.py::test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup \
+            tests/test_ext2_native.py::test_native_ext2_cleanup_failure_after_commit_does_not_roll_back \
+            tests/test_ext2_native.py::test_native_ext2_refuses_to_overwrite_unknown_commit_bytes \
+            tests/test_ext2_native.py::test_native_ext2_rejects_concurrent_change_before_commit \
             tests/test_ntfs_writer_fault_coverage.py \
             tests/test_ext4_writer_fault_coverage.py \
             tests/test_ntfs_crash_oracle_matrix.py \
             tests/test_jbd2_checkpoint_interruption.py \
             -q --junitxml=failure-matrix.xml
+      - name: Emit test, checker and acceptance evidence separately
+        if: always()
+        run: >-
+          python scripts/failure_matrix_artifact.py
+          --repo-root .
+          --junitxml failure-matrix.xml
+          --json-out failure-matrix.json
+      - name: Validate generated matrix against JUnit
+        if: always()
+        run: >-
+          python scripts/failure_matrix_artifact.py
+          --repo-root .
+          --junitxml failure-matrix.xml
+          --validate failure-matrix.json
+          --json-out failure-matrix-validation.json
       - name: Regenerate status artifacts
+        if: always()
         run: python scripts/sync_repository_status.py --repo-root . --output-dir docs/generated
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
         with:
           name: failure-matrix-${{ github.sha }}
           path: |
             failure-matrix.xml
+            failure-matrix.json
+            failure-matrix-validation.json
             docs/generated/
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14

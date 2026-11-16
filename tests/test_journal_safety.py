@@ -61,5 +61,5 @@ def test_ntfs_log_gate_does_not_treat_ntfsfix_as_authoritative():
     result = NTFSLogFileManager().check_logfile("image.img", runner)
 
     assert result.state is NTFSLogState.ERROR
-    with pytest.raises(JournalSafetyError, match="authoritative"):
+    with pytest.raises(JournalSafetyError, match="chkdsk parity"):
         NTFSLogFileManager().require_clean("image.img", runner)

@@ -2,26 +2,28 @@
 
 Проверено по `main` на коммите `ec7b4c61c3fc0f6e7845dec11215416161323e3d` от 10 ноября 2026 года. Этот документ задаёт техническое решение и критерии готовности; он сам по себе не включает запись в файловые системы и не заменяет приёмочные тесты.
 
+> **Historical plan snapshot:** subsequent changes added bounded ext4/JBD2 writing and NTFS `$LogFile` replay. Statements below that say those paths are absent describe the 10 November snapshot only. Current implementation status and remaining external acceptance criteria are in `docs/issue-510-acceptance-status.md`; ext3/ext4 and NTFS remain product-level read-only.
+
 ## Главный вывод
 
-Задачи #385 и #386 нельзя безопасно закрыть простым включением уже существующих writer-профилей. Для ext3/ext4 нет интегрированного JBD2 transaction/replay/checkpoint протокола; для NTFS есть ограниченная проверка restart area `$LogFile`, но нет полноценного разбора и проигрывания redo/undo-записей. Включать запись до восстановления после аварийного завершения означает рисковать повреждением образа. Поэтому ext3/ext4 и NTFS должны оставаться read-only, пока не пройдут отдельные gates из #387–#390. Это соответствует текущей capability matrix и существующему отказу для неподдерживаемых профилей. [1] [2] [7] [8]
+На срезе этого плана bounded ext4/JBD2 writer/replay и NTFS `$LogFile` replay уже присутствуют в коде, но это не закрывает issues #385/#386 и не разрешает product-level writes. По-прежнему обязательны полная failure/phase coverage, подходящие независимые checks, реальные Windows-generated NTFS crash fixtures и сравнение с Windows `chkdsk`. Поэтому ext3/ext4 и NTFS остаются read-only в пользовательском контракте. [1] [2] [7] [8]
 
 При этом у проекта уже есть значимая основа: ограниченные native readers, профильная capability matrix, typed refusal коды, тесты отказа без legacy fallback, checker/recovery acceptance runners и read-only VFS benchmark. Задачи #387–#390 в основном требуют довести эти разрозненные механизмы до сквозных и воспроизводимых доказательств, а не переписывать их с нуля. [3] [4] [5] [6] [7]
 
-### Что уже попало в main
+### Исторический список изменений до даты этого плана
 
-- **#385:** PR #447 добавил строгую non-mutating проверку JBD2 superblock state и использование independent checker на disposable copy. Полный transaction writer, checkpoint и process-kill recovery ещё не готовы; issue прямо требует держать ext3/ext4 read-only. [24]
-- **#386:** PR #474 усилил read-only `$LogFile` restart checks. Это валидация, не NTFS writer/replay. [25]
-- **#387:** PR #407 добавил machine-readable recovery matrix, PR #417 — executable recovery acceptance и Linux artifacts. Остались непокрытые profile/failure-phase cells; recovery contract сам помечает process-kill/quarantine для FAT12/16, FAT32 и exFAT как `not_proven`, а power-loss — как `unsupported`. [26] [27] [8]
+- **#385:** PR #447 добавил строгую non-mutating проверку JBD2 superblock state и checker на disposable copy; bounded writer/replay появились позже. [24]
+- **#386:** PR #474 усилил read-only `$LogFile` restart checks; parser и ограниченный replay появились позже. [25]
+- **#387:** PR #407 добавил machine-readable recovery matrix, PR #417 — executable recovery acceptance и Linux artifacts. Это ограниченные тесты, а не полная матрица acceptance; `power_loss` остаётся `unsupported`. [26] [27] [8]
 - **#388:** PR #399 добавил `stat`, PR #400 — bounded RW `read_range` (до 1 MiB). Требование полного вызова каждой положительной/отрицательной operation cell и сохранения refusal/fallback parity across interfaces всё ещё требует отдельного conformance прохода. [28] [29] [30]
-- **#389:** PR #397/#404/#416 добавили bounded tool inventory, декларативную/исполняемую checker acceptance; PR #441 расширил cross-platform native-read evidence. Это не означает, что каждый независимый filesystem checker исполняется на каждой OS, или что все image/profile/operation cells уже имеют fixtures. [31] [32] [33] [34]
-- **#390:** PR #402/#409/#419 добавили capability/evidence поля, status contract и benchmark artifact validator; PR #468 заставляет `status-sync` падать при устаревшем generated README status. Эта проверка находит и в данном PR реальный drift: README показывал 1.86.0 при package version 1.86.1; файл перегенерирован штатным `scripts/generate_readme.py`. Cross-platform benchmark provenance и write benchmark matrix остаются открытыми; текущий benchmark read-only и Linux-specific. [35] [36] [37] [38] [39] [40]
+- **#389:** PR #397/#404/#416 добавили bounded tool inventory и checker acceptance; PR #441 расширил cross-platform native-read evidence. Текущая полная main matrix включает Linux, Windows и macOS, но read-only VFS evidence не является independent filesystem parity. [31] [32] [33] [34]
+- **#390:** status contract и benchmark artifact validator присутствуют. Required `Verify (status, secrets, versions, tests)` check сейчас входит в branch protection; отдельный `status-sync.yml` не добавлен в required contexts этим изменением. Benchmark coverage остаётся read-only и Linux-specific. [35] [36] [37] [38] [39] [40]
 
 ## #385 — ext3/ext4 writer с JBD2
 
 ### Что не готово
 
-`jbd2_writer.py` умеет работать с ограниченными записями журнала, а `jbd2_checkpoint.py` содержит отдельные checkpoint helpers, однако они не объединены в полный путь файловой мутации, commit, replay и recovery. ext3/ext4 остаются read-only; проверка `e2fsck` на временной копии не доказывает crash safety писателя. [1] [9] [10]
+В репозитории теперь есть ограниченные writer/replay/checkpoint пути для ext4/JBD2, включая checksummed journal handling и selected process-kill tests. Это не доказывает полную crash safety для всех операций и metadata phases; `e2fsck` на disposable copy подтверждает только конкретный tested case. ext3/ext4 остаются read-only в product status. [1] [9] [10]
 
 ### Решение
 
@@ -37,7 +39,7 @@
 
 ### Что не готово
 
-Текущий NTFS reader проверяет ограниченную restart area `$LogFile` и состояние тома для чтения. Он не реализует полный parser страниц журнала, transaction model, redo/undo, compensation records, checkpoint и безопасное восстановление. Microsoft описывает журнал на высоком уровне как механизм восстановления, но этого описания недостаточно для реализации низкоуровневого on-disk replay; сам issue перечисляет широкий набор требуемых NTFS metadata/transaction операций. [2] [11] [12] [25]
+В репозитории теперь есть `$LogFile` parser и bounded redo/undo replay для ограниченного набора операций под `recover="native"`; unsupported mutations остаются fail-closed. Synthetic fixtures подтверждают только реализованные случаи. Реальные Windows crash captures, Windows `chkdsk` reference results и byte-level `$MFT`/`$BITMAP` comparison отсутствуют, поэтому product-level NTFS writes остаются неподдерживаемыми. [2] [11] [12] [25]
 
 ### Решение
 
@@ -53,7 +55,7 @@
 
 ### Что уже есть и чего не хватает
 
-В `recovery_acceptance.py` перечислены реальные fixtures для FAT12/16, FAT32, ext2 и exFAT, но это ограниченный набор тестов, а не полная таблица операций и точек отказа. ext2 уже имеет более развитые process-kill/recovery проверки. Для FAT12/16, FAT32 и exFAT capability contract всё ещё указывает `process_kill`/`quarantine` как `not_proven`; для всех writer-профилей `power_loss` остаётся `unsupported`. Process-kill нельзя выдавать за доказательство внезапного отключения питания. [3] [7] [14]
+В `recovery_acceptance.py` и nightly failure workflow перечислены fixtures для FAT12/16, FAT32, ext2, exFAT, ext4/JBD2 и NTFS. Это всё ещё ограниченный набор тестов, а не полная таблица операций и metadata failure phases. В текущих fault suites есть process-kill на объявленных staged-writer boundaries, но этот результат не означает process-kill на каждой transaction phase; для всех writer-профилей `power_loss` остаётся `unsupported`. Process-kill нельзя выдавать за доказательство внезапного отключения питания. [3] [7] [14]
 
 ### Решение
 

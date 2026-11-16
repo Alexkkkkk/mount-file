@@ -2,6 +2,8 @@
 
 Аудит выполнен по `origin/main` на commit `7ab919d` (`feat(layers): самообучающиеся AI-слои...`). Цель аудита — отделить реально работающие bounded-профили от заявлений, которые пока нельзя считать production-ready.
 
+> **Historical snapshot:** this audit predates the bounded ext4/JBD2 writer and NTFS `$LogFile` replay paths now present in the repository. Statements below that say those implementations do not exist describe the audited commit only; they are not current status and do not imply that either filesystem is production-ready. See `docs/issue-510-acceptance-status.md` and `docs/issue-385-390-production-readiness.md` for the current conservative status.
+
 ## Итог
 
 Репозиторий находится в рабочем промежуточном состоянии, но не готов объявлять полную native read/write поддержку всех заявленных файловых систем. Это не дефект safety-контракта: ограничения в основном выставлены намеренно и fail-closed. Неготовыми остаются прежде всего ext3/ext4 и NTFS native writers, power-loss evidence для всех writable profiles, а также два открытых status PR.

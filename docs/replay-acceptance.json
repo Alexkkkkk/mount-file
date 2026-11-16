@@ -2,10 +2,10 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "fix/issue-510-acceptance",
-    "commit": "bb85658",
+    "branch": "fix/issue-510-evidence-contract",
+    "commit": "0559287",
     "version": "1.95.0",
-    "checked": "2026-11-15"
+    "checked": "2026-11-16"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -47,10 +47,16 @@
     {
       "id": "A4",
       "block": "A",
-      "title": "Таблица README отражает фактический статус",
-      "status": "not_started",
-      "evidence": [],
-      "note": "README: ext3/ext4 и NTFS = Read-only/No; закрывается вместе с #390"
+      "title": "README сохраняет ext3/ext4 и NTFS в read-only до принятия replay",
+      "status": "verified",
+      "evidence": [
+        "README.md",
+        "scripts/product_status_contract.py",
+        "tests/test_readme_status_gate.py",
+        "scripts/verify_generated_status.py"
+      ],
+      "note": "README advertises ext3/ext4 and NTFS as Read-only/No; не флипать на запись до закрытия B, C и D.",
+      "reproduced": "2026-11-16: product-status/README gates validate the read-only product status; replay acceptance remains open."
     },
     {
       "id": "B1",
@@ -135,14 +141,14 @@
     {
       "id": "B8",
       "block": "B",
-      "title": "Process-kill на каждой transaction boundary",
-      "status": "verified",
+      "title": "Process-kill at selected ext4 staged-writer fault boundaries",
+      "status": "partial",
       "evidence": [
         "mountfile/native_write.py",
-        "tests/test_jbd2_interrupted_commit.py"
+        "tests/test_ext4_writer_fault_coverage.py"
       ],
-      "reproduced": "2026-11-15: FAULT_HOOK в mountfile/native_write.py; 6 точек + сохранение источника",
-      "note": "FAULT_HOOK = seam"
+      "reproduced": "2026-11-16: tests/test_ext4_writer_fault_coverage.py passes seven active SIGKILL boundary cases; source remains unchanged before publish:done.",
+      "note": "SIGKILL проверен на объявленных staged-writer boundaries; это не каждая JBD2 transaction/metadata phase и не power-loss proof."
     },
     {
       "id": "B9",
@@ -224,22 +230,22 @@
         "mountfile/ntfs_mft_allocation.py",
         "tests/test_ntfs_mft_allocation.py"
       ],
-      "note": "не начато",
+      "note": "Bounded MFT record reuse helpers exist; extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
       "reproduced": "2026-11-15: планировщик reuse добавлен (plan_mft_record_reuse: $MFT+$MFTMirr USA-валидация, free-запись, sequence+1 c wrap, 7 typed refusals; тесты 7 passed). Подключение к write-пути и независимый чекер — не сделаны, потому partial, а не verified"
     },
     {
       "id": "C6",
       "block": "C",
-      "title": "Replay на dirty/crashed фикстурах с независимым чекером",
-      "status": "verified",
+      "title": "Synthetic NTFS crash fixtures with auxiliary ntfsfix -n checks",
+      "status": "partial",
       "evidence": [
         "tests/ntfs_crash_fixture.py",
         "tests/test_ntfs_replay.py",
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_ntfs_acceptance_independent_checker.py"
       ],
-      "note": "dirty/crash-фикстура из mkntfs-тома; независимый чекер ntfsfix -n (ntfs-3g, не разделяет код с replay): dirty → rc=1 ($MFTMirr mismatch), после native_ntfs_recover → rc=0 \"processed successfully\"",
-      "reproduced": "2026-11-15: test_replayed_crash_volume_passes_independent_ntfsfix_checker — ntfsfix -n на dirty фикстуре rc=1, после replay rc=0; ntfs-3g 2022.10.3, Python 3.12.3"
+      "note": "Fixtures are synthetic mkntfs-based images. ntfsfix -n is secondary evidence only, not a Windows/chkdsk oracle or parity proof; real Windows captures and byte-level $MFT/$BITMAP comparison are absent.",
+      "reproduced": "2026-11-16: synthetic crash-oracle cases exercise bounded replay and ntfsfix -n; no Windows reference data is available."
     },
     {
       "id": "C7",
@@ -276,28 +282,28 @@
     {
       "id": "D2",
       "block": "D",
-      "title": "Process-kill для каждой transaction phase",
-      "status": "verified",
+      "title": "Process-kill at selected staged-writer boundaries",
+      "status": "partial",
       "evidence": [
-        "tests/test_jbd2_interrupted_commit.py",
+        "tests/test_ext4_writer_fault_coverage.py",
         "tests/test_ntfs_writer_fault_coverage.py"
       ],
-      "note": "process-kill закрыт для обоих профилей: ext4 (B8, SIGKILL на границах FAULT_HOOK) и NTFS (SIGKILL на каждой из 9 FAULT_POINTS через fault_hook_installed в дочернем процессе; источник байт-в-байт сохранён до publish:done)",
-      "reproduced": "2026-11-15: python -m pytest tests/test_ntfs_writer_fault_coverage.py → 10 passed (trace покрывает все FAULT_POINTS; process-kill тесты на 9 точках, mkntfs/ntfscp доступны) + tests/test_jbd2_interrupted_commit.py — 1 passed"
+      "note": "Mapped ext4 and NTFS process-kill cases cover declared staged-writer boundaries only; not every filesystem transaction or metadata operation. NTFS cases remain synthetic.",
+      "reproduced": "2026-11-16: expanded local failure-matrix run passed 58 tests; seven ext4 and seven NTFS active kill-boundary cases passed. This is not two scheduled nightly runs."
     },
     {
       "id": "D3",
       "block": "D",
-      "title": "Hash preservation оригинала на каждом отказе",
-      "status": "verified",
+      "title": "Hash preservation on mapped refusal and failure cases",
+      "status": "partial",
       "evidence": [
         "mountfile/ntfs_native_writer.py",
         "mountfile/native_write.py",
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_jbd2_malformed_journal_refusal.py"
       ],
-      "note": "hash preservation систематичен для обоих нативных профилей: NTFS — SHA-256 до/после SIGKILL на каждой из 9 точек отказа (источник неизменен до publish:done); ext4 — отказные матрицы test_native_writer_failure_matrix/test_jbd2_malformed_journal_refusal",
-      "reproduced": "2026-11-15: tests/test_ntfs_writer_fault_coverage.py — 10 passed (assert after == before на каждой точке кроме publish:done, после publish probe_ntfs_log clean); test_native_writer_failure_matrix.py — 11 passed"
+      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; this does not prove preservation for every profile × operation × phase cell.",
+      "reproduced": "2026-11-16: targeted failure-matrix JUnit reports passing mapped cases; remaining cells are not proven."
     },
     {
       "id": "D4",
@@ -326,15 +332,16 @@
     {
       "id": "D6",
       "block": "D",
-      "title": "CI-артефакт profile × operation × state × checker",
-      "status": "verified",
+      "title": "JUnit-backed profile × operation × failure-state artifact",
+      "status": "partial",
       "evidence": [
         "scripts/failure_matrix_artifact.py",
         "tests/test_failure_matrix_artifact.py",
-        ".github/workflows/ci.yml"
+        ".github/workflows/ci.yml",
+        ".github/workflows/failure-matrix.yml"
       ],
-      "note": "machine-readable артефакт profile x operation x state x checker (5 профилей x 4 состояния = 20 ячеек); skipped_cells всегда 0, недоказанные ячейки — typed refused_no_evidence; checker-претензии: ext4=e2fsck, ntfs=ntfsfix (check-only, -n), остальные not_claimed",
-      "reproduced": "2026-11-15: tests/test_failure_matrix_artifact.py — 5 passed после добавления ntfsfix-претензии; тест checker-ячейки ext4 расширен по аналогии"
+      "note": "v2 uses exact JUnit node IDs across 7 profiles × 4 states; checker execution is separate from test execution; acceptance is always not_claimed. Unmatched/empty evidence cannot turn green.",
+      "reproduced": "2026-11-16: expanded local run 58 passed; artifact recorded 19/28 cells as passed and 9/28 as not_proven; checker states were separately typed. Manual/local evidence does not satisfy scheduled-nightly criteria."
     },
     {
       "id": "D7",
@@ -352,10 +359,13 @@
       "title": "#389: Windows/macOS evidence, unavailable vs pass как typed outcome",
       "status": "partial",
       "evidence": [
-        "tests/_independent_checkers.py",
-        "scripts/native_read_evidence.py"
+        "scripts/native_read_evidence.py",
+        "scripts/cross_platform_evidence.py",
+        "tests/test_cross_platform_evidence.py",
+        ".github/workflows/ci.yml"
       ],
-      "note": "macos_read_only_adapter_contract → not_collected/blocked; macOS-раннер только для бинарника"
+      "note": "Full main-push matrix aggregates Linux, Windows and macOS read-only VFS evidence; PR/merge-queue fast tier aggregates Linux+Windows. Independent filesystem parity is not claimed; Windows checker inventory remains unavailable.",
+      "reproduced": "2026-11-16: main CI includes all three OS legs; platform aggregate now requires all three on full runs and retains two on fast runs. No replay parity is implied."
     },
     {
       "id": "E2",
@@ -365,10 +375,11 @@
       "evidence": [
         "scripts/product_status_contract.py",
         "scripts/verify_generated_status.py",
+        "tests/test_readme_status_gate.py",
         ".github/workflows/ci.yml"
       ],
-      "note": "механизм гейта закрыт: job \"Verify (status, secrets, versions, tests)\" в ci.yml на каждый push/PR и добавлен в required status checks main (подтверждено через GET /branches/main: 12 контекстов включая Verify); финальный README-флип (A4) остаётся за #390",
-      "reproduced": "2026-11-15: GitHub API /repos/Alexkkkkk/mount-file/branches/main → required_status_checks.contexts содержит \"Verify (status, secrets, versions, tests)\"; локально product_status_contract verdict=pass, verify_generated_status exit 0"
+      "note": "Required Verify (status, secrets, versions, tests) context enforces repository/product-status consistency; the separate status-sync.yml check is not a required context. Product-facing ext3/ext4 and NTFS status remains read-only.",
+      "reproduced": "2026-11-16: branch protection required_status_checks API returned Verify (status, secrets, versions, tests); local product-status/README gates pass."
     },
     {
       "id": "E3",
