@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "fix/issue-510-mft-replay-refusal",
-    "commit": "ecb36ae",
+    "branch": "chore/issue-510-tracker-sync",
+    "commit": "a9d21a3",
     "version": "1.96.0",
     "checked": "2026-11-16"
   },
@@ -29,8 +29,8 @@
         "pyproject.toml",
         "mountfile/__init__.py"
       ],
-      "reproduced": "2026-11-15: version = 1.95.0 в pyproject.toml и __version__ = 1.95.0",
-      "note": "v1.95.0 = d31b4dc"
+      "reproduced": "2026-11-16: тег v1.96.0 = 3a59d36 (git ls-remote) содержит #508; pyproject.toml и __version__ = 1.96.0",
+      "note": "v1.96.0 = 3a59d36; HEAD main (a9d21a3) впереди тега только фиксами доказательной базы (#532, #533)"
     },
     {
       "id": "A3",
@@ -350,11 +350,15 @@
       "id": "D7",
       "block": "D",
       "title": "Unsupported-ячейки как typed refusals, а не скрытые skip",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "scripts/product_status_contract.py"
+        "scripts/capability_conformance.py",
+        "tests/test_capability_conformance.py",
+        "tests/test_vfs_refusal_routing.py",
+        "tests/test_fat_capability_identity.py"
       ],
-      "note": "подтверждено для NTFS; для остальных профилей — нет"
+      "note": "typed refusal-контракт закреплён машинно для всех профилей, не только NTFS; parity по-прежнему not_claimed",
+      "reproduced": "2026-11-16: validate_matrix() → verdict pass, 12 профилей × 10 операций = 120 ячеек, refusal-ячейки типизированы; VFS-маршрутизация сохраняет причину отказа без тихого fallback (113 passed)"
     },
     {
       "id": "E1",
