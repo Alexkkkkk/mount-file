@@ -34,6 +34,7 @@ from tests.ntfs_crash_fixture import mark_volume_dirty
 needs_ntfs = pytest.mark.skipif(
     shutil.which("mkntfs") is None
     or shutil.which("ntfscp") is None
+    or shutil.which("ntfscat") is None
     or shutil.which("ntfsfix") is None,
     reason="ntfs-3g tools (mkntfs/ntfscp/ntfsfix) are unavailable",
 )
@@ -87,9 +88,10 @@ def _dirty_bit_only_fixture(tmp_path: Path) -> Path:
     return image
 
 
-def _make_scenario(tmp_path: Path, scenario: str) -> Path:
+def _make_scenario(tmp_path: Path, scenario: str) -> tuple[Path, bytes]:
     if scenario == "dirty-bit-only":
-        return _dirty_bit_only_fixture(tmp_path)
+        image = _dirty_bit_only_fixture(tmp_path)
+        return image, (tmp_path / "payload.bin").read_bytes()
     from tests.ntfs_crash_fixture import make_crash_fixture
 
     kwargs = {
@@ -98,7 +100,17 @@ def _make_scenario(tmp_path: Path, scenario: str) -> Path:
         "active-transaction": {"active": True},
         "active-nonresident": {"active": True, "nonresident": True},
     }[scenario]
-    return make_crash_fixture(tmp_path, **kwargs).image
+    fixture = make_crash_fixture(tmp_path, **kwargs)
+    expected = fixture.old_data if scenario.startswith("active-") else fixture.new_data
+    return fixture.image, expected
+
+
+def _ntfscat(image: Path) -> bytes:
+    result = subprocess.run(
+        ["ntfscat", str(image), "/target"], capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    return result.stdout
 
 
 def _volume_dirty_flag(image: Path) -> int:
@@ -112,7 +124,7 @@ def _volume_dirty_flag(image: Path) -> int:
 @needs_ntfs
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
-    image = _make_scenario(tmp_path, scenario)
+    image, expected_data = _make_scenario(tmp_path, scenario)
     before = _sha256(image)
 
     # 1. The independent checker must refuse the dirty volume first.
@@ -126,6 +138,10 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
     result = native_ntfs_recover(str(image))
     assert result.changed is True, f"{scenario}: replay reported no change"
     assert result.volume_flags_after == 0, f"{scenario}: dirty flag survived"
+    actual_data = _ntfscat(image)
+    assert actual_data[: len(expected_data)] == expected_data, (
+        f"{scenario}: replayed target data differs from its redo/undo expectation"
+    )
 
     # 3. The independent checker must accept the recovered volume.
     recovered = _ntfsfix_no(image)
