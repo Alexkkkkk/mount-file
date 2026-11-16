@@ -940,7 +940,9 @@ def _apply_stream_operation(
                 raise NtfsReplayError("short read from bitmap stream")
             buffer += chunk
         for bit in range(bitmap_off, bitmap_off + bits):
-            position = bit - bitmap_off
+            # ``buffer`` starts at byte_start, not at the requested bit. Keep
+            # the bit's intra-byte offset while preserving adjacent bits.
+            position = bit - byte_start * 8
             if set_bit:
                 buffer[position // 8] |= 1 << (position % 8)
             else:
