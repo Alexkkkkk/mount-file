@@ -7,6 +7,7 @@ executor, not a private overlay: the source is a disposable copy, the clean
 restart pages are written, ``$Volume`` is cleared and ``ntfscat`` reads the
 replayed bytes back.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -134,12 +135,15 @@ def test_second_recovery_is_a_clean_noop(tmp_path):
 
 
 def test_mft_allocation_and_bitmap_operations_are_not_allowlisted():
-    assert not {
-        OP_INITIALIZE_FILE_RECORD,
-        OP_DEALLOCATE_FILE_RECORD,
-        OP_SET_BITS_IN_NONRESIDENT_BITMAP,
-        OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
-    } & SUPPORTED_OPERATIONS
+    assert (
+        not {
+            OP_INITIALIZE_FILE_RECORD,
+            OP_DEALLOCATE_FILE_RECORD,
+            OP_SET_BITS_IN_NONRESIDENT_BITMAP,
+            OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
+        }
+        & SUPPORTED_OPERATIONS
+    )
 
 
 @needs_ntfs
