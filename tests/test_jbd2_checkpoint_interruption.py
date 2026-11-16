@@ -24,6 +24,7 @@ import struct
 import subprocess
 
 import pytest
+from test_jbd2_csum_replay import _dirty_v3_image, _target_bytes
 
 from mountfile.ext4_native_writer import (
     _clear_recover_flag,
@@ -40,7 +41,6 @@ from mountfile.jbd2_checkpoint import (
 )
 from mountfile.jbd2_writer import parse_jbd2_superblock
 from mountfile.journal_safety import JournalState
-from test_jbd2_csum_replay import _dirty_v3_image, _target_bytes
 
 needs_ext = pytest.mark.skipif(
     shutil.which("mkfs.ext4") is None
