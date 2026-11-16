@@ -15,6 +15,7 @@ def test_checker_matrix_is_json_serialisable_and_never_claims_parity():
     profiles = {entry["profile"]: entry for entry in report["entries"]}
     assert {
         "ext2-native-rw",
+        "ext4-native-rw",
         "fat12-16-native-rw",
         "fat32-native-rw",
         "exfat-native-rw",
