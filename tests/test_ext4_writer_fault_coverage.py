@@ -151,8 +151,11 @@ def test_ext4_process_kill_preserves_source_until_atomic_publish(
         assert after != before
         probe = probe_journal(str(image))
         assert probe.state is JournalState.CLEAN
-        assert subprocess.run(
-            ["e2fsck", "-fn", str(image)], capture_output=True
-        ).returncode == 0
+        assert (
+            subprocess.run(
+                ["e2fsck", "-fn", str(image)], capture_output=True
+            ).returncode
+            == 0
+        )
     else:
         assert after == before, f"SIGKILL at {point} mutated the source image"

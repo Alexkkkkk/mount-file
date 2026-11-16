@@ -130,18 +130,18 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
     # 1. The independent checker must refuse the dirty volume first.
     dirty = _ntfsfix_no(image)
     assert _sha256(image) == before, f"{scenario}: ntfsfix -n modified the image"
-    assert dirty.returncode != 0, (
-        f"{scenario}: ntfsfix -n accepted a dirty volume: {dirty.stdout}"
-    )
+    assert (
+        dirty.returncode != 0
+    ), f"{scenario}: ntfsfix -n accepted a dirty volume: {dirty.stdout}"
 
     # 2. Replay on the image handed in (the test owns disposability: tmp_path).
     result = native_ntfs_recover(str(image))
     assert result.changed is True, f"{scenario}: replay reported no change"
     assert result.volume_flags_after == 0, f"{scenario}: dirty flag survived"
     actual_data = _ntfscat(image)
-    assert actual_data[: len(expected_data)] == expected_data, (
-        f"{scenario}: replayed target data differs from its redo/undo expectation"
-    )
+    assert (
+        actual_data[: len(expected_data)] == expected_data
+    ), f"{scenario}: replayed target data differs from its redo/undo expectation"
 
     # 3. The independent checker must accept the recovered volume.
     recovered = _ntfsfix_no(image)

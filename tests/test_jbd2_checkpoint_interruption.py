@@ -96,9 +96,7 @@ def _coordinate_with_injection(image, uuid: bytes, *, fault_at_phase: str):
 
 @needs_ext
 @pytest.mark.parametrize("phase", ["data", "journal-superblock"])
-def test_checkpoint_interruption_before_clean_marker_requires_replay(
-    tmp_path, phase
-):
+def test_checkpoint_interruption_before_clean_marker_requires_replay(tmp_path, phase):
     """A crash before the durable clean marker never fakes a clean volume."""
     image, target_block, uuid, _journal_blocks, _records = _dirty_v3_image(tmp_path)
 
@@ -126,9 +124,10 @@ def test_checkpoint_interruption_before_clean_marker_requires_replay(
         is True
     )
     assert probe_journal(str(image)).state is JournalState.CLEAN
-    assert subprocess.run(
-        ["e2fsck", "-fn", str(image)], capture_output=True
-    ).returncode == 0
+    assert (
+        subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode
+        == 0
+    )
 
 
 @needs_ext
@@ -145,9 +144,10 @@ def test_recovery_after_checkpoint_interruption_succeeds(tmp_path):
     probe = probe_journal(str(image))
     assert probe.state is JournalState.CLEAN, probe.message
     assert probe.journal_start == 0
-    assert subprocess.run(
-        ["e2fsck", "-fn", str(image)], capture_output=True
-    ).returncode == 0
+    assert (
+        subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode
+        == 0
+    )
     assert _target_bytes(image, tmp_path)[:4] == b"NEW!"
 
 
@@ -167,7 +167,8 @@ def test_full_checkpoint_run_leaves_volume_clean(tmp_path):
     probe = probe_journal(str(image))
     assert probe.state is JournalState.CLEAN, probe.message
     assert probe.journal_start == 0
-    assert subprocess.run(
-        ["e2fsck", "-fn", str(image)], capture_output=True
-    ).returncode == 0
+    assert (
+        subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode
+        == 0
+    )
     assert _target_bytes(image, tmp_path)[:4] == b"NEW!"
