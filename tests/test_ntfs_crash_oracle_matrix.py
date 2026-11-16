@@ -117,6 +117,7 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
 
     # 1. The independent checker must refuse the dirty volume first.
     dirty = _ntfsfix_no(image)
+    assert _sha256(image) == before, f"{scenario}: ntfsfix -n modified the image"
     assert dirty.returncode != 0, (
         f"{scenario}: ntfsfix -n accepted a dirty volume: {dirty.stdout}"
     )
