@@ -3,7 +3,7 @@
   "tracker": 510,
   "slice": {
     "branch": "fix/issue-510-mft-replay-refusal",
-    "commit": "e459310",
+    "commit": "ecb36ae",
     "version": "1.96.0",
     "checked": "2026-11-16"
   },
@@ -208,9 +208,11 @@
       "status": "partial",
       "evidence": [
         "mountfile/ntfs_replay.py",
-        "mountfile/ntfs_replay_executor.py"
+        "mountfile/ntfs_replay_executor.py",
+        "tests/test_ntfs_bitmap_handler.py"
       ],
-      "note": "код есть; независимого подтверждения применения к метаданным нет"
+      "note": "Nonresident bitmap byte handler has unit coverage for misaligned ranges, neighbor preservation and bounds refusal. Bitmap/MFT allocation operations remain excluded from the replay allowlist; no independent volume-level metadata checker is claimed. C3 remains partial.",
+      "reproduced": "2026-11-16: tests/test_ntfs_bitmap_handler.py → 3 passed; end-to-end synthetic-log refusal/hash-preservation cases also pass. These tests validate the isolated byte handler and fail-closed policy only, not Windows replay parity."
     },
     {
       "id": "C4",
