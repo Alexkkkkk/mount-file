@@ -131,12 +131,12 @@ STREAM_OPERATIONS = frozenset(
         OP_UPDATE_RECORD_DATA_ALLOCATION,
     )
 )
-# The bounded executor implements these byte-level operations.  Index entry
-# surgery is refused until it has an independent index checker.
+# The bounded executor implements these byte-level operations.  MFT record
+# allocation/deallocation and bitmap mutation remain refused until the MFT
+# allocation planner is wired in and independently checked; index entry
+# surgery is also refused until it has an independent index checker.
 SUPPORTED_OPERATIONS = frozenset(
     (
-        OP_INITIALIZE_FILE_RECORD,
-        OP_DEALLOCATE_FILE_RECORD,
         OP_WRITE_END_OF_FILE_RECORD,
         OP_CREATE_ATTRIBUTE,
         OP_DELETE_ATTRIBUTE,
@@ -144,8 +144,6 @@ SUPPORTED_OPERATIONS = frozenset(
         OP_UPDATE_NONRESIDENT_VALUE,
         OP_UPDATE_MAPPING_PAIRS,
         OP_SET_NEW_ATTRIBUTE_SIZES,
-        OP_SET_BITS_IN_NONRESIDENT_BITMAP,
-        OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
         OP_ZERO_END_OF_FILE_RECORD,
     )
 )
@@ -942,7 +940,9 @@ def _apply_stream_operation(
                 raise NtfsReplayError("short read from bitmap stream")
             buffer += chunk
         for bit in range(bitmap_off, bitmap_off + bits):
-            position = bit - bitmap_off
+            # ``buffer`` starts at byte_start, not at the requested bit. Keep
+            # the bit's intra-byte offset while preserving adjacent bits.
+            position = bit - byte_start * 8
             if set_bit:
                 buffer[position // 8] |= 1 << (position % 8)
             else:
