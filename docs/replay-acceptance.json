@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "fix/issue-510-evidence-contract",
-    "commit": "c547394",
+    "branch": "fix/issue-510-mft-replay-refusal",
+    "commit": "e459310",
     "version": "1.96.0",
     "checked": "2026-11-16"
   },
@@ -121,10 +121,11 @@
       "title": "Transaction checksums (JBD2 csum) end-to-end",
       "status": "verified",
       "evidence": [
-        "tests/test_jbd2_csum_replay.py"
+        "tests/test_jbd2_csum_replay.py",
+        "tests/test_ext4_jbd2_csum.py"
       ],
-      "note": "8 passed независимо воспроизведено 2026-11-15 вне исходной машины (Python 3.12.3, без OOM)",
-      "reproduced": "2026-11-15: независимое воспроизведение вне исходной машины — python -m pytest tests/test_jbd2_csum_replay.py → 8 passed (Python 3.12.3, без OOM); ранее 8 passed по отчёту 2026-11-15"
+      "note": "Локальный повторный прогон 2026-11-16: 16 passed, без OOM.",
+      "reproduced": "2026-11-16: python -m pytest -q tests/test_ext4_jbd2_csum.py tests/test_jbd2_csum_replay.py → 16 passed (Python 3.12.3, Linux sandbox)"
     },
     {
       "id": "B7",
@@ -197,7 +198,7 @@
         "tests/test_ntfs_logfile_parser.py",
         "tests/test_ntfs_logfile_draft_golden.py"
       ],
-      "reproduced": "2026-11-15: LogClient/ClientRestartArea/LogRecord/Transaction, RCRD, USA — файлы и тесты в main",
+      "reproduced": "2026-11-16: python -m pytest -q tests/test_ntfs_logfile_parser.py tests/test_ntfs_logfile_draft_golden.py → 40 passed (Python 3.12.3, Linux sandbox)",
       "note": "утверждение об отсутствии парсера устарело"
     },
     {
