@@ -27,8 +27,6 @@ from mountfile.ntfs_mft import (
     parse_ntfs_file_record_header,
 )
 
-_SEQUENCE_MODULUS = 1 << 16
-
 
 class NtfsMftAllocationError(ValueError):
     """Typed refusal to allocate or reuse an MFT record slot."""
@@ -74,11 +72,20 @@ def plan_mft_record_reuse(
             "mft_mirr_mismatch",
             f"$MFT sequence {record.sequence_number} != mirror content",
         )
+    if record.sequence_number == 0xFFFF:
+        # Sequence zero is rejected by decode_ntfs_file_reference().  Do not
+        # manufacture an unusable next reference by wrapping modulo 2**16;
+        # the correct NTFS reuse behavior at exhaustion needs independent
+        # format evidence before this planner can safely proceed.
+        raise NtfsMftAllocationError(
+            "sequence_exhausted",
+            "candidate sequence 0xFFFF has no supported successor",
+        )
     try:
         record_number, sequence = decode_ntfs_file_reference(reference)
     except NtfsRecordError as exc:
         raise NtfsMftAllocationError("reference_invalid", str(exc)) from exc
-    expected = (record.sequence_number + 1) % _SEQUENCE_MODULUS
+    expected = record.sequence_number + 1
     if sequence != expected:
         raise NtfsMftAllocationError(
             "sequence_mismatch",

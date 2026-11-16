@@ -58,6 +58,16 @@ def test_sequence_wrap_at_uint16_is_planned():
     assert plan.next_sequence == 0xFFFF
 
 
+def test_sequence_exhaustion_has_a_specific_typed_refusal():
+    with pytest.raises(NtfsMftAllocationError) as excinfo:
+        plan_mft_record_reuse(
+            _raw_record(0xFFFF, in_use=False),
+            _raw_record(0xFFFF, in_use=False),
+            _reference(42, 1),
+        )
+    assert excinfo.value.reason == "sequence_exhausted"
+
+
 def test_in_use_candidate_is_refused():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
         plan_mft_record_reuse(
