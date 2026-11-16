@@ -33,7 +33,7 @@ read-only анализ и умеет ограниченно писать — т�
 
 | | |
 |---|---|
-| Версия пакета | `1.95.0` — синхронизирована в `pyproject.toml` и `mountfile/__init__.py`; готовые сборки в [Releases](https://github.com/Alexkkkkk/mount-file/releases) |
+| Версия пакета | `1.96.0` — синхронизирована в `pyproject.toml` и `mountfile/__init__.py`; готовые сборки в [Releases](https://github.com/Alexkkkkk/mount-file/releases) |
 | Документация | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Репозиторий | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | Лицензия | [MIT](LICENSE) |
@@ -61,7 +61,7 @@ read-only анализ и умеет ограниченно писать — т�
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `1.95.0`.
+This block is generated from the canonical status data in this repository. Package version: `1.96.0`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 

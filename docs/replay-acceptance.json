@@ -4,7 +4,7 @@
   "slice": {
     "branch": "fix/issue-510-acceptance",
     "commit": "bb85658",
-    "version": "1.95.0",
+    "version": "1.96.0",
     "checked": "2026-11-15"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
