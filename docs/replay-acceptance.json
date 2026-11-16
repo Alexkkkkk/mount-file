@@ -231,7 +231,7 @@
         "tests/test_ntfs_mft_allocation.py"
       ],
       "note": "Bounded MFT record reuse helpers exist; extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
-      "reproduced": "2026-11-15: планировщик reuse добавлен (plan_mft_record_reuse: $MFT+$MFTMirr USA-валидация, free-запись, sequence+1 c wrap, 7 typed refusals; тесты 7 passed). Подключение к write-пути и независимый чекер — не сделаны, потому partial, а не verified"
+      "reproduced": "2026-11-16: plan_mft_record_reuse checks USA-restored $MFT/$MFTMirr bytes, free state, reference-to-candidate slot identity, and the supported sequence successor; sequence 0xFFFF is refused. The planner remains unwired to the replay writer, and independent Windows checking is unavailable; C5 therefore remains partial. Planner unit tests: 10 passed."
     },
     {
       "id": "C6",

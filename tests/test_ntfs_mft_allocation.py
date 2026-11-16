@@ -35,8 +35,17 @@ def _reference(record_number: int, sequence: int) -> int:
     return (sequence << 48) | record_number
 
 
-def test_free_record_with_matching_mirror_and_sequence_is_planned():
-    plan = plan_mft_record_reuse(
+def _plan_reuse(raw_record, raw_mirror, reference, candidate_record_number=42):
+    return plan_mft_record_reuse(
+        raw_record,
+        raw_mirror,
+        reference,
+        candidate_record_number=candidate_record_number,
+    )
+
+
+def test_free_record_with_matching_mirror_sequence_and_slot_is_planned():
+    plan = _plan_reuse(
         _raw_record(7, in_use=False),
         _raw_record(7, in_use=False),
         _reference(42, 8),
@@ -50,17 +59,18 @@ def test_free_record_with_matching_mirror_and_sequence_is_planned():
 
 def test_sequence_wrap_at_uint16_is_planned():
     # Zero is a reserved sequence, so wrap goes 0xFFFE -> 0xFFFF.
-    plan = plan_mft_record_reuse(
+    plan = _plan_reuse(
         _raw_record(0xFFFE, in_use=False),
         _raw_record(0xFFFE, in_use=False),
         _reference(1, 0xFFFF),
+        candidate_record_number=1,
     )
     assert plan.next_sequence == 0xFFFF
 
 
 def test_sequence_exhaustion_has_a_specific_typed_refusal():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(
+        _plan_reuse(
             _raw_record(0xFFFF, in_use=False),
             _raw_record(0xFFFF, in_use=False),
             _reference(42, 1),
@@ -70,7 +80,7 @@ def test_sequence_exhaustion_has_a_specific_typed_refusal():
 
 def test_in_use_candidate_is_refused():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(
+        _plan_reuse(
             _raw_record(7, in_use=True),
             _raw_record(7, in_use=True),
             _reference(42, 8),
@@ -80,7 +90,7 @@ def test_in_use_candidate_is_refused():
 
 def test_sequence_mismatch_is_refused():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(
+        _plan_reuse(
             _raw_record(7, in_use=False),
             _raw_record(7, in_use=False),
             _reference(42, 9),
@@ -88,9 +98,31 @@ def test_sequence_mismatch_is_refused():
     assert excinfo.value.reason == "sequence_mismatch"
 
 
+def test_reference_record_number_must_match_candidate_slot():
+    with pytest.raises(NtfsMftAllocationError) as excinfo:
+        _plan_reuse(
+            _raw_record(7, in_use=False),
+            _raw_record(7, in_use=False),
+            _reference(42, 8),
+            candidate_record_number=41,
+        )
+    assert excinfo.value.reason == "candidate_record_mismatch"
+
+
+def test_candidate_slot_outside_ntfs_reference_range_is_refused():
+    with pytest.raises(NtfsMftAllocationError) as excinfo:
+        _plan_reuse(
+            _raw_record(7, in_use=False),
+            _raw_record(7, in_use=False),
+            _reference(42, 8),
+            candidate_record_number=1 << 48,
+        )
+    assert excinfo.value.reason == "candidate_record_number_invalid"
+
+
 def test_mirror_content_mismatch_is_refused():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(
+        _plan_reuse(
             _raw_record(7, in_use=False),
             _raw_record(8, in_use=False),
             _reference(42, 8),
@@ -100,7 +132,7 @@ def test_mirror_content_mismatch_is_refused():
 
 def test_invalid_candidate_usa_is_refused():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(
+        _plan_reuse(
             _raw_record(7, in_use=False, usa_mismatch=True),
             _raw_record(7, in_use=False),
             _reference(42, 8),
@@ -110,7 +142,7 @@ def test_invalid_candidate_usa_is_refused():
 
 def test_zero_sequence_reference_is_refused():
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(
+        _plan_reuse(
             _raw_record(7, in_use=False),
             _raw_record(7, in_use=False),
             _reference(42, 0),

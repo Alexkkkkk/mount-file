@@ -9,7 +9,8 @@ to an image.  Reuse is planned only when:
 * both the $MFT candidate record and its $MFTMirr copy parse with valid
   USA fixups;
 * the candidate record is marked not-in-use (actually free);
-* the log reference sequence equals the candidate sequence + 1 (mod 2**16);
+* the log reference names the candidate slot and its sequence equals the
+  candidate sequence + 1 (when the successor is supported);
 * the $MFTMirr copy is byte-identical to the USA-restored $MFT record.
 
 Wiring this planner into a write path is intentionally out of scope here;
@@ -47,13 +48,19 @@ class MftAllocationPlan:
 
 
 def plan_mft_record_reuse(
-    raw_record: object, raw_mirror: object, reference: int
+    raw_record: object,
+    raw_mirror: object,
+    reference: int,
+    *,
+    candidate_record_number: int,
 ) -> MftAllocationPlan:
     """Plan reuse of a free MFT record slot backed by a consistent mirror.
 
     ``raw_record`` and ``raw_mirror`` are the raw $MFT and $MFTMirr record
     bytes; ``reference`` is the NTFS file reference from the log entry that
-    wants the slot.  Refusals are typed via :class:`NtfsMftAllocationError`.
+    wants the slot. ``candidate_record_number`` identifies the MFT slot from
+    which both record buffers were read and must match the reference's record
+    number. Refusals are typed via :class:`NtfsMftAllocationError`.
     """
     try:
         record = parse_ntfs_file_record_header(raw_record, require_in_use=False)
@@ -85,6 +92,20 @@ def plan_mft_record_reuse(
         record_number, sequence = decode_ntfs_file_reference(reference)
     except NtfsRecordError as exc:
         raise NtfsMftAllocationError("reference_invalid", str(exc)) from exc
+    if (
+        type(candidate_record_number) is not int
+        or candidate_record_number < 0
+        or candidate_record_number >= (1 << 48)
+    ):
+        raise NtfsMftAllocationError(
+            "candidate_record_number_invalid",
+            "candidate slot is outside the 48-bit MFT record range",
+        )
+    if record_number != candidate_record_number:
+        raise NtfsMftAllocationError(
+            "candidate_record_mismatch",
+            f"log reference names {record_number}, candidate slot is {candidate_record_number}",
+        )
     expected = record.sequence_number + 1
     if sequence != expected:
         raise NtfsMftAllocationError(
