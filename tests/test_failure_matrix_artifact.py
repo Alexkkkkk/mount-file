@@ -9,7 +9,8 @@ from scripts.failure_matrix_artifact import SCHEMA, build_report, validate_repor
 
 def _cell(report, profile, state):
     return next(
-        cell for cell in report["cells"]
+        cell
+        for cell in report["cells"]
         if cell["profile"] == profile and cell["state"] == state
     )
 
@@ -22,7 +23,9 @@ def _junit(path: Path, testcases: list[tuple[str, str, str]]) -> Path:
             f'<testcase classname="{classname}" name="{name}">{outcome}</testcase>'
         )
     path.write_text(
-        '<testsuites><testsuite name="pytest">' + "".join(cases) + "</testsuite></testsuites>",
+        '<testsuites><testsuite name="pytest">'
+        + "".join(cases)
+        + "</testsuite></testsuites>",
         encoding="utf-8",
     )
     return path
@@ -31,7 +34,11 @@ def _junit(path: Path, testcases: list[tuple[str, str, str]]) -> Path:
 def test_empty_evidence_files_do_not_create_coverage(tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
-    for name in ("test_fat1216_writer.py", "test_ext2_native.py", "test_ntfs_writer_fault_coverage.py"):
+    for name in (
+        "test_fat1216_writer.py",
+        "test_ext2_native.py",
+        "test_ntfs_writer_fault_coverage.py",
+    ):
         (tests_dir / name).write_text("", encoding="utf-8")
     junit = _junit(tmp_path / "empty.xml", [])
 

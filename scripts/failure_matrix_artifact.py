@@ -29,47 +29,154 @@ def _case(
     include: tuple[str, ...] = (),
     exclude: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    return {"module": module, "name": name, "include": list(include), "exclude": list(exclude)}
+    return {
+        "module": module,
+        "name": name,
+        "include": list(include),
+        "exclude": list(exclude),
+    }
 
 
 # These are test selectors, not declarations of completed acceptance. Parameter
 # selectors narrow evidence to a particular FAT width or a real process-kill seam.
 TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
     "fat12": {
-        "short_write": [_case("test_fat1216_writer", "test_fat1216_short_write_rolls_back_and_preserves_sentinels")],
-        "injected_exception": [_case("test_fat1216_writer", "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean", include=("[12-1474560]",))],
-        "process_kill": [_case("test_fat1216_writer", "test_fat1216_process_kill_before_atomic_replace_never_publishes", include=("[12]",))],
+        "short_write": [
+            _case(
+                "test_fat1216_writer",
+                "test_fat1216_short_write_rolls_back_and_preserves_sentinels",
+            )
+        ],
+        "injected_exception": [
+            _case(
+                "test_fat1216_writer",
+                "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+                include=("[12-1474560]",),
+            )
+        ],
+        "process_kill": [
+            _case(
+                "test_fat1216_writer",
+                "test_fat1216_process_kill_before_atomic_replace_never_publishes",
+                include=("[12]",),
+            )
+        ],
     },
     "fat16": {
-        "injected_exception": [_case("test_fat1216_writer", "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean", include=("[16-33554432]",))],
-        "process_kill": [_case("test_fat1216_writer", "test_fat1216_process_kill_before_atomic_replace_never_publishes", include=("[16]",))],
+        "injected_exception": [
+            _case(
+                "test_fat1216_writer",
+                "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+                include=("[16-33554432]",),
+            )
+        ],
+        "process_kill": [
+            _case(
+                "test_fat1216_writer",
+                "test_fat1216_process_kill_before_atomic_replace_never_publishes",
+                include=("[16]",),
+            )
+        ],
     },
     "fat32": {
-        "short_write": [_case("test_native_writer_failure_matrix", "test_fat32_short_write_and_cancellation_restore_selected_extent")],
-        "injected_exception": [_case("test_native_writer_failure_matrix", "test_fat32_injected_exception_and_external_suffix_change_are_bounded")],
-        "process_kill": [_case("test_native_writer_failure_matrix", "test_fat32_process_kill_before_atomic_replace_never_publishes")],
-        "cancellation": [_case("test_native_writer_failure_matrix", "test_fat32_short_write_and_cancellation_restore_selected_extent")],
+        "short_write": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_fat32_short_write_and_cancellation_restore_selected_extent",
+            )
+        ],
+        "injected_exception": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_fat32_injected_exception_and_external_suffix_change_are_bounded",
+            )
+        ],
+        "process_kill": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_fat32_process_kill_before_atomic_replace_never_publishes",
+            )
+        ],
+        "cancellation": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_fat32_short_write_and_cancellation_restore_selected_extent",
+            )
+        ],
     },
     "ext2": {
-        "short_write": [_case("test_ext2_native", "test_native_ext2_short_rollback_write_is_not_claimed_as_restored")],
-        "injected_exception": [_case("test_ext2_native", "test_native_ext2_staging_failure_does_not_modify_original")],
-        "process_kill": [
-            _case("test_ext2_native", "test_native_ext2_recovers_after_process_dies_mid_commit"),
-            _case("test_ext2_native", "test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup"),
+        "short_write": [
+            _case(
+                "test_ext2_native",
+                "test_native_ext2_short_rollback_write_is_not_claimed_as_restored",
+            )
         ],
-        "cancellation": [_case("test_native_writer_failure_matrix", "test_ext2_cancellation_leaves_original_and_repeated_recovery_is_idempotent")],
+        "injected_exception": [
+            _case(
+                "test_ext2_native",
+                "test_native_ext2_staging_failure_does_not_modify_original",
+            )
+        ],
+        "process_kill": [
+            _case(
+                "test_ext2_native",
+                "test_native_ext2_recovers_after_process_dies_mid_commit",
+            ),
+            _case(
+                "test_ext2_native",
+                "test_native_ext2_rolls_back_commit_if_process_dies_before_marker_cleanup",
+            ),
+        ],
+        "cancellation": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_ext2_cancellation_leaves_original_and_repeated_recovery_is_idempotent",
+            )
+        ],
     },
     "exfat": {
-        "short_write": [_case("test_native_writer_failure_matrix", "test_exfat_short_write_exception_and_cancellation_never_publish")],
-        "injected_exception": [_case("test_native_writer_failure_matrix", "test_exfat_short_write_exception_and_cancellation_never_publish")],
-        "process_kill": [_case("test_native_writer_failure_matrix", "test_exfat_process_kill_before_atomic_replace_never_publishes")],
-        "cancellation": [_case("test_native_writer_failure_matrix", "test_exfat_short_write_exception_and_cancellation_never_publish")],
+        "short_write": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_exfat_short_write_exception_and_cancellation_never_publish",
+            )
+        ],
+        "injected_exception": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_exfat_short_write_exception_and_cancellation_never_publish",
+            )
+        ],
+        "process_kill": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_exfat_process_kill_before_atomic_replace_never_publishes",
+            )
+        ],
+        "cancellation": [
+            _case(
+                "test_native_writer_failure_matrix",
+                "test_exfat_short_write_exception_and_cancellation_never_publish",
+            )
+        ],
     },
     "ext4": {
-        "process_kill": [_case("test_ext4_writer_fault_coverage", "test_ext4_process_kill_preserves_source_until_atomic_publish", exclude=("[helper:",))],
+        "process_kill": [
+            _case(
+                "test_ext4_writer_fault_coverage",
+                "test_ext4_process_kill_preserves_source_until_atomic_publish",
+                exclude=("[helper:",),
+            )
+        ],
     },
     "ntfs": {
-        "process_kill": [_case("test_ntfs_writer_fault_coverage", "test_ntfs_process_kill_preserves_source_until_atomic_publish", exclude=("[helper:",))],
+        "process_kill": [
+            _case(
+                "test_ntfs_writer_fault_coverage",
+                "test_ntfs_process_kill_preserves_source_until_atomic_publish",
+                exclude=("[helper:",),
+            )
+        ],
     },
 }
 
@@ -77,30 +184,65 @@ CHECKERS: dict[str, dict[str, Any]] = {
     "fat12": {
         "name": "fsck.fat",
         "authority": "independent_checker",
-        "tests": [_case("test_fat1216_writer", "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean", include=("[12-1474560]",))],
+        "tests": [
+            _case(
+                "test_fat1216_writer",
+                "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+                include=("[12-1474560]",),
+            )
+        ],
     },
     "fat16": {
         "name": "fsck.fat",
         "authority": "independent_checker",
-        "tests": [_case("test_fat1216_writer", "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean", include=("[16-33554432]",))],
+        "tests": [
+            _case(
+                "test_fat1216_writer",
+                "test_real_fat1216_failed_write_rolls_back_and_checker_stays_clean",
+                include=("[16-33554432]",),
+            )
+        ],
     },
-    "fat32": {"name": "fsck.fat", "authority": "not_exercised_by_mapped_case", "tests": []},
+    "fat32": {
+        "name": "fsck.fat",
+        "authority": "not_exercised_by_mapped_case",
+        "tests": [],
+    },
     "ext2": {
         "name": "e2fsck",
         "authority": "independent_checker",
-        "tests": [_case("test_ext2_native", "test_native_ext2_recovers_after_process_dies_mid_commit")],
+        "tests": [
+            _case(
+                "test_ext2_native",
+                "test_native_ext2_recovers_after_process_dies_mid_commit",
+            )
+        ],
     },
-    "exfat": {"name": "fsck.exfat", "authority": "not_exercised_by_mapped_case", "tests": []},
+    "exfat": {
+        "name": "fsck.exfat",
+        "authority": "not_exercised_by_mapped_case",
+        "tests": [],
+    },
     "ext4": {
         "name": "e2fsck -fn",
         "authority": "independent_checker",
-        "tests": [_case("test_ext4_writer_fault_coverage", "test_ext4_process_kill_preserves_source_until_atomic_publish", include=("[publish:done]",))],
+        "tests": [
+            _case(
+                "test_ext4_writer_fault_coverage",
+                "test_ext4_process_kill_preserves_source_until_atomic_publish",
+                include=("[publish:done]",),
+            )
+        ],
     },
     "ntfs": {
         "name": "ntfsfix -n",
         "authority": "secondary_only_not_chkdsk_parity",
         "tests": [
-            _case("test_ntfs_crash_oracle_matrix", "test_ntfs_crash_oracle_matrix", include=(f"[{scenario}]",))
+            _case(
+                "test_ntfs_crash_oracle_matrix",
+                "test_ntfs_crash_oracle_matrix",
+                include=(f"[{scenario}]",),
+            )
             for scenario in (
                 "committed-resident",
                 "committed-nonresident",
@@ -131,7 +273,9 @@ def _collect_seams(native_write_path: Path) -> list[str]:
     return sorted(set(SEAM_RE.findall(text)))
 
 
-def _load_junit(path: Path | None) -> tuple[list[dict[str, str]], dict[str, Any] | None]:
+def _load_junit(
+    path: Path | None,
+) -> tuple[list[dict[str, str]], dict[str, Any] | None]:
     if path is None or not path.is_file():
         return [], None
     raw = path.read_bytes()
@@ -159,7 +303,14 @@ def _load_junit(path: Path | None) -> tuple[list[dict[str, str]], dict[str, Any]
             status = "skipped"
         else:
             status = "passed"
-        cases.append({"node_id": node_id, "module": classname.rsplit(".", 1)[-1], "name": name, "status": status})
+        cases.append(
+            {
+                "node_id": node_id,
+                "module": classname.rsplit(".", 1)[-1],
+                "name": name,
+                "status": status,
+            }
+        )
     summary = {
         "file": path.name,
         "sha256": hashlib.sha256(raw).hexdigest(),
@@ -187,22 +338,32 @@ def _matches(case: dict[str, str], selector: dict[str, Any]) -> bool:
     return True
 
 
-def _evaluate(selectors: list[dict[str, Any]], cases: list[dict[str, str]], junit_status: str) -> dict[str, Any]:
+def _evaluate(
+    selectors: list[dict[str, Any]], cases: list[dict[str, str]], junit_status: str
+) -> dict[str, Any]:
     if junit_status == "not_run":
         return {"status": "not_run", "evidence": [], "missing_selectors": selectors}
     if junit_status != "available":
         return {"status": "unavailable", "evidence": [], "missing_selectors": selectors}
     if not selectors:
         return {"status": "not_proven", "evidence": [], "missing_selectors": []}
-    matched_by_selector = [[case for case in cases if _matches(case, selector)] for selector in selectors]
+    matched_by_selector = [
+        [case for case in cases if _matches(case, selector)] for selector in selectors
+    ]
     matched = [case for group in matched_by_selector for case in group]
-    missing = [selector for selector, group in zip(selectors, matched_by_selector) if not group]
+    missing = [
+        selector for selector, group in zip(selectors, matched_by_selector) if not group
+    ]
     evidence = sorted({case["node_id"] for case in matched})
     statuses = [case["status"] for case in matched]
     if "failed" in statuses:
         status = "failed"
     elif "skipped" in statuses:
-        status = "unavailable" if not any(value == "passed" for value in statuses) else "partial"
+        status = (
+            "unavailable"
+            if not any(value == "passed" for value in statuses)
+            else "partial"
+        )
     elif missing:
         status = "partial" if matched else "not_proven"
     else:
@@ -218,38 +379,52 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
         for state in STATES:
             selectors = TESTS.get(profile, {}).get(state, [])
             execution = _evaluate(selectors, cases, junit_status)
-            cells.append({
-                "profile": profile,
-                "operation": operation,
-                "state": state,
-                "test_status": execution["status"],
-                "test_evidence": execution["evidence"],
-                "expected_test_selectors": selectors,
-                "missing_test_selectors": execution["missing_selectors"],
-                "checker_status": "not_claimed_per_cell",
-                "acceptance_status": "not_accepted",
-            })
+            cells.append(
+                {
+                    "profile": profile,
+                    "operation": operation,
+                    "state": state,
+                    "test_status": execution["status"],
+                    "test_evidence": execution["evidence"],
+                    "expected_test_selectors": selectors,
+                    "missing_test_selectors": execution["missing_selectors"],
+                    "checker_status": "not_claimed_per_cell",
+                    "acceptance_status": "not_accepted",
+                }
+            )
     checker_evidence: list[dict[str, Any]] = []
     for profile, spec in CHECKERS.items():
         result = _evaluate(spec["tests"], cases, junit_status)
         status = result["status"]
-        checker_evidence.append({
-            "profile": profile,
-            "checker": spec["name"],
-            "authority": spec["authority"],
-            "status": status,
-            "evidence": result["evidence"],
-            "missing_test_selectors": result["missing_selectors"],
-        })
+        checker_evidence.append(
+            {
+                "profile": profile,
+                "checker": spec["name"],
+                "authority": spec["authority"],
+                "status": status,
+                "evidence": result["evidence"],
+                "missing_test_selectors": result["missing_selectors"],
+            }
+        )
     summary = {
         status: sum(cell["test_status"] == status for cell in cells)
-        for status in ("passed", "failed", "partial", "unavailable", "not_proven", "not_run")
+        for status in (
+            "passed",
+            "failed",
+            "partial",
+            "unavailable",
+            "not_proven",
+            "not_run",
+        )
     }
     overall = (
-        "tests_failed" if summary["failed"] or (junit_summary and junit_summary["failed"])
-        else "execution_recorded" if junit_status == "available"
-        else "junit_unavailable" if junit_status == "unavailable"
-        else "not_run"
+        "tests_failed"
+        if summary["failed"] or (junit_summary and junit_summary["failed"])
+        else (
+            "execution_recorded"
+            if junit_status == "available"
+            else "junit_unavailable" if junit_status == "unavailable" else "not_run"
+        )
     )
     return {
         "schema": SCHEMA,
@@ -270,11 +445,15 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
     }
 
 
-def validate_report(report: dict[str, Any], root: Path, junitxml: Path | None = None) -> dict[str, Any]:
+def validate_report(
+    report: dict[str, Any], root: Path, junitxml: Path | None = None
+) -> dict[str, Any]:
     blockers: list[str] = []
     if report.get("schema") != SCHEMA:
         blockers.append("schema")
-    if not isinstance(report.get("cells"), list) or len(report["cells"]) != len(PROFILE_OPERATIONS) * len(STATES):
+    if not isinstance(report.get("cells"), list) or len(report["cells"]) != len(
+        PROFILE_OPERATIONS
+    ) * len(STATES):
         blockers.append("cells")
     try:
         expected = build_report(root, junitxml)
