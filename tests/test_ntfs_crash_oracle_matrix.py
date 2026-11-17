@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: MIT
-"""Issue #530, P1: independent ntfsfix oracle over a fixed dirty-fixture set.
+"""Issue #530, P1: auxiliary ntfsfix checks over synthetic dirty fixtures.
 
-The production gate (``probe_ntfs_log``) shares code with the replay it
-validates, so C6 acceptance requires an *external* oracle.  This module pins a
-matrix of five dirty/crashed fixture scenarios and, for every one of them,
-asserts the full oracle contract:
+The production gate (``probe_ntfs_log``) shares code with replay, and C6 still
+requires authoritative external evidence. This module uses ``ntfsfix -n`` only
+as a secondary consistency check; it is not a Windows/``chkdsk`` oracle and
+does not establish parity. The five scenarios below are synthetic, not
+Windows-generated crash captures.
 
-1. ``ntfsfix -n`` refuses the dirty volume (non-zero exit) — the fixture really
-   is a crash image, not a clean one;
+For each scenario, the test checks that:
+
+1. ``ntfsfix -n`` flags the synthetic dirty image (non-zero exit) without
+   modifying it; this does not establish the fixture's provenance;
 2. ``native_ntfs_recover`` replays/repairs it;
-3. ``ntfsfix -n`` accepts the recovered volume (exit 0) — an independent
-   implementation agrees with the replay result;
+3. ``ntfsfix -n`` accepts the recovered image (exit 0) as secondary evidence;
 4. the volume dirty flag is cleared.
 
 Scenarios: committed resident update, committed nonresident update, an active
@@ -127,7 +129,7 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
     image, expected_data = _make_scenario(tmp_path, scenario)
     before = _sha256(image)
 
-    # 1. The independent checker must refuse the dirty volume first.
+    # 1. The auxiliary ntfsfix check must flag the synthetic dirty image.
     dirty = _ntfsfix_no(image)
     assert _sha256(image) == before, f"{scenario}: ntfsfix -n modified the image"
     assert (
@@ -143,7 +145,7 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
         actual_data[: len(expected_data)] == expected_data
     ), f"{scenario}: replayed target data differs from its redo/undo expectation"
 
-    # 3. The independent checker must accept the recovered volume.
+    # 3. ntfsfix -n is a secondary check, not an authoritative oracle.
     recovered = _ntfsfix_no(image)
     assert recovered.returncode == 0, (
         f"{scenario}: ntfsfix -n rejected the replayed volume: "
@@ -154,7 +156,7 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
     assert _volume_dirty_flag(image) & 0x0001 == 0
 
     # 5. Replay is a repair, not a rewrite: an immediate second pass is a noop
-    #    and keeps the checker green (idempotence leg of the oracle).
+    #    and keeps the auxiliary ntfsfix check green.
     second = native_ntfs_recover(str(image))
     assert _ntfsfix_no(image).returncode == 0
     assert second.redo_applied in (0, result.redo_applied)

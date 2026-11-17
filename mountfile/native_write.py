@@ -216,6 +216,29 @@ def _require_tools(*tools: str) -> None:
         )
 
 
+def _read_ntfs_file_bytes(image_path: str, internal_path: str) -> bytes:
+    """Read one NTFS file with ntfscat without decoding its payload."""
+
+    _require_tools("ntfscat")
+    command = ["ntfscat", image_path, "/" + internal_path.lstrip("/")]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise NativeWriteUnsafe(f"NTFS staged read-back failed: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()[-1000:]
+        suffix = f"; {detail}" if detail else ""
+        raise NativeWriteUnsafe(
+            f"ntfscat read-back helper returned {result.returncode}{suffix}"
+        )
+    return result.stdout
+
+
 def _fsync_path(path: str) -> None:
     """Flush a finished temporary file before it is renamed over the source.
 

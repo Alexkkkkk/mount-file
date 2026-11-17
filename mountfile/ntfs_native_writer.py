@@ -42,6 +42,7 @@ from mountfile.native_write import (
     _atomic_replace,
     _fsync_path,
     _image_copy,
+    _read_ntfs_file_bytes,
     _require_enabled,
     _require_source_unchanged,
     _require_tools,
@@ -320,6 +321,7 @@ class NtfsNativeWriter:
         source = os.path.abspath(os.fspath(image_path))
         if not os.path.isfile(source):
             raise NtfsProfileUnsupported(f"image is not readable: {source}")
+        payload = bytes(data)
         try:
             source_identity = _sha256_file(source)
         except OSError as exc:
@@ -332,7 +334,7 @@ class NtfsNativeWriter:
                 raise NtfsReplayQuarantined(
                     quarantine_ntfs_image(source, reason=gate.reason)
                 )
-        _require_tools("ntfscp")
+        _require_tools("ntfscp", "ntfscat")
         source_path, temporary = _image_copy(source)
         try:
             gate = probe_ntfs_log(temporary, 0)
@@ -350,7 +352,12 @@ class NtfsNativeWriter:
                         "refusing to write a volume that needs log recovery: "
                         f"{gate.reason}"
                     )
-            written = ntfs_write_file_native(temporary, internal, data)
+            written = ntfs_write_file_native(temporary, internal, payload)
+            readback = _read_ntfs_file_bytes(temporary, internal)
+            if readback != payload:
+                raise NtfsProfileUnsupported(
+                    "NTFS staged read-back mismatch; refusing publication"
+                )
             after = probe_ntfs_log(temporary, 0)
             if not after.clean:
                 raise NtfsProfileUnsupported(
