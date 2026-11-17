@@ -54,8 +54,10 @@ def _ntfscat(image: Path, path: str) -> bytes:
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
 @pytest.mark.skipif(
-    shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
-    reason="ntfs-3g tools (mkntfs/ntfscp) are unavailable",
+    shutil.which("mkntfs") is None
+    or shutil.which("ntfscp") is None
+    or shutil.which("ntfscat") is None,
+    reason="ntfs-3g tools (mkntfs/ntfscp/ntfscat) are unavailable",
 )
 def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
     monkeypatch.setenv(ENABLE_ENV, "1")
