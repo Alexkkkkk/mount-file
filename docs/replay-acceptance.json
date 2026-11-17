@@ -251,7 +251,7 @@
         "tests/test_windows_ntfs_acceptance_contract.py"
       ],
       "note": "A real Windows VHDX + chkdsk acceptance harness now exists, but the scheduled Windows artifact has not yet been reproduced in this development session. It validates clean/dirty/repair checker behavior only; real Windows replay captures and byte-level $MFT/$BITMAP comparison remain absent.",
-      "reproduced": "2026-11-17: offline contract tests validate the windows-latest workflow, native chkdsk stages, VHDX creation, dirty/repair lifecycle and fail-closed claims. Full C6 remains partial until the Windows workflow produces a successful artifact."
+      "reproduced": "2026-11-17: Windows run 44016475448 on windows-latest produced the native chkdsk artifact: clean /scan, dirty-volume /scan (typed exit 13), /f repair, clean post-repair /scan and unchanged sentinel SHA-256. The artifact explicitly does not claim NTFS replay parity or crash-fixture equivalence; C6 remains partial for those missing proofs."
     },
     {
       "id": "C7",
