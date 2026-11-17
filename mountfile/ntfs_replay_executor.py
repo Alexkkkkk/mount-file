@@ -61,6 +61,12 @@ class NtfsReplayPublication:
 ReplayResolver = Callable[[ReplayStep], ReplayTarget]
 MftCandidateProvider = Callable[[ReplayStep], tuple[object, object, int, int] | None]
 
+# These operations require coordinated MFT/$MFTMirr, bitmap, or index writes;
+# a byte-range resolver and candidate precondition check cannot authorize them.
+_ALLOCATION_SENSITIVE_OPERATIONS = frozenset(
+    (0x02, 0x03, *range(0x0C, 0x17), *range(0x21, 0x25))
+)
+
 
 def _validate_mft_candidate(
     step: ReplayStep,
@@ -116,6 +122,10 @@ def _resolve_targets(
     for step in (*analysis.redo_plan, *analysis.undo_plan):
         if step.operation_name in {"Noop", "CommitTransaction", "ForgetTransaction"}:
             continue
+        if step.operation in _ALLOCATION_SENSITIVE_OPERATIONS:
+            raise NtfsReplayResolutionError(
+                f"allocation-sensitive operation {step.operation_name} is refused"
+            )
         _validate_mft_candidate(step, mft_candidate_provider)
         try:
             target = resolver(step)

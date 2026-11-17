@@ -30,12 +30,12 @@ def _analysis(*steps: ReplayStep) -> NtfsLogFileAnalysis:
     )
 
 
-def _step(payload: bytes = b"XYZ") -> ReplayStep:
+def _step(payload: bytes = b"XYZ", *, operation: int = 0x07) -> ReplayStep:
     return ReplayStep(
         lsn=1,
         transaction_id=1,
         kind="redo",
-        operation=0x07,
+        operation=operation,
         length=len(payload),
         payload=payload,
         target_attr=128,
@@ -139,6 +139,49 @@ def test_mft_candidate_mirror_mismatch_is_refused_before_source_change(tmp_path)
                 42,
             ),
         )
+    assert image.read_bytes() == before
+    assert list(tmp_path.glob(".mountfile-image-*")) == []
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [0x02, 0x03, *range(0x0C, 0x17), *range(0x21, 0x25)],
+)
+@pytest.mark.parametrize("provider_kind", ("absent", "none", "valid"))
+def test_allocation_sensitive_operations_refuse_before_resolution(
+    tmp_path, operation, provider_kind
+):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    before = image.read_bytes()
+    provider_calls = []
+    publish_kwargs = {}
+
+    if provider_kind != "absent":
+
+        def candidate_provider(_step):
+            provider_calls.append(True)
+            if provider_kind == "none":
+                return None
+            record = _raw_mft_record(7)
+            return record, record, (8 << 48) | 42, 42
+
+        publish_kwargs["mft_candidate_provider"] = candidate_provider
+
+    def resolver(_step):
+        pytest.fail("allocation-sensitive step must not reach the resolver")
+
+    with pytest.raises(
+        NtfsReplayResolutionError, match="allocation-sensitive operation"
+    ):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_step(operation=operation)),
+            resolver,
+            **publish_kwargs,
+        )
+
+    assert provider_calls == []
     assert image.read_bytes() == before
     assert list(tmp_path.glob(".mountfile-image-*")) == []
 
