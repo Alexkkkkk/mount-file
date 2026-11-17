@@ -1354,6 +1354,13 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 # Freshly formatted volume: the log was never used, and
                 # $Volume already reported a clean state, so nothing to replay.
                 self.logfile_restart = None
+            except NtfsMetadataError:
+                if not allow_dirty_read:
+                    raise
+                # Raw Windows evidence is intentionally read-only.  It may
+                # capture a dirty/recovery $LogFile before chkdsk; do not
+                # interpret or replay it in this mode.
+                self.logfile_restart = None
             if self.logfile_restart is not None:
                 self.profile = replace(
                     self.profile, logfile_restart=self.logfile_restart
