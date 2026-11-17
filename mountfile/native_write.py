@@ -372,8 +372,13 @@ class NtfsTransactionalWriter:
         source = os.path.abspath(os.fspath(image_path))
         source_identity = _sha256_file(source)
         source_path, temporary = _image_copy(source)
-        payload = _payload_file(data, os.path.dirname(source) or ".")
+        payload = ""
         try:
+            # Staged *inside* the try: a failure while writing the payload
+            # (ENOSPC, EACCES, a full tmpfs) used to leak a complete copy of the
+            # caller's evidence into the evidence directory under a dot-prefixed
+            # name that nobody reports.  Issue #510 D1/D3.
+            payload = _payload_file(data, os.path.dirname(source) or ".")
             log_file = NTFSLogFileManager()
             try:
                 log_file.require_clean(temporary, _run)
