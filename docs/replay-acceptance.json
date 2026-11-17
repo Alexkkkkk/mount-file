@@ -282,9 +282,10 @@
       "title": "Failure injection после каждого шага (data, bitmap, directory, inode, journal, commit)",
       "status": "partial",
       "evidence": [
-        "mountfile/native_write.py"
+        "mountfile/native_write.py",
+        "tests/test_ext4_write_phase_injection.py"
       ],
-      "note": "fault seam есть, полная матрица шагов не пройдена"
+      "note": "Ext4 operation chain now has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. NTFS steps and JBD2 transaction sub-phases still uninstrumented, so D1 stays partial."
     },
     {
       "id": "D2",
@@ -294,9 +295,12 @@
       "evidence": [
         "tests/test_ext4_writer_fault_coverage.py",
         "tests/test_ntfs_writer_fault_coverage.py",
-        "tests/test_native_journal_writers.py"
+        "tests/test_native_journal_writers.py",
+        ".github/workflows/replay-nightly.yml",
+        "scripts/replay_nightly_evidence.py",
+        "tests/test_replay_nightly_evidence.py"
       ],
-      "note": "Local tests exercise all nine declared process-kill boundaries for ext4 and synthetic NTFS; the failure-matrix artifact maps seven cases per profile because helper boundaries are excluded. This does not cover every filesystem transaction or metadata operation. NTFS publish:done reads back exact target bytes.",
+      "note": "The nine declared boundaries remain locally covered. A scheduled workflow now exists (replay-nightly.yml, 02:00 UTC) and the two-consecutive-nightly-run criterion is machine-checked by scripts/replay_nightly_evidence.py, which reports unavailable/unsatisfied instead of green. No scheduled run has completed yet, so the #387 criterion is still unproven.",
       "reproduced": "2026-11-17: focused writer/checker/failure suite → 97 passed, 3 skipped. Pre-publish hashes stay unchanged; ext4 publish:done verifies debugfs bytes and e2fsck -fn, NTFS publish:done verifies /target via ntfscat. No schedule-triggered failure-matrix runs are available; no two-nightly criterion is claimed."
     },
     {
@@ -350,9 +354,11 @@
         "scripts/failure_matrix_artifact.py",
         "tests/test_failure_matrix_artifact.py",
         ".github/workflows/ci.yml",
-        ".github/workflows/failure-matrix.yml"
+        ".github/workflows/failure-matrix.yml",
+        ".github/workflows/replay-nightly.yml",
+        "scripts/replay_nightly_evidence.py"
       ],
-      "note": "v2 uses exact JUnit node IDs across 7 profiles × 4 states; checker execution is separate from test execution; acceptance is always not_claimed. Unmatched/empty evidence cannot turn green.",
+      "note": "Streak evidence is now emitted as replay-nightly-streak.json alongside the JUnit matrix; acceptance remains not_claimed and the 9 not_proven cells are unchanged.",
       "reproduced": "2026-11-16: expanded local run 58 passed; artifact recorded 19/28 cells as passed and 9/28 as not_proven; checker states were separately typed. Manual/local evidence does not satisfy scheduled-nightly criteria."
     },
     {
