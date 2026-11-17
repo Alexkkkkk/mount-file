@@ -45,7 +45,6 @@ Two properties are encoded here rather than described in prose:
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -133,7 +132,9 @@ def _install_doubles(monkeypatch, *, order: list[str], fail: str = "") -> _GateS
             raise NativeWriteUnsafe("injected failure at payload_stage")
         return real_payload(*args, **kwargs)
 
-    gate = _GateStub(fail_on={"log_gate_pre": (1,), "log_gate_post": (2,)}.get(fail, ()))
+    gate = _GateStub(
+        fail_on={"log_gate_pre": (1,), "log_gate_post": (2,)}.get(fail, ())
+    )
     order_ref = order
 
     class _Recording(_GateStub):
@@ -141,9 +142,7 @@ def _install_doubles(monkeypatch, *, order: list[str], fail: str = "") -> _GateS
             # Recorded *before* the call: a refusing cell must still prove the
             # gate was reached, otherwise the cell cannot distinguish "refused
             # here" from "never got here".
-            order_ref.append(
-                "log_gate_pre" if not self.calls else "log_gate_post"
-            )
+            order_ref.append("log_gate_pre" if not self.calls else "log_gate_post")
             super().require_clean(image_path, runner)
 
     recording = _Recording()
@@ -328,7 +327,14 @@ def _make_ntfs_image(tmp_path: Path) -> Path:
 @_TIER_B_SKIP
 @pytest.mark.parametrize(
     "step",
-    ("copy", "payload_stage", "ntfs_write", "log_gate_post", "identity_verify", "publish"),
+    (
+        "copy",
+        "payload_stage",
+        "ntfs_write",
+        "log_gate_post",
+        "identity_verify",
+        "publish",
+    ),
 )
 def test_real_ntfs_step_failure_preserves_the_image(tmp_path, monkeypatch, step):
     """Same contract on a real ``mkntfs`` volume, including post-write steps."""
