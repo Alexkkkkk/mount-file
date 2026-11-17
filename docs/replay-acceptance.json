@@ -245,10 +245,13 @@
         "tests/ntfs_crash_fixture.py",
         "tests/test_ntfs_replay.py",
         "tests/test_ntfs_writer_fault_coverage.py",
-        "tests/test_ntfs_acceptance_independent_checker.py"
+        "tests/test_ntfs_acceptance_independent_checker.py",
+        "scripts/windows_ntfs_acceptance.ps1",
+        ".github/workflows/ntfs-windows-acceptance.yml",
+        "tests/test_windows_ntfs_acceptance_contract.py"
       ],
-      "note": "Fixtures are synthetic mkntfs-based images. ntfsfix -n is secondary evidence only, not a Windows/chkdsk oracle or parity proof; real Windows captures and byte-level $MFT/$BITMAP comparison are absent.",
-      "reproduced": "2026-11-16: synthetic crash-oracle cases exercise bounded replay and ntfsfix -n; no Windows reference data is available."
+      "note": "A real Windows VHDX + chkdsk acceptance harness now exists, but the scheduled Windows artifact has not yet been reproduced in this development session. It validates clean/dirty/repair checker behavior only; real Windows replay captures and byte-level $MFT/$BITMAP comparison remain absent.",
+      "reproduced": "2026-11-17: offline contract tests validate the windows-latest workflow, native chkdsk stages, VHDX creation, dirty/repair lifecycle and fail-closed claims. Full C6 remains partial until the Windows workflow produces a successful artifact."
     },
     {
       "id": "C7",

@@ -1,0 +1,47 @@
+name: NTFS Windows Acceptance
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ntfs-windows-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-ntfs-checker:
+    name: Windows NTFS VHDX + chkdsk acceptance
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Create disposable NTFS VHDX and run native checker
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\mountfile-ntfs-windows" | Out-Null
+          & .\scripts\windows_ntfs_acceptance.ps1 `
+            -OutputDirectory "$env:RUNNER_TEMP\mountfile-ntfs-windows"
+          if ($LASTEXITCODE -ne 0) { throw "Windows NTFS acceptance failed" }
+
+      - name: Assert typed Windows acceptance result
+        shell: pwsh
+        run: |
+          $report = Get-Content "$env:RUNNER_TEMP\mountfile-ntfs-windows\windows-ntfs-acceptance.json" | ConvertFrom-Json
+          if ($report.schema -ne 'mountfile.windows-ntfs-acceptance/v1') { throw 'invalid acceptance schema' }
+          if ($report.checker_authority -ne 'windows_native') { throw 'non-Windows checker evidence' }
+          if ($report.status -ne 'checked_and_repaired') { throw "unexpected status: $($report.status)" }
+          if ($report.sentinel_sha256_before -ne $report.sentinel_sha256_after) { throw 'sentinel hash changed' }
+
+      - name: Upload Windows checker evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ntfs-windows-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}/mountfile-ntfs-windows/windows-ntfs-acceptance.json
+          if-no-files-found: error
+          retention-days: 30
