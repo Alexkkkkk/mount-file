@@ -27,7 +27,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-
 # ---------------------------------------------------------------------------
 # Timeline model
 # ---------------------------------------------------------------------------
@@ -299,8 +298,8 @@ def cmd_hash(args: argparse.Namespace) -> None:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     try:
-        from fastapi import FastAPI
         import uvicorn
+        from fastapi import FastAPI
     except ImportError:
         sys.exit("Установи зависимости: pip install fastapi uvicorn")
 
