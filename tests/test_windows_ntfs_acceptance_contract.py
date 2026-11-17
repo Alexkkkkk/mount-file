@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from mountfile.ntfs_reader import NtfsMetadataError
-from scripts.windows_ntfs_raw_snapshot import _validate_device_window
+from scripts.windows_ntfs_raw_snapshot import (
+    _validate_device_window,
+    _validate_sector_size,
+)
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/ntfs-windows-acceptance.yml"
@@ -27,6 +30,8 @@ def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
     assert "format fs=ntfs" in script
     assert "windows_ntfs_raw_snapshot.py" in script
     assert "compare_ntfs_snapshots.py" in script
+    assert "PhysicalSectorSize" in script
+    assert "--sector-size $sectorSize" in script
 
 
 def test_windows_acceptance_has_clean_dirty_and_repair_stages():
@@ -64,6 +69,13 @@ def test_raw_snapshot_tools_are_bounded_and_byte_comparison_is_explicit():
 
 def test_raw_snapshot_accepts_the_bounded_ci_volume_window():
     assert _validate_device_window(4096, 64 << 30) == (4096 + (64 << 30))
+    assert _validate_sector_size(4096) == 4096
+
+
+@pytest.mark.parametrize("sector_size", [True, 0, 256, 768, 1 << 21])
+def test_raw_snapshot_rejects_invalid_sector_sizes(sector_size):
+    with pytest.raises(NtfsMetadataError):
+        _validate_sector_size(sector_size)
 
 
 @pytest.mark.parametrize(

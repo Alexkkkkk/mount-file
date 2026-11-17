@@ -40,6 +40,17 @@ def _validate_device_window(offset: int, volume_size: int) -> int:
     return offset + volume_size
 
 
+def _validate_sector_size(sector_size: int) -> int:
+    if (
+        type(sector_size) is not int
+        or sector_size < 512
+        or sector_size > (1 << 20)
+        or sector_size & (sector_size - 1)
+    ):
+        raise NtfsMetadataError("raw snapshot physical sector size is invalid")
+    return sector_size
+
+
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -89,12 +100,24 @@ def _write_stream(
     return written
 
 
-def snapshot(device: str, offset: int, volume_size: int, output: Path) -> dict:
+def snapshot(
+    device: str,
+    offset: int,
+    volume_size: int,
+    output: Path,
+    sector_size: int = 512,
+) -> dict:
     source_size = _validate_device_window(offset, volume_size)
+    sector_size = _validate_sector_size(sector_size)
     output.mkdir(parents=True, exist_ok=True)
 
     def source_factory():
-        return WindowsRawDeviceImageSource(device, size=source_size)
+        return WindowsRawDeviceImageSource(
+            device,
+            size=source_size,
+            lower_bound=offset,
+            sector_size=sector_size,
+        )
 
     image = NativeNtfsMetadataImage(
         device,
@@ -114,6 +137,7 @@ def snapshot(device: str, offset: int, volume_size: int, output: Path) -> dict:
         "device": device,
         "offset": offset,
         "volume_size": volume_size,
+        "physical_sector_size": sector_size,
         "streams": {
             key: {
                 "path": path.name,
@@ -138,11 +162,19 @@ def main() -> int:
     parser.add_argument("--device", required=True)
     parser.add_argument("--offset", type=int, required=True)
     parser.add_argument("--volume-size", type=int, required=True)
+    parser.add_argument("--sector-size", type=int, default=512)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     print(
         json.dumps(
-            snapshot(args.device, args.offset, args.volume_size, args.out), indent=2
+            snapshot(
+                args.device,
+                args.offset,
+                args.volume_size,
+                args.out,
+                args.sector_size,
+            ),
+            indent=2,
         )
     )
     return 0

@@ -77,16 +77,20 @@ try {
     $partition = Get-Partition -DiskNumber $disk.Number |
         Where-Object { $_.DriveLetter -eq "R" } | Select-Object -First 1
     if ($null -eq $partition) { throw "cannot resolve mounted NTFS partition" }
+    $sectorSize = [int64]$disk.PhysicalSectorSize
+    if ($sectorSize -lt 512) { throw "cannot resolve physical disk sector size" }
     $device = "\\.\PhysicalDrive$($disk.Number)"
     $rawBefore = Join-Path $OutputDirectory "raw-before"
     $rawAfter = Join-Path $OutputDirectory "raw-after"
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
-        --volume-size ([int64]$partition.Size) --out $rawBefore
+        --volume-size ([int64]$partition.Size) `
+        --sector-size $sectorSize --out $rawBefore
     if ($LASTEXITCODE -ne 0) { throw "raw pre-repair NTFS snapshot failed" }
     $report.raw_device = $device
     $report.raw_partition_offset = [int64]$partition.Offset
     $report.raw_partition_size = [int64]$partition.Size
+    $report.raw_physical_sector_size = $sectorSize
 
     Set-Content -LiteralPath "$drive\before.txt" -Value "mountfile-windows-acceptance"
     $beforeHash = (Get-FileHash -Algorithm SHA256 "$drive\before.txt").Hash

@@ -1,11 +1,20 @@
 # SPDX-License-Identifier: MIT
 """Safety tests for the read-only positioned image source abstraction."""
 
+import ctypes
+import os
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
-from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
+from mountfile.image_source import (
+    BoundedImageSource,
+    FileImageSource,
+    ImageSourceError,
+    WindowsRawDeviceImageSource,
+    _aligned_read_window,
+)
 from mountfile.safety import RefusalCode
 
 
@@ -54,6 +63,66 @@ def test_bounded_image_source_never_reads_adjacent_extent_bytes(tmp_path):
     finally:
         window.close()
         parent.close()
+
+
+def test_raw_read_alignment_refuses_padding_outside_selected_partition():
+    assert _aligned_read_window(4101, 9, 4096, 4608, 512) == (4096, 512, 5)
+    with pytest.raises(ImageSourceError, match="selected partition bound") as caught:
+        _aligned_read_window(4096, 1, 4096, 4607, 512)
+    assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
+
+
+class _FakeWinFunction:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def __call__(self, *args):
+        return self.callback(*args)
+
+
+def test_windows_raw_device_source_uses_aligned_reads_and_returns_exact_range(
+    monkeypatch,
+):
+    payload = bytes(index % 251 for index in range(8192))
+    state = {"position": 0, "calls": []}
+
+    def create_file(*_args):
+        return 7
+
+    def set_file_pointer(_handle, distance, result, _origin):
+        state["position"] = distance.value
+        result._obj.value = distance.value
+        return 1
+
+    def read_file(_handle, buffer, length, result, _overlapped):
+        position = state["position"]
+        address = ctypes.cast(buffer, ctypes.c_void_p).value
+        state["calls"].append((position, length, address % 512))
+        if position % 512 or length % 512 or address % 512:
+            return 0
+        chunk = payload[position : position + length]
+        if len(chunk) != length:
+            return 0
+        ctypes.memmove(buffer, chunk, length)
+        result._obj.value = length
+        state["position"] += length
+        return 1
+
+    api = SimpleNamespace(
+        CreateFileW=_FakeWinFunction(create_file),
+        SetFilePointerEx=_FakeWinFunction(set_file_pointer),
+        ReadFile=_FakeWinFunction(read_file),
+        CloseHandle=_FakeWinFunction(lambda _handle: 1),
+    )
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: api, raising=False)
+
+    with WindowsRawDeviceImageSource(
+        r"\\.\PhysicalDrive7", size=8192, lower_bound=4096, sector_size=512
+    ) as source:
+        assert source.read_at(4101, 9) == payload[4101:4110]
+
+    assert state["calls"] == [(4096, 512, 0)]
 
 
 def test_bounded_image_source_rejects_invalid_window_before_any_reads(tmp_path):

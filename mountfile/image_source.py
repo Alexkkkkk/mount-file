@@ -128,13 +128,39 @@ class FileImageSource:
         self.close()
 
 
+def _aligned_read_window(
+    offset: int, length: int, lower_bound: int, upper_bound: int, sector_size: int
+) -> tuple[int, int, int]:
+    """Return a sector-aligned physical read window and requested-byte slice."""
+    checked_range(
+        offset,
+        length,
+        lower=lower_bound,
+        upper=upper_bound,
+        context="raw physical-drive read exceeds selected partition bound",
+        error_type=ImageSourceError,
+    )
+    if not length:
+        return offset, 0, 0
+    aligned_start = offset - offset % sector_size
+    end = offset + length
+    aligned_end = ((end + sector_size - 1) // sector_size) * sector_size
+    if aligned_start < lower_bound or aligned_end > upper_bound:
+        raise ImageSourceError(
+            "sector-aligned raw read would cross the selected partition bound",
+            RefusalCode.RANGE_OUT_OF_BOUNDS,
+        )
+    return aligned_start, aligned_end - aligned_start, offset - aligned_start
+
+
 class WindowsRawDeviceImageSource:
     """Read-only random access to an explicitly bounded Windows physical disk.
 
-    ``size`` is the exclusive upper bound in bytes from the start of the disk,
-    normally ``partition_offset + partition_size``. The source never queries or
-    exposes bytes beyond that bound. Positioned reads are serialized because
-    the Win32 file pointer belongs to the shared device handle.
+    ``lower_bound`` and ``size`` bound reads to the selected partition within
+    the physical disk. Requests are expanded to sector-aligned reads and then
+    sliced back to the exact requested bytes. The aligned read must remain
+    inside the selected partition; positioned reads are serialized because the
+    Win32 file pointer belongs to the shared device handle.
     """
 
     _GENERIC_READ = 0x80000000
@@ -144,7 +170,14 @@ class WindowsRawDeviceImageSource:
     _FILE_BEGIN = 0
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
-    def __init__(self, device_path: str, *, size: int):
+    def __init__(
+        self,
+        device_path: str,
+        *,
+        size: int,
+        lower_bound: int = 0,
+        sector_size: int = 512,
+    ):
         prefix = "\\\\.\\PhysicalDrive"
         suffix = device_path[len(prefix) :] if isinstance(device_path, str) else ""
         if (
@@ -168,6 +201,21 @@ class WindowsRawDeviceImageSource:
                 "raw Windows source size is invalid",
                 RefusalCode.RANGE_OUT_OF_BOUNDS,
             )
+        if type(lower_bound) is not int or lower_bound < 0 or lower_bound >= size:
+            raise ImageSourceError(
+                "raw Windows source lower bound is invalid",
+                RefusalCode.RANGE_OUT_OF_BOUNDS,
+            )
+        if (
+            type(sector_size) is not int
+            or sector_size < 512
+            or sector_size > (1 << 20)
+            or sector_size & (sector_size - 1)
+        ):
+            raise ImageSourceError(
+                "raw Windows source sector size is invalid",
+                RefusalCode.RANGE_OUT_OF_BOUNDS,
+            )
         if os.name != "nt":
             raise ImageSourceError(
                 "raw Windows devices are available only on Windows",
@@ -188,6 +236,8 @@ class WindowsRawDeviceImageSource:
         if self._handle is None or self._handle == self._INVALID_HANDLE_VALUE:
             raise self._win_error("opening raw physical drive failed")
         self._size = size
+        self._lower_bound = lower_bound
+        self._sector_size = sector_size
         self._lock = threading.Lock()
 
     def _configure_api(self) -> None:
@@ -237,18 +287,18 @@ class WindowsRawDeviceImageSource:
         return self._handle is None
 
     def read_at(self, offset: int, length: int) -> bytes:
-        checked_range(
+        aligned_start, aligned_length, requested_start = _aligned_read_window(
             offset,
             length,
-            upper=self._size,
-            context="raw physical-drive read exceeds selected partition bound",
-            error_type=ImageSourceError,
+            self._lower_bound,
+            self._size,
+            self._sector_size,
         )
         if self._handle is None:
             raise ImageSourceError(
                 "raw physical-drive source is closed", RefusalCode.UNSAFE
             )
-        if length == 0:
+        if not aligned_length:
             return b""
 
         output = bytearray()
@@ -260,35 +310,51 @@ class WindowsRawDeviceImageSource:
             new_position = ctypes.c_longlong()
             if not self._kernel32.SetFilePointerEx(
                 self._handle,
-                ctypes.c_longlong(offset),
+                ctypes.c_longlong(aligned_start),
                 ctypes.byref(new_position),
                 self._FILE_BEGIN,
             ):
                 raise self._win_error("seeking raw physical drive failed")
-            if new_position.value != offset:
+            if new_position.value != aligned_start:
                 raise ImageSourceError(
                     "raw physical-drive seek returned an unexpected position",
                     RefusalCode.CONCURRENT_CHANGE,
                 )
-            while len(output) < length:
-                chunk_size = min(_READ_CHUNK_SIZE, length - len(output))
-                buffer = ctypes.create_string_buffer(chunk_size)
+            while len(output) < aligned_length:
+                chunk_size = min(_READ_CHUNK_SIZE, aligned_length - len(output))
+                chunk_size -= chunk_size % self._sector_size
+                if chunk_size <= 0:
+                    raise ImageSourceError(
+                        "raw physical-drive read is smaller than one sector",
+                        RefusalCode.RANGE_OUT_OF_BOUNDS,
+                    )
+                storage = ctypes.create_string_buffer(
+                    chunk_size + self._sector_size - 1
+                )
+                address = ctypes.addressof(storage)
+                aligned_address = (address + self._sector_size - 1) & ~(
+                    self._sector_size - 1
+                )
                 bytes_read = wintypes.DWORD(0)
                 if not self._kernel32.ReadFile(
                     self._handle,
-                    buffer,
+                    ctypes.c_void_p(aligned_address),
                     chunk_size,
                     ctypes.byref(bytes_read),
                     None,
                 ):
-                    raise self._win_error("reading raw physical drive failed")
-                if bytes_read.value == 0 or bytes_read.value > chunk_size:
+                    raise self._win_error(
+                        "reading raw physical drive failed at "
+                        f"offset {aligned_start + len(output)} "
+                        f"for {chunk_size} bytes"
+                    )
+                if bytes_read.value != chunk_size:
                     raise ImageSourceError(
                         "raw physical-drive read was short or invalid",
                         RefusalCode.CONCURRENT_CHANGE,
                     )
-                output.extend(buffer.raw[: bytes_read.value])
-        return bytes(output)
+                output.extend(ctypes.string_at(aligned_address, bytes_read.value))
+        return bytes(output[requested_start : requested_start + length])
 
     def close(self) -> None:
         with self._lock:
