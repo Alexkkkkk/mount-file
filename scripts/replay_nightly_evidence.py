@@ -17,6 +17,7 @@ Contract:
 * no network access happens at import time and the transport is injectable, so
   the behaviour above is covered by offline unit tests.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -117,7 +118,9 @@ def fetch_scheduled_runs(
     return normalised
 
 
-def evaluate(runs: list[dict[str, Any]], required: int = REQUIRED_RUNS) -> dict[str, Any]:
+def evaluate(
+    runs: list[dict[str, Any]], required: int = REQUIRED_RUNS
+) -> dict[str, Any]:
     """Count the current streak of consecutive successful scheduled runs."""
     if required < 1:
         raise EvidenceUnavailable("required must be at least 1")
@@ -204,9 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         help="exit non-zero unless the criterion is satisfied (#387 hard gate)",
     )
     args = parser.parse_args(argv)
-    report = build_report(
-        args.repo, workflow=args.workflow, required=args.required
-    )
+    report = build_report(args.repo, workflow=args.workflow, required=args.required)
     rendered = json.dumps(report, indent=2, ensure_ascii=False)
     print(rendered)
     if args.json_out:

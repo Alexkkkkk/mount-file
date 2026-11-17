@@ -33,7 +33,7 @@ import pytest
 
 import mountfile.ext4_native_writer as writer_module
 from mountfile.ext4_native_writer import Ext4NativeWriter, libext2fs_available
-from mountfile.native_write import ENABLE_ENV, NativeWriteError
+from mountfile.native_write import ENABLE_ENV
 
 #: ``step`` -> the module-level callable ``write_file`` uses for that step.
 #: Steps covered: image copy, profile validation, journal gate, pre-check,
@@ -72,7 +72,16 @@ def _make_clean_image(tmp_path: Path) -> Path:
     with open(image, "wb") as handle:
         handle.truncate(32 << 20)
     result = subprocess.run(
-        ["mkfs.ext4", "-q", "-F", "-b", "4096", "-O", "^metadata_csum_seed", str(image)],
+        [
+            "mkfs.ext4",
+            "-q",
+            "-F",
+            "-b",
+            "4096",
+            "-O",
+            "^metadata_csum_seed",
+            str(image),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -156,4 +165,7 @@ def test_control_run_succeeds_so_the_matrix_is_not_vacuous(tmp_path, monkeypatch
     written = Ext4NativeWriter().write_file(str(image), "/target", b"phase control\n")
     assert written == len(b"phase control\n")
     assert _sha256(image) != before
-    assert subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode == 0
+    assert (
+        subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode
+        == 0
+    )
