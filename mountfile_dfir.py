@@ -18,11 +18,13 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import ipaddress
 import json
 import mmap
 import re
 import sqlite3
 import sys
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -135,7 +137,8 @@ def grep_image(
 
 class TimelineDB:
     def __init__(self, db_path: str | Path):
-        self.conn = sqlite3.connect(str(db_path))
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
@@ -158,19 +161,25 @@ class TimelineDB:
             (r.path, r.size, r.mtime, r.atime, r.ctime, r.birth, r.sha256)
             for r in records
         ]
-        self.conn.executemany(
-            """
-            INSERT INTO timeline(path, size, mtime, atime, ctime, birth, sha256)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        self.conn.commit()
+        with self._lock, self.conn:
+            self.conn.executemany(
+                """
+                INSERT INTO timeline(path, size, mtime, atime, ctime, birth, sha256)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
         return len(rows)
 
     def query(
         self, *, limit: int = 1000, path_like: str | None = None
     ) -> list[dict[str, Any]]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 10000
+        ):
+            raise ValueError("limit must be between 1 and 10000")
         sql = "SELECT * FROM timeline"
         params: list[Any] = []
         if path_like:
@@ -178,7 +187,18 @@ class TimelineDB:
             params.append(f"%{path_like}%")
         sql += " ORDER BY mtime IS NULL, mtime LIMIT ?"
         params.append(limit)
-        return [dict(row) for row in self.conn.execute(sql, params)]
+        with self._lock:
+            return [dict(row) for row in self.conn.execute(sql, params)]
+
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()
+
+    def __enter__(self) -> "TimelineDB":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +317,22 @@ def cmd_hash(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
+    host = str(args.host).strip()
+    is_loopback = host.lower() == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+        except ValueError:
+            is_loopback = False
+    if not is_loopback:
+        raise SystemExit(
+            "Refusing to expose the unauthenticated DFIR prototype on a non-loopback "
+            "host. Use --host 127.0.0.1 or localhost."
+        )
+
     try:
         import uvicorn
-        from fastapi import FastAPI
+        from fastapi import FastAPI, HTTPException
     except ImportError:
         sys.exit("Установи зависимости: pip install fastapi uvicorn")
 
@@ -308,9 +341,15 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     @app.get("/timeline")
     def timeline(limit: int = 100, path: str | None = None) -> list[dict[str, Any]]:
-        return db.query(limit=limit, path_like=path)
+        try:
+            return db.query(limit=limit, path_like=path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    try:
+        uvicorn.run(app, host=args.host, port=args.port)
+    finally:
+        db.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
