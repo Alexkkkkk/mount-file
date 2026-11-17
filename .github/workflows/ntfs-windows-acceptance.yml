@@ -2,6 +2,9 @@ name: NTFS Windows Acceptance
 # Revision 2: raw $MFT/$BITMAP snapshots and byte comparator are required.
 
 on:
+  push:
+    branches:
+      - feat/issue-510-schedule-provenance
   schedule:
     - cron: '30 3 * * *'
   workflow_dispatch: {}
