@@ -1,4 +1,5 @@
 name: NTFS Windows Acceptance
+# Revision 2: raw $MFT/$BITMAP snapshots and byte comparator are required.
 
 on:
   schedule:
