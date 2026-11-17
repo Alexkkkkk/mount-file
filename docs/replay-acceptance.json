@@ -2,9 +2,9 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "fix/issue-510-ntfs-post-crash-readback",
-    "commit": "57b3c77",
-    "version": "1.96.0",
+    "branch": "main",
+    "commit": "8533e63",
+    "version": "1.96.1",
     "checked": "2026-11-17"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
@@ -335,15 +335,15 @@
       "block": "D",
       "title": "Independent checker + read-back после каждой поддержанной операции",
       "status": "partial",
- "evidence": [
-  "tests/_independent_checkers.py",
-  "tests/test_checker_acceptance.py",
-  "mountfile/ntfs_native_writer.py",
-  "mountfile/native_write.py",
-  "tests/test_ntfs_transactional_readback.py",
-  "tests/test_native_journal_writers.py",
-  "tests/test_writer_fault_coverage.py"
- ],
+      "evidence": [
+        "tests/_independent_checkers.py",
+        "tests/test_checker_acceptance.py",
+        "mountfile/ntfs_native_writer.py",
+        "mountfile/native_write.py",
+        "tests/test_ntfs_transactional_readback.py",
+        "tests/test_native_journal_writers.py",
+        "tests/test_writer_fault_coverage.py"
+      ],
       "note": "Ext4 selected paths use e2fsck -fn plus read-back. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
       "reproduced": "2026-11-17: NTFS staged-readback mismatch refusal preserves the source byte-for-byte; ext4 publish:done SIGKILL reads exact debugfs bytes and passes e2fsck -fn. Focused suite: 97 passed, 3 skipped. D5 remains partial."
     },
