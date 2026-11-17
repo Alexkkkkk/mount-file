@@ -44,7 +44,10 @@ _ATTRIBUTE_FLAG_SPARSE = 0x8000
 _ATTRIBUTE_KNOWN_FLAGS = (
     _ATTRIBUTE_FLAG_COMPRESSED | _ATTRIBUTE_FLAG_ENCRYPTED | _ATTRIBUTE_FLAG_SPARSE
 )
-_VOLUME_KNOWN_FLAGS = 0x807F
+# Windows may set 0x0080 on a freshly-created or checker-touched volume.  It
+# is state metadata, not permission to write; dirty/recovery gates below still
+# decide whether a profile is writable.  Keep rejecting all other unknown bits.
+_VOLUME_KNOWN_FLAGS = 0x80FF
 _LOGFILE_PAGE_SIZE = 4096
 _LOGFILE_CLIENT_RECORD_SIZE = 0xA0
 _LOGFILE_NO_CLIENT = 0xFFFF

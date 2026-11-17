@@ -300,9 +300,7 @@ def test_native_ntfs_reopen_uses_injected_source_factory(tmp_path):
     image._source_factory = source_factory
     image._image_source = None
     image._volume_source = None
-    image.profile = SimpleNamespace(
-        boot=SimpleNamespace(filesystem_size=VOLUME_SIZE)
-    )
+    image.profile = SimpleNamespace(boot=SimpleNamespace(filesystem_size=VOLUME_SIZE))
 
     volume = image.reopen()
     assert volume.read_at(0, 512) == _boot()
@@ -1761,11 +1759,11 @@ def test_ntfs_upcase_load_failure_falls_back_to_safe_name_matching(
 def test_rejects_unknown_ntfs_volume_flags():
     value = bytearray(12)
     value[8:10] = b"\x03\x01"
-    struct.pack_into("<H", value, 10, 0x0080)
+    struct.pack_into("<H", value, 10, 0x0100)
     attr = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
     with pytest.raises(
         NtfsMetadataError,
-        match="unknown volume flags raw=0x0080 unknown=0x0080",
+        match="unknown volume flags raw=0x0100 unknown=0x0100",
     ):
         parse_ntfs_volume_state((attr,))
 

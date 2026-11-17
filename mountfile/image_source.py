@@ -41,11 +41,9 @@ class ImageSource(Protocol):
         """Release the underlying read-only source handle."""
         ...
 
-    def __enter__(self) -> ImageSource:
-        ...
+    def __enter__(self) -> ImageSource: ...
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        ...
+    def __exit__(self, exc_type, exc, traceback) -> None: ...
 
 
 class FileImageSource:
@@ -247,7 +245,9 @@ class WindowsRawDeviceImageSource:
             error_type=ImageSourceError,
         )
         if self._handle is None:
-            raise ImageSourceError("raw physical-drive source is closed", RefusalCode.UNSAFE)
+            raise ImageSourceError(
+                "raw physical-drive source is closed", RefusalCode.UNSAFE
+            )
         if length == 0:
             return b""
 
@@ -300,7 +300,9 @@ class WindowsRawDeviceImageSource:
 
     def __enter__(self) -> WindowsRawDeviceImageSource:
         if self.closed:
-            raise ImageSourceError("raw physical-drive source is closed", RefusalCode.UNSAFE)
+            raise ImageSourceError(
+                "raw physical-drive source is closed", RefusalCode.UNSAFE
+            )
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
