@@ -18,21 +18,19 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
-import ipaddress
 import json
 import mmap
 import re
 import sqlite3
 import sys
-import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+
 # ---------------------------------------------------------------------------
 # Timeline model
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class TimelineRecord:
@@ -76,7 +74,6 @@ def read_timeline_csv(path: str | Path) -> Iterator[TimelineRecord]:
 # Grep по raw-образу
 # ---------------------------------------------------------------------------
 
-
 def _context(mm: mmap.mmap, start: int, end: int, context: int) -> str:
     left = max(0, start - context)
     right = min(len(mm), end + context)
@@ -96,17 +93,12 @@ def grep_image(
     Ищет pattern в raw-образе через mmap.
     encoding: utf-8, utf-16le, latin-1, raw.
     """
-    if max_hits < 1 or not pattern:
-        return
     if encoding == "raw":
         needle = pattern.encode("latin-1")
     else:
         needle = pattern.encode(encoding)
 
     with open(image_path, "rb") as f:
-        if f.seek(0, 2) == 0:
-            return
-        f.seek(0)
         with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             if regex:
                 rx = re.compile(needle)
@@ -139,11 +131,9 @@ def grep_image(
 # SQLite timeline
 # ---------------------------------------------------------------------------
 
-
 class TimelineDB:
     def __init__(self, db_path: str | Path):
-        self._lock = threading.RLock()
-        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
@@ -166,25 +156,17 @@ class TimelineDB:
             (r.path, r.size, r.mtime, r.atime, r.ctime, r.birth, r.sha256)
             for r in records
         ]
-        with self._lock, self.conn:
-            self.conn.executemany(
-                """
-                INSERT INTO timeline(path, size, mtime, atime, ctime, birth, sha256)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+        self.conn.executemany(
+            """
+            INSERT INTO timeline(path, size, mtime, atime, ctime, birth, sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        self.conn.commit()
         return len(rows)
 
-    def query(
-        self, *, limit: int = 1000, path_like: str | None = None
-    ) -> list[dict[str, Any]]:
-        if (
-            isinstance(limit, bool)
-            or not isinstance(limit, int)
-            or not 1 <= limit <= 10000
-        ):
-            raise ValueError("limit must be between 1 and 10000")
+    def query(self, *, limit: int = 1000, path_like: str | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM timeline"
         params: list[Any] = []
         if path_like:
@@ -192,24 +174,12 @@ class TimelineDB:
             params.append(f"%{path_like}%")
         sql += " ORDER BY mtime IS NULL, mtime LIMIT ?"
         params.append(limit)
-        with self._lock:
-            return [dict(row) for row in self.conn.execute(sql, params)]
-
-    def close(self) -> None:
-        with self._lock:
-            self.conn.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.close()
+        return [dict(row) for row in self.conn.execute(sql, params)]
 
 
 # ---------------------------------------------------------------------------
 # Timestomp detection
 # ---------------------------------------------------------------------------
-
 
 def detect_timestomp(
     records: Iterable[TimelineRecord],
@@ -240,7 +210,6 @@ def detect_timestomp(
 # Plugin registry
 # ---------------------------------------------------------------------------
 
-
 class PluginRegistry:
     HOOKS = ("on_open", "on_file", "on_close")
 
@@ -263,7 +232,6 @@ class PluginRegistry:
 # Helpers
 # ---------------------------------------------------------------------------
 
-
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -275,7 +243,6 @@ def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
 # ---------------------------------------------------------------------------
 # CLI commands
 # ---------------------------------------------------------------------------
-
 
 def cmd_grep(args: argparse.Namespace) -> None:
     for hit in grep_image(
@@ -293,15 +260,15 @@ def cmd_grep(args: argparse.Namespace) -> None:
 
 
 def cmd_timeline(args: argparse.Namespace) -> None:
-    with TimelineDB(args.db) as db:
-        if args.query:
-            result = db.query(limit=args.limit)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        else:
-            if not args.csv:
-                raise ValueError("timeline import requires a CSV path")
-            count = db.add(read_timeline_csv(args.csv))
-            print(f"added {count} records to {args.db}")
+    records = list(read_timeline_csv(args.csv))
+    db = TimelineDB(args.db)
+
+    if args.query:
+        result = db.query(limit=args.limit)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        count = db.add(records)
+        print(f"added {count} records to {args.db}")
 
 
 def cmd_timestomp(args: argparse.Namespace) -> None:
@@ -322,22 +289,9 @@ def cmd_hash(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    host = str(args.host).strip()
-    is_loopback = host.lower() == "localhost"
-    if not is_loopback:
-        try:
-            is_loopback = ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
-        except ValueError:
-            is_loopback = False
-    if not is_loopback:
-        raise SystemExit(
-            "Refusing to expose the unauthenticated DFIR prototype on a non-loopback host. "
-            "Use --host 127.0.0.1 or localhost."
-        )
-
     try:
+        from fastapi import FastAPI
         import uvicorn
-        from fastapi import FastAPI, HTTPException
     except ImportError:
         sys.exit("Установи зависимости: pip install fastapi uvicorn")
 
@@ -346,37 +300,27 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     @app.get("/timeline")
     def timeline(limit: int = 100, path: str | None = None) -> list[dict[str, Any]]:
-        try:
-            return db.query(limit=limit, path_like=path)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return db.query(limit=limit, path_like=path)
 
-    try:
-        uvicorn.run(app, host=args.host, port=args.port)
-    finally:
-        db.close()
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Single-file DFIR prototype for mount-file issue #87"
-    )
+    parser = argparse.ArgumentParser(description="Single-file DFIR prototype for mount-file issue #87")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_grep = sub.add_parser("grep", help="grep по raw-образу")
     p_grep.add_argument("image")
     p_grep.add_argument("pattern")
     p_grep.add_argument("--regex", action="store_true")
-    p_grep.add_argument(
-        "--encoding", default="utf-8", choices=["utf-8", "utf-16le", "latin-1", "raw"]
-    )
+    p_grep.add_argument("--encoding", default="utf-8", choices=["utf-8", "utf-16le", "latin-1", "raw"])
     p_grep.add_argument("--context", type=int, default=64)
     p_grep.add_argument("--max-hits", type=int, default=1000)
     p_grep.add_argument("--json", action="store_true")
     p_grep.set_defaults(func=cmd_grep)
 
     p_tl = sub.add_parser("timeline", help="timeline CSV -> SQLite")
-    p_tl.add_argument("csv", nargs="?")
+    p_tl.add_argument("csv")
     p_tl.add_argument("--db", default="timeline.db")
     p_tl.add_argument("--query", action="store_true")
     p_tl.add_argument("--limit", type=int, default=100)
