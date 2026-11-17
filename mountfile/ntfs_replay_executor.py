@@ -13,6 +13,7 @@ future filesystem-aware resolver can implement MFT allocation, ``$MFTMirr``
 repair, attribute-list expansion and index updates while retaining the same
 transactional boundary.
 """
+
 from __future__ import annotations
 
 import os
@@ -37,6 +38,10 @@ from mountfile.ntfs_logfile import (
     ReplayTarget,
     replay_analysis_to_stream,
 )
+from mountfile.ntfs_mft_allocation import (
+    NtfsMftAllocationError,
+    plan_mft_record_reuse,
+)
 
 
 class NtfsReplayResolutionError(NtfsReplayExecutorError):
@@ -54,10 +59,48 @@ class NtfsReplayPublication:
 
 
 ReplayResolver = Callable[[ReplayStep], ReplayTarget]
+MftCandidateProvider = Callable[[ReplayStep], tuple[object, object, int, int] | None]
+
+
+def _validate_mft_candidate(
+    step: ReplayStep,
+    provider: MftCandidateProvider | None,
+) -> None:
+    """Validate a provider-supplied MFT/$MFTMirr candidate before mutation."""
+    if provider is None:
+        return
+    try:
+        candidate = provider(step)
+    except NtfsMftAllocationError:
+        raise
+    except Exception as exc:
+        raise NtfsReplayResolutionError(
+            f"MFT candidate provider failed for LSN {step.lsn}: {exc}"
+        ) from exc
+    if candidate is None:
+        return
+    if not isinstance(candidate, tuple) or len(candidate) != 4:
+        raise NtfsReplayResolutionError(
+            "MFT candidate provider must return a 4-tuple or None"
+        )
+    raw_record, raw_mirror, reference, record_number = candidate
+    try:
+        plan_mft_record_reuse(
+            raw_record,
+            raw_mirror,
+            reference,
+            candidate_record_number=record_number,
+        )
+    except NtfsMftAllocationError as exc:
+        raise NtfsReplayResolutionError(
+            f"MFT allocation refused for LSN {step.lsn}: {exc.reason}"
+        ) from exc
 
 
 def _resolve_targets(
-    analysis: NtfsLogFileAnalysis, resolver: ReplayResolver
+    analysis: NtfsLogFileAnalysis,
+    resolver: ReplayResolver,
+    mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> dict[tuple[int, int], ReplayTarget]:
     if not isinstance(analysis, NtfsLogFileAnalysis):
         raise NtfsReplayResolutionError("replay analysis has an invalid type")
@@ -73,6 +116,7 @@ def _resolve_targets(
     for step in (*analysis.redo_plan, *analysis.undo_plan):
         if step.operation_name in {"Noop", "CommitTransaction", "ForgetTransaction"}:
             continue
+        _validate_mft_candidate(step, mft_candidate_provider)
         try:
             target = resolver(step)
         except NtfsReplayExecutorError:
@@ -103,8 +147,9 @@ def _replay_staged(
     stream: BinaryIO,
     analysis: NtfsLogFileAnalysis,
     resolver: ReplayResolver,
+    mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> tuple[OverlayProvenance, ...]:
-    targets = _resolve_targets(analysis, resolver)
+    targets = _resolve_targets(analysis, resolver, mft_candidate_provider)
     _fault("mutation:start")
     provenance = replay_analysis_to_stream(
         analysis, stream, targets, sync=lambda: _fsync_stream(stream)
@@ -129,13 +174,15 @@ def publish_ntfs_replay(
     resolver: ReplayResolver,
     *,
     verify: Callable[[str], None] | None = None,
+    mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> NtfsReplayPublication:
     """Replay a validated analysis on a disposable copy and atomically publish it.
 
-    ``resolver`` is mandatory. No implicit MFT arithmetic is performed. A
-    caller that cannot resolve every operation gets a typed refusal before the
+    ``resolver`` is mandatory. No implicit MFT arithmetic is performed. When
+    ``mft_candidate_provider`` is supplied, each candidate is validated
+    against both its USA-restored mirror and the log reference before the
     staged image is modified. ``verify`` should independently validate the
-    staged NTFS metadata (for example with a platform checker) before publish.
+    staged NTFS metadata before publish.
     """
     source = os.path.abspath(os.fspath(image_path))
     try:
@@ -146,7 +193,9 @@ def publish_ntfs_replay(
     provenance: tuple[OverlayProvenance, ...] = ()
     try:
         with open(temporary, "r+b", buffering=0) as stream:
-            provenance = _replay_staged(stream, analysis, resolver)
+            provenance = _replay_staged(
+                stream, analysis, resolver, mft_candidate_provider
+            )
             if verify is not None:
                 verify(temporary)
             _fsync_path(temporary)
@@ -177,6 +226,7 @@ def publish_ntfs_replay(
 __all__ = [
     "NtfsReplayPublication",
     "NtfsReplayResolutionError",
+    "MftCandidateProvider",
     "ReplayResolver",
     "publish_ntfs_replay",
 ]

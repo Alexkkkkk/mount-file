@@ -13,9 +13,10 @@ to an image.  Reuse is planned only when:
   candidate sequence + 1 (when the successor is supported);
 * the $MFTMirr copy is byte-identical to the USA-restored $MFT record.
 
-Wiring this planner into a write path is intentionally out of scope here;
-until that lands with an independent checker, replay stays refused for
-allocation questions (tracker #510, item C5).
+The NTFS replay executor can use this planner as an explicit pre-write gate
+when a filesystem-aware candidate provider is supplied. The provider still
+owns locating records and the executor still refuses actual allocation or
+publication without an independent checker (tracker #510, item C5).
 """
 
 from __future__ import annotations
