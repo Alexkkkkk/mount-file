@@ -35,7 +35,12 @@ from mountfile.ext4_native_writer import (
 )
 from mountfile.jbd2_writer import encode_classic_jbd2_transaction
 from mountfile.journal_safety import JournalState
-from mountfile.native_write import ENABLE_ENV, NativeWriteDisabled, NativeWriteUnsafe
+from mountfile.native_write import (
+    ENABLE_ENV,
+    NativeWriteDisabled,
+    NativeWriteUnsafe,
+    _read_ntfs_file_bytes,
+)
 from mountfile.ntfs_native_writer import (
     NtfsLogGate,
     NtfsNativeWriter,
@@ -54,8 +59,10 @@ needs_libext2fs = pytest.mark.skipif(
     not libext2fs_available(), reason="libext2fs is unavailable"
 )
 needs_ntfs = pytest.mark.skipif(
-    shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
-    reason="ntfs-3g tools are unavailable",
+    shutil.which("mkntfs") is None
+    or shutil.which("ntfscp") is None
+    or shutil.which("ntfscat") is None,
+    reason="ntfs-3g tools (mkntfs/ntfscp/ntfscat) are unavailable",
 )
 
 
@@ -724,6 +731,43 @@ def test_ntfs_native_writer_writes_through_ntfscp(tmp_path, monkeypatch):
     payload = b"ntfs journal-gated write\n"
     assert NtfsNativeWriter().write_file(str(image), "/f.txt", payload) == len(payload)
     assert _run(["ntfscat", str(image), "/f.txt"]).stdout == payload.decode()
+
+
+@needs_ntfs
+def test_ntfs_native_writer_rejects_readback_mismatch_before_publish(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_ntfs(tmp_path)
+    before = image.read_bytes()
+    monkeypatch.setattr(
+        "mountfile.ntfs_native_writer._read_ntfs_file_bytes",
+        lambda *_args: b"not the requested payload",
+    )
+
+    with pytest.raises(NtfsProfileUnsupported, match="read-back mismatch"):
+        NtfsNativeWriter().write_file(str(image), "/f.txt", b"expected payload")
+
+    assert image.read_bytes() == before
+
+
+def test_ntfs_readback_failure_does_not_expose_partial_file_bytes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "mountfile.native_write.shutil.which", lambda _tool: "/fake/ntfscat"
+    )
+    monkeypatch.setattr(
+        "mountfile.native_write.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], 1, stdout=b"private-file-content", stderr=b""
+        ),
+    )
+
+    with pytest.raises(NativeWriteUnsafe) as raised:
+        _read_ntfs_file_bytes(str(tmp_path / "not-opened.img"), "f.txt")
+
+    assert "private-file-content" not in str(raised.value)
 
 
 @needs_ntfs

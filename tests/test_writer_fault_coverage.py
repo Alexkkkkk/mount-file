@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_native_journal_writers import make_ext4, needs_ext, needs_libext2fs
+from test_native_journal_writers import ext4_read, make_ext4, needs_ext, needs_libext2fs
 
 from mountfile.ext4_native_writer import probe_journal
 from mountfile.journal_safety import JournalState
@@ -134,6 +134,16 @@ def test_ext4_process_kill_preserves_source_until_publish(tmp_path, point) -> No
     after = image.read_bytes()
     if point == "publish:done":
         assert after != before
+        assert ext4_read(image) == "killed write\n"
+        checked = subprocess.run(
+            ["e2fsck", "-fn", str(image)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert image.read_bytes() == after
     else:
         assert after == before
 
