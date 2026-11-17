@@ -123,10 +123,19 @@ jobs:
       # Modest package-wide floor: OS-specific and optional GUI/backends are
       # intentionally not exercised on every matrix leg; fail only on a broad
       # loss of exercised MountFile code, while still publishing the report.
+      #
+      # -n auto --dist loadfile: the suite is ~3000 tests / ~14 min on one core
+      # and the wall time is dominated by per-file image fixtures (mkfs + fsck
+      # of ext4/FAT/NTFS images, write-chain matrices). loadfile keeps every
+      # test FILE on a single worker, so file-scoped image/port/temp fixtures
+      # never race between workers - the only safe distribution mode here.
+      # --durations=25 records the slowest tests so the next optimisation round
+      # can shard by measured cost instead of guessing.
       - name: Run tests with coverage
         run: >-
-          python -m pytest tests/ -v
+          python -m pytest tests/ -v -n auto --dist loadfile
           --timeout=600 --timeout-method=thread
+          --durations=25
           --cov=mountfile --cov-report=term --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
           --cov-fail-under=20
@@ -358,13 +367,15 @@ jobs:
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov pytest-timeout hypothesis pytsk3 'setuptools>=68' wheel
+          python -m pip install pytest pytest-cov pytest-timeout pytest-xdist hypothesis pytsk3 'setuptools>=68' wheel
           python -m pip install -r requirements.txt
 
       - name: Run the full suite with pytsk3 available
         run: >-
-          python -m pytest tests/ -v --cov=mountfile --cov-report=term
+          python -m pytest tests/ -v -n auto --dist loadfile
+          --cov=mountfile --cov-report=term
           --cov-fail-under=20
+          --durations=25
 
       - name: Emit external-checker capability matrix
         run: python scripts/checker_matrix.py --json-out checker-matrix.json
