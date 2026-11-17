@@ -3,7 +3,7 @@
   "tracker": 510,
   "slice": {
     "branch": "fix/issue-510-ntfs-post-crash-readback",
-    "commit": "479bc59",
+    "commit": "57b3c77",
     "version": "1.96.0",
     "checked": "2026-11-17"
   },
@@ -146,9 +146,10 @@
       "status": "partial",
       "evidence": [
         "mountfile/native_write.py",
-        "tests/test_ext4_writer_fault_coverage.py"
+        "tests/test_ext4_writer_fault_coverage.py",
+        "tests/test_native_journal_writers.py"
       ],
-      "reproduced": "2026-11-16: tests/test_ext4_writer_fault_coverage.py passes seven active SIGKILL boundary cases; source remains unchanged before publish:done.",
+      "reproduced": "2026-11-17: ext4 SIGKILL cases exercise all nine declared boundaries; publish:done reads exact bytes via debugfs and passes e2fsck -fn. The matrix artifact maps seven cases because helper boundaries are excluded.",
       "note": "SIGKILL проверен на объявленных staged-writer boundaries; это не каждая JBD2 transaction/metadata phase и не power-loss proof."
     },
     {
@@ -289,10 +290,11 @@
       "status": "partial",
       "evidence": [
         "tests/test_ext4_writer_fault_coverage.py",
-        "tests/test_ntfs_writer_fault_coverage.py"
+        "tests/test_ntfs_writer_fault_coverage.py",
+        "tests/test_native_journal_writers.py"
       ],
-      "note": "Mapped ext4 and NTFS process-kill cases cover declared staged-writer boundaries only; not every filesystem transaction or metadata operation. NTFS cases remain synthetic. The NTFS publish:done case now reads back and compares the exact target bytes.",
-      "reproduced": "2026-11-17: tests/test_ntfs_writer_fault_coverage.py and tests/test_ntfs_crash_oracle_matrix.py → 15 passed. All nine declared NTFS SIGKILL boundaries are exercised; pre-publish hashes stay unchanged and publish:done verifies /target bytes. GitHub currently has no schedule-triggered failure-matrix runs; no two-nightly criterion is claimed."
+      "note": "Local tests exercise all nine declared process-kill boundaries for ext4 and synthetic NTFS; the failure-matrix artifact maps seven cases per profile because helper boundaries are excluded. This does not cover every filesystem transaction or metadata operation. NTFS publish:done reads back exact target bytes.",
+      "reproduced": "2026-11-17: focused writer/checker/failure suite → 97 passed, 3 skipped. Pre-publish hashes stay unchanged; ext4 publish:done verifies debugfs bytes and e2fsck -fn, NTFS publish:done verifies /target via ntfscat. No schedule-triggered failure-matrix runs are available; no two-nightly criterion is claimed."
     },
     {
       "id": "D3",
@@ -306,7 +308,7 @@
         "tests/test_jbd2_malformed_journal_refusal.py"
       ],
       "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; this does not prove preservation for every profile × operation × phase cell. NTFS post-publish correctness is checked by exact target read-back, not by expecting the image hash to remain unchanged after commit.",
-      "reproduced": "2026-11-17: focused NTFS process-kill/crash-matrix tests → 15 passed; pre-publish image hashes are preserved, and the successful atomic publish returns the exact expected file bytes. Remaining matrix cells are not proven."
+      "reproduced": "2026-11-17: focused writer/checker/failure suite → 97 passed, 3 skipped; selected process-kill cases preserve pre-publish image hashes, and successful publish cases read back the exact expected bytes. Remaining matrix cells are not proven."
     },
     {
       "id": "D4",
@@ -328,9 +330,13 @@
       "status": "partial",
       "evidence": [
         "tests/_independent_checkers.py",
-        "tests/test_checker_acceptance.py"
+        "tests/test_checker_acceptance.py",
+        "mountfile/ntfs_native_writer.py",
+        "tests/test_native_journal_writers.py",
+        "tests/test_writer_fault_coverage.py"
       ],
-      "note": "в recovery-пути ext4 — да, вне его — нет"
+      "note": "Ext4 selected paths use e2fsck -fn plus read-back. Binary staged read-back is added only to the gated experimental NtfsNativeWriter helper, not the VFS/application NtfsTransactionalWriter route; no authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
+      "reproduced": "2026-11-17: NTFS staged-readback mismatch refusal preserves the source byte-for-byte; ext4 publish:done SIGKILL reads exact debugfs bytes and passes e2fsck -fn. Focused suite: 97 passed, 3 skipped. D5 remains partial."
     },
     {
       "id": "D6",

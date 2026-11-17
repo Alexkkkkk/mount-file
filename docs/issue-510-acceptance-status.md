@@ -1,6 +1,6 @@
 # Issue #510 acceptance status
 
-Status snapshot: 2026-11-17. This follow-up starts from `main@9769bab`. The full local suite on code head `479bc59` completed with **2761 passed, 99 skipped** in 237.70s; skips were for optional/platform tools unavailable in the sandbox. Earlier per-subsystem counts below are historical unless explicitly tied to this run. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
+Status snapshot: 2026-11-17. This follow-up starts from `main@9769bab`. The full local suite on code head `57b3c77` completed with **2763 passed, 99 skipped** in 225.59s; the focused writer/checker/failure suite reported **97 passed, 3 skipped**. Skips were for optional/platform tools unavailable in the sandbox. Earlier per-subsystem counts below are historical unless explicitly tied to this run. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
 
 ## ext4 / JBD2
 
@@ -10,9 +10,9 @@ This is implementation and test evidence, not production readiness. Independent 
 
 ## NTFS / `$LogFile`
 
-The repository contains a bounded `$LogFile` parser and replay path. `recover="native"` invokes replay on a disposable copy and remains fail-closed for unsupported operations. The focused parser/replay suite at the base revision reported 87 passing tests. The crash-oracle cases are synthetic NTFS images, not Windows-generated crash captures.
+The repository contains a bounded `$LogFile` parser and replay path. `recover="native"` invokes replay on a disposable copy and remains fail-closed for unsupported operations. The gated experimental `NtfsNativeWriter` now compares staged file bytes from `ntfscat` with the requested payload before publication. This is not the VFS/application route: `NtfsVFS` uses `NtfsTransactionalWriter`, whose existing log gate remains fail-closed because `ntfsfix` cannot establish Windows parity. The focused parser/replay suite at the base revision reported 87 passing tests. The crash-oracle cases are synthetic NTFS images, not Windows-generated crash captures.
 
-`ntfsfix -n` is an auxiliary check only. It is not a substitute for Windows `chkdsk`, and it does not establish Windows parity. No Windows crash-capture reference set or byte-level `$MFT`/`$BITMAP` comparison against a `chkdsk`-recovered image is available. Product-level NTFS writes therefore remain unsupported/read-only; do not describe the bounded replay as production-ready.
+`ntfsfix -n` is an auxiliary check only. It is not a substitute for Windows `chkdsk`, and it does not establish Windows parity. No Windows crash-capture reference set or byte-level `$MFT`/`$BITMAP` comparison against a `chkdsk`-recovered image is available. The staged read-back hardening applies only to the gated `NtfsNativeWriter` helper and does not make product-level/VFS NTFS writes supported; keep them unsupported/read-only and do not describe bounded replay as production-ready.
 
 ## Failure-matrix evidence
 
