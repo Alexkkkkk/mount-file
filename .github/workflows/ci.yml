@@ -20,12 +20,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Fast tier (4 legs) on PRs and merge-queue batches, full 3x3 matrix on
-  # main pushes. The matrix is computed in a setup job because the matrix
-  # context is not available in a job-level `if`. The fast tier keeps every
-  # REQUIRED check name reporting ("test (3.10/3.11/3.12)" are in branch
-  # protection) and only drops the non-required macos/windows-extra legs;
-  # dropping a required leg would leave its context pending forever.
+  # Fast tier (4 legs) on PRs and merge-queue batches, full matrix on main
+  # pushes. The matrix is computed in a setup job because the matrix context is
+  # not available in a job-level `if`. The fast tier keeps every REQUIRED check
+  # name reporting ("test (3.10/3.11/3.12)" are in branch protection) and only
+  # drops the non-required macos/windows-extra legs; dropping a required leg
+  # would leave its context pending forever.
+  #
+  # macOS is the most expensive runner in the matrix (~10x the per-minute cost
+  # of Linux) and only leg 3.12 adds coverage on top of 3.10 -- 3.11 on macOS
+  # duplicated 3.11 on Linux without exercising anything new, so the full tier
+  # runs 3.10 + 3.12 on macOS instead of all three versions.
   setup-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -37,7 +42,7 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
             echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.10","check_name":"Tests (windows-latest, py3.10)","timeout":40},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40},{"os":"macos-latest","python":"3.10","check_name":"Tests (macos-latest, py3.10)","timeout":75},{"os":"macos-latest","python":"3.11","check_name":"Tests (macos-latest, py3.11)","timeout":75},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.10","check_name":"Tests (windows-latest, py3.10)","timeout":40},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40},{"os":"macos-latest","python":"3.10","check_name":"Tests (macos-latest, py3.10)","timeout":75},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75}]}' >> "$GITHUB_OUTPUT"
           fi
 
   tests:
@@ -64,12 +69,13 @@ jobs:
           cache: pip
 
       # Linux Qt runtime libraries are needed for GUI tests; without them the
-      # import is skipped. The system tools build FAT32 fixtures in CI.
+      # import is skipped. The system tools build FAT32 fixtures in CI. The
+      # package set comes from the shared composite action so it is identical
+      # in every workflow and cached between runs (apt cache instead of a
+      # 35-60 s apt-get update + install on every Linux leg).
       - name: Install system tools (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          xargs -r sudo apt-get install -y < <(grep -vE '^[[:space:]]*(#|$)' tools/system-packages-debian.txt)
+        uses: ./.github/actions/setup-system-deps
 
       - name: Require filesystem oracle tools (Linux)
         if: runner.os == 'Linux'
@@ -111,15 +117,6 @@ jobs:
           $report.check_count = $report.checks.Count
           $report | ConvertTo-Json -Depth 8 | Set-Content -Path $evidencePath -Encoding UTF8
 
-      - name: Upload Windows platform adapter evidence
-        if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: windows-installer-evidence-${{ matrix.os }}-py${{ matrix.python }}
-          path: windows-installer-evidence.json
-          if-no-files-found: error
-          retention-days: 14
-
       # Modest package-wide floor: OS-specific and optional GUI/backends are
       # intentionally not exercised on every matrix leg; fail only on a broad
       # loss of exercised MountFile code, while still publishing the report.
@@ -131,48 +128,32 @@ jobs:
           --junitxml=test-results.xml
           --cov-fail-under=20
 
-      - name: Upload detailed test outcomes (including skips and xfails)
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: test-results-${{ matrix.os }}-py${{ matrix.python }}
-          path: test-results.xml
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Emit cross-platform benchmark provenance
+      # Every evidence generator is cheap (pure Python over the JUnit XML) and
+      # used to be its own workflow step: nine step startups, nine runner log
+      # sections and nine separate artifact zips per matrix leg. Running them
+      # in one step and uploading one archive keeps the same files and
+      # validations but removes that per-step overhead across the whole matrix.
+      - name: Emit cross-platform evidence reports
         if: always()
         run: |
+          set -uo pipefail
           python scripts/platform_benchmark_provenance.py --junitxml test-results.xml --json-out platform-benchmark-provenance.json
           python scripts/platform_benchmark_provenance.py --validate platform-benchmark-provenance.json --json-out platform-benchmark-provenance-validation.json
-
-      - name: Upload cross-platform benchmark provenance
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: platform-benchmark-provenance-${{ matrix.os }}-py${{ matrix.python }}
-          path: |
-            platform-benchmark-provenance.json
-            platform-benchmark-provenance-validation.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload the coverage report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: coverage-${{ matrix.os }}-py${{ matrix.python }}
-          path: coverage.xml
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Emit cross-platform native read fixture evidence
-        if: always()
-        run: >-
-          python scripts/native_read_evidence.py
-          --junitxml test-results.xml
-          --windows-installer-evidence windows-installer-evidence.json
-          --json-out native-read-evidence.json
+          python scripts/native_read_evidence.py \
+            --junitxml test-results.xml \
+            --windows-installer-evidence windows-installer-evidence.json \
+            --json-out native-read-evidence.json
+          python scripts/capability_conformance.py --json-out capability-conformance.json
+          python scripts/benchmark_provenance.py --json-out benchmark-provenance.json
+          python scripts/checker_matrix.py --json-out checker-matrix.json
+          python scripts/failure_matrix_artifact.py \
+            --repo-root . \
+            --junitxml test-results.xml \
+            --json-out failure-matrix.json
+          python scripts/failure_matrix_artifact.py \
+            --repo-root . \
+            --junitxml test-results.xml \
+            --validate failure-matrix.json
 
       - name: Upload native read fixture evidence
         if: always()
@@ -183,66 +164,29 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Validate capability operation conformance
-        run: python scripts/capability_conformance.py --json-out capability-conformance.json
-
-      - name: Upload capability conformance
+      - name: Upload all remaining per-leg reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: capability-conformance-${{ matrix.os }}-py${{ matrix.python }}
-          path: capability-conformance.json
-          if-no-files-found: error
+          name: ci-reports-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            test-results.xml
+            coverage.xml
+            platform-benchmark-provenance.json
+            platform-benchmark-provenance-validation.json
+            capability-conformance.json
+            benchmark-provenance.json
+            checker-matrix.json
+            failure-matrix.json
+          if-no-files-found: ignore
           retention-days: 14
 
-      - name: Emit cross-platform benchmark provenance
-        if: always()
-        run: python scripts/benchmark_provenance.py --json-out benchmark-provenance.json
-
-      - name: Upload cross-platform benchmark provenance
-        if: always()
+      - name: Upload Windows platform adapter evidence
+        if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: benchmark-provenance-${{ matrix.os }}-py${{ matrix.python }}
-          path: benchmark-provenance.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Emit external-checker inventory for this platform
-        if: always()
-        run: python scripts/checker_matrix.py --json-out checker-matrix.json
-
-      - name: Emit failure coverage matrix
-        if: always()
-        run: >-
-          python scripts/failure_matrix_artifact.py
-          --repo-root .
-          --junitxml test-results.xml
-          --json-out failure-matrix.json
-
-      - name: Validate failure coverage matrix
-        if: always()
-        run: >-
-          python scripts/failure_matrix_artifact.py
-          --repo-root .
-          --junitxml test-results.xml
-          --validate failure-matrix.json
-
-      - name: Upload failure coverage matrix
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: failure-matrix-${{ matrix.os }}-py${{ matrix.python }}
-          path: failure-matrix.json
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload platform checker inventory
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: external-checker-matrix-${{ matrix.os }}-py${{ matrix.python }}
-          path: checker-matrix.json
+          name: windows-installer-evidence-${{ matrix.os }}-py${{ matrix.python }}
+          path: windows-installer-evidence.json
           if-no-files-found: error
           retention-days: 14
 
@@ -342,24 +286,19 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # pytsk3 builds bundled libtsk from source; the build tools ship
-      # with ubuntu-latest but must be present for pip to compile it.
-      # ntfs-3g supplies mkfs.ntfs and ntfsfix for the real-image checker case.
-      # The Qt runtime libraries are required too: requirements.txt pulls
-      # in PyQt6, but without libEGL/libGL the binding cannot import and
-      # every GUI test in tests/test_build_ci.py is silently skipped
-      # instead of running.
+      # Build tools (pytsk3 compiles bundled libtsk from source), ntfs-3g
+      # (mkfs.ntfs/ntfsfix for the real-image checker case) and the Qt runtime
+      # libraries all come from the cached canonical package list: without
+      # libEGL/libGL every GUI test in tests/test_build_ci.py is silently
+      # skipped instead of running.
       - name: Install system packages
-        run: |
-          sudo apt-get update
-          xargs -r sudo apt-get install -y < <(grep -vE '^[[:space:]]*(#|$)' tools/system-packages-debian.txt)
-          sudo apt-get install -y build-essential
+        uses: ./.github/actions/setup-system-deps
 
       - name: Install runtime dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov pytest-timeout hypothesis pytsk3 'setuptools>=68' wheel
-          python -m pip install -r requirements.txt
+        uses: ./.github/actions/python-test-env
+        with:
+          extra-pip: 'pytsk3'
+          requirements-file: 'requirements.txt'
 
       - name: Run the full suite with pytsk3 available
         run: >-
@@ -369,29 +308,11 @@ jobs:
       - name: Emit external-checker capability matrix
         run: python scripts/checker_matrix.py --json-out checker-matrix.json
 
-      - name: Upload external-checker capability matrix
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: external-checker-matrix-linux
-          path: checker-matrix.json
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Execute checker fixture acceptance matrix
         run: >-
           python scripts/checker_acceptance.py
           --json-out checker-acceptance.json
           --junitxml checker-acceptance-junit.xml
-
-      - name: Upload checker fixture acceptance artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: checker-fixture-acceptance-linux
-          path: |
-            checker-acceptance.json
-            checker-acceptance-junit.xml
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Execute writer recovery acceptance fixtures
         run: >-
@@ -399,26 +320,8 @@ jobs:
           --json-out recovery-acceptance.json
           --junitxml recovery-acceptance-junit.xml
 
-      - name: Upload writer recovery acceptance artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: writer-recovery-acceptance-linux
-          path: |
-            recovery-acceptance.json
-            recovery-acceptance-junit.xml
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Validate conservative product status contract
         run: python scripts/product_status_contract.py --json-out product-status.json
-
-      - name: Upload product status contract
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: product-status-contract-linux
-          path: product-status.json
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Entry-point and GUI import diagnostics
         run: |
@@ -439,12 +342,19 @@ jobs:
             "${output_dir}/bench_report.json" \
             --json-out "${output_dir}/benchmark-validation.json"
 
-      - name: Upload reproducible benchmark evidence
+      # One archive for the five integration reports instead of five uploads.
+      - name: Upload integration acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: vfs-benchmark-linux
+          name: integration-evidence-linux
           path: |
+            checker-matrix.json
+            checker-acceptance.json
+            checker-acceptance-junit.xml
+            recovery-acceptance.json
+            recovery-acceptance-junit.xml
+            product-status.json
             ${{ runner.temp }}/mountfile-vfs-benchmark/bench_report.json
             ${{ runner.temp }}/mountfile-vfs-benchmark/benchmark-validation.json
           if-no-files-found: ignore
@@ -472,11 +382,12 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller
-          python -m pip install -r requirements.txt
+      - name: Install build dependencies with uv
+        uses: ./.github/actions/python-test-env
+        with:
+          install-test-stack: 'false'
+          extra-pip: 'pyinstaller'
+          requirements-file: 'requirements.txt'
 
       - name: Build the standalone binary (PyInstaller)
         shell: bash
@@ -511,10 +422,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install PyQt6
-        run: |
-          pip install PyQt6
-          pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0'
+      - name: Install PyQt6 and the API dependencies
+        uses: ./.github/actions/python-test-env
       - name: Import the GUI modules headless
         shell: bash
         run: |
@@ -534,14 +443,11 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Qt runtime libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
+        uses: ./.github/actions/setup-system-deps
+        with:
+          extra: 'libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0'
       - name: Install GUI smoke-test dependencies
-        run: |
-          python -m pip install --upgrade pip pytest pytest-timeout PyQt6
-          python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0'
+        uses: ./.github/actions/python-test-env
       - name: Run focused headless GUI smoke tests
         run: python -m pytest tests/test_gui_smoke.py -v
 
