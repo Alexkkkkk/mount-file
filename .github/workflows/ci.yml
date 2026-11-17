@@ -123,9 +123,14 @@ jobs:
       # Modest package-wide floor: OS-specific and optional GUI/backends are
       # intentionally not exercised on every matrix leg; fail only on a broad
       # loss of exercised MountFile code, while still publishing the report.
+      # -n auto with --dist loadscope: 2987 tests across every core of the
+      # runner instead of ~14 min of single-threaded execution. loadscope keeps
+      # all tests of one module on the same worker, so module-level state and
+      # the tests that chdir stay isolated exactly as in a serial run.
       - name: Run tests with coverage
         run: >-
           python -m pytest tests/ -v
+          -n auto --dist loadscope
           --timeout=600 --timeout-method=thread
           --cov=mountfile --cov-report=term --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
@@ -363,7 +368,9 @@ jobs:
 
       - name: Run the full suite with pytsk3 available
         run: >-
-          python -m pytest tests/ -v --cov=mountfile --cov-report=term
+          python -m pytest tests/ -v
+          -n auto --dist loadscope
+          --cov=mountfile --cov-report=term
           --cov-fail-under=20
 
       - name: Emit external-checker capability matrix
