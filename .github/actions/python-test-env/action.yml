@@ -36,7 +36,17 @@ runs:
         # --python pins the interpreter actions/setup-python provisioned, so
         # the lockfile resolves against the exact version under test instead
         # of whatever CPython uv finds first on the runner.
-        uv sync --frozen --extra ci --python "$(command -v python)"
+        PY_BIN="$(command -v python)"
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          # Git Bash resolves python.exe without the .exe suffix; uv requires
+          # the exact file name when given an explicit --python path.
+          case "$PY_BIN" in
+            *.exe) : ;;
+            *) PY_BIN="$PY_BIN.exe" ;;
+          esac
+          PY_BIN="$(cygpath -m "$PY_BIN")"
+        fi
+        uv sync --frozen --extra ci --python "$PY_BIN"
 
     # uv's venv ships without pip on purpose. One ci.yml step runs
     # `python -m pip wheel`, so pip is installed explicitly instead of
