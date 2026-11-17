@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import datetime as _dt
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
+from mountfile.image_source import (
+    BoundedImageSource,
+    FileImageSource,
+    ImageSource,
+    ImageSourceError,
+)
 from mountfile.ntfs_mft import (
     NtfsFileRecordHeader,
     NtfsRecordError,
@@ -38,7 +44,10 @@ _ATTRIBUTE_FLAG_SPARSE = 0x8000
 _ATTRIBUTE_KNOWN_FLAGS = (
     _ATTRIBUTE_FLAG_COMPRESSED | _ATTRIBUTE_FLAG_ENCRYPTED | _ATTRIBUTE_FLAG_SPARSE
 )
-_VOLUME_KNOWN_FLAGS = 0x807F
+# Windows may set 0x0080 on a freshly-created or checker-touched volume.  It
+# is state metadata, not permission to write; dirty/recovery gates below still
+# decide whether a profile is writable.  Keep rejecting all other unknown bits.
+_VOLUME_KNOWN_FLAGS = 0x80FF
 _LOGFILE_PAGE_SIZE = 4096
 _LOGFILE_CLIENT_RECORD_SIZE = 0xA0
 _LOGFILE_NO_CLIENT = 0xFFFF
@@ -1009,11 +1018,19 @@ def parse_ntfs_volume_state(
     if len(volume.resident_value) != 12:
         raise NtfsMetadataError("NTFS $Volume information has an invalid length")
     major, minor = volume.resident_value[8:10]
-    if (major, minor) not in ((1, 1), (3, 0), (3, 1)):
-        raise NtfsMetadataError("unsupported NTFS $Volume version")
+    # Keep this closed set explicit; NTFS 1.2 is a documented on-disk version.
+    if (major, minor) not in ((1, 1), (1, 2), (3, 0), (3, 1)):
+        raw_version = volume.resident_value[8:10].hex()
+        raise NtfsMetadataError(
+            f"unsupported NTFS $Volume version {major}.{minor} (raw={raw_version})"
+        )
     flags = struct.unpack_from("<H", volume.resident_value, 10)[0]
-    if flags & ~_VOLUME_KNOWN_FLAGS:
-        raise NtfsMetadataError("NTFS $Volume has unknown volume flags")
+    unknown_flags = flags & ~_VOLUME_KNOWN_FLAGS
+    if unknown_flags:
+        raise NtfsMetadataError(
+            "NTFS $Volume has unknown volume flags "
+            f"raw=0x{flags:04x} unknown=0x{unknown_flags:04x}"
+        )
     return NtfsVolumeState(flags)
 
 
@@ -1140,6 +1157,7 @@ def probe_ntfs_metadata(
     offset: int = 0,
     volume_size: int | None = None,
     validate_mirror: bool = True,
+    source_factory: Callable[[], ImageSource] | None = None,
 ) -> NtfsMetadataProfile:
     """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror.
 
@@ -1149,7 +1167,12 @@ def probe_ntfs_metadata(
     caller keeps the fail-closed default.
     """
     try:
-        with FileImageSource(image_path) as source:
+        source = (
+            source_factory()
+            if source_factory is not None
+            else FileImageSource(image_path)
+        )
+        with source:
             volume = BoundedImageSource(source, offset, volume_size)
             boot = parse_ntfs_boot_sector(
                 volume.read_at(0, 512), volume_size=volume_size
@@ -1257,15 +1280,27 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     case_insensitive_ascii_paths = True
     max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
-    def __init__(self, image_path, offset=0, volume_size=None):
+    def __init__(
+        self,
+        image_path,
+        offset=0,
+        volume_size=None,
+        *,
+        source_factory: Callable[[], ImageSource] | None = None,
+        allow_dirty_read: bool = False,
+    ):
         if volume_size is None:
             raise NtfsMetadataError("an explicit NTFS volume_size is required")
         self.image_path = str(image_path)
         self.offset = int(offset)
-        self._image_source: FileImageSource | None = None
+        self._source_factory = source_factory
+        self._image_source: ImageSource | None = None
         self._volume_source: BoundedImageSource | None = None
         self.profile = probe_ntfs_metadata(
-            self.image_path, offset=self.offset, volume_size=volume_size
+            self.image_path,
+            offset=self.offset,
+            volume_size=volume_size,
+            source_factory=self._source_factory,
         )
         self._mft_data = next(
             (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
@@ -1282,7 +1317,8 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         volume_state = parse_ntfs_volume_state(
             self._attributes_for_record(3, volume_record)
         )
-        if not volume_state.clean:
+        self.volume_state = volume_state
+        if not volume_state.clean and not allow_dirty_read:
             self.close()
             raise NtfsMetadataError(
                 "NTFS volume is dirty or requires repair",
@@ -1318,6 +1354,13 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
                 # Freshly formatted volume: the log was never used, and
                 # $Volume already reported a clean state, so nothing to replay.
                 self.logfile_restart = None
+            except NtfsMetadataError:
+                if not allow_dirty_read:
+                    raise
+                # Raw Windows evidence is intentionally read-only.  It may
+                # capture a dirty/recovery $LogFile before chkdsk; do not
+                # interpret or replay it in this mode.
+                self.logfile_restart = None
             if self.logfile_restart is not None:
                 self.profile = replace(
                     self.profile, logfile_restart=self.logfile_restart
@@ -1340,7 +1383,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     def reopen(self):
         if self._volume_source is not None and not self._volume_source.closed:
             return self._volume_source
-        source = FileImageSource(self.image_path)
+        source_factory = getattr(self, "_source_factory", None)
+        source = (
+            source_factory()
+            if source_factory is not None
+            else FileImageSource(self.image_path)
+        )
         try:
             volume = BoundedImageSource(
                 source,

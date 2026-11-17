@@ -189,3 +189,39 @@ def test_unmapped_junit_failure_still_marks_overall_verdict_failed(tmp_path):
     assert report["verdict"] == "tests_failed"
     assert report["junit_report"]["failed"] == 1
     assert report["test_status_counts"]["failed"] == 0
+
+
+def test_schedule_run_is_explicitly_eligible_for_nightly_acceptance(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_RUN_ID", "12345")
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    report = build_report(tmp_path, _junit(tmp_path / "scheduled.xml", []))
+    assert report["run_provenance"] == {
+        "event": "schedule",
+        "run_id": "12345",
+        "sha": "a" * 40,
+        "schedule_eligible": True,
+    }
+
+
+def test_manual_run_cannot_be_counted_as_nightly_acceptance(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_RUN_ID", "67890")
+    report = build_report(tmp_path, _junit(tmp_path / "manual.xml", []))
+    assert report["run_provenance"]["event"] == "workflow_dispatch"
+    assert report["run_provenance"]["schedule_eligible"] is False
+
+
+def test_missing_trigger_metadata_is_not_scheduled(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    report = build_report(tmp_path, _junit(tmp_path / "local.xml", []))
+    assert report["run_provenance"] == {
+        "event": None,
+        "run_id": None,
+        "sha": None,
+        "schedule_eligible": False,
+    }
