@@ -80,8 +80,9 @@ class _FakeWinFunction:
         return self.callback(*args)
 
 
+@pytest.mark.parametrize("sector_size", [512, 4096])
 def test_windows_raw_device_source_uses_aligned_reads_and_returns_exact_range(
-    monkeypatch,
+    monkeypatch, sector_size
 ):
     payload = bytes(index % 251 for index in range(8192))
     state = {"position": 0, "calls": []}
@@ -97,8 +98,8 @@ def test_windows_raw_device_source_uses_aligned_reads_and_returns_exact_range(
     def read_file(_handle, buffer, length, result, _overlapped):
         position = state["position"]
         address = ctypes.cast(buffer, ctypes.c_void_p).value
-        state["calls"].append((position, length, address % 512))
-        if position % 512 or length % 512 or address % 512:
+        state["calls"].append((position, length, address % sector_size))
+        if position % sector_size or length % sector_size or address % sector_size:
             return 0
         chunk = payload[position : position + length]
         if len(chunk) != length:
@@ -118,11 +119,14 @@ def test_windows_raw_device_source_uses_aligned_reads_and_returns_exact_range(
     monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: api, raising=False)
 
     with WindowsRawDeviceImageSource(
-        r"\\.\PhysicalDrive7", size=8192, lower_bound=4096, sector_size=512
+        r"\\.\PhysicalDrive7",
+        size=8192,
+        lower_bound=4096,
+        sector_size=sector_size,
     ) as source:
         assert source.read_at(4101, 9) == payload[4101:4110]
 
-    assert state["calls"] == [(4096, 512, 0)]
+    assert state["calls"] == [(4096, sector_size, 0)]
 
 
 def test_bounded_image_source_rejects_invalid_window_before_any_reads(tmp_path):

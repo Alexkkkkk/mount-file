@@ -234,7 +234,7 @@
         "mountfile/ntfs_mft_allocation.py",
         "tests/test_ntfs_mft_allocation.py"
       ],
-      "note": "Bounded MFT record reuse helpers are wired into the resolver-backed replay executor as an explicit pre-write gate; staged identity validation now reads only bounded $MFT/$MFTMirr/bitmap ranges instead of materializing the full image. The new focused regression is included in a 94-test targeted run that passed; extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
+      "note": "Bounded MFT record reuse helpers are wired into the resolver-backed replay executor as an explicit pre-write gate; staged identity validation now reads only bounded $MFT/$MFTMirr/bitmap ranges instead of materializing the full image. The new focused regression is included in a 95-test targeted run that passed; extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
       "reproduced": "2026-11-17: plan_mft_record_reuse checks USA-restored $MFT/$MFTMirr bytes, free state, reference-to-candidate slot identity, and the supported sequence successor; sequence 0xFFFF is refused. The resolver-backed replay executor now invokes this planner before staged mutation when a candidate provider is supplied; actual allocation, index surgery and independent Windows checking remain unavailable. Planner and executor integration tests passed."
     },
     {
@@ -252,7 +252,7 @@
         "tests/test_windows_ntfs_acceptance_contract.py"
       ],
       "note": "Crash-replay fixtures remain synthetic mkntfs-based; ntfsfix -n is secondary evidence only, not a Windows/chkdsk oracle or replay-parity proof. The Windows VHDX + chkdsk harness includes bounded streaming $MFT/$BITMAP capture and comparison. The latest snapshot run exposed raw ReadFile WinError 87; the source now uses physically sector-aligned windows and fails closed if padding crosses the selected partition, with the rerun pending. Real Windows replay captures and replay-parity proof remain absent.",
-      "reproduced": "2026-11-17: tests/test_ntfs_crash_oracle_matrix.py covers five synthetic scenarios; focused process-kill/crash-matrix tests: 15 passed; ntfsfix -n is secondary evidence only. Windows run 44016475448 on windows-latest produced the native chkdsk artifact (clean /scan, dirty-volume /scan with typed exit 13, /f repair, clean post-repair /scan, and unchanged sentinel SHA-256). Run 44052870716 identified WinError 87 during $BITMAP raw-device capture; sector-aligned reads and partition-bound checks are implemented, and 94 targeted tests passed locally. Windows rerun is pending; no result establishes real Windows crash captures or NTFS replay parity; C6 remains partial."
+      "reproduced": "2026-11-17: tests/test_ntfs_crash_oracle_matrix.py covers five synthetic scenarios; focused process-kill/crash-matrix tests: 15 passed; ntfsfix -n is secondary evidence only. Windows run 44016475448 on windows-latest produced the native chkdsk artifact (clean /scan, dirty-volume /scan with typed exit 13, /f repair, clean post-repair /scan, and unchanged sentinel SHA-256). Run 44052870716 identified WinError 87 during $BITMAP raw-device capture; sector-aligned reads and partition-bound checks are implemented, and 95 targeted tests passed locally. Windows rerun is pending; no result establishes real Windows crash captures or NTFS replay parity; C6 remains partial."
     },
     {
       "id": "C7",
