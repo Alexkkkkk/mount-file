@@ -92,11 +92,11 @@ def test_transport_payload_is_normalised_and_queried_with_schedule_filter():
     def transport(url, token):
         seen["url"] = url
         seen["token"] = token
-        return {"workflow_runs": [{"id": 9, "status": "completed", "conclusion": "success"}]}
+        return {
+            "workflow_runs": [{"id": 9, "status": "completed", "conclusion": "success"}]
+        }
 
-    runs = module.fetch_scheduled_runs(
-        "owner/name", token="t0ken", transport=transport
-    )
+    runs = module.fetch_scheduled_runs("owner/name", token="t0ken", transport=transport)
     assert "event=schedule" in seen["url"]
     assert "/repos/owner/name/actions/workflows/replay-nightly.yml/runs" in seen["url"]
     assert seen["token"] == "t0ken"
