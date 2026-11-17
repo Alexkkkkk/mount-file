@@ -6,6 +6,7 @@ import struct
 import pytest
 
 import mountfile.native_write as native_write
+import mountfile.ntfs_replay_executor as replay_executor
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
 from mountfile.ntfs_mft_allocation import MftAllocationCandidate
 from mountfile.ntfs_replay_executor import (
@@ -227,7 +228,9 @@ def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(tmp_path) -> 
     initialized = bytearray(_raw_mft_record(8, in_use=True))
     struct.pack_into("<Q", initialized, 0x08, 1)
     image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
-    candidate = MftAllocationCandidate(free, mirror, (8 << 48) | 42, 42, 0, 1000)
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
 
     publication = publish_ntfs_replay(
         str(image),
@@ -239,6 +242,7 @@ def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(tmp_path) -> 
     assert publication.sha256_after != publication.sha256_before
     raw = image.read_bytes()
     assert raw[:512] == raw[1000:1512]
+    assert raw[1512:1528] == bytes((0, 0, 0, 0, 0, 0x04, 0, 0)) + bytes(8)
     assert struct.unpack_from("<H", raw, 0x10)[0] == 8
 
 
@@ -249,9 +253,78 @@ def test_bounded_mft_allocation_refuses_changed_candidate_source(tmp_path) -> No
     initialized = _raw_mft_record(8, in_use=True)
     image.write_bytes(b"X" * 512 + b"\x00" * 488 + mirror + b"\x00" * 512)
     before = image.read_bytes()
-    candidate = MftAllocationCandidate(free, mirror, (8 << 48) | 42, 42, 0, 1000)
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
 
     with pytest.raises(NtfsReplayResolutionError, match="source identity"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+    assert image.read_bytes() == before
+
+
+def test_bounded_mft_allocation_refuses_allocated_bitmap_bit(tmp_path) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    bitmap = bytearray(16)
+    bitmap[5] = 0x04
+    image.write_bytes(free + b"\x00" * 488 + mirror + bytes(bitmap))
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(bitmap), 42
+    )
+
+    with pytest.raises(NtfsReplayResolutionError, match="already allocated"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+
+
+def test_bounded_mft_allocation_refuses_bitmap_range_out_of_bounds(tmp_path) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 16)
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 2020, bytes(16), 42
+    )
+
+    with pytest.raises(NtfsReplayResolutionError, match="out of bounds"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+
+
+def test_bounded_mft_allocation_publish_failure_leaves_source_unchanged(
+    tmp_path, monkeypatch
+) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
+    before = image.read_bytes()
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
+
+    def fail_publish(_source, _temporary):
+        raise OSError("publish failed")
+
+    monkeypatch.setattr(replay_executor, "_atomic_replace", fail_publish)
+    with pytest.raises(OSError, match="publish failed"):
         publish_ntfs_replay(
             str(image),
             _analysis(_allocation_step(initialized)),

@@ -65,6 +65,9 @@ class MftAllocationCandidate:
     record_number: int
     record_offset: int
     mirror_offset: int
+    bitmap_offset: int = -1
+    bitmap_bytes: bytes = b""
+    bitmap_bit: int = -1
 
 
 def plan_mft_record_reuse(

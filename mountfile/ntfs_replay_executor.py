@@ -216,8 +216,32 @@ def _replay_mft_allocation(
         raise NtfsReplayResolutionError(
             "MFT allocation payload is not one complete FILE record"
         )
+    if (
+        type(candidate.bitmap_offset) is not int
+        or candidate.bitmap_offset < 0
+        or not isinstance(candidate.bitmap_bytes, bytes)
+        or not candidate.bitmap_bytes
+        or type(candidate.bitmap_bit) is not int
+        or candidate.bitmap_bit < 0
+        or candidate.bitmap_bit >= len(candidate.bitmap_bytes) * 8
+    ):
+        raise NtfsReplayResolutionError(
+            "MFT allocation requires an explicit physical bitmap byte range"
+        )
     stream.seek(0)
     source = stream.read()
+    ranges = (
+        (candidate.record_offset, candidate.raw_record, "MFT"),
+        (candidate.mirror_offset, candidate.raw_mirror, "MFT mirror"),
+        (candidate.bitmap_offset, candidate.bitmap_bytes, "bitmap"),
+    )
+    for offset, expected, name in ranges:
+        if offset > len(source) or len(expected) > len(source) - offset:
+            raise NtfsReplayResolutionError(f"{name} candidate range is out of bounds")
+        if source[offset : offset + len(expected)] != expected:
+            raise NtfsReplayResolutionError(
+                f"{name} candidate source identity changed on stage"
+            )
     if (
         source[
             candidate.record_offset : candidate.record_offset
@@ -236,6 +260,12 @@ def _replay_mft_allocation(
         != candidate.raw_mirror
     ):
         raise NtfsReplayResolutionError("MFT mirror source identity changed on stage")
+    bit_mask = 1 << (candidate.bitmap_bit % 8)
+    bitmap_index = candidate.bitmap_bit // 8
+    if candidate.bitmap_bytes[bitmap_index] & bit_mask:
+        raise NtfsReplayResolutionError(
+            "MFT allocation bitmap bit is already allocated"
+        )
     try:
         initialized = parse_ntfs_file_record_header(step.payload)
     except Exception as exc:
@@ -255,19 +285,28 @@ def _replay_mft_allocation(
         raise NtfsReplayResolutionError(
             "initialized MFT record size differs from candidate"
         )
-    for offset in (candidate.record_offset, candidate.mirror_offset):
+    updated_bitmap = bytearray(candidate.bitmap_bytes)
+    updated_bitmap[bitmap_index] |= bit_mask
+    writes = (
+        (candidate.record_offset, raw_initialized),
+        (candidate.mirror_offset, raw_initialized),
+        (candidate.bitmap_offset, bytes(updated_bitmap)),
+    )
+    for offset, payload in writes:
         stream.seek(offset)
-        if stream.write(raw_initialized) != len(raw_initialized):
+        if stream.write(payload) != len(payload):
             raise NtfsReplayResolutionError(
                 "short write during MFT/$MFTMirr allocation"
             )
     stream.flush()
     with suppress(AttributeError, OSError):
         os.fsync(stream.fileno())
-    for offset in (candidate.record_offset, candidate.mirror_offset):
+    for offset, expected in writes:
         stream.seek(offset)
-        if stream.read(len(raw_initialized)) != raw_initialized:
-            raise NtfsReplayResolutionError("MFT allocation read-back mismatch")
+        if stream.read(len(expected)) != expected:
+            raise NtfsReplayResolutionError(
+                "MFT/$MFTMirr/bitmap allocation read-back mismatch"
+            )
     return (
         OverlayProvenance(
             step.lsn,
