@@ -73,6 +73,21 @@ try {
         "assign letter=R"
     ) "create-and-mount-vhd"
 
+    $disk = Get-DiskImage -ImagePath $vhd | Get-Disk
+    $partition = Get-Partition -DiskNumber $disk.Number |
+        Where-Object { $_.DriveLetter -eq "R" } | Select-Object -First 1
+    if ($null -eq $partition) { throw "cannot resolve mounted NTFS partition" }
+    $device = "\\.\PhysicalDrive$($disk.Number)"
+    $rawBefore = Join-Path $OutputDirectory "raw-before"
+    $rawAfter = Join-Path $OutputDirectory "raw-after"
+    & python scripts/windows_ntfs_raw_snapshot.py `
+        --device $device --offset ([int64]$partition.Offset) `
+        --volume-size ([int64]$partition.Size) --out $rawBefore
+    if ($LASTEXITCODE -ne 0) { throw "raw pre-repair NTFS snapshot failed" }
+    $report.raw_device = $device
+    $report.raw_partition_offset = [int64]$partition.Offset
+    $report.raw_partition_size = [int64]$partition.Size
+
     Set-Content -LiteralPath "$drive\before.txt" -Value "mountfile-windows-acceptance"
     $beforeHash = (Get-FileHash -Algorithm SHA256 "$drive\before.txt").Hash
     $scanBefore = & chkdsk.exe $drive /scan 2>&1 | Out-String
@@ -117,6 +132,16 @@ try {
         output = $scanAfter.Trim()
     }
     if ($scanAfterCode -ne 0) { throw "repaired NTFS VHDX failed chkdsk /scan" }
+
+    & python scripts/windows_ntfs_raw_snapshot.py `
+        --device $device --offset ([int64]$partition.Offset) `
+        --volume-size ([int64]$partition.Size) --out $rawAfter
+    if ($LASTEXITCODE -ne 0) { throw "raw post-repair NTFS snapshot failed" }
+    $comparison = Join-Path $OutputDirectory "raw-snapshot-comparison.json"
+    & python scripts/compare_ntfs_snapshots.py `
+        --before $rawBefore --after $rawAfter --out $comparison
+    if ($LASTEXITCODE -ne 0) { throw "raw NTFS snapshot comparison failed" }
+    $report.raw_snapshot_comparison = Get-Content $comparison | ConvertFrom-Json
 
     $afterHash = (Get-FileHash -Algorithm SHA256 "$drive\before.txt").Hash
     if ($beforeHash -ne $afterHash) { throw "sentinel hash changed during checker lifecycle" }

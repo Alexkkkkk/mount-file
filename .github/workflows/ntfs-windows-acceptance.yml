@@ -26,6 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install MountFile runtime for raw NTFS parser
+        shell: pwsh
+        run: python -m pip install -r requirements.txt
+
       - name: Create disposable NTFS VHDX and run native checker
         shell: pwsh
         run: |
@@ -42,12 +51,18 @@ jobs:
           if ($report.checker_authority -ne 'windows_native') { throw 'non-Windows checker evidence' }
           if ($report.status -ne 'checked_and_repaired') { throw "unexpected status: $($report.status)" }
           if ($report.sentinel_sha256_before -ne $report.sentinel_sha256_after) { throw 'sentinel hash changed' }
+          if (-not $report.raw_snapshot_comparison.mft) { throw 'missing $MFT comparison' }
+          if (-not $report.raw_snapshot_comparison.bitmap) { throw 'missing $BITMAP comparison' }
 
       - name: Upload Windows checker evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ntfs-windows-acceptance-${{ github.sha }}
-          path: ${{ runner.temp }}/mountfile-ntfs-windows/windows-ntfs-acceptance.json
+          path: |
+            ${{ runner.temp }}/mountfile-ntfs-windows/windows-ntfs-acceptance.json
+            ${{ runner.temp }}/mountfile-ntfs-windows/raw-before/
+            ${{ runner.temp }}/mountfile-ntfs-windows/raw-after/
+            ${{ runner.temp }}/mountfile-ntfs-windows/raw-snapshot-comparison.json
           if-no-files-found: error
           retention-days: 30
