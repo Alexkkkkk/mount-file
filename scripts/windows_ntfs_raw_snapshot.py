@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from mountfile.image_source import WindowsRawDeviceImageSource
@@ -20,6 +21,7 @@ from mountfile.ntfs_reader import NativeNtfsMetadataImage, NtfsMetadataError
 
 _MAX_RAW_VOLUME_BYTES = 128 << 30
 _MAX_SIGNED_OFFSET = (1 << 63) - 1
+_SNAPSHOT_CHUNK_BYTES = 1 << 20
 
 
 def _validate_device_window(offset: int, volume_size: int) -> int:
@@ -46,7 +48,9 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _stream(image: NativeNtfsMetadataImage, record_number: int, name: str) -> bytes:
+def _write_stream(
+    image: NativeNtfsMetadataImage, record_number: int, name: str, output: Path
+) -> int:
     record = image.read_mft_record(record_number)
     attributes = image._attributes_for_record(record_number, record)  # noqa: SLF001
     streams = [
@@ -61,9 +65,28 @@ def _stream(image: NativeNtfsMetadataImage, record_number: int, name: str) -> by
         raise NtfsMetadataError(
             "metadata DATA stream is not a readable nonresident stream"
         )
-    return image._read_nonresident_range(
-        attribute, 0, attribute.data_size
-    )  # noqa: SLF001
+    temporary = output.with_name(output.name + ".tmp")
+    written = 0
+    try:
+        with temporary.open("wb") as stream:
+            while written < attribute.data_size:
+                length = min(_SNAPSHOT_CHUNK_BYTES, attribute.data_size - written)
+                chunk = image._read_nonresident_range(  # noqa: SLF001
+                    attribute, written, length
+                )
+                if len(chunk) != length:
+                    raise NtfsMetadataError(
+                        "short read while extracting NTFS metadata stream"
+                    )
+                if stream.write(chunk) != length:
+                    raise OSError("short write while saving NTFS metadata snapshot")
+                written += length
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return written
 
 
 def snapshot(device: str, offset: int, volume_size: int, output: Path) -> dict:
@@ -81,13 +104,11 @@ def snapshot(device: str, offset: int, volume_size: int, output: Path) -> dict:
         allow_dirty_read=True,
     )
     try:
-        mft = _stream(image, 0, "")
-        bitmap = _stream(image, 6, "")
+        paths = {"mft": output / "MFT.bin", "bitmap": output / "BITMAP.bin"}
+        _write_stream(image, 0, "", paths["mft"])
+        _write_stream(image, 6, "", paths["bitmap"])
     finally:
         image.close()
-    paths = {"mft": output / "MFT.bin", "bitmap": output / "BITMAP.bin"}
-    paths["mft"].write_bytes(mft)
-    paths["bitmap"].write_bytes(bitmap)
     manifest = {
         "schema": "mountfile.windows-ntfs-raw-snapshot/v1",
         "device": device,

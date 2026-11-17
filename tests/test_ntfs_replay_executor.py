@@ -221,7 +221,9 @@ def test_publication_boundaries_are_emitted_once(tmp_path, monkeypatch) -> None:
     assert trace.count("publish:done") == 1
 
 
-def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(tmp_path) -> None:
+def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(
+    tmp_path, monkeypatch
+) -> None:
     image = tmp_path / "image.bin"
     free = _raw_mft_record(7)
     mirror = _raw_mft_record(7)
@@ -231,6 +233,14 @@ def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(tmp_path) -> 
     candidate = MftAllocationCandidate(
         free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
     )
+    range_reads = []
+    read_candidate_range = replay_executor._read_candidate_range
+
+    def track_range_read(stream, offset, expected, name):
+        range_reads.append((offset, len(expected), name))
+        return read_candidate_range(stream, offset, expected, name)
+
+    monkeypatch.setattr(replay_executor, "_read_candidate_range", track_range_read)
 
     publication = publish_ntfs_replay(
         str(image),
@@ -244,6 +254,11 @@ def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(tmp_path) -> 
     assert raw[:512] == raw[1000:1512]
     assert raw[1512:1528] == bytes((0, 0, 0, 0, 0, 0x04, 0, 0)) + bytes(8)
     assert struct.unpack_from("<H", raw, 0x10)[0] == 8
+    assert range_reads == [
+        (0, 512, "MFT"),
+        (1000, 512, "MFT mirror"),
+        (1512, 16, "bitmap"),
+    ]
 
 
 def test_bounded_mft_allocation_refuses_changed_candidate_source(tmp_path) -> None:

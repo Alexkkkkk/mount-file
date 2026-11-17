@@ -8,25 +8,49 @@ import hashlib
 import json
 from pathlib import Path
 
+_CHUNK_BYTES = 1 << 20
+
 
 def compare_file(before: Path, after: Path) -> dict:
-    left = before.read_bytes()
-    right = after.read_bytes()
-    differing = sum(a != b for a, b in zip(left, right))
-    differing += abs(len(left) - len(right))
-    first = next(
-        (index for index, (a, b) in enumerate(zip(left, right)) if a != b), None
-    )
-    if first is None and len(left) != len(right):
-        first = min(len(left), len(right))
+    before_size = before.stat().st_size
+    after_size = after.stat().st_size
+    before_digest = hashlib.sha256()
+    after_digest = hashlib.sha256()
+    differing = abs(before_size - after_size)
+    first = None
+    compared = 0
+    with before.open("rb") as left, after.open("rb") as right:
+        while compared < min(before_size, after_size):
+            length = min(_CHUNK_BYTES, min(before_size, after_size) - compared)
+            left_chunk = left.read(length)
+            right_chunk = right.read(length)
+            if len(left_chunk) != length or len(right_chunk) != length:
+                raise OSError("snapshot file changed or was truncated during compare")
+            before_digest.update(left_chunk)
+            after_digest.update(right_chunk)
+            chunk_differences = sum(a != b for a, b in zip(left_chunk, right_chunk))
+            differing += chunk_differences
+            if first is None and chunk_differences:
+                first = compared + next(
+                    index
+                    for index, (a, b) in enumerate(zip(left_chunk, right_chunk))
+                    if a != b
+                )
+            compared += length
+        while chunk := left.read(_CHUNK_BYTES):
+            before_digest.update(chunk)
+        while chunk := right.read(_CHUNK_BYTES):
+            after_digest.update(chunk)
+    if first is None and before_size != after_size:
+        first = min(before_size, after_size)
     return {
-        "before_size": len(left),
-        "after_size": len(right),
-        "before_sha256": hashlib.sha256(left).hexdigest(),
-        "after_sha256": hashlib.sha256(right).hexdigest(),
+        "before_size": before_size,
+        "after_size": after_size,
+        "before_sha256": before_digest.hexdigest(),
+        "after_sha256": after_digest.hexdigest(),
         "differing_bytes": differing,
         "first_difference": first,
-        "byte_identical": left == right,
+        "byte_identical": before_size == after_size and differing == 0,
     }
 
 

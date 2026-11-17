@@ -72,6 +72,7 @@ MftCandidateProvider = Callable[
 _ALLOCATION_SENSITIVE_OPERATIONS = frozenset(
     (0x02, 0x03, *range(0x0C, 0x17), *range(0x21, 0x25))
 )
+_MAX_MFT_CANDIDATE_RANGE_BYTES = 1 << 20
 
 
 def _validate_mft_candidate(
@@ -180,6 +181,39 @@ def _resolve_targets(
     return targets, allocations
 
 
+def _read_candidate_range(
+    stream: BinaryIO, offset: int, expected: bytes, name: str
+) -> bytes:
+    """Read one provider-bounded range without materializing the image."""
+    if type(offset) is not int or offset < 0:
+        raise NtfsReplayResolutionError(f"{name} candidate range is invalid")
+    if not isinstance(expected, bytes) or not expected:
+        raise NtfsReplayResolutionError(f"{name} candidate bytes are invalid")
+    if len(expected) > _MAX_MFT_CANDIDATE_RANGE_BYTES:
+        raise NtfsReplayResolutionError(
+            f"{name} candidate range exceeds the bounded read limit"
+        )
+    try:
+        stream.seek(offset)
+        data = bytearray()
+        while len(data) < len(expected):
+            chunk = stream.read(
+                min(_MAX_MFT_CANDIDATE_RANGE_BYTES, len(expected) - len(data))
+            )
+            if not chunk:
+                raise NtfsReplayResolutionError(
+                    f"{name} candidate range is out of bounds"
+                )
+            data.extend(chunk)
+    except NtfsReplayResolutionError:
+        raise
+    except (OSError, ValueError, OverflowError) as exc:
+        raise NtfsReplayResolutionError(
+            f"{name} candidate range is out of bounds"
+        ) from exc
+    return bytes(data)
+
+
 def _replay_mft_allocation(
     stream: BinaryIO,
     analysis: NtfsLogFileAnalysis,
@@ -228,38 +262,16 @@ def _replay_mft_allocation(
         raise NtfsReplayResolutionError(
             "MFT allocation requires an explicit physical bitmap byte range"
         )
-    stream.seek(0)
-    source = stream.read()
     ranges = (
         (candidate.record_offset, candidate.raw_record, "MFT"),
         (candidate.mirror_offset, candidate.raw_mirror, "MFT mirror"),
         (candidate.bitmap_offset, candidate.bitmap_bytes, "bitmap"),
     )
     for offset, expected, name in ranges:
-        if offset > len(source) or len(expected) > len(source) - offset:
-            raise NtfsReplayResolutionError(f"{name} candidate range is out of bounds")
-        if source[offset : offset + len(expected)] != expected:
+        if _read_candidate_range(stream, offset, expected, name) != expected:
             raise NtfsReplayResolutionError(
                 f"{name} candidate source identity changed on stage"
             )
-    if (
-        source[
-            candidate.record_offset : candidate.record_offset
-            + len(candidate.raw_record)
-        ]
-        != candidate.raw_record
-    ):
-        raise NtfsReplayResolutionError(
-            "MFT candidate source identity changed on stage"
-        )
-    if (
-        source[
-            candidate.mirror_offset : candidate.mirror_offset
-            + len(candidate.raw_mirror)
-        ]
-        != candidate.raw_mirror
-    ):
-        raise NtfsReplayResolutionError("MFT mirror source identity changed on stage")
     bit_mask = 1 << (candidate.bitmap_bit % 8)
     bitmap_index = candidate.bitmap_bit // 8
     if candidate.bitmap_bytes[bitmap_index] & bit_mask:
