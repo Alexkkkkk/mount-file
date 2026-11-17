@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "fix/issue-510-evidence-contract",
-    "commit": "c547394",
+    "branch": "chore/issue-510-tracker-sync",
+    "commit": "a9d21a3",
     "version": "1.96.0",
     "checked": "2026-11-16"
   },
@@ -29,8 +29,8 @@
         "pyproject.toml",
         "mountfile/__init__.py"
       ],
-      "reproduced": "2026-11-15: version = 1.95.0 в pyproject.toml и __version__ = 1.95.0",
-      "note": "v1.95.0 = d31b4dc"
+      "reproduced": "2026-11-16: тег v1.96.0 = 3a59d36 (git ls-remote) содержит #508; pyproject.toml и __version__ = 1.96.0",
+      "note": "v1.96.0 = 3a59d36; HEAD main (a9d21a3) впереди тега только фиксами доказательной базы (#532, #533)"
     },
     {
       "id": "A3",
@@ -121,10 +121,11 @@
       "title": "Transaction checksums (JBD2 csum) end-to-end",
       "status": "verified",
       "evidence": [
-        "tests/test_jbd2_csum_replay.py"
+        "tests/test_jbd2_csum_replay.py",
+        "tests/test_ext4_jbd2_csum.py"
       ],
-      "note": "8 passed независимо воспроизведено 2026-11-15 вне исходной машины (Python 3.12.3, без OOM)",
-      "reproduced": "2026-11-15: независимое воспроизведение вне исходной машины — python -m pytest tests/test_jbd2_csum_replay.py → 8 passed (Python 3.12.3, без OOM); ранее 8 passed по отчёту 2026-11-15"
+      "note": "Локальный повторный прогон 2026-11-16: 16 passed, без OOM.",
+      "reproduced": "2026-11-16: python -m pytest -q tests/test_ext4_jbd2_csum.py tests/test_jbd2_csum_replay.py → 16 passed (Python 3.12.3, Linux sandbox)"
     },
     {
       "id": "B7",
@@ -197,7 +198,7 @@
         "tests/test_ntfs_logfile_parser.py",
         "tests/test_ntfs_logfile_draft_golden.py"
       ],
-      "reproduced": "2026-11-15: LogClient/ClientRestartArea/LogRecord/Transaction, RCRD, USA — файлы и тесты в main",
+      "reproduced": "2026-11-16: python -m pytest -q tests/test_ntfs_logfile_parser.py tests/test_ntfs_logfile_draft_golden.py → 40 passed (Python 3.12.3, Linux sandbox)",
       "note": "утверждение об отсутствии парсера устарело"
     },
     {
@@ -207,9 +208,11 @@
       "status": "partial",
       "evidence": [
         "mountfile/ntfs_replay.py",
-        "mountfile/ntfs_replay_executor.py"
+        "mountfile/ntfs_replay_executor.py",
+        "tests/test_ntfs_bitmap_handler.py"
       ],
-      "note": "код есть; независимого подтверждения применения к метаданным нет"
+      "note": "Nonresident bitmap byte handler has unit coverage for misaligned ranges, neighbor preservation and bounds refusal. Bitmap/MFT allocation operations remain excluded from the replay allowlist; no independent volume-level metadata checker is claimed. C3 remains partial.",
+      "reproduced": "2026-11-16: tests/test_ntfs_bitmap_handler.py → 3 passed; end-to-end synthetic-log refusal/hash-preservation cases also pass. These tests validate the isolated byte handler and fail-closed policy only, not Windows replay parity."
     },
     {
       "id": "C4",
@@ -231,7 +234,7 @@
         "tests/test_ntfs_mft_allocation.py"
       ],
       "note": "Bounded MFT record reuse helpers exist; extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
-      "reproduced": "2026-11-15: планировщик reuse добавлен (plan_mft_record_reuse: $MFT+$MFTMirr USA-валидация, free-запись, sequence+1 c wrap, 7 typed refusals; тесты 7 passed). Подключение к write-пути и независимый чекер — не сделаны, потому partial, а не verified"
+      "reproduced": "2026-11-16: plan_mft_record_reuse checks USA-restored $MFT/$MFTMirr bytes, free state, reference-to-candidate slot identity, and the supported sequence successor; sequence 0xFFFF is refused. The planner remains unwired to the replay writer, and independent Windows checking is unavailable; C5 therefore remains partial. Planner unit tests: 10 passed."
     },
     {
       "id": "C6",
@@ -347,11 +350,15 @@
       "id": "D7",
       "block": "D",
       "title": "Unsupported-ячейки как typed refusals, а не скрытые skip",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
-        "scripts/product_status_contract.py"
+        "scripts/capability_conformance.py",
+        "tests/test_capability_conformance.py",
+        "tests/test_vfs_refusal_routing.py",
+        "tests/test_fat_capability_identity.py"
       ],
-      "note": "подтверждено для NTFS; для остальных профилей — нет"
+      "note": "typed refusal-контракт закреплён машинно для всех профилей, не только NTFS; parity по-прежнему not_claimed",
+      "reproduced": "2026-11-16: validate_matrix() → verdict pass, 12 профилей × 10 операций = 120 ячеек, refusal-ячейки типизированы; VFS-маршрутизация сохраняет причину отказа без тихого fallback (113 passed)"
     },
     {
       "id": "E1",

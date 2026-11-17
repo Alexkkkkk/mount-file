@@ -7,6 +7,7 @@ executor, not a private overlay: the source is a disposable copy, the clean
 restart pages are written, ``$Volume`` is cleared and ``ntfscat`` reads the
 replayed bytes back.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -27,6 +28,12 @@ from mountfile.ntfs_native_writer import (
 )
 from mountfile.ntfs_reader import probe_ntfs_metadata
 from mountfile.ntfs_replay import (
+    OP_ADD_INDEX_ENTRY_ROOT,
+    OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
+    OP_DEALLOCATE_FILE_RECORD,
+    OP_INITIALIZE_FILE_RECORD,
+    OP_SET_BITS_IN_NONRESIDENT_BITMAP,
+    SUPPORTED_OPERATIONS,
     NtfsReplayError,
     native_ntfs_recover,
     parse_restart_tables,
@@ -127,8 +134,30 @@ def test_second_recovery_is_a_clean_noop(tmp_path):
     assert _sha256(fixture.image) == digest
 
 
+def test_mft_allocation_and_bitmap_operations_are_not_allowlisted():
+    assert (
+        not {
+            OP_INITIALIZE_FILE_RECORD,
+            OP_DEALLOCATE_FILE_RECORD,
+            OP_SET_BITS_IN_NONRESIDENT_BITMAP,
+            OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
+        }
+        & SUPPORTED_OPERATIONS
+    )
+
+
 @needs_ntfs
-def test_unsupported_operation_is_refused_before_writing(tmp_path):
+@pytest.mark.parametrize(
+    "operation",
+    [
+        OP_ADD_INDEX_ENTRY_ROOT,
+        OP_INITIALIZE_FILE_RECORD,
+        OP_DEALLOCATE_FILE_RECORD,
+        OP_SET_BITS_IN_NONRESIDENT_BITMAP,
+        OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
+    ],
+)
+def test_unsupported_operations_are_refused_before_writing(tmp_path, operation):
     fixture = make_crash_fixture(tmp_path)
     stream, _cluster, logfile = read_logfile_stream(str(fixture.image))
     analysis = analyze_image(str(fixture.image))
@@ -136,7 +165,7 @@ def test_unsupported_operation_is_refused_before_writing(tmp_path):
     assert record is not None
     body = record.byte_offset + analysis.restart.log_record_header_length
     stream = bytearray(stream)
-    struct.pack_into("<H", stream, body, 0x0C)  # AddIndexEntryRoot
+    struct.pack_into("<H", stream, body, operation)
     with open(fixture.image, "r+b") as handle:
         for run in logfile.runs:
             start = run.vcn * _cluster
