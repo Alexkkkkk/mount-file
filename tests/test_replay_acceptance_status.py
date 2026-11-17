@@ -9,6 +9,7 @@ Run:  python -m pytest tests/test_replay_acceptance_status.py -v
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -36,11 +37,50 @@ def test_manifest_matches_the_tree():
     assert problems == [], "доказательства разошлись с деревом: %s" % problems
 
 
+def _project_version() -> str:
+    """Read the real ``[project].version`` value from pyproject.toml.
+
+    The table header is located by exact match: a plain substring search for
+    ``[project]`` also hits the ``# [project].version ...`` comment at the top
+    of the file, which would make this read the wrong block.
+    """
+    lines = (ROOT / "pyproject.toml").read_text(encoding="utf-8").splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "[project]"),
+        None,
+    )
+    assert start is not None, "pyproject.toml has no [project] table"
+    for line in lines[start + 1 :]:
+        if line.lstrip().startswith("["):
+            break
+        match = re.match(r'\s*version\s*=\s*"([^"]+)"', line)
+        if match:
+            return match.group(1)
+    raise AssertionError("pyproject.toml has no [project].version")
+
+
+def _semver(value: str):
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(value))
+    assert match, "not a semantic version: %r" % (value,)
+    return tuple(int(part) for part in match.groups())
+
+
 def test_slice_points_at_a_real_version():
+    """The slice records an audited snapshot, so it trails the release bump.
+
+    It must name a real, well-formed version that was actually released - not
+    whatever version a release PR is bumping TO right now.  Comparing the two
+    for equality made every "chore(release)" PR fail this gate, which is why
+    1.96.1 and 1.97.0 could never merge.
+    """
     manifest = ras.load_manifest(ROOT / ras.MANIFEST_PATH)
     version = manifest["slice"]["version"]
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "%s"' % version in pyproject
+    recorded = _semver(version)
+    current = _semver(_project_version())
+    assert recorded <= current, (
+        "slice version %s is newer than the project version, so it cannot have "
+        "been released yet" % version
+    )
 
 
 def test_counts_add_up():
