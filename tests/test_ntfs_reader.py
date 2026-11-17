@@ -1316,6 +1316,18 @@ def test_parses_ntfs_volume_flags_and_rejects_missing_information():
         parse_ntfs_volume_state(())
 
 
+def test_rejects_unsupported_ntfs_volume_version_with_raw_bytes():
+    value = bytearray(12)
+    value[8:10] = b"\x03\x02"
+    attribute = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
+
+    with pytest.raises(
+        NtfsMetadataError,
+        match=r"unsupported NTFS \$Volume version 3\.2 \(raw=0302\)",
+    ):
+        parse_ntfs_volume_state((attribute,))
+
+
 def test_parses_resident_filename_and_standard_information_bounds():
     value = bytearray(76)
     struct.pack_into("<Q", value, 0, (3 << 48) | 5)

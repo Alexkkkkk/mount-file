@@ -1016,7 +1016,10 @@ def parse_ntfs_volume_state(
         raise NtfsMetadataError("NTFS $Volume information has an invalid length")
     major, minor = volume.resident_value[8:10]
     if (major, minor) not in ((1, 1), (3, 0), (3, 1)):
-        raise NtfsMetadataError("unsupported NTFS $Volume version")
+        raw_version = volume.resident_value[8:10].hex()
+        raise NtfsMetadataError(
+            f"unsupported NTFS $Volume version {major}.{minor} (raw={raw_version})"
+        )
     flags = struct.unpack_from("<H", volume.resident_value, 10)[0]
     if flags & ~_VOLUME_KNOWN_FLAGS:
         raise NtfsMetadataError("NTFS $Volume has unknown volume flags")
