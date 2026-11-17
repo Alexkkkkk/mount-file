@@ -78,6 +78,7 @@ def snapshot(device: str, offset: int, volume_size: int, output: Path) -> dict:
         offset=offset,
         volume_size=volume_size,
         source_factory=source_factory,
+        allow_dirty_read=True,
     )
     try:
         mft = _stream(image, 0, "")

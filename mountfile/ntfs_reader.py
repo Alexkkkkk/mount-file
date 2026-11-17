@@ -1287,6 +1287,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         volume_size=None,
         *,
         source_factory: Callable[[], ImageSource] | None = None,
+        allow_dirty_read: bool = False,
     ):
         if volume_size is None:
             raise NtfsMetadataError("an explicit NTFS volume_size is required")
@@ -1316,7 +1317,8 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         volume_state = parse_ntfs_volume_state(
             self._attributes_for_record(3, volume_record)
         )
-        if not volume_state.clean:
+        self.volume_state = volume_state
+        if not volume_state.clean and not allow_dirty_read:
             self.close()
             raise NtfsMetadataError(
                 "NTFS volume is dirty or requires repair",
