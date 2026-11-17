@@ -15,7 +15,27 @@ import hashlib
 import json
 from pathlib import Path
 
+from mountfile.image_source import WindowsRawDeviceImageSource
 from mountfile.ntfs_reader import NativeNtfsMetadataImage, NtfsMetadataError
+
+_MAX_RAW_VOLUME_BYTES = 128 << 30
+_MAX_SIGNED_OFFSET = (1 << 63) - 1
+
+
+def _validate_device_window(offset: int, volume_size: int) -> int:
+    if (
+        not isinstance(offset, int)
+        or isinstance(offset, bool)
+        or offset < 0
+        or not isinstance(volume_size, int)
+        or isinstance(volume_size, bool)
+        or volume_size <= 0
+        or volume_size > _MAX_RAW_VOLUME_BYTES
+    ):
+        raise NtfsMetadataError("raw snapshot offset or volume size is invalid")
+    if offset > _MAX_SIGNED_OFFSET - volume_size:
+        raise NtfsMetadataError("raw snapshot device window overflows signed offsets")
+    return offset + volume_size
 
 
 def _digest(path: Path) -> str:
@@ -47,8 +67,18 @@ def _stream(image: NativeNtfsMetadataImage, record_number: int, name: str) -> by
 
 
 def snapshot(device: str, offset: int, volume_size: int, output: Path) -> dict:
+    source_size = _validate_device_window(offset, volume_size)
     output.mkdir(parents=True, exist_ok=True)
-    image = NativeNtfsMetadataImage(device, offset=offset, volume_size=volume_size)
+
+    def source_factory():
+        return WindowsRawDeviceImageSource(device, size=source_size)
+
+    image = NativeNtfsMetadataImage(
+        device,
+        offset=offset,
+        volume_size=volume_size,
+        source_factory=source_factory,
+    )
     try:
         mft = _stream(image, 0, "")
         bitmap = _stream(image, 6, "")

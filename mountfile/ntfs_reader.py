@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import datetime as _dt
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
+from mountfile.image_source import (
+    BoundedImageSource,
+    FileImageSource,
+    ImageSource,
+    ImageSourceError,
+)
 from mountfile.ntfs_mft import (
     NtfsFileRecordHeader,
     NtfsRecordError,
@@ -1140,6 +1146,7 @@ def probe_ntfs_metadata(
     offset: int = 0,
     volume_size: int | None = None,
     validate_mirror: bool = True,
+    source_factory: Callable[[], ImageSource] | None = None,
 ) -> NtfsMetadataProfile:
     """Validate bounded NTFS boot, backup boot, MFT record 0 and its mirror.
 
@@ -1149,7 +1156,12 @@ def probe_ntfs_metadata(
     caller keeps the fail-closed default.
     """
     try:
-        with FileImageSource(image_path) as source:
+        source = (
+            source_factory()
+            if source_factory is not None
+            else FileImageSource(image_path)
+        )
+        with source:
             volume = BoundedImageSource(source, offset, volume_size)
             boot = parse_ntfs_boot_sector(
                 volume.read_at(0, 512), volume_size=volume_size
@@ -1257,15 +1269,26 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     case_insensitive_ascii_paths = True
     max_read_range_bytes = _MAX_READ_RANGE_BYTES
 
-    def __init__(self, image_path, offset=0, volume_size=None):
+    def __init__(
+        self,
+        image_path,
+        offset=0,
+        volume_size=None,
+        *,
+        source_factory: Callable[[], ImageSource] | None = None,
+    ):
         if volume_size is None:
             raise NtfsMetadataError("an explicit NTFS volume_size is required")
         self.image_path = str(image_path)
         self.offset = int(offset)
-        self._image_source: FileImageSource | None = None
+        self._source_factory = source_factory
+        self._image_source: ImageSource | None = None
         self._volume_source: BoundedImageSource | None = None
         self.profile = probe_ntfs_metadata(
-            self.image_path, offset=self.offset, volume_size=volume_size
+            self.image_path,
+            offset=self.offset,
+            volume_size=volume_size,
+            source_factory=self._source_factory,
         )
         self._mft_data = next(
             (a for a in self.profile.attributes if a.type_code == 0x80 and not a.name),
@@ -1340,7 +1363,12 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
     def reopen(self):
         if self._volume_source is not None and not self._volume_source.closed:
             return self._volume_source
-        source = FileImageSource(self.image_path)
+        source_factory = getattr(self, "_source_factory", None)
+        source = (
+            source_factory()
+            if source_factory is not None
+            else FileImageSource(self.image_path)
+        )
         try:
             volume = BoundedImageSource(
                 source,

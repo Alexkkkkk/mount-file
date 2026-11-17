@@ -2,12 +2,14 @@
 """Synthetic tests for bounded NTFS metadata validation."""
 
 import struct
+from types import SimpleNamespace
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mountfile import vfs
+from mountfile.image_source import FileImageSource
 from mountfile.ntfs_reader import (
     NativeNtfsMetadataImage,
     NtfsAttributeListEntry,
@@ -242,6 +244,70 @@ def test_validates_backup_mft_mirror_and_attribute_end_marker(tmp_path):
     assert profile.mirror_matches_mft is True
     assert profile.attributes == ()
     assert profile.mft_record.sequence_number == 3
+
+
+def test_probe_ntfs_metadata_uses_injected_source_factory(tmp_path):
+    image_path = _image(tmp_path)
+    opened_sources = []
+
+    def source_factory():
+        opened_sources.append(True)
+        return FileImageSource(image_path)
+
+    profile = probe_ntfs_metadata(
+        "unused-raw-device",
+        volume_size=VOLUME_SIZE,
+        source_factory=source_factory,
+    )
+
+    assert profile.boot.mft_offset == MFT
+    assert opened_sources == [True]
+
+
+def test_native_ntfs_image_passes_source_factory_to_probe(monkeypatch):
+    def source_factory():
+        pytest.fail("probe stub must not open the source")
+
+    observed = []
+
+    def stop_after_probe(*_args, **kwargs):
+        observed.append(kwargs["source_factory"])
+        raise RuntimeError("stop after source-factory wiring")
+
+    monkeypatch.setattr("mountfile.ntfs_reader.probe_ntfs_metadata", stop_after_probe)
+    with pytest.raises(RuntimeError, match="stop after source-factory wiring"):
+        NativeNtfsMetadataImage(
+            "unused-raw-device",
+            offset=0,
+            volume_size=VOLUME_SIZE,
+            source_factory=source_factory,
+        )
+
+    assert observed == [source_factory]
+
+
+def test_native_ntfs_reopen_uses_injected_source_factory(tmp_path):
+    image_path = _image(tmp_path)
+    opened_sources = []
+
+    def source_factory():
+        opened_sources.append(True)
+        return FileImageSource(image_path)
+
+    image = NativeNtfsMetadataImage.__new__(NativeNtfsMetadataImage)
+    image.image_path = "unused-raw-device"
+    image.offset = 0
+    image._source_factory = source_factory
+    image._image_source = None
+    image._volume_source = None
+    image.profile = SimpleNamespace(
+        boot=SimpleNamespace(filesystem_size=VOLUME_SIZE)
+    )
+
+    volume = image.reopen()
+    assert volume.read_at(0, 512) == _boot()
+    assert opened_sources == [True]
+    image.close()
 
 
 def test_vfs_exposes_bounded_ntfs_metadata_probe_without_pytsk3(tmp_path, monkeypatch):

@@ -3,6 +3,11 @@
 
 from pathlib import Path
 
+import pytest
+
+from mountfile.ntfs_reader import NtfsMetadataError
+from scripts.windows_ntfs_raw_snapshot import _validate_device_window
+
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/ntfs-windows-acceptance.yml"
 SCRIPT = ROOT / "scripts/windows_ntfs_acceptance.ps1"
@@ -48,8 +53,30 @@ def test_raw_snapshot_tools_are_bounded_and_byte_comparison_is_explicit():
     snapshot = SNAPSHOT.read_text(encoding="utf-8")
     compare = COMPARE.read_text(encoding="utf-8")
     assert "NativeNtfsMetadataImage" in snapshot
+    assert "WindowsRawDeviceImageSource" in snapshot
+    assert "source_factory=source_factory" in snapshot
     assert '"MFT.bin"' in snapshot
     assert '"BITMAP.bin"' in snapshot
     assert "byte_identical" in compare
     assert "differing_bytes" in compare
     assert "not proof that replay is correct" in compare
+
+
+def test_raw_snapshot_accepts_the_bounded_ci_volume_window():
+    assert _validate_device_window(4096, 64 << 30) == (4096 + (64 << 30))
+
+
+@pytest.mark.parametrize(
+    ("offset", "volume_size"),
+    [
+        (-1, 512),
+        (0, 0),
+        (True, 512),
+        (0, True),
+        (0, (128 << 30) + 1),
+        ((1 << 63) - 1, 1),
+    ],
+)
+def test_raw_snapshot_rejects_invalid_or_unbounded_device_windows(offset, volume_size):
+    with pytest.raises(NtfsMetadataError):
+        _validate_device_window(offset, volume_size)
