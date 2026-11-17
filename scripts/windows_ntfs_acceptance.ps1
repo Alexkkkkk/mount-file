@@ -139,7 +139,8 @@ try {
 
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
-        --volume-size ([int64]$partition.Size) --out $rawAfter
+        --volume-size ([int64]$partition.Size) `
+        --sector-size $sectorSize --out $rawAfter
     if ($LASTEXITCODE -ne 0) { throw "raw post-repair NTFS snapshot failed" }
     $comparison = Join-Path $OutputDirectory "raw-snapshot-comparison.json"
     & python scripts/compare_ntfs_snapshots.py `

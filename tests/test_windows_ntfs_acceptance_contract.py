@@ -31,7 +31,7 @@ def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
     assert "windows_ntfs_raw_snapshot.py" in script
     assert "compare_ntfs_snapshots.py" in script
     assert "PhysicalSectorSize" in script
-    assert "--sector-size $sectorSize" in script
+    assert script.count("--sector-size $sectorSize") == 2
 
 
 def test_windows_acceptance_has_clean_dirty_and_repair_stages():
