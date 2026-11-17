@@ -2,7 +2,7 @@
 # ruff (статические ошибки) + black + isort (формат и порядок импортов).
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.10
+    rev: v0.17.5
     hooks:
       - id: ruff
         args: [--fix, --select, "E9,F63,F7,F82"]
