@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "fix/issue-510-ntfs-post-crash-readback",
-    "commit": "57b3c77",
+    "branch": "main",
+    "commit": "4fe6b4e",
     "version": "1.96.0",
     "checked": "2026-11-17"
   },
@@ -29,8 +29,8 @@
         "pyproject.toml",
         "mountfile/__init__.py"
       ],
-      "reproduced": "2026-11-16: тег v1.96.0 = 3a59d36 (git ls-remote) содержит #508; pyproject.toml и __version__ = 1.96.0",
-      "note": "v1.96.0 = 3a59d36; HEAD main (a9d21a3) впереди тега только фиксами доказательной базы (#532, #533)"
+      "reproduced": "2026-11-17: git ls-remote + git log 3a59d36..main — 10 коммитов, все test/docs/fix(test)",
+      "note": "v1.96.0 = 3a59d36; HEAD main (4fe6b4e) впереди тега только фиксами доказательной базы и тестов (#535–#544), runtime-кода записи — нет"
     },
     {
       "id": "A3",
@@ -283,9 +283,11 @@
       "status": "partial",
       "evidence": [
         "mountfile/native_write.py",
-        "tests/test_ext4_write_phase_injection.py"
+        "tests/test_ext4_write_phase_injection.py",
+        "tests/test_ntfs_write_phase_injection.py"
       ],
-      "note": "Ext4 operation chain now has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. NTFS steps and JBD2 transaction sub-phases still uninstrumented, so D1 stays partial."
+      "note": "Ext4 operation chain: declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell (merged #541). NTFS application route: declared 8-step matrix (copy, payload_stage, log_gate_pre, ntfs_write, log_gate_post, read_back, identity_verify, publish) with the same per-cell contract (merged #543); local run 2026-11-17: 21 passed. JBD2 transaction sub-phases (descriptor/data/commit inside one transaction) and NTFS metadata sub-phases (bitmap/directory/inode cells) remain uninstrumented, so D1 stays partial.",
+      "reproduced": "2026-11-17: pytest tests/test_ext4_write_phase_injection.py tests/test_ntfs_write_phase_injection.py -q → 31 passed"
     },
     {
       "id": "D2",
@@ -335,15 +337,15 @@
       "block": "D",
       "title": "Independent checker + read-back после каждой поддержанной операции",
       "status": "partial",
- "evidence": [
-  "tests/_independent_checkers.py",
-  "tests/test_checker_acceptance.py",
-  "mountfile/ntfs_native_writer.py",
-  "mountfile/native_write.py",
-  "tests/test_ntfs_transactional_readback.py",
-  "tests/test_native_journal_writers.py",
-  "tests/test_writer_fault_coverage.py"
- ],
+      "evidence": [
+        "tests/_independent_checkers.py",
+        "tests/test_checker_acceptance.py",
+        "mountfile/ntfs_native_writer.py",
+        "mountfile/native_write.py",
+        "tests/test_ntfs_transactional_readback.py",
+        "tests/test_native_journal_writers.py",
+        "tests/test_writer_fault_coverage.py"
+      ],
       "note": "Ext4 selected paths use e2fsck -fn plus read-back. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
       "reproduced": "2026-11-17: NTFS staged-readback mismatch refusal preserves the source byte-for-byte; ext4 publish:done SIGKILL reads exact debugfs bytes and passes e2fsck -fn. Focused suite: 97 passed, 3 skipped. D5 remains partial."
     },
