@@ -1,6 +1,6 @@
 # Issue #510 acceptance status
 
-Status snapshot: 2026-11-16. The implementation work in this branch starts from `main` at `0559287`. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
+Status snapshot: 2026-11-17. The earlier broad test-count snapshot was taken at `main@a9d21a3`; this follow-up starts from `main@9769bab`. Counts below are historical evidence from the earlier snapshot unless explicitly reproduced here. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
 
 ## ext4 / JBD2
 

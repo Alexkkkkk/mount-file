@@ -44,6 +44,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _ntfscat(image: Path, path: str) -> bytes:
+    result = subprocess.run(
+        ["ntfscat", str(image), path], capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    return result.stdout
+
+
 @pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
 @pytest.mark.skipif(
     shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
@@ -67,8 +75,10 @@ def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
 @pytest.mark.skipif(
-    shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
-    reason="ntfs-3g tools (mkntfs/ntfscp) are unavailable",
+    shutil.which("mkntfs") is None
+    or shutil.which("ntfscp") is None
+    or shutil.which("ntfscat") is None,
+    reason="ntfs-3g tools (mkntfs/ntfscp/ntfscat) are unavailable",
 )
 @pytest.mark.parametrize("point", FAULT_POINTS)
 def test_ntfs_process_kill_preserves_source_until_atomic_publish(
@@ -97,5 +107,6 @@ def test_ntfs_process_kill_preserves_source_until_atomic_publish(
         from mountfile.ntfs_native_writer import probe_ntfs_log
 
         assert probe_ntfs_log(str(image)).clean is True
+        assert _ntfscat(image, "/target") == b"killed write\n"
     else:
         assert after == before
