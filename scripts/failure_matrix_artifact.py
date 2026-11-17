@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -273,6 +274,25 @@ def _collect_seams(native_write_path: Path) -> list[str]:
     return sorted(set(SEAM_RE.findall(text)))
 
 
+def _run_provenance() -> dict[str, Any]:
+    """Record whether this artifact came from the required scheduled trigger.
+
+    A manual ``workflow_dispatch`` run is useful diagnostic evidence, but it
+    must never be mistaken for one of the consecutive nightly runs required
+    by the acceptance tracker.  Missing GitHub metadata is typed as unknown
+    rather than being treated as a scheduled run.
+    """
+    event = os.environ.get("GITHUB_EVENT_NAME") or None
+    run_id = os.environ.get("GITHUB_RUN_ID") or None
+    sha = os.environ.get("GITHUB_SHA") or None
+    return {
+        "event": event,
+        "run_id": run_id,
+        "sha": sha,
+        "schedule_eligible": event == "schedule",
+    }
+
+
 def _load_junit(
     path: Path | None,
 ) -> tuple[list[dict[str, str]], dict[str, Any] | None]:
@@ -431,6 +451,7 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
         "verdict": overall,
         "acceptance": "not_claimed",
         "production_ready": False,
+        "run_provenance": _run_provenance(),
         "fault_seams": _collect_seams(root / "mountfile" / "native_write.py"),
         "junit_report": junit_summary,
         "test_status_counts": summary,

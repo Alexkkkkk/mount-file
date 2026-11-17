@@ -13,10 +13,12 @@ future filesystem-aware resolver can implement MFT allocation, ``$MFTMirr``
 repair, attribute-list expansion and index updates while retaining the same
 transactional boundary.
 """
+
 from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -37,6 +39,13 @@ from mountfile.ntfs_logfile import (
     ReplayTarget,
     replay_analysis_to_stream,
 )
+from mountfile.ntfs_mft import parse_ntfs_file_record_header
+from mountfile.ntfs_mft_allocation import (
+    MftAllocationCandidate,
+    NtfsMftAllocationError,
+    fixed_record_to_raw,
+    plan_mft_record_reuse,
+)
 
 
 class NtfsReplayResolutionError(NtfsReplayExecutorError):
@@ -54,11 +63,69 @@ class NtfsReplayPublication:
 
 
 ReplayResolver = Callable[[ReplayStep], ReplayTarget]
+MftCandidateProvider = Callable[
+    [ReplayStep], MftAllocationCandidate | tuple[object, object, int, int] | None
+]
+
+# These operations require coordinated MFT/$MFTMirr, bitmap, or index writes;
+# a byte-range resolver and candidate precondition check cannot authorize them.
+_ALLOCATION_SENSITIVE_OPERATIONS = frozenset(
+    (0x02, 0x03, *range(0x0C, 0x17), *range(0x21, 0x25))
+)
+_MAX_MFT_CANDIDATE_RANGE_BYTES = 1 << 20
+
+
+def _validate_mft_candidate(
+    step: ReplayStep,
+    provider: MftCandidateProvider | None,
+) -> MftAllocationCandidate | None:
+    """Validate a provider-supplied MFT/$MFTMirr candidate before mutation."""
+    if provider is None:
+        return None
+    try:
+        candidate = provider(step)
+    except NtfsMftAllocationError:
+        raise
+    except Exception as exc:
+        raise NtfsReplayResolutionError(
+            f"MFT candidate provider failed for LSN {step.lsn}: {exc}"
+        ) from exc
+    if candidate is None:
+        return None
+    if isinstance(candidate, MftAllocationCandidate):
+        raw_record = candidate.raw_record
+        raw_mirror = candidate.raw_mirror
+        reference = candidate.reference
+        record_number = candidate.record_number
+        for name in ("record_offset", "mirror_offset"):
+            value = getattr(candidate, name)
+            if type(value) is not int or value < 0:
+                raise NtfsReplayResolutionError(f"MFT candidate {name} is invalid")
+    elif isinstance(candidate, tuple) and len(candidate) == 4:
+        raw_record, raw_mirror, reference, record_number = candidate
+    else:
+        raise NtfsReplayResolutionError(
+            "MFT candidate provider must return MftAllocationCandidate, a 4-tuple or None"
+        )
+    try:
+        plan_mft_record_reuse(
+            raw_record,
+            raw_mirror,
+            reference,
+            candidate_record_number=record_number,
+        )
+    except NtfsMftAllocationError as exc:
+        raise NtfsReplayResolutionError(
+            f"MFT allocation refused for LSN {step.lsn}: {exc.reason}"
+        ) from exc
+    return candidate if isinstance(candidate, MftAllocationCandidate) else None
 
 
 def _resolve_targets(
-    analysis: NtfsLogFileAnalysis, resolver: ReplayResolver
-) -> dict[tuple[int, int], ReplayTarget]:
+    analysis: NtfsLogFileAnalysis,
+    resolver: ReplayResolver,
+    mft_candidate_provider: MftCandidateProvider | None = None,
+) -> tuple[dict[tuple[int, int], ReplayTarget], dict[int, MftAllocationCandidate]]:
     if not isinstance(analysis, NtfsLogFileAnalysis):
         raise NtfsReplayResolutionError("replay analysis has an invalid type")
     if analysis.truncated:
@@ -70,9 +137,24 @@ def _resolve_targets(
             "a filesystem-aware replay resolver is required"
         )
     targets: dict[tuple[int, int], ReplayTarget] = {}
+    allocations: dict[int, MftAllocationCandidate] = {}
     for step in (*analysis.redo_plan, *analysis.undo_plan):
         if step.operation_name in {"Noop", "CommitTransaction", "ForgetTransaction"}:
             continue
+        if (
+            step.operation in _ALLOCATION_SENSITIVE_OPERATIONS
+            and step.operation != 0x02
+        ):
+            raise NtfsReplayResolutionError(
+                f"allocation-sensitive operation {step.operation_name} is refused"
+            )
+        candidate = _validate_mft_candidate(step, mft_candidate_provider)
+        if step.operation in _ALLOCATION_SENSITIVE_OPERATIONS:
+            if step.operation != 0x02 or candidate is None:
+                raise NtfsReplayResolutionError(
+                    f"allocation-sensitive operation {step.operation_name} is refused"
+                )
+            allocations[step.lsn] = candidate
         try:
             target = resolver(step)
         except NtfsReplayExecutorError:
@@ -96,16 +178,171 @@ def _resolve_targets(
                 f"resolver returned inconsistent targets for attr/vcn {key}"
             )
         targets[key] = target
-    return targets
+    return targets, allocations
+
+
+def _read_candidate_range(
+    stream: BinaryIO, offset: int, expected: bytes, name: str
+) -> bytes:
+    """Read one provider-bounded range without materializing the image."""
+    if type(offset) is not int or offset < 0:
+        raise NtfsReplayResolutionError(f"{name} candidate range is invalid")
+    if not isinstance(expected, bytes) or not expected:
+        raise NtfsReplayResolutionError(f"{name} candidate bytes are invalid")
+    if len(expected) > _MAX_MFT_CANDIDATE_RANGE_BYTES:
+        raise NtfsReplayResolutionError(
+            f"{name} candidate range exceeds the bounded read limit"
+        )
+    try:
+        stream.seek(offset)
+        data = bytearray()
+        while len(data) < len(expected):
+            chunk = stream.read(
+                min(_MAX_MFT_CANDIDATE_RANGE_BYTES, len(expected) - len(data))
+            )
+            if not chunk:
+                raise NtfsReplayResolutionError(
+                    f"{name} candidate range is out of bounds"
+                )
+            data.extend(chunk)
+    except NtfsReplayResolutionError:
+        raise
+    except (OSError, ValueError, OverflowError) as exc:
+        raise NtfsReplayResolutionError(
+            f"{name} candidate range is out of bounds"
+        ) from exc
+    return bytes(data)
+
+
+def _replay_mft_allocation(
+    stream: BinaryIO,
+    analysis: NtfsLogFileAnalysis,
+    targets: dict[tuple[int, int], ReplayTarget],
+    allocations: dict[int, MftAllocationCandidate],
+) -> tuple[OverlayProvenance, ...]:
+    """Apply only a full-record InitializeFileRecordSegment allocation.
+
+    The candidate provider supplies both physical ranges.  The executor checks
+    source identity on the disposable stage, validates the initialized FILE
+    record and writes identical USA-encoded bytes to $MFT and $MFTMirr.
+    """
+    steps = (*analysis.redo_plan, *analysis.undo_plan)
+    allocation_steps = [step for step in steps if step.lsn in allocations]
+    other_steps = [
+        step for step in steps if step.operation not in _ALLOCATION_SENSITIVE_OPERATIONS
+    ]
+    if other_steps:
+        raise NtfsReplayResolutionError(
+            "MFT allocation replay cannot be combined with other replay operations"
+        )
+    if len(allocation_steps) != 1:
+        raise NtfsReplayResolutionError(
+            "bounded MFT allocation requires exactly one InitializeFileRecordSegment"
+        )
+    step = allocation_steps[0]
+    candidate = allocations[step.lsn]
+    target = targets.get((step.target_attr, step.target_vcn))
+    if target is None or target.offset != candidate.record_offset:
+        raise NtfsReplayResolutionError(
+            "MFT allocation target does not match candidate range"
+        )
+    if target.length != len(candidate.raw_record) or len(step.payload) != target.length:
+        raise NtfsReplayResolutionError(
+            "MFT allocation payload is not one complete FILE record"
+        )
+    if (
+        type(candidate.bitmap_offset) is not int
+        or candidate.bitmap_offset < 0
+        or not isinstance(candidate.bitmap_bytes, bytes)
+        or not candidate.bitmap_bytes
+        or type(candidate.bitmap_bit) is not int
+        or candidate.bitmap_bit < 0
+        or candidate.bitmap_bit >= len(candidate.bitmap_bytes) * 8
+    ):
+        raise NtfsReplayResolutionError(
+            "MFT allocation requires an explicit physical bitmap byte range"
+        )
+    ranges = (
+        (candidate.record_offset, candidate.raw_record, "MFT"),
+        (candidate.mirror_offset, candidate.raw_mirror, "MFT mirror"),
+        (candidate.bitmap_offset, candidate.bitmap_bytes, "bitmap"),
+    )
+    for offset, expected, name in ranges:
+        if _read_candidate_range(stream, offset, expected, name) != expected:
+            raise NtfsReplayResolutionError(
+                f"{name} candidate source identity changed on stage"
+            )
+    bit_mask = 1 << (candidate.bitmap_bit % 8)
+    bitmap_index = candidate.bitmap_bit // 8
+    if candidate.bitmap_bytes[bitmap_index] & bit_mask:
+        raise NtfsReplayResolutionError(
+            "MFT allocation bitmap bit is already allocated"
+        )
+    try:
+        initialized = parse_ntfs_file_record_header(step.payload)
+    except Exception as exc:
+        raise NtfsReplayResolutionError("initialized MFT record is invalid") from exc
+    plan = plan_mft_record_reuse(
+        candidate.raw_record,
+        candidate.raw_mirror,
+        candidate.reference,
+        candidate_record_number=candidate.record_number,
+    )
+    if initialized.sequence_number != plan.next_sequence or not initialized.in_use:
+        raise NtfsReplayResolutionError(
+            "initialized MFT record has an invalid successor identity"
+        )
+    raw_initialized = fixed_record_to_raw(initialized.fixed_record)
+    if len(raw_initialized) != len(candidate.raw_record):
+        raise NtfsReplayResolutionError(
+            "initialized MFT record size differs from candidate"
+        )
+    updated_bitmap = bytearray(candidate.bitmap_bytes)
+    updated_bitmap[bitmap_index] |= bit_mask
+    writes = (
+        (candidate.record_offset, raw_initialized),
+        (candidate.mirror_offset, raw_initialized),
+        (candidate.bitmap_offset, bytes(updated_bitmap)),
+    )
+    for offset, payload in writes:
+        stream.seek(offset)
+        if stream.write(payload) != len(payload):
+            raise NtfsReplayResolutionError(
+                "short write during MFT/$MFTMirr allocation"
+            )
+    stream.flush()
+    with suppress(AttributeError, OSError):
+        os.fsync(stream.fileno())
+    for offset, expected in writes:
+        stream.seek(offset)
+        if stream.read(len(expected)) != expected:
+            raise NtfsReplayResolutionError(
+                "MFT/$MFTMirr/bitmap allocation read-back mismatch"
+            )
+    return (
+        OverlayProvenance(
+            step.lsn,
+            step.transaction_id,
+            step.kind,
+            step.operation_name,
+            step.target_attr,
+            step.target_vcn,
+            candidate.record_offset,
+            len(raw_initialized),
+        ),
+    )
 
 
 def _replay_staged(
     stream: BinaryIO,
     analysis: NtfsLogFileAnalysis,
     resolver: ReplayResolver,
+    mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> tuple[OverlayProvenance, ...]:
-    targets = _resolve_targets(analysis, resolver)
+    targets, allocations = _resolve_targets(analysis, resolver, mft_candidate_provider)
     _fault("mutation:start")
+    if allocations:
+        return _replay_mft_allocation(stream, analysis, targets, allocations)
     provenance = replay_analysis_to_stream(
         analysis, stream, targets, sync=lambda: _fsync_stream(stream)
     )
@@ -129,13 +366,15 @@ def publish_ntfs_replay(
     resolver: ReplayResolver,
     *,
     verify: Callable[[str], None] | None = None,
+    mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> NtfsReplayPublication:
     """Replay a validated analysis on a disposable copy and atomically publish it.
 
-    ``resolver`` is mandatory. No implicit MFT arithmetic is performed. A
-    caller that cannot resolve every operation gets a typed refusal before the
+    ``resolver`` is mandatory. No implicit MFT arithmetic is performed. When
+    ``mft_candidate_provider`` is supplied, each candidate is validated
+    against both its USA-restored mirror and the log reference before the
     staged image is modified. ``verify`` should independently validate the
-    staged NTFS metadata (for example with a platform checker) before publish.
+    staged NTFS metadata before publish.
     """
     source = os.path.abspath(os.fspath(image_path))
     try:
@@ -146,7 +385,9 @@ def publish_ntfs_replay(
     provenance: tuple[OverlayProvenance, ...] = ()
     try:
         with open(temporary, "r+b", buffering=0) as stream:
-            provenance = _replay_staged(stream, analysis, resolver)
+            provenance = _replay_staged(
+                stream, analysis, resolver, mft_candidate_provider
+            )
             if verify is not None:
                 verify(temporary)
             _fsync_path(temporary)
@@ -177,6 +418,7 @@ def publish_ntfs_replay(
 __all__ = [
     "NtfsReplayPublication",
     "NtfsReplayResolutionError",
+    "MftCandidateProvider",
     "ReplayResolver",
     "publish_ntfs_replay",
 ]
