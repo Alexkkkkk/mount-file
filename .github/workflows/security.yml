@@ -35,6 +35,12 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
+          # uv.lock pins Pillow 12.3.0 for the Python 3.10 floor (Pillow 13
+          # requires >=3.11) and no patched 12.x exists yet, so these four
+          # critical Pillow advisories cannot be resolved by a version bump.
+          # Allow them explicitly until upstream ships a fixed release, then
+          # remove this list (track the GHSAs below).
+          allow-ghsas: GHSA-332p-7hrc-92wf, GHSA-v9pv-5gc8-w2m6, GHSA-w889-685w-c8fh, GHSA-5x8w-8jj5-q52h
 
   pip-audit:
     timeout-minutes: 30
