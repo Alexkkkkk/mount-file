@@ -39,6 +39,10 @@ jobs:
         shell: pwsh
         run: python -m pip install -r requirements.txt
 
+      - name: Install local MountFile package for acceptance scripts
+        shell: pwsh
+        run: python -m pip install --no-deps .
+
       - name: Create disposable NTFS VHDX and run native checker
         shell: pwsh
         run: |

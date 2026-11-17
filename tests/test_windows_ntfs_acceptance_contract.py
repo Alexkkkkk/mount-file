@@ -15,6 +15,7 @@ def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
     script = SCRIPT.read_text(encoding="utf-8")
     assert "runs-on: windows-latest" in workflow
     assert "windows_native" in workflow
+    assert "python -m pip install --no-deps ." in workflow
     assert "chkdsk" in script
     assert "diskpart.exe" in script
     assert "create vdisk" in script
