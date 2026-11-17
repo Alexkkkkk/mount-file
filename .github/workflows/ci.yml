@@ -135,6 +135,7 @@ jobs:
       # validations but removes that per-step overhead across the whole matrix.
       - name: Emit cross-platform evidence reports
         if: always()
+        shell: bash
         run: |
           set -uo pipefail
           python scripts/platform_benchmark_provenance.py --junitxml test-results.xml --json-out platform-benchmark-provenance.json
