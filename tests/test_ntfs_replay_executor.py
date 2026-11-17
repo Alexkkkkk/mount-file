@@ -7,6 +7,7 @@ import pytest
 
 import mountfile.native_write as native_write
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
+from mountfile.ntfs_mft_allocation import MftAllocationCandidate
 from mountfile.ntfs_replay_executor import (
     NtfsReplayResolutionError,
     publish_ntfs_replay,
@@ -60,6 +61,22 @@ def _raw_mft_record(sequence: int, *, in_use: bool = False) -> bytes:
     struct.pack_into("<H", record, 0x2C, 0x5A5A)
     struct.pack_into("<H", record, 510, sequence)
     return bytes(record)
+
+
+def _allocation_step(payload: bytes) -> ReplayStep:
+    return ReplayStep(
+        lsn=1,
+        transaction_id=1,
+        kind="redo",
+        operation=0x02,
+        length=len(payload),
+        payload=payload,
+        target_attr=128,
+        target_vcn=0,
+        record_off=0,
+        attr_off=0,
+        cluster_off=0,
+    )
 
 
 def test_resolution_failure_happens_before_source_publication(tmp_path) -> None:
@@ -181,7 +198,8 @@ def test_allocation_sensitive_operations_refuse_before_resolution(
             **publish_kwargs,
         )
 
-    assert provider_calls == []
+    if operation != 0x02:
+        assert provider_calls == []
     assert image.read_bytes() == before
     assert list(tmp_path.glob(".mountfile-image-*")) == []
 
@@ -200,3 +218,44 @@ def test_publication_boundaries_are_emitted_once(tmp_path, monkeypatch) -> None:
 
     assert trace.count("publish:start") == 1
     assert trace.count("publish:done") == 1
+
+
+def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(tmp_path) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = bytearray(_raw_mft_record(8, in_use=True))
+    struct.pack_into("<Q", initialized, 0x08, 1)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
+    candidate = MftAllocationCandidate(free, mirror, (8 << 48) | 42, 42, 0, 1000)
+
+    publication = publish_ntfs_replay(
+        str(image),
+        _analysis(_allocation_step(bytes(initialized))),
+        lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+        mft_candidate_provider=lambda _step: candidate,
+    )
+
+    assert publication.sha256_after != publication.sha256_before
+    raw = image.read_bytes()
+    assert raw[:512] == raw[1000:1512]
+    assert struct.unpack_from("<H", raw, 0x10)[0] == 8
+
+
+def test_bounded_mft_allocation_refuses_changed_candidate_source(tmp_path) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(b"X" * 512 + b"\x00" * 488 + mirror + b"\x00" * 512)
+    before = image.read_bytes()
+    candidate = MftAllocationCandidate(free, mirror, (8 << 48) | 42, 42, 0, 1000)
+
+    with pytest.raises(NtfsReplayResolutionError, match="source identity"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+    assert image.read_bytes() == before

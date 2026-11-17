@@ -21,6 +21,7 @@ publication without an independent checker (tracker #510, item C5).
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 
 from mountfile.ntfs_mft import (
@@ -46,6 +47,24 @@ class MftAllocationPlan:
     previous_sequence: int
     next_sequence: int
     mirror_consistent: bool
+
+
+@dataclass(frozen=True)
+class MftAllocationCandidate:
+    """A provider-owned, bounded candidate that can be mutated on a stage.
+
+    Offsets are physical image offsets.  Keeping them in the provider result
+    prevents the replay executor from guessing MFT geometry or mirror layout.
+    ``raw_record`` and ``raw_mirror`` are source identity guards and must be
+    the exact on-disk bytes read by the provider.
+    """
+
+    raw_record: bytes
+    raw_mirror: bytes
+    reference: int
+    record_number: int
+    record_offset: int
+    mirror_offset: int
 
 
 def plan_mft_record_reuse(
@@ -121,8 +140,37 @@ def plan_mft_record_reuse(
     )
 
 
+def fixed_record_to_raw(fixed_record: object) -> bytes:
+    """Encode a USA-restored FILE record for a bounded staged write."""
+    try:
+        raw = bytearray(bytes(fixed_record))
+    except (TypeError, ValueError) as exc:
+        raise NtfsMftAllocationError(
+            "initialized_record_invalid", "not bytes-like"
+        ) from exc
+    if len(raw) < 512 or len(raw) % 512:
+        raise NtfsMftAllocationError(
+            "initialized_record_invalid", "invalid record size"
+        )
+    try:
+        fixup_offset, fixup_count = struct.unpack_from("<HH", raw, 4)
+        usn = struct.unpack_from("<H", raw, fixup_offset)[0]
+        if fixup_count != len(raw) // 512 + 1:
+            raise ValueError("USA count does not match record size")
+        for index in range(fixup_count - 1):
+            trailer = (index + 1) * 512 - 2
+            original = struct.unpack_from("<H", raw, trailer)[0]
+            struct.pack_into("<H", raw, fixup_offset + 2 * (index + 1), original)
+            struct.pack_into("<H", raw, trailer, usn)
+    except (IndexError, struct.error, ValueError) as exc:
+        raise NtfsMftAllocationError("initialized_record_invalid", str(exc)) from exc
+    return bytes(raw)
+
+
 __all__ = [
+    "MftAllocationCandidate",
     "MftAllocationPlan",
     "NtfsMftAllocationError",
+    "fixed_record_to_raw",
     "plan_mft_record_reuse",
 ]
