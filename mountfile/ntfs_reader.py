@@ -1015,7 +1015,8 @@ def parse_ntfs_volume_state(
     if len(volume.resident_value) != 12:
         raise NtfsMetadataError("NTFS $Volume information has an invalid length")
     major, minor = volume.resident_value[8:10]
-    if (major, minor) not in ((1, 1), (3, 0), (3, 1)):
+    # Keep this closed set explicit; NTFS 1.2 is a documented on-disk version.
+    if (major, minor) not in ((1, 1), (1, 2), (3, 0), (3, 1)):
         raw_version = volume.resident_value[8:10].hex()
         raise NtfsMetadataError(
             f"unsupported NTFS $Volume version {major}.{minor} (raw={raw_version})"
