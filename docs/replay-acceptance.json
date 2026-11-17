@@ -3,8 +3,8 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "4fe6b4e",
-    "version": "1.96.0",
+    "commit": "8533e63",
+    "version": "1.96.1",
     "checked": "2026-11-17"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
@@ -29,8 +29,8 @@
         "pyproject.toml",
         "mountfile/__init__.py"
       ],
-      "reproduced": "2026-11-17: git ls-remote + git log 3a59d36..main — 10 коммитов, все test/docs/fix(test)",
-      "note": "v1.96.0 = 3a59d36; HEAD main (4fe6b4e) впереди тега только фиксами доказательной базы и тестов (#535–#544), runtime-кода записи — нет"
+      "reproduced": "2026-11-16: тег v1.96.0 = 3a59d36 (git ls-remote) содержит #508; pyproject.toml и __version__ = 1.96.0",
+      "note": "v1.96.0 = 3a59d36; HEAD main (a9d21a3) впереди тега только фиксами доказательной базы (#532, #533)"
     },
     {
       "id": "A3",
@@ -283,11 +283,9 @@
       "status": "partial",
       "evidence": [
         "mountfile/native_write.py",
-        "tests/test_ext4_write_phase_injection.py",
-        "tests/test_ntfs_write_phase_injection.py"
+        "tests/test_ext4_write_phase_injection.py"
       ],
-      "note": "Ext4 operation chain: declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell (merged #541). NTFS application route: declared 8-step matrix (copy, payload_stage, log_gate_pre, ntfs_write, log_gate_post, read_back, identity_verify, publish) with the same per-cell contract (merged #543); local run 2026-11-17: 21 passed. JBD2 transaction sub-phases (descriptor/data/commit inside one transaction) and NTFS metadata sub-phases (bitmap/directory/inode cells) remain uninstrumented, so D1 stays partial.",
-      "reproduced": "2026-11-17: pytest tests/test_ext4_write_phase_injection.py tests/test_ntfs_write_phase_injection.py -q → 31 passed"
+      "note": "Ext4 operation chain now has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. NTFS steps and JBD2 transaction sub-phases still uninstrumented, so D1 stays partial."
     },
     {
       "id": "D2",

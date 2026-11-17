@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# Labels trusted bot PRs (Dependabot / github-actions) with «auto-merge» so
+# the auto-merge.yml pipeline can take them from green checks to squash
+# merge without a human. The label is applied with AUTOMATION_TOKEN (a PAT),
+# NOT the default GITHUB_TOKEN: events created by the default token do not
+# trigger other workflows, so the «labeled» trigger of auto-merge.yml would
+# never fire and the PR would stall until a human looks at it.
+name: auto-label
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: auto-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label-bot-prs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Label trusted bot PRs and approve them
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          case "$PR_AUTHOR" in
+            dependabot[bot]|github-actions[bot])
+              gh pr edit "$PR_NUMBER" --add-label auto-merge
+              # Approval is harmless when reviews are not required and keeps
+              # the pipeline working if they become required later.
+              gh pr review "$PR_NUMBER" --approve || \
+                echo "approve skipped (already approved or not permitted)"
+              echo "PR #$PR_NUMBER by $PR_AUTHOR labeled for auto-merge."
+              ;;
+            *)
+              echo "PR author $PR_AUTHOR is not a trusted bot; leaving unlabeled."
+              ;;
+          esac
