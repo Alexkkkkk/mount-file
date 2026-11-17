@@ -10,7 +10,7 @@ never in the route the VFS actually uses.  This module drives that route:
 one declared cell per storage step, in the order the runtime emits them::
 
     copy -> payload_stage -> log_gate_pre -> ntfs_write
-         -> log_gate_post -> identity_verify -> publish
+         -> log_gate_post -> read_back -> identity_verify -> publish
 
 Two tiers, kept apart so neither can be read as the other:
 
@@ -70,6 +70,7 @@ DECLARED_STEPS: tuple[str, ...] = (
     "log_gate_pre",
     "ntfs_write",
     "log_gate_post",
+    "read_back",
     "identity_verify",
     "publish",
 )
@@ -126,11 +127,15 @@ def _install_doubles(monkeypatch, *, order: list[str], fail: str = "") -> _GateS
             raise NativeWriteUnsafe("injected failure at copy")
         return real_copy(*args, **kwargs)
 
+    stored_payload: dict[str, str] = {}
+
     def payload(*args, **kwargs):
         order.append("payload_stage")
         if fail == "payload_stage":
             raise NativeWriteUnsafe("injected failure at payload_stage")
-        return real_payload(*args, **kwargs)
+        result = real_payload(*args, **kwargs)
+        stored_payload["path"] = result
+        return result
 
     gate = _GateStub(
         fail_on={"log_gate_pre": (1,), "log_gate_post": (2,)}.get(fail, ())
@@ -177,7 +182,19 @@ def _install_doubles(monkeypatch, *, order: list[str], fail: str = "") -> _GateS
         # ``test_missing_ntfs_tools_are_a_typed_refusal``.
         return None
 
+    def read_back(image_path, internal_path):  # noqa: ANN001
+        # D5 cell: the staged copy must read back byte-identical through the
+        # independent helper before publish is allowed.  The double returns
+        # exactly the staged payload, which is what a healthy ``ntfscat``
+        # would see on a correctly written copy.
+        order.append("read_back")
+        if fail == "read_back":
+            raise NativeWriteUnsafe("injected failure at read_back")
+        with open(stored_payload["path"], "rb") as handle:
+            return handle.read()
+
     monkeypatch.setattr(native_write, "_image_copy", copy)
+    monkeypatch.setattr(native_write, "_read_ntfs_file_bytes", read_back)
     monkeypatch.setattr(native_write, "_payload_file", payload)
     monkeypatch.setattr(native_write, "NTFSLogFileManager", gate_factory)
     monkeypatch.setattr(native_write, "_run", run_stub)
@@ -210,6 +227,7 @@ def test_declared_matrix_matches_the_runtime_call_chain():
         "log_gate_pre",
         "ntfs_write",
         "log_gate_post",
+        "read_back",
         "identity_verify",
         "publish",
     )
@@ -332,6 +350,7 @@ def _make_ntfs_image(tmp_path: Path) -> Path:
         "payload_stage",
         "ntfs_write",
         "log_gate_post",
+        "read_back",
         "identity_verify",
         "publish",
     ),
