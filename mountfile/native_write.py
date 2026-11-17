@@ -365,7 +365,7 @@ class NtfsTransactionalWriter:
     def write_file(
         self, image_path: str, path: str, data: bytes, offset: int = 0
     ) -> None:
-        _require_tools("ntfsfix", "ntfscp")
+        _require_tools("ntfsfix", "ntfscp", "ntfscat")
         _require_enabled()
         _require_zero_offset(offset)
         internal = validate_internal_path(path)
@@ -384,6 +384,15 @@ class NtfsTransactionalWriter:
                 log_file.require_clean(temporary, _run)
             except JournalSafetyError as exc:
                 raise NativeWriteUnsafe(str(exc)) from exc
+            # D5 (#510): the staged copy must read back, through the
+            # independent ntfscat helper, exactly the bytes the caller asked
+            # to store - before the atomic publish is allowed. A mismatch
+            # refuses publication and leaves the source untouched.
+            readback = _read_ntfs_file_bytes(temporary, internal)
+            if readback != bytes(data):
+                raise NativeWriteUnsafe(
+                    "NTFS staged read-back mismatch; refusing publication"
+                )
             _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""

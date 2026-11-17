@@ -331,14 +331,16 @@
       "block": "D",
       "title": "Independent checker + read-back после каждой поддержанной операции",
       "status": "partial",
-      "evidence": [
-        "tests/_independent_checkers.py",
-        "tests/test_checker_acceptance.py",
-        "mountfile/ntfs_native_writer.py",
-        "tests/test_native_journal_writers.py",
-        "tests/test_writer_fault_coverage.py"
-      ],
-      "note": "Ext4 selected paths use e2fsck -fn plus read-back. Binary staged read-back is added only to the gated experimental NtfsNativeWriter helper, not the VFS/application NtfsTransactionalWriter route; no authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
+ "evidence": [
+  "tests/_independent_checkers.py",
+  "tests/test_checker_acceptance.py",
+  "mountfile/ntfs_native_writer.py",
+  "mountfile/native_write.py",
+  "tests/test_ntfs_transactional_readback.py",
+  "tests/test_native_journal_writers.py",
+  "tests/test_writer_fault_coverage.py"
+ ],
+      "note": "Ext4 selected paths use e2fsck -fn plus read-back. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
       "reproduced": "2026-11-17: NTFS staged-readback mismatch refusal preserves the source byte-for-byte; ext4 publish:done SIGKILL reads exact debugfs bytes and passes e2fsck -fn. Focused suite: 97 passed, 3 skipped. D5 remains partial."
     },
     {
