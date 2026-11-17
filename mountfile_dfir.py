@@ -23,6 +23,7 @@ import argparse
 import base64
 import csv
 import hashlib
+import ipaddress
 import json
 import mmap
 import os
@@ -32,6 +33,7 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -76,8 +78,17 @@ def read_timeline_csv(path: str | Path) -> Iterator[TimelineRecord]:
 
 
 class TimelineDB:
+    """Thread-safe timeline store shared by the CLI and the REST API.
+
+    The connection is opened with ``check_same_thread=False`` and every
+    statement is serialised through an :class:`threading.RLock`, because
+    FastAPI serves requests from a worker thread pool while the caller may
+    keep writing from the main thread.
+    """
+
     def __init__(self, db_path: str | Path):
-        self.conn = sqlite3.connect(str(db_path))
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
@@ -95,24 +106,41 @@ class TimelineDB:
             (r.path, r.size, r.mtime, r.atime, r.ctime, r.birth, r.sha256)
             for r in records
         ]
-        self.conn.executemany(
-            "INSERT INTO timeline(path,size,mtime,atime,ctime,birth,sha256) "
-            "VALUES (?,?,?,?,?,?,?)",
-            rows,
-        )
-        self.conn.commit()
+        with self._lock, self.conn:
+            self.conn.executemany(
+                "INSERT INTO timeline(path,size,mtime,atime,ctime,birth,sha256) "
+                "VALUES (?,?,?,?,?,?,?)",
+                rows,
+            )
         return len(rows)
 
     def query(
         self, *, limit: int = 1000, path_like: str | None = None
     ) -> list[dict[str, Any]]:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 10000
+        ):
+            raise ValueError("limit must be between 1 and 10000")
         sql, params = "SELECT * FROM timeline", []
         if path_like:
             sql += " WHERE path LIKE ?"
             params.append(f"%{path_like}%")
         sql += " ORDER BY mtime IS NULL, mtime LIMIT ?"
         params.append(limit)
-        return [dict(r) for r in self.conn.execute(sql, params)]
+        with self._lock:
+            return [dict(r) for r in self.conn.execute(sql, params)]
+
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()
+
+    def __enter__(self) -> "TimelineDB":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
 
 # =========================================================================
@@ -463,24 +491,37 @@ def serve(
         sys.exit("Установи: pip install fastapi uvicorn")
 
     app = FastAPI(title="mountfile-dfir")
-    security = HTTPBasic()
     db = TimelineDB(db_path)
 
-    def auth(creds: HTTPBasicCredentials = Depends(security)) -> str:
-        if user is None and password is None:
+    if user is None and password is None:
+        # No HTTPBasic dependency at all: with HTTPBasic() FastAPI answers 401
+        # before this function runs when the client sends no Authorization
+        # header, which would make the anonymous profile unusable.
+        def auth() -> str:
             return "anonymous"
-        ok = creds.username == user and creds.password == password
-        if not ok:
-            raise HTTPException(
-                status.HTTP_401_UNAUTHORIZED, headers={"WWW-Authenticate": "Basic"}
-            )
-        return creds.username
+
+    else:
+        security = HTTPBasic()
+
+        def auth(creds: HTTPBasicCredentials = Depends(security)) -> str:
+            ok = creds.username == user and creds.password == password
+            if not ok:
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED,
+                    headers={"WWW-Authenticate": "Basic"},
+                )
+            return creds.username
 
     @app.get("/timeline")
     def timeline(
         limit: int = 100, path: str | None = None, _: str = Depends(auth)
     ) -> list[dict[str, Any]]:
-        return db.query(limit=limit, path_like=path)
+        try:
+            return db.query(limit=limit, path_like=path)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
 
     @app.get("/hash")
     def hash_path(p: str, _: str = Depends(auth)) -> dict[str, str]:
@@ -492,7 +533,10 @@ def serve(
     def diff(old: str, new: str, _: str = Depends(auth)) -> dict[str, list]:
         return live_diff(snapshot(old), snapshot(new))
 
-    uvicorn.run(app, host=host, port=port)
+    try:
+        uvicorn.run(app, host=host, port=port)
+    finally:
+        db.close()
 
 
 # =========================================================================
@@ -601,7 +645,24 @@ def cmd_plugins(a: argparse.Namespace) -> None:
 
 
 def cmd_serve(a: argparse.Namespace) -> None:
-    serve(a.db, a.host, a.port, a.user, a.password)
+    user = getattr(a, "user", None)
+    password = getattr(a, "password", None)
+    if user is None and password is None:
+        # Same guard as the standalone prototype: an unauthenticated REST API
+        # must never bind to a non-loopback interface.
+        host = str(getattr(a, "host", "127.0.0.1")).strip()
+        is_loopback = host.lower() == "localhost"
+        if not is_loopback:
+            try:
+                is_loopback = ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+            except ValueError:
+                is_loopback = False
+        if not is_loopback:
+            raise SystemExit(
+                "Refusing to expose the unauthenticated DFIR API on a non-loopback "
+                "host. Use --host 127.0.0.1, localhost, or pass --user/--password."
+            )
+    serve(a.db, a.host, a.port, user, password)
 
 
 def build_parser() -> argparse.ArgumentParser:
