@@ -2,10 +2,10 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "chore/issue-510-tracker-sync",
-    "commit": "a9d21a3",
+    "branch": "fix/issue-510-ntfs-post-crash-readback",
+    "commit": "479bc59",
     "version": "1.96.0",
-    "checked": "2026-11-16"
+    "checked": "2026-11-17"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -248,7 +248,7 @@
         "tests/test_ntfs_acceptance_independent_checker.py"
       ],
       "note": "Fixtures are synthetic mkntfs-based images. ntfsfix -n is secondary evidence only, not a Windows/chkdsk oracle or parity proof; real Windows captures and byte-level $MFT/$BITMAP comparison are absent.",
-      "reproduced": "2026-11-16: synthetic crash-oracle cases exercise bounded replay and ntfsfix -n; no Windows reference data is available."
+      "reproduced": "2026-11-17: tests/test_ntfs_crash_oracle_matrix.py exercises five synthetic scenarios; ntfsfix -n is documented as secondary evidence only. Focused process-kill/crash-matrix tests: 15 passed; no Windows reference data is available."
     },
     {
       "id": "C7",
@@ -291,8 +291,8 @@
         "tests/test_ext4_writer_fault_coverage.py",
         "tests/test_ntfs_writer_fault_coverage.py"
       ],
-      "note": "Mapped ext4 and NTFS process-kill cases cover declared staged-writer boundaries only; not every filesystem transaction or metadata operation. NTFS cases remain synthetic.",
-      "reproduced": "2026-11-16: expanded local failure-matrix run passed 58 tests; seven ext4 and seven NTFS active kill-boundary cases passed. This is not two scheduled nightly runs."
+      "note": "Mapped ext4 and NTFS process-kill cases cover declared staged-writer boundaries only; not every filesystem transaction or metadata operation. NTFS cases remain synthetic. The NTFS publish:done case now reads back and compares the exact target bytes.",
+      "reproduced": "2026-11-17: tests/test_ntfs_writer_fault_coverage.py and tests/test_ntfs_crash_oracle_matrix.py → 15 passed. All nine declared NTFS SIGKILL boundaries are exercised; pre-publish hashes stay unchanged and publish:done verifies /target bytes. GitHub currently has no schedule-triggered failure-matrix runs; no two-nightly criterion is claimed."
     },
     {
       "id": "D3",
@@ -305,8 +305,8 @@
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_jbd2_malformed_journal_refusal.py"
       ],
-      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; this does not prove preservation for every profile × operation × phase cell.",
-      "reproduced": "2026-11-16: targeted failure-matrix JUnit reports passing mapped cases; remaining cells are not proven."
+      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; this does not prove preservation for every profile × operation × phase cell. NTFS post-publish correctness is checked by exact target read-back, not by expecting the image hash to remain unchanged after commit.",
+      "reproduced": "2026-11-17: focused NTFS process-kill/crash-matrix tests → 15 passed; pre-publish image hashes are preserved, and the successful atomic publish returns the exact expected file bytes. Remaining matrix cells are not proven."
     },
     {
       "id": "D4",

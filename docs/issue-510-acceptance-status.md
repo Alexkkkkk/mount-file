@@ -1,6 +1,6 @@
 # Issue #510 acceptance status
 
-Status snapshot: 2026-11-17. The earlier broad test-count snapshot was taken at `main@a9d21a3`; this follow-up starts from `main@9769bab`. Counts below are historical evidence from the earlier snapshot unless explicitly reproduced here. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
+Status snapshot: 2026-11-17. This follow-up starts from `main@9769bab`. The full local suite on code head `479bc59` completed with **2761 passed, 99 skipped** in 237.70s; skips were for optional/platform tools unavailable in the sandbox. Earlier per-subsystem counts below are historical unless explicitly tied to this run. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
 
 ## ext4 / JBD2
 
@@ -18,7 +18,7 @@ The repository contains a bounded `$LogFile` parser and replay path. `recover="n
 
 The artifact generator now reads pytest JUnit XML and maps exact test node IDs to profile/state cells. A passing test is recorded separately from checker evidence. The artifact's `acceptance` is always `not_claimed`; a missing or skipped node is typed as `not_proven` or `unavailable`, not green. The status `passed` means only that the mapped pytest case passed.
 
-The scheduled failure workflow includes FAT12/16, FAT32, ext2, exFAT, ext4/JBD2, and synthetic NTFS cases. A single manual dispatch is not evidence of two consecutive scheduled nightly runs. That criterion remains open until two scheduled runs complete consecutively with valid artifacts.
+The scheduled failure workflow includes FAT12/16, FAT32, ext2, exFAT, ext4/JBD2, and synthetic NTFS cases. As checked on 2026-11-17, GitHub reports no runs for this workflow with event `schedule`; the available run is a manual `workflow_dispatch`. Therefore the requirement for two consecutive scheduled runs with valid artifacts remains unproven.
 
 The main-push CI platform gate expects Linux, Windows, and macOS. The PR/merge-queue fast tier expects Linux and Windows only. These artifacts cover the read-only VFS contracts and do not establish independent filesystem parity.
 
@@ -28,6 +28,5 @@ The main-push CI platform gate expects Linux, Windows, and macOS. The PR/merge-q
 - Recover those images with Windows `chkdsk`, then compare byte-level `$MFT` and `$BITMAP` state with the native replay result.
 - Complete two consecutive scheduled nightly failure-matrix runs; do not substitute a manual workflow dispatch.
 - Establish full per-operation/per-phase independent checker and read-back coverage before considering any product write support.
-- Configure the trusted status-sync check as required branch protection only after explicit repository-owner approval; this change does not alter branch protection or rulesets.
 
 Until those items are met, ext4 and NTFS write support must remain unclaimed in product-facing status and documentation.
