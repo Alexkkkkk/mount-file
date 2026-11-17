@@ -1763,7 +1763,10 @@ def test_rejects_unknown_ntfs_volume_flags():
     value[8:10] = b"\x03\x01"
     struct.pack_into("<H", value, 10, 0x0080)
     attr = NtfsAttributeSummary(0x70, 24, False, "", resident_value=bytes(value))
-    with pytest.raises(NtfsMetadataError, match="unknown volume flags"):
+    with pytest.raises(
+        NtfsMetadataError,
+        match="unknown volume flags raw=0x0080 unknown=0x0080",
+    ):
         parse_ntfs_volume_state((attr,))
 
 

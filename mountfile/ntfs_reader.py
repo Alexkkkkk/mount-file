@@ -1022,8 +1022,12 @@ def parse_ntfs_volume_state(
             f"unsupported NTFS $Volume version {major}.{minor} (raw={raw_version})"
         )
     flags = struct.unpack_from("<H", volume.resident_value, 10)[0]
-    if flags & ~_VOLUME_KNOWN_FLAGS:
-        raise NtfsMetadataError("NTFS $Volume has unknown volume flags")
+    unknown_flags = flags & ~_VOLUME_KNOWN_FLAGS
+    if unknown_flags:
+        raise NtfsMetadataError(
+            "NTFS $Volume has unknown volume flags "
+            f"raw=0x{flags:04x} unknown=0x{unknown_flags:04x}"
+        )
     return NtfsVolumeState(flags)
 
 
