@@ -32,3 +32,7 @@ The main-push CI platform gate expects Linux, Windows, and macOS. The PR/merge-q
 - Establish full per-operation/per-phase independent checker and read-back coverage before considering any product write support.
 
 Until those items are met, ext4 and NTFS write support must remain unclaimed in product-facing status and documentation.
+
+## B8 — JBD2 phase-level process-kill evidence
+
+The checksummed JBD2 checkpoint suite now includes a real POSIX subprocess harness that sends `SIGKILL` at each declared checkpoint write phase (`data` and `journal-superblock`). Each disposable image remains `NEEDS_REPLAY` after the kill, is recovered through the native coordinator, and is accepted by `e2fsck -fn` after recovery. This records process-kill evidence only; it does not claim power-loss durability or promote ext4/JBD2 product write support.

@@ -31,7 +31,7 @@ def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
     assert "windows_ntfs_raw_snapshot.py" in script
     assert "compare_ntfs_snapshots.py" in script
     assert "PhysicalSectorSize" in script
-    assert script.count("--sector-size $sectorSize") == 2
+    assert script.count("--sector-size $sectorSize") == 3
 
 
 def test_windows_acceptance_has_clean_dirty_and_repair_stages():
@@ -45,6 +45,10 @@ def test_windows_acceptance_has_clean_dirty_and_repair_stages():
     ):
         assert marker in script
     assert "sentinel hash changed during checker lifecycle" in script
+    assert "windows-child-process-terminated-during-ntfs-write" in script
+    assert "Stop-Process -Id $writer.Id -Force" in script
+    assert "$rawCrash" in script
+    assert "raw-crash-repair-comparison.json" in script
 
 
 def test_windows_acceptance_does_not_claim_replay_parity():
@@ -61,9 +65,11 @@ def test_raw_snapshot_tools_are_bounded_and_byte_comparison_is_explicit():
     assert "WindowsRawDeviceImageSource" in snapshot
     assert "source_factory=source_factory" in snapshot
     assert '"MFT.bin"' in snapshot
+    assert '"MFTMirr.bin"' in snapshot
     assert '"BITMAP.bin"' in snapshot
     assert "byte_identical" in compare
     assert "differing_bytes" in compare
+    assert '"mftmirr"' in compare
     assert "not proof that replay is correct" in compare
 
 

@@ -1,0 +1,12 @@
+# Community routing for issues/discussions
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Вопросы, идеи и обсуждения
+    url: https://github.com/Alexkkkkk/mount-file/discussions
+    about: Задавайте вопросы и предлагайте идеи в Discussions — там отвечают быстрее.
+  - name: 🔐 Сообщить об уязвимости (приватно)
+    url: https://github.com/Alexkkkkk/mount-file/security/advisories/new
+    about: Не публикуйте уязвимости в issues — используйте приватный Security Advisory.
+  - name: 📖 Документация
+    url: https://alexkkkkk.github.io/mount-file/
+    about: Установка, поддерживаемые форматы образов и артефактов, FAQ.

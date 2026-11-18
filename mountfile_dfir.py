@@ -96,17 +96,12 @@ def grep_image(
     Ищет pattern в raw-образе через mmap.
     encoding: utf-8, utf-16le, latin-1, raw.
     """
-    if max_hits < 1 or not pattern:
-        return
     if encoding == "raw":
         needle = pattern.encode("latin-1")
     else:
         needle = pattern.encode(encoding)
 
     with open(image_path, "rb") as f:
-        if f.seek(0, 2) == 0:
-            return
-        f.seek(0)
         with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             if regex:
                 rx = re.compile(needle)
@@ -199,10 +194,10 @@ class TimelineDB:
         with self._lock:
             self.conn.close()
 
-    def __enter__(self):
+    def __enter__(self) -> "TimelineDB":
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: object) -> None:
         self.close()
 
 
@@ -293,15 +288,15 @@ def cmd_grep(args: argparse.Namespace) -> None:
 
 
 def cmd_timeline(args: argparse.Namespace) -> None:
-    with TimelineDB(args.db) as db:
-        if args.query:
-            result = db.query(limit=args.limit)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        else:
-            if not args.csv:
-                raise ValueError("timeline import requires a CSV path")
-            count = db.add(read_timeline_csv(args.csv))
-            print(f"added {count} records to {args.db}")
+    records = list(read_timeline_csv(args.csv))
+    db = TimelineDB(args.db)
+
+    if args.query:
+        result = db.query(limit=args.limit)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        count = db.add(records)
+        print(f"added {count} records to {args.db}")
 
 
 def cmd_timestomp(args: argparse.Namespace) -> None:
@@ -331,8 +326,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
             is_loopback = False
     if not is_loopback:
         raise SystemExit(
-            "Refusing to expose the unauthenticated DFIR prototype on a non-loopback host. "
-            "Use --host 127.0.0.1 or localhost."
+            "Refusing to expose the unauthenticated DFIR prototype on a non-loopback "
+            "host. Use --host 127.0.0.1 or localhost."
         )
 
     try:
@@ -376,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_grep.set_defaults(func=cmd_grep)
 
     p_tl = sub.add_parser("timeline", help="timeline CSV -> SQLite")
-    p_tl.add_argument("csv", nargs="?")
+    p_tl.add_argument("csv")
     p_tl.add_argument("--db", default="timeline.db")
     p_tl.add_argument("--query", action="store_true")
     p_tl.add_argument("--limit", type=int, default=100)
