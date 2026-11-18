@@ -337,10 +337,20 @@ def test_bad_commit_checksum_is_refused_before_any_write(tmp_path):
 @needs_ext
 def test_bad_journal_superblock_checksum_is_an_error(tmp_path):
     image, _target_block, _uuid, journal_blocks, _records = _dirty_v3_image(tmp_path)
+    # Corrupt a byte of ``s_checksum`` (0xFC) rather than ``0x30``.  Offset
+    # 0x30 is the *high* byte of the big-endian ``s_maxlen`` word, which is
+    # already 0x00 for every realistic journal, so the write was a no-op on
+    # most images: the superblock checksum stayed valid and the probe returned
+    # NEEDS_REPLAY (RECOVER is set) instead of ERROR.  That made the test pass
+    # or fail depending on the journal size mke2fs happened to pick.
     with open(image, "r+b") as stream:
-        stream.seek(journal_blocks[0] * BLOCK_SIZE + 0x30)
-        stream.write(b"\x00")
+        stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
+        checksum = stream.read(4)
+        assert len(checksum) == 4
+        stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
+        stream.write(bytes([checksum[0] ^ 0xFF]) + checksum[1:])
     probe = probe_journal(str(image))
+    assert probe.state is JournalState.ERROR, probe.message
     assert probe.state is JournalState.ERROR
     before = _sha256(image)
     with pytest.raises(Exception):
