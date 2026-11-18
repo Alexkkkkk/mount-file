@@ -3,24 +3,37 @@ description: >-
   Single source of truth for the Linux system packages used by the CI matrix.
   Installs the canonical list from tools/system-packages-debian.txt (filesystem
   oracle tools, Qt runtime libraries, build toolchain) plus optional extras,
-  so every workflow exercises the same package set.
+  so every workflow exercises the same package set. The package set is cached
+  with awalsh128/cache-apt-pkgs-action, which turns the ~35-60 s apt-get
+  update + install on every Linux leg into a single cache restore.
 inputs:
   extra:
     description: 'Space-separated extra apt packages installed on top of the canonical list'
     required: false
     default: ''
+  cache-version:
+    description: 'Bump to invalidate the apt cache after a package list change'
+    required: false
+    default: 'v1'
 runs:
   using: composite
   steps:
-    - name: Install the canonical system package set
+    - name: Resolve the canonical package list
+      id: packages
       shell: bash
-      env:
-        EXTRA: ${{ inputs.extra }}
       run: |
         set -euo pipefail
-        sudo apt-get update
-        xargs -r sudo apt-get install -y < <(grep -vE '^[[:space:]]*(#|$)' tools/system-packages-debian.txt)
-        if [ -n "$EXTRA" ]; then
-          # shellcheck disable=SC2086
-          sudo apt-get install -y $EXTRA
+        pkgs="$(grep -vE '^[[:space:]]*(#|$)' tools/system-packages-debian.txt | tr '\n' ' ')"
+        if [ -n "${{ inputs.extra }}" ]; then
+          pkgs="$pkgs ${{ inputs.extra }}"
         fi
+        echo "list=${pkgs}" >> "$GITHUB_OUTPUT"
+
+    - name: Install the canonical system package set (apt cache)
+      uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
+      with:
+        packages: ${{ steps.packages.outputs.list }}
+        version: ${{ inputs.cache-version }}
+        # Restoring the files alone is enough; running package maintainer
+        # scripts again on a warm cache only adds time.
+        execute_install_scripts: false

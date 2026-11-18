@@ -2,12 +2,13 @@ name: NTFS Windows Acceptance
 # Revision 2: raw $MFT/$BITMAP snapshots and byte comparator are required.
 
 on:
-  push:
-    branches:
-      - feat/issue-510-schedule-provenance
+  # No push trigger: this workflow only needs the schedule, the pull_request
+  # paths filter below and manual runs, so a push to any branch no longer
+  # duplicates a full Windows acceptance run.
   schedule:
     - cron: '30 3 * * *'
   workflow_dispatch: {}
+  merge_group: {}
   pull_request:
     paths:
       - '.github/workflows/ntfs-windows-acceptance.yml'

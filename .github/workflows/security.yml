@@ -15,9 +15,9 @@ permissions:
   contents: read
 
 concurrency:
-  # This workflow is invoked directly and through pipeline.yml. Keep both
-  # executions alive so the fail-closed security-gate never sees cancelled
-  # dependency-review or pip-audit results.
+  # This workflow runs directly on push/PR/merge_group. The read-only
+  # security-gate must never see a cancelled dependency-review or pip-audit
+  # result, so cancellation stays disabled here.
   group: security-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 
