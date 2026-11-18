@@ -21,6 +21,7 @@ import hashlib
 import ipaddress
 import json
 import mmap
+import os
 import re
 import sqlite3
 import sys
@@ -58,7 +59,7 @@ def _opt_int(value: Any) -> int | None:
 
 
 def read_timeline_csv(path: str | Path) -> Iterator[TimelineRecord]:
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(safe_path(path), newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             yield TimelineRecord(
@@ -101,7 +102,7 @@ def grep_image(
     else:
         needle = pattern.encode(encoding)
 
-    with open(image_path, "rb") as f:
+    with open(safe_path(image_path), "rb") as f:
         with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             if regex:
                 rx = re.compile(needle)
@@ -138,7 +139,8 @@ def grep_image(
 class TimelineDB:
     def __init__(self, db_path: str | Path):
         self._lock = threading.RLock()
-        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.path = safe_path(db_path)
+        self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute(
             """
@@ -259,9 +261,32 @@ class PluginRegistry:
 # ---------------------------------------------------------------------------
 
 
+def _allowed_root() -> Path:
+    """Directory every filesystem argument must stay inside."""
+    return Path(os.environ.get("MF_DFIR_ROOT") or os.getcwd()).resolve()
+
+
+def safe_path(path: str | Path) -> Path:
+    """Resolve *path* and refuse anything outside :func:`_allowed_root`.
+
+    CodeQL reported py/path-injection against the CLI helpers: a caller
+    supplied path went straight into open(), so ../ traversal, an absolute
+    path elsewhere or a symlink pointing out of the tree could read any file.
+    Confining the resolved path to one root removes that surface.
+    """
+    root = _allowed_root()
+    candidate = Path(path)
+    resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"path outside the DFIR root {root}: {path}") from exc
+    return resolved
+
+
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with open(safe_path(path), "rb") as f:
         while chunk := f.read(chunk_size):
             h.update(chunk)
     return h.hexdigest()
@@ -313,7 +338,10 @@ def cmd_timestomp(args: argparse.Namespace) -> None:
 
 
 def cmd_hash(args: argparse.Namespace) -> None:
-    print(sha256_file(args.file))
+    try:
+        print(sha256_file(args.file))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
