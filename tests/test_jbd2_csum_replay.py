@@ -337,11 +337,21 @@ def test_bad_commit_checksum_is_refused_before_any_write(tmp_path):
 @needs_ext
 def test_bad_journal_superblock_checksum_is_an_error(tmp_path):
     image, _target_block, _uuid, journal_blocks, _records = _dirty_v3_image(tmp_path)
+    # Corrupt a byte of ``s_checksum`` (0xFC) rather than ``0x30``.  Offset
+    # 0x30 is ``s_uuid[0]``, so zeroing it is a no-op whenever the generated
+    # filesystem UUID already starts with 0x00: the journal superblock then
+    # stayed fully valid and the probe answered NEEDS_REPLAY (RECOVER is set)
+    # instead of ERROR.  That made the test pass or fail depending on the
+    # random UUID mke2fs happened to pick.  Corrupting the checksum exercises
+    # the gate this test is named after.
     with open(image, "r+b") as stream:
-        stream.seek(journal_blocks[0] * BLOCK_SIZE + 0x30)
-        stream.write(b"\x00")
+        stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
+        stored = stream.read(4)
+        assert len(stored) == 4
+        stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
+        stream.write(bytes([stored[0] ^ 0xFF]) + stored[1:])
     probe = probe_journal(str(image))
-    assert probe.state is JournalState.ERROR
+    assert probe.state is JournalState.ERROR, probe.message
     before = _sha256(image)
     with pytest.raises(Exception):
         recover_journal_on_copy(str(image), 0, native_coordinator=native_jbd2_recover)
