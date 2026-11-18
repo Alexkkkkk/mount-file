@@ -59,7 +59,7 @@ def _opt_int(value: Any) -> int | None:
 
 
 def read_timeline_csv(path: str | Path) -> Iterator[TimelineRecord]:
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(safe_path(path), newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             yield TimelineRecord(
@@ -102,7 +102,7 @@ def grep_image(
     else:
         needle = pattern.encode(encoding)
 
-    with open(image_path, "rb") as f:
+    with open(safe_path(image_path), "rb") as f:
         with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             if regex:
                 rx = re.compile(needle)
@@ -139,10 +139,10 @@ def grep_image(
 class TimelineDB:
     def __init__(self, db_path: str | Path):
         self._lock = threading.RLock()
-        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self.path = safe_path(db_path)
+        self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute(
-            """
+        self.conn.execute("""
             CREATE TABLE IF NOT EXISTS timeline (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT NOT NULL,
@@ -153,8 +153,7 @@ class TimelineDB:
                 birth REAL,
                 sha256 TEXT
             )
-            """
-        )
+            """)
         self.conn.commit()
 
     def add(self, records: Iterable[TimelineRecord]) -> int:

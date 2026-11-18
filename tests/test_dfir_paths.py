@@ -10,7 +10,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from mountfile_dfir import safe_path, sha256_file
+from mountfile_dfir import (
+    TimelineDB,
+    grep_image,
+    read_timeline_csv,
+    safe_path,
+    sha256_file,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +35,9 @@ def test_absolute_path_inside_root_is_allowed(tmp_path):
     assert safe_path(target) == target.resolve()
 
 
-@pytest.mark.parametrize("evil", ["../outside.txt", "../../etc/passwd", "/etc/passwd", "/tmp/zzz"])
+@pytest.mark.parametrize(
+    "evil", ["../outside.txt", "../../etc/passwd", "/etc/passwd", "/tmp/zzz"]
+)
 def test_traversal_and_foreign_absolute_paths_are_rejected(evil):
     with pytest.raises(ValueError, match="outside the DFIR root"):
         safe_path(evil)
@@ -49,3 +57,23 @@ def test_sha256_file_hashes_inside_root_only(tmp_path):
     assert sha256_file("f.bin") == sha256_file(tmp_path / "f.bin")
     with pytest.raises(ValueError, match="outside the DFIR root"):
         sha256_file("/etc/passwd")
+
+
+def test_grep_image_rejects_path_outside_root(tmp_path):
+    outside = tmp_path.parent / "outside.img"
+    outside.write_bytes(b"needle")
+    with pytest.raises(ValueError, match="outside the DFIR root"):
+        list(grep_image(outside, "needle"))
+
+
+def test_timeline_csv_rejects_path_outside_root(tmp_path):
+    outside = tmp_path.parent / "outside.csv"
+    outside.write_text("path,size\n/a,1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="outside the DFIR root"):
+        list(read_timeline_csv(outside))
+
+
+def test_timeline_db_rejects_output_path_outside_root(tmp_path):
+    outside = tmp_path.parent / "outside.db"
+    with pytest.raises(ValueError, match="outside the DFIR root"):
+        TimelineDB(outside)
