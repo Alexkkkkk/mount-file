@@ -338,11 +338,12 @@ def test_bad_commit_checksum_is_refused_before_any_write(tmp_path):
 def test_bad_journal_superblock_checksum_is_an_error(tmp_path):
     image, _target_block, _uuid, journal_blocks, _records = _dirty_v3_image(tmp_path)
     # Corrupt a byte of ``s_checksum`` (0xFC) rather than ``0x30``.  Offset
-    # 0x30 is the *high* byte of the big-endian ``s_maxlen`` word, which is
-    # already 0x00 for every realistic journal, so the write was a no-op on
-    # most images: the superblock checksum stayed valid and the probe returned
-    # NEEDS_REPLAY (RECOVER is set) instead of ERROR.  That made the test pass
-    # or fail depending on the journal size mke2fs happened to pick.
+    # 0x30 is ``s_uuid[0]``, so zeroing it is a no-op whenever the generated
+    # filesystem UUID already starts with 0x00: the journal superblock then
+    # stayed fully valid and the probe answered NEEDS_REPLAY (RECOVER is set)
+    # instead of ERROR.  That made the test pass or fail depending on the
+    # random UUID mke2fs happened to pick.  Corrupting the checksum exercises
+    # the gate this test is named after.
     with open(image, "r+b") as stream:
         stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
         checksum = stream.read(4)
