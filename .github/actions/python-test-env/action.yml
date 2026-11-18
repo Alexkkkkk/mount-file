@@ -69,7 +69,13 @@ runs:
       run: |
         set -euo pipefail
         if [ "$RUNNER_OS" = "Windows" ]; then
-          echo "$PWD/.venv/Scripts" >> "$GITHUB_PATH"
+          # $PWD is a Git-Bash POSIX path (/d/a/mount-file/mount-file) and the
+          # runner consumes GITHUB_PATH entries as native Windows paths, so a
+          # raw $PWD line was silently ignored: every later step kept resolving
+          # `python` to the setup-python interpreter, which has no pytest, and
+          # the Windows test job died with "No module named pytest".
+          VENV_BIN="$(cygpath -w "$PWD/.venv/Scripts")"
         else
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          VENV_BIN="$PWD/.venv/bin"
         fi
+        echo "$VENV_BIN" >> "$GITHUB_PATH"
