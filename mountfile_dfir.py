@@ -259,9 +259,32 @@ class PluginRegistry:
 # ---------------------------------------------------------------------------
 
 
+def _allowed_root() -> Path:
+    """Directory every filesystem argument must stay inside."""
+    return Path(os.environ.get("MF_DFIR_ROOT") or os.getcwd()).resolve()
+
+
+def safe_path(path: str | Path) -> Path:
+    """Resolve *path* and refuse anything outside :func:`_allowed_root`.
+
+    CodeQL reported py/path-injection against the CLI helpers: a caller
+    supplied path went straight into open(), so ../ traversal, an absolute
+    path elsewhere or a symlink pointing out of the tree could read any file.
+    Confining the resolved path to one root removes that surface.
+    """
+    root = _allowed_root()
+    candidate = Path(path)
+    resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"path outside the DFIR root {root}: {path}") from exc
+    return resolved
+
+
 def sha256_file(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
+    with open(safe_path(path), "rb") as f:
         while chunk := f.read(chunk_size):
             h.update(chunk)
     return h.hexdigest()
@@ -313,7 +336,10 @@ def cmd_timestomp(args: argparse.Namespace) -> None:
 
 
 def cmd_hash(args: argparse.Namespace) -> None:
-    print(sha256_file(args.file))
+    try:
+        print(sha256_file(args.file))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
