@@ -20,6 +20,7 @@ the existing stream, attribute resizing, sparse runs, ``$ATTRIBUTE_LIST``)
 raise :class:`NtfsReplayError` before any byte is written.  The executor is
 only called on a copy; publication stays with the atomic writer.
 """
+
 from __future__ import annotations
 
 import os
@@ -131,6 +132,10 @@ STREAM_OPERATIONS = frozenset(
         OP_UPDATE_RECORD_DATA_ALLOCATION,
     )
 )
+_BITMAP_OPERATIONS = frozenset(
+    (OP_SET_BITS_IN_NONRESIDENT_BITMAP, OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP)
+)
+_BITMAP_ATTRIBUTE_NAMES = frozenset(("$bitmap", "$i30"))
 # The bounded executor implements these byte-level operations.  MFT record
 # allocation/deallocation and bitmap mutation remain refused until the MFT
 # allocation planner is wired in and independently checked; index entry
@@ -894,6 +899,13 @@ def _apply_stream_operation(
     redo: bool,
 ) -> int:
     op = record.redo_op if redo else record.undo_op
+    if op in _BITMAP_OPERATIONS:
+        if attribute.type_code != ATTR_BITMAP:
+            raise NtfsReplayError("bitmap operation targets a non-bitmap attribute")
+        if attribute.name.casefold() not in _BITMAP_ATTRIBUTE_NAMES:
+            raise NtfsReplayError(
+                "bitmap operation targets an unrecognized bitmap stream"
+            )
     cluster_bits = cluster_size.bit_length() - 1
     if (1 << cluster_bits) != cluster_size:
         raise NtfsReplayError("cluster size is not a power of two")
