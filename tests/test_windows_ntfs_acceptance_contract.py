@@ -65,9 +65,11 @@ def test_raw_snapshot_tools_are_bounded_and_byte_comparison_is_explicit():
     assert "WindowsRawDeviceImageSource" in snapshot
     assert "source_factory=source_factory" in snapshot
     assert '"MFT.bin"' in snapshot
+    assert '"MFTMirr.bin"' in snapshot
     assert '"BITMAP.bin"' in snapshot
     assert "byte_identical" in compare
     assert "differing_bytes" in compare
+    assert '"mftmirr"' in compare
     assert "not proof that replay is correct" in compare
 
 

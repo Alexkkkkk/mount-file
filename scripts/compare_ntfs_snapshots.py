@@ -63,6 +63,9 @@ def main() -> int:
     result = {
         "schema": "mountfile.windows-ntfs-snapshot-comparison/v1",
         "mft": compare_file(args.before / "MFT.bin", args.after / "MFT.bin"),
+        "mftmirr": compare_file(
+            args.before / "MFTMirr.bin", args.after / "MFTMirr.bin"
+        ),
         "bitmap": compare_file(args.before / "BITMAP.bin", args.after / "BITMAP.bin"),
         "claims": [
             "Comparison is byte-for-byte over the extracted stream files.",
