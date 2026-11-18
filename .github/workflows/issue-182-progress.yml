@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: issue-182-progress-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-push:
     runs-on: ubuntu-latest

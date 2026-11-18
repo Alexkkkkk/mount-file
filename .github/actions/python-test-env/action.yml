@@ -10,6 +10,17 @@ inputs:
   python-version:
     description: 'Python version to provision. Empty = reuse the current interpreter.'
     default: ''
+  install-test-stack:
+    description: "Install the pinned test stack ('true') or skip it ('false')"
+    default: 'true'
+  extra-pip:
+    description: 'Space-separated extra pip packages installed with uv'
+    default: ''
+  requirements-file:
+    description: >-
+      Optional requirements file (e.g. requirements.txt) installed with uv after
+      the test stack, so a job never falls back to a slow plain-pip resolve.
+    default: ''
 runs:
   using: composite
   steps:
@@ -30,6 +41,7 @@ runs:
     # uv.lock disagree. --extra ci is the exact test stack (pytest, cov,
     # timeout, xdist, hypothesis, PyQt6, API deps).
     - name: Install the locked test environment
+      if: inputs.install-test-stack == 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -52,6 +64,7 @@ runs:
     # `python -m pip wheel`, so pip is installed explicitly instead of
     # pulling the whole world into the venv.
     - name: Ensure pip inside the locked venv
+      if: inputs.install-test-stack == 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -65,6 +78,7 @@ runs:
     # Put the locked interpreter first on PATH so the existing
     # `python -m pytest` / `python main.py` commands keep working unchanged.
     - name: Put the locked venv on PATH
+      if: inputs.install-test-stack == 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -80,10 +94,11 @@ runs:
         fi
         echo "$VENV_BIN" >> "$GITHUB_PATH"
 
-    # Test-only extras. `uv sync --frozen --extra ci` brings the locked
-    # dependencies, but the pytest plugins and the optional API/AI extras
-    # still came from main's plain `--system` installs.
+    # Test-only extras kept from main's plain installs for jobs that opt out
+    # of the locked stack (install-test-stack: 'false') and run on the
+    # setup-python interpreter instead.
     - name: Install test extras into the locked venv
+      if: inputs.install-test-stack == 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -95,3 +110,39 @@ runs:
         uv pip install --python "$VENV_PY" pytest pytest-cov pytest-timeout pytest-xdist hypothesis setuptools wheel 'PyQt6>=6.11.0'
         uv pip install --python "$VENV_PY" 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0' 'pydantic>=2.0'
 
+    - name: Install the project requirements with uv
+      if: inputs.requirements-file != ''
+      shell: bash
+      env:
+        REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "Windows" ] || [ -f "$PWD/.venv/Scripts/python.exe" ]; then
+          VENV_PY="$PWD/.venv/Scripts/python.exe"
+        else
+          VENV_PY="$PWD/.venv/bin/python"
+        fi
+        if [ -f "$VENV_PY" ]; then
+          uv pip install --python "$VENV_PY" -r "$REQUIREMENTS_FILE"
+        else
+          uv pip install --system -r "$REQUIREMENTS_FILE"
+        fi
+
+    - name: Install extra packages with uv
+      if: inputs.extra-pip != ''
+      shell: bash
+      env:
+        EXTRA_PIP: ${{ inputs.extra-pip }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "Windows" ] || [ -f "$PWD/.venv/Scripts/python.exe" ]; then
+          VENV_PY="$PWD/.venv/Scripts/python.exe"
+        else
+          VENV_PY="$PWD/.venv/bin/python"
+        fi
+        if [ -f "$VENV_PY" ]; then
+          uv pip install --python "$VENV_PY" $EXTRA_PIP
+        else
+          # shellcheck disable=SC2086
+          uv pip install --system $EXTRA_PIP
+        fi
