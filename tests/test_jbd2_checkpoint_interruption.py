@@ -55,7 +55,7 @@ needs_ext = pytest.mark.skipif(
 
 BLOCK_SIZE = 4096
 
-_SIGKILL_CHILD = r'''
+_SIGKILL_CHILD = r"""
 import os
 import signal
 import struct
@@ -97,7 +97,7 @@ with open(image_path, "r+b") as stream:
         sync=lambda: None,
         fault_injector=kill_at,
     )
-'''
+"""
 
 
 def _fault_at(phase: str):
