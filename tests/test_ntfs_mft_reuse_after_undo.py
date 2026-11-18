@@ -147,9 +147,9 @@ def test_freed_slot_is_reused_with_successor_sequence_and_locked_mirror(
     _publish(image, initialized, free, mirror)
     after_first = image.read_bytes()
     assert _read(after_first, 0, RECORD_SIZE) == initialized
-    assert _read(after_first, MIRROR_OFFSET, RECORD_SIZE) == initialized, (
-        "$MFTMirr must follow $MFT byte-for-byte on allocation"
-    )
+    assert (
+        _read(after_first, MIRROR_OFFSET, RECORD_SIZE) == initialized
+    ), "$MFTMirr must follow $MFT byte-for-byte on allocation"
     bitmap = bytearray(_read(after_first, BITMAP_OFFSET, len(BITMAP_BYTES)))
     assert bitmap[42 // 8] & (1 << (42 % 8)), "allocation bit must be set"
 
@@ -160,7 +160,9 @@ def test_freed_slot_is_reused_with_successor_sequence_and_locked_mirror(
     # Pass 2: a later transaction reuses the same freed slot.  The runtime
     # planner must plan exactly the successor sequence the new reference
     # carries; the executor publishes record+mirror+bitmap in lockstep.
-    plan = plan_mft_record_reuse(free, mirror, (8 << 48) | SLOT, candidate_record_number=SLOT)
+    plan = plan_mft_record_reuse(
+        free, mirror, (8 << 48) | SLOT, candidate_record_number=SLOT
+    )
     assert (plan.record_number, plan.previous_sequence, plan.next_sequence) == (
         SLOT,
         7,
@@ -178,7 +180,9 @@ def test_reuse_of_sequence_0xffff_slot_is_refused_not_wrapped() -> None:
     free = _raw_record(0xFFFF)
     mirror = _raw_record(0xFFFF)
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(free, mirror, (1 << 48) | SLOT, candidate_record_number=SLOT)
+        plan_mft_record_reuse(
+            free, mirror, (1 << 48) | SLOT, candidate_record_number=SLOT
+        )
     assert excinfo.value.reason == "sequence_exhausted"
 
 
@@ -186,5 +190,7 @@ def test_reuse_refuses_a_slot_whose_mirror_drifted() -> None:
     free = _raw_record(7)
     drifted = _raw_record(8)
     with pytest.raises(NtfsMftAllocationError) as excinfo:
-        plan_mft_record_reuse(free, drifted, (8 << 48) | SLOT, candidate_record_number=SLOT)
+        plan_mft_record_reuse(
+            free, drifted, (8 << 48) | SLOT, candidate_record_number=SLOT
+        )
     assert excinfo.value.reason == "mft_mirr_mismatch"

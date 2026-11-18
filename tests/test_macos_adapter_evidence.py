@@ -37,9 +37,13 @@ def _write_junit(tmp_path: Path, failing: set[str] = frozenset()) -> Path:
     for base, count in REQUIRED_MACOS_ADAPTER_TESTS.items():
         for index in range(count):
             names.append(base if count == 1 else f"{base}[param{index}]")
-    cases = "\n".join(_case(name, failure=name.split("[", 1)[0] in failing) for name in names)
+    cases = "\n".join(
+        _case(name, failure=name.split("[", 1)[0] in failing) for name in names
+    )
     path = tmp_path / "junit-macos.xml"
-    path.write_text(_JUNIT_TEMPLATE.format(total=len(names), cases=cases), encoding="utf-8")
+    path.write_text(
+        _JUNIT_TEMPLATE.format(total=len(names), cases=cases), encoding="utf-8"
+    )
     return path
 
 
@@ -51,9 +55,7 @@ def test_full_passing_macos_run_is_a_typed_pass(tmp_path):
 
 
 def test_failed_or_missing_cases_are_blocked_not_collected(tmp_path):
-    failing = _write_junit(
-        tmp_path, failing={"test_apfs_constructor_never_mounts"}
-    )
+    failing = _write_junit(tmp_path, failing={"test_apfs_constructor_never_mounts"})
     report = build_macos_adapter_evidence(failing)
     assert report["status"] == "blocked"
     assert any("never_mounts" in blocker for blocker in report["blockers"])
@@ -77,18 +79,30 @@ def test_missing_report_is_not_collected_and_never_a_pass(tmp_path):
 def test_cli_exit_codes_follow_the_verdict(tmp_path):
     passing = _write_junit(tmp_path)
     ok = subprocess.run(
-        [sys.executable, str(_REPO_ROOT / "scripts" / "macos_adapter_evidence.py"),
-         "--junitxml", str(passing)],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            str(_REPO_ROOT / "scripts" / "macos_adapter_evidence.py"),
+            "--junitxml",
+            str(passing),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert ok.returncode == 0, ok.stdout + ok.stderr
     payload = json.loads(ok.stdout)
     assert payload["status"] == "pass"
 
     missing = subprocess.run(
-        [sys.executable, str(_REPO_ROOT / "scripts" / "macos_adapter_evidence.py"),
-         "--junitxml", str(tmp_path / "absent.xml")],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            str(_REPO_ROOT / "scripts" / "macos_adapter_evidence.py"),
+            "--junitxml",
+            str(tmp_path / "absent.xml"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert missing.returncode == 2
     assert json.loads(missing.stdout)["status"] == "not_collected"

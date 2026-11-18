@@ -21,7 +21,14 @@ from scripts.recovery_matrix import build_acceptance_report
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ARTIFACT = _REPO_ROOT / "docs" / "generated" / "recovery-acceptance.json"
 
-_TYPED_VERDICTS = {"pass", "unavailable", "not_proven", "blocked", "not_collected", "missing"}
+_TYPED_VERDICTS = {
+    "pass",
+    "unavailable",
+    "not_proven",
+    "blocked",
+    "not_collected",
+    "missing",
+}
 _REPRODUCIBLE_PREFIX = "tested_"
 
 
@@ -64,9 +71,9 @@ def test_every_published_cell_carries_a_typed_verdict():
     assert cells, "acceptance artifact must publish cells"
     for cell in cells:
         verdict = _verdict(cell)
-        assert verdict in _TYPED_VERDICTS, (
-            f"untyped cell verdict {verdict!r} in {_ARTIFACT.name}"
-        )
+        assert (
+            verdict in _TYPED_VERDICTS
+        ), f"untyped cell verdict {verdict!r} in {_ARTIFACT.name}"
 
 
 def test_pass_cells_cite_reproducible_evidence_only():
@@ -74,15 +81,17 @@ def test_pass_cells_cite_reproducible_evidence_only():
         if _verdict(cell) != "pass":
             continue
         source = cell.get("source")
-        assert isinstance(source, str) and source.startswith(_REPRODUCIBLE_PREFIX), (
-            f"pass cell without a reproducible 'tested_*' source: {source!r}"
-        )
+        assert isinstance(source, str) and source.startswith(
+            _REPRODUCIBLE_PREFIX
+        ), f"pass cell without a reproducible 'tested_*' source: {source!r}"
 
 
 @pytest.mark.parametrize(
     "cell",
     [
-        pytest.param(cell, id=f"{_verdict(cell)}:{cell.get('cell') or cell.get('source')}")
+        pytest.param(
+            cell, id=f"{_verdict(cell)}:{cell.get('cell') or cell.get('source')}"
+        )
         for cell in _cells(json.loads(_ARTIFACT.read_text(encoding="utf-8")))
         if _verdict(cell) != "pass"
     ],
