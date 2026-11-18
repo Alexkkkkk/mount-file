@@ -60,8 +60,13 @@ jobs:
           if ($report.checker_authority -ne 'windows_native') { throw 'non-Windows checker evidence' }
           if ($report.status -ne 'checked_and_repaired') { throw "unexpected status: $($report.status)" }
           if ($report.sentinel_sha256_before -ne $report.sentinel_sha256_after) { throw 'sentinel hash changed' }
+          if ($report.crash_fixture.kind -ne 'windows-child-process-terminated-during-ntfs-write') { throw 'missing abrupt crash fixture' }
           if (-not $report.raw_snapshot_comparison.mft) { throw 'missing $MFT comparison' }
+          if (-not $report.raw_snapshot_comparison.mftmirr) { throw 'missing $MFTMirr comparison' }
           if (-not $report.raw_snapshot_comparison.bitmap) { throw 'missing $BITMAP comparison' }
+          if (-not $report.raw_crash_repair_comparison.mft) { throw 'missing crash/repaired $MFT comparison' }
+          if (-not $report.raw_crash_repair_comparison.mftmirr) { throw 'missing crash/repaired $MFTMirr comparison' }
+          if (-not $report.raw_crash_repair_comparison.bitmap) { throw 'missing crash/repaired $BITMAP comparison' }
 
       - name: Upload Windows checker evidence
         if: always()
@@ -71,7 +76,9 @@ jobs:
           path: |
             ${{ runner.temp }}/mountfile-ntfs-windows/windows-ntfs-acceptance.json
             ${{ runner.temp }}/mountfile-ntfs-windows/raw-before/
+            ${{ runner.temp }}/mountfile-ntfs-windows/raw-crash/
             ${{ runner.temp }}/mountfile-ntfs-windows/raw-after/
             ${{ runner.temp }}/mountfile-ntfs-windows/raw-snapshot-comparison.json
+            ${{ runner.temp }}/mountfile-ntfs-windows/raw-crash-repair-comparison.json
           if-no-files-found: error
           retention-days: 30

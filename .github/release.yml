@@ -1,0 +1,21 @@
+# GitHub auto-generated release notes: categorized, deduplicated.
+# Used by "Generate release notes" (UI, API and `gh release create --generate-notes`).
+changelog:
+  exclude:
+    labels: [skip-changelog, no-changelog]
+    authors: [dependabot[bot], github-actions[bot], github-actions]
+  categories:
+    - title: "🚀 Features"
+      labels: [enhancement, feat, feature, epic]
+    - title: "🐛 Bug Fixes"
+      labels: [bug, fix, regression]
+    - title: "🔐 Security"
+      labels: [security, dependencies]
+    - title: "⚡ Performance"
+      labels: [performance]
+    - title: "🧪 CI, Tests & Docs"
+      labels: [ci, tests, ci-failure, documentation]
+    - title: "🧹 Maintenance"
+      labels: [chore, refactor, automation, roadmap]
+    - title: "📦 Other Changes"
+      labels: ["*"]

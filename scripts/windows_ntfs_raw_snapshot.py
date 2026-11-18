@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-r"""Extract bounded raw NTFS $MFT and $BITMAP streams from a Windows volume.
+r"""Extract bounded raw NTFS $MFT, $MFTMirr and $BITMAP streams from a Windows volume.
 
 The command is intended for an elevated Windows CI runner with a physical
 volume handle (for example ``\\.\PhysicalDrive7``). It uses MountFile's
@@ -127,8 +127,13 @@ def snapshot(
         allow_dirty_read=True,
     )
     try:
-        paths = {"mft": output / "MFT.bin", "bitmap": output / "BITMAP.bin"}
+        paths = {
+            "mft": output / "MFT.bin",
+            "mftmirr": output / "MFTMirr.bin",
+            "bitmap": output / "BITMAP.bin",
+        }
         _write_stream(image, 0, "", paths["mft"])
+        _write_stream(image, 1, "", paths["mftmirr"])
         _write_stream(image, 6, "", paths["bitmap"])
     finally:
         image.close()
@@ -149,6 +154,7 @@ def snapshot(
         "claims": [
             "These are exact bytes read from validated NTFS nonresident streams.",
             "This is metadata evidence, not proof of replay parity by itself.",
+            "$MFTMirr is captured independently so mirror identity can be compared.",
         ],
     }
     (output / "manifest.json").write_text(

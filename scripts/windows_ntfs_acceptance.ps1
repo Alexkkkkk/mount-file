@@ -81,6 +81,7 @@ try {
     if ($sectorSize -lt 512) { throw "cannot resolve physical disk sector size" }
     $device = "\\.\PhysicalDrive$($disk.Number)"
     $rawBefore = Join-Path $OutputDirectory "raw-before"
+    $rawCrash = Join-Path $OutputDirectory "raw-crash"
     $rawAfter = Join-Path $OutputDirectory "raw-after"
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
@@ -103,6 +104,47 @@ try {
         output = $scanBefore.Trim()
     }
     if ($scanBeforeCode -ne 0) { throw "clean NTFS VHDX failed chkdsk /scan" }
+
+    $childScript = Join-Path $OutputDirectory "abrupt-writer.ps1"
+    @'
+$ErrorActionPreference = "Stop"
+$path = Join-Path $env:MOUNTFILE_CRASH_DRIVE "crash-payload.bin"
+for ($i = 0; $i -lt 10000; $i++) {
+    Add-Content -LiteralPath $path -Value ("crash-line-{0}-{1}" -f $i, (Get-Date).Ticks)
+    if (($i % 100) -eq 0) { Start-Sleep -Milliseconds 1 }
+}
+'@ | Set-Content -LiteralPath $childScript -Encoding UTF8
+    $env:MOUNTFILE_CRASH_DRIVE = $drive
+    $writer = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScript
+    ) -PassThru
+    $crashPayload = Join-Path $drive "crash-payload.bin"
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not (Test-Path $crashPayload) -and (Get-Date) -lt $deadline) {
+        if ($writer.HasExited) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not (Test-Path $crashPayload)) {
+        $childOutput = if ($writer.HasExited) { $writer.ExitCode } else { "running" }
+        throw "abrupt writer did not create payload before termination (state=$childOutput)"
+    }
+    Stop-Process -Id $writer.Id -Force
+    $writer.WaitForExit()
+    if ($writer.ExitCode -eq 0) {
+        throw "abrupt writer unexpectedly completed normally"
+    }
+    if (-not (Test-Path $crashPayload)) { throw "crash payload was not created" }
+    $report.crash_fixture = [ordered]@{
+        kind = "windows-child-process-terminated-during-ntfs-write"
+        pid = $writer.Id
+        exit_code = $writer.ExitCode
+        payload_sha256 = (Get-FileHash -Algorithm SHA256 $crashPayload).Hash
+    }
+    & python scripts/windows_ntfs_raw_snapshot.py `
+        --device $device --offset ([int64]$partition.Offset) `
+        --volume-size ([int64]$partition.Size) `
+        --sector-size $sectorSize --out $rawCrash
+    if ($LASTEXITCODE -ne 0) { throw "raw crash NTFS snapshot failed" }
 
     # Simulate an interrupted/unclean lifecycle at the volume level. This is
     # deliberately not called a replay fixture: no fabricated $LogFile record
@@ -147,6 +189,11 @@ try {
         --before $rawBefore --after $rawAfter --out $comparison
     if ($LASTEXITCODE -ne 0) { throw "raw NTFS snapshot comparison failed" }
     $report.raw_snapshot_comparison = Get-Content $comparison | ConvertFrom-Json
+    $crashComparison = Join-Path $OutputDirectory "raw-crash-repair-comparison.json"
+    & python scripts/compare_ntfs_snapshots.py `
+        --before $rawCrash --after $rawAfter --out $crashComparison
+    if ($LASTEXITCODE -ne 0) { throw "raw crash/repaired comparison failed" }
+    $report.raw_crash_repair_comparison = Get-Content $crashComparison | ConvertFrom-Json
 
     $afterHash = (Get-FileHash -Algorithm SHA256 "$drive\before.txt").Hash
     if ($beforeHash -ne $afterHash) { throw "sentinel hash changed during checker lifecycle" }
