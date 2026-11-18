@@ -59,6 +59,25 @@ dev = [
     "pre-commit>=3.0",
     "pyinstaller>=6.22.3",
 ]
+ci = [
+    # Mirrors the exact stack .github/actions/python-test-env installed before
+    # uv.lock existed: pytest + coverage + timeout + xdist, hypothesis, the Qt
+    # runtime bindings (PyQt6 is a base dependency), the REST API stack and
+    # `regex`. Kept as its own extra so `uv sync --frozen --extra ci` installs a
+    # pre-resolved, hash-verified environment instead of running a resolver.
+    "pytest>=7",
+    "pytest-cov>=4",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
+    "hypothesis>=6",
+    "setuptools",
+    "wheel",
+    "pydantic>=2.0",
+    "fastapi>=0.115,<1.0",
+    "uvicorn>=0.30,<1.0",
+    "httpx>=0.27,<1.0",
+    "regex>=2024.0.0",
+]
 images = [
     "Pillow>=10.0",
 ]
