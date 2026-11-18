@@ -19,13 +19,13 @@ preservation invariant is asserted by the hash checks of the caller paths in
 
 from __future__ import annotations
 
-import shutil
 import os
-from pathlib import Path
+import shutil
 import signal
 import struct
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from test_jbd2_csum_replay import _dirty_v3_image, _target_bytes
