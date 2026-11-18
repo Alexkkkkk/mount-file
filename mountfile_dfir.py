@@ -21,6 +21,7 @@ import hashlib
 import ipaddress
 import json
 import mmap
+import os
 import re
 import sqlite3
 import sys
