@@ -346,13 +346,12 @@ def test_bad_journal_superblock_checksum_is_an_error(tmp_path):
     # the gate this test is named after.
     with open(image, "r+b") as stream:
         stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
-        checksum = stream.read(4)
-        assert len(checksum) == 4
+        stored = stream.read(4)
+        assert len(stored) == 4
         stream.seek(journal_blocks[0] * BLOCK_SIZE + 0xFC)
-        stream.write(bytes([checksum[0] ^ 0xFF]) + checksum[1:])
+        stream.write(bytes([stored[0] ^ 0xFF]) + stored[1:])
     probe = probe_journal(str(image))
     assert probe.state is JournalState.ERROR, probe.message
-    assert probe.state is JournalState.ERROR
     before = _sha256(image)
     with pytest.raises(Exception):
         recover_journal_on_copy(str(image), 0, native_coordinator=native_jbd2_recover)
