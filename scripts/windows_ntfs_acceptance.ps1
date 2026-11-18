@@ -118,13 +118,21 @@ for ($i = 0; $i -lt 10000; $i++) {
     $writer = Start-Process -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScript
     ) -PassThru
-    Start-Sleep -Milliseconds 250
+    $crashPayload = Join-Path $drive "crash-payload.bin"
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not (Test-Path $crashPayload) -and (Get-Date) -lt $deadline) {
+        if ($writer.HasExited) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not (Test-Path $crashPayload)) {
+        $childOutput = if ($writer.HasExited) { $writer.ExitCode } else { "running" }
+        throw "abrupt writer did not create payload before termination (state=$childOutput)"
+    }
     Stop-Process -Id $writer.Id -Force
     $writer.WaitForExit()
     if ($writer.ExitCode -eq 0) {
         throw "abrupt writer unexpectedly completed normally"
     }
-    $crashPayload = Join-Path $drive "crash-payload.bin"
     if (-not (Test-Path $crashPayload)) { throw "crash payload was not created" }
     $report.crash_fixture = [ordered]@{
         kind = "windows-child-process-terminated-during-ntfs-write"
