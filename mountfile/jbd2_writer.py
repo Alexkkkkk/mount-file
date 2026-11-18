@@ -671,11 +671,23 @@ def parse_jbd2_superblock(
             if len(raw) < filesystem_block_size:
                 raise JBD2WriteProfileError("checksummed JBD2 superblock is truncated")
             try:
-                verify_journal_superblock_checksum(raw[:filesystem_block_size])
+                # ``verify_journal_superblock_checksum`` *returns* a bool and
+                # only raises for a malformed/unsupported checksum field.  The
+                # return value used to be discarded, so a superblock whose
+                # stored s_checksum simply did not match the journal content
+                # was accepted as valid: probe_journal() then reported CLEAN or
+                # NEEDS_REPLAY for a corrupt journal instead of ERROR.
+                checksum_ok = verify_journal_superblock_checksum(
+                    raw[:filesystem_block_size]
+                )
             except JBD2ChecksumError as exc:
                 raise JBD2WriteProfileError(
                     f"JBD2 journal superblock checksum is invalid: {exc}"
                 ) from exc
+            if not checksum_ok:
+                raise JBD2WriteProfileError(
+                    "JBD2 journal superblock checksum does not match its content"
+                )
     if start != 0 and not first <= start < max_length:
         raise JBD2WriteProfileError("JBD2 journal start is outside ring bounds")
     return JBD2JournalState(
