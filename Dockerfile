@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Mount File's container image intentionally contains the CLI only; Qt and
 # other GUI dependencies are not installed.
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ARG PYTSK3_VERSION=20260715
 ARG INSTALL_LEGACY_TSK=0
