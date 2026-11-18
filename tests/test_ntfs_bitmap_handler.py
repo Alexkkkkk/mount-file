@@ -42,12 +42,12 @@ def _record(operation: int) -> LogRecord:
     )
 
 
-def _attribute(data_size: int = 512) -> NtfsAttributeSummary:
+def _attribute(data_size: int = 512, name: str = "$Bitmap") -> NtfsAttributeSummary:
     return NtfsAttributeSummary(
         type_code=0xB0,
         length=0,
         nonresident=True,
-        name="$Bitmap",
+        name=name,
         runs=(NtfsRun(vcn=0, lcn=0, length=1),),
         data_size=data_size,
         allocated_size=512,
@@ -103,6 +103,26 @@ def test_bitmap_handler_refuses_out_of_bounds_range_without_writing() -> None:
             stream,
             None,
             _attribute(data_size=1),
+            _record(OP_SET_BITS_IN_NONRESIDENT_BITMAP),
+            struct.pack("<II", 3, 7),
+            cluster_size=512,
+            base_offset=0,
+            redo=True,
+        )
+
+    assert stream.getvalue() == before
+
+
+def test_bitmap_handler_refuses_unrecognized_bitmap_stream_name() -> None:
+    image = bytearray([0xA5] * 512)
+    stream = io.BytesIO(image)
+    before = stream.getvalue()
+
+    with pytest.raises(NtfsReplayError, match="unrecognized bitmap stream"):
+        _apply_stream_operation(
+            stream,
+            None,
+            _attribute(name="$UNTRUSTED"),
             _record(OP_SET_BITS_IN_NONRESIDENT_BITMAP),
             struct.pack("<II", 3, 7),
             cluster_size=512,
