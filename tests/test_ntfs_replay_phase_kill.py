@@ -31,7 +31,8 @@ from pathlib import Path
 import pytest
 
 from mountfile.native_write import fault_hook_installed
-from mountfile.ntfs_replay import native_ntfs_recover
+from mountfile.ntfs_reader import parse_ntfs_attribute_stream, probe_ntfs_metadata
+from mountfile.ntfs_replay import _attribute_offset, _Mft, native_ntfs_recover
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,11 +74,36 @@ def _sha256(path: Path) -> str:
 
 
 def _volume_dirty_flag(image: Path) -> int:
-    """Read ``s_volume_flags`` straight from the boot sector (no replay code)."""
+    """Flags word of the ``$Volume`` ``$VOLUME_INFORMATION`` attribute.
 
-    with open(image, "rb") as stream:
-        stream.seek(0x78)
-        return struct.unpack("<H", stream.read(2))[0]
+    The previous revision read two bytes at boot-sector offset ``0x78``,
+    which is bootstrap code on every real ``mkntfs`` volume -- the constant
+    it returned (0x6e20 = 28192) failed the convergence branches regardless
+    of the actual dirty state (CI incident #571).  The attribute-offset
+    path mirrors ``ntfs_crash_fixture.mark_volume_dirty`` and shares no
+    code with the replay executor under test.
+    """
+
+    profile = probe_ntfs_metadata(str(image), volume_size=os.path.getsize(image))
+    mft_data = [
+        attribute
+        for attribute in profile.attributes
+        if attribute.type_code == 0x80 and not attribute.name
+    ][0]
+    with open(image, "rb") as handle:
+        mft = _Mft(handle, profile.boot, mft_data, base_offset=0)
+        volume = mft.read_record(3)
+        volume_info = [
+            attribute
+            for attribute in parse_ntfs_attribute_stream(
+                volume, allow_end_marker_padding=True
+            )
+            if attribute.type_code == 0x70
+        ][0]
+        offset = _attribute_offset(volume, volume_info.attribute_id)
+        fixed = volume.fixed_record
+        value = struct.unpack_from("<H", fixed, offset + 20)[0]
+        return struct.unpack_from("<H", fixed, offset + value + 10)[0]
 
 
 def _ntfsfix_no(image: Path) -> subprocess.CompletedProcess:

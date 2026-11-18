@@ -67,9 +67,7 @@ def _junit_cases(junit_path: Path) -> dict[str, list[dict[str, str]]]:
                 outcome = "skipped"
                 message = child.get("message") or ""
                 break
-        cases.setdefault(base, []).append(
-            {"status": outcome, "message": message}
-        )
+        cases.setdefault(base, []).append({"status": outcome, "message": message})
     return cases
 
 

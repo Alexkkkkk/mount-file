@@ -20,11 +20,7 @@ import inspect
 import pytest
 
 from mountfile.journal_safety import JournalSafetyError
-from mountfile.native_write import (
-    ENABLE_ENV,
-    ENABLE_VALUE,
-    NtfsTransactionalWriter,
-)
+from mountfile.native_write import ENABLE_ENV, ENABLE_VALUE, NtfsTransactionalWriter
 from tests.test_ntfs_write_phase_injection import _install_doubles
 
 # Supported (profile, operation) pairs and the runtime symbol that must be
@@ -55,7 +51,9 @@ def test_every_supported_operation_calls_post_operation_verification() -> None:
             "silent D5 regression"
         )
     ext4_module = inspect.getsource(
-        __import__("mountfile.ext4_native_writer", fromlist=["verify_image_after_operation"])
+        __import__(
+            "mountfile.ext4_native_writer", fromlist=["verify_image_after_operation"]
+        )
     )
     assert "e2fsck" in ext4_module, "ext4 verification must use the independent checker"
 
