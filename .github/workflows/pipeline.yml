@@ -4,14 +4,17 @@ name: pipeline
 # quality / security / mfsync / CI workflows as reusable workflows and
 # exposes exactly one aggregate status check: Pipeline-Gate.
 #
-# Transition: the four called workflows still also trigger directly on
-# push/pull_request, so runs are duplicated until their direct triggers are
-# removed (follow-up commit after this pipeline has run green).
+# Runs once per main push. It deliberately does NOT trigger on pull_request:
+# the four called workflows already trigger directly on pull requests, so a
+# pull_request trigger here executed the entire suite (matrix + integration +
+# Windows legs) a SECOND time for every PR - ~20 extra runner-minutes per PR
+# that could never change the PR's verdict. Branch protection requires the
+# direct, unprefixed contexts (test (3.10), Integration (...), ...), so PRs are
+# gated by those alone; main additionally gets the single aggregate
+# Pipeline-Gate as a post-merge alarm.
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
