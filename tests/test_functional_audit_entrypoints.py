@@ -99,7 +99,8 @@ def test_standalone_grep_zero_limit_does_not_open_image(tmp_path):
     )
 
 
-def test_standalone_timeline_db_accepts_threaded_api_reads(tmp_path):
+def test_standalone_timeline_db_accepts_threaded_api_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("MF_DFIR_ROOT", str(tmp_path))
     with mountfile_dfir.TimelineDB(tmp_path / "timeline.db") as database:
         assert database.add([mountfile_dfir.TimelineRecord("a.txt", mtime=42)]) == 1
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as workers:
@@ -113,6 +114,7 @@ def test_standalone_timeline_db_accepts_threaded_api_reads(tmp_path):
 def test_standalone_timeline_rest_uses_thread_safe_connection_and_closes_it(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("MF_DFIR_ROOT", str(tmp_path))
     fastapi = pytest.importorskip("fastapi.testclient")
     uvicorn = pytest.importorskip("uvicorn")
     tracked = []
