@@ -19,13 +19,13 @@ preservation invariant is asserted by the hash checks of the caller paths in
 
 from __future__ import annotations
 
-import shutil
 import os
-from pathlib import Path
+import shutil
 import signal
 import struct
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from test_jbd2_csum_replay import _dirty_v3_image, _target_bytes
@@ -55,7 +55,7 @@ needs_ext = pytest.mark.skipif(
 
 BLOCK_SIZE = 4096
 
-_SIGKILL_CHILD = r'''
+_SIGKILL_CHILD = r"""
 import os
 import signal
 import struct
@@ -97,7 +97,7 @@ with open(image_path, "r+b") as stream:
         sync=lambda: None,
         fault_injector=kill_at,
     )
-'''
+"""
 
 
 def _fault_at(phase: str):
