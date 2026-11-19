@@ -42,9 +42,8 @@ def _record(operation: int) -> LogRecord:
     )
 
 
-def _attribute(data_size: int = 512, name: str = "$Bitmap") -> NtfsAttributeSummary:
     return NtfsAttributeSummary(
-        type_code=0xB0,
+        type_code=type_code,
         length=0,
         nonresident=True,
         name=name,

@@ -20,6 +20,7 @@ the existing stream, attribute resizing, sparse runs, ``$ATTRIBUTE_LIST``)
 raise :class:`NtfsReplayError` before any byte is written.  The executor is
 only called on a copy; publication stays with the atomic writer.
 """
+
 from __future__ import annotations
 
 import os
