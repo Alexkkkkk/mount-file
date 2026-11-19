@@ -10,6 +10,7 @@ import mountfile.ntfs_replay_executor as replay_executor
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
 from mountfile.ntfs_mft_allocation import MftAllocationCandidate
 from mountfile.ntfs_replay_executor import (
+    NTFS_EXECUTOR_FAULT_POINTS,
     NtfsReplayResolutionError,
     publish_ntfs_replay,
 )
@@ -256,6 +257,32 @@ def test_publication_boundaries_are_emitted_once(tmp_path, monkeypatch) -> None:
 
     assert trace.count("publish:start") == 1
     assert trace.count("publish:done") == 1
+
+
+def test_executor_phase_hooks_cover_preflight_verify_and_source_identity(
+    tmp_path,
+):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    trace: list[str] = []
+    previous = native_write.FAULT_HOOK
+    native_write.fault_hook_installed(trace.append)
+    try:
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_step()),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+            verify=lambda staged: None,
+        )
+    finally:
+        native_write.fault_hook_installed(previous)
+    assert NTFS_EXECUTOR_FAULT_POINTS == (
+        "executor:preflight:done",
+        "executor:verify:start",
+        "executor:verify:done",
+        "executor:source:unchanged",
+    )
+    assert all(point in trace for point in NTFS_EXECUTOR_FAULT_POINTS)
 
 
 def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(

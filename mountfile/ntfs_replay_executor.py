@@ -74,6 +74,12 @@ _ALLOCATION_SENSITIVE_OPERATIONS = frozenset(
 )
 _MAX_MFT_CANDIDATE_RANGE_BYTES = 1 << 20
 _MAX_REPLAY_TARGET_BYTES = 1 << 30
+NTFS_EXECUTOR_FAULT_POINTS = (
+    "executor:preflight:done",
+    "executor:verify:start",
+    "executor:verify:done",
+    "executor:source:unchanged",
+)
 
 
 def _validate_target_geometry(
@@ -396,6 +402,7 @@ def _replay_staged(
     mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> tuple[OverlayProvenance, ...]:
     targets, allocations = _resolve_targets(analysis, resolver, mft_candidate_provider)
+    _fault("executor:preflight:done")
     _fault("mutation:start")
     if allocations:
         return _replay_mft_allocation(stream, analysis, targets, allocations)
@@ -445,9 +452,12 @@ def publish_ntfs_replay(
                 stream, analysis, resolver, mft_candidate_provider
             )
             if verify is not None:
+                _fault("executor:verify:start")
                 verify(temporary)
+                _fault("executor:verify:done")
             _fsync_path(temporary)
         _require_source_unchanged(source_path, before)
+        _fault("executor:source:unchanged")
         # ``_atomic_replace`` owns the publication boundary and emits both
         # publish fault points.  Do not emit them here as well: duplicate
         # boundaries make process-kill acceptance ambiguous and can kill a
@@ -475,6 +485,7 @@ __all__ = [
     "NtfsReplayPublication",
     "NtfsReplayResolutionError",
     "MftCandidateProvider",
+    "NTFS_EXECUTOR_FAULT_POINTS",
     "ReplayResolver",
     "publish_ntfs_replay",
 ]
