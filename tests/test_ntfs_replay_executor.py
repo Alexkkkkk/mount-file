@@ -15,7 +15,7 @@ from mountfile.ntfs_replay_executor import (
 )
 
 
-def _analysis(*steps: ReplayStep) -> NtfsLogFileAnalysis:
+def _analysis(*steps: ReplayStep, executable: bool = True) -> NtfsLogFileAnalysis:
     return NtfsLogFileAnalysis(
         restart=None,  # type: ignore[arg-type] - synthetic bounded fixture
         page_size=4096,
@@ -28,7 +28,7 @@ def _analysis(*steps: ReplayStep) -> NtfsLogFileAnalysis:
         redo_plan=tuple(steps),
         undo_plan=(),
         truncated=False,
-        executable=False,
+        executable=executable,
     )
 
 
@@ -101,6 +101,20 @@ def test_resolution_failure_happens_before_source_publication(tmp_path) -> None:
         )
 
     assert hashlib.sha256(image.read_bytes()).digest() == before
+    assert list(tmp_path.glob(".mountfile-image-*")) == []
+
+
+def test_non_executable_analysis_is_refused_before_staging(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    before = image.read_bytes()
+    with pytest.raises(NtfsReplayResolutionError, match="non-executable"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_step(), executable=False),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+        )
+    assert image.read_bytes() == before
     assert list(tmp_path.glob(".mountfile-image-*")) == []
 
 

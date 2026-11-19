@@ -182,6 +182,10 @@ def _resolve_targets(
         raise NtfsReplayResolutionError(
             "cannot publish replay from a truncated $LogFile stream"
         )
+    if not analysis.executable:
+        raise NtfsReplayResolutionError(
+            "cannot publish replay from a non-executable $LogFile analysis"
+        )
     if not callable(resolver):
         raise NtfsReplayResolutionError(
             "a filesystem-aware replay resolver is required"
