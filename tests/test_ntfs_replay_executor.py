@@ -32,7 +32,13 @@ def _analysis(*steps: ReplayStep) -> NtfsLogFileAnalysis:
     )
 
 
-def _step(payload: bytes = b"XYZ", *, operation: int = 0x07) -> ReplayStep:
+def _step(
+    payload: bytes = b"XYZ",
+    *,
+    operation: int = 0x07,
+    target_attr: int = 128,
+    target_vcn: int = 0,
+) -> ReplayStep:
     return ReplayStep(
         lsn=1,
         transaction_id=1,
@@ -40,8 +46,8 @@ def _step(payload: bytes = b"XYZ", *, operation: int = 0x07) -> ReplayStep:
         operation=operation,
         length=len(payload),
         payload=payload,
-        target_attr=128,
-        target_vcn=0,
+        target_attr=target_attr,
+        target_vcn=target_vcn,
         record_off=1024,
         attr_off=96,
         cluster_off=8,
@@ -120,6 +126,23 @@ def test_resolver_backed_replay_publishes_only_after_readback(tmp_path) -> None:
     assert publication.sha256_before == hashlib.sha256(b"abcdef").hexdigest()
     assert publication.sha256_after == hashlib.sha256(b"abXYZf").hexdigest()
     assert len(publication.provenance) == 1
+
+
+def test_overlapping_distinct_targets_are_refused_before_staging_mutation(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    before = image.read_bytes()
+    analysis = _analysis(_step(), _step(target_attr=129))
+
+    with pytest.raises(NtfsReplayResolutionError, match="overlap"):
+        publish_ntfs_replay(
+            str(image),
+            analysis,
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+        )
+
+    assert image.read_bytes() == before
+    assert list(tmp_path.glob(".mountfile-image-*")) == []
 
 
 def test_mft_candidate_gate_validates_mirror_before_publication(tmp_path) -> None:

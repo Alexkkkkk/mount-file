@@ -73,6 +73,36 @@ _ALLOCATION_SENSITIVE_OPERATIONS = frozenset(
     (0x02, 0x03, *range(0x0C, 0x17), *range(0x21, 0x25))
 )
 _MAX_MFT_CANDIDATE_RANGE_BYTES = 1 << 20
+_MAX_REPLAY_TARGET_BYTES = 1 << 30
+
+
+def _validate_target_geometry(
+    targets: dict[tuple[int, int], ReplayTarget],
+) -> None:
+    """Reject malformed or physically overlapping targets before mutation."""
+    ranges: list[tuple[int, int, tuple[int, int]]] = []
+    for key, target in targets.items():
+        values = (target.target_attr, target.target_vcn, target.offset, target.length)
+        if any(type(value) is not int for value in values):
+            raise NtfsReplayResolutionError(
+                f"resolver target {key} contains a non-integer coordinate"
+            )
+        if target.offset < 0 or target.length <= 0:
+            raise NtfsReplayResolutionError(f"resolver target {key} range is invalid")
+        if target.length > _MAX_REPLAY_TARGET_BYTES:
+            raise NtfsReplayResolutionError(
+                f"resolver target {key} exceeds the bounded range limit"
+            )
+        end = target.offset + target.length
+        if end <= target.offset or end > (1 << 63):
+            raise NtfsReplayResolutionError(f"resolver target {key} range overflows")
+        ranges.append((target.offset, end, key))
+    for index, (start, end, key) in enumerate(ranges):
+        for other_start, other_end, other_key in ranges[index + 1 :]:
+            if start < other_end and other_start < end:
+                raise NtfsReplayResolutionError(
+                    f"resolver targets {key} and {other_key} overlap"
+                )
 
 
 def _validate_mft_candidate(
@@ -178,6 +208,7 @@ def _resolve_targets(
                 f"resolver returned inconsistent targets for attr/vcn {key}"
             )
         targets[key] = target
+    _validate_target_geometry(targets)
     return targets, allocations
 
 
