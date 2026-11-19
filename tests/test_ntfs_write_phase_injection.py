@@ -53,6 +53,7 @@ import pytest
 
 import mountfile.native_write as native_write
 from mountfile.journal_safety import JournalSafetyError, NTFSLogFileManager
+from mountfile.ntfs_replay import NTFS_REPLAY_FAULT_POINTS
 from mountfile.native_write import (
     ENABLE_ENV,
     NativeWriteDisabled,
@@ -74,6 +75,19 @@ DECLARED_STEPS: tuple[str, ...] = (
     "identity_verify",
     "publish",
 )
+
+
+def test_native_ntfs_replay_exposes_stable_transaction_phase_boundaries():
+    assert NTFS_REPLAY_FAULT_POINTS == (
+        "replay:redo:start",
+        "replay:redo:done",
+        "replay:undo:start",
+        "replay:undo:done",
+        "replay:journal:clean-pages",
+        "replay:volume:dirty-flag",
+        "replay:mirror:update",
+        "replay:flush",
+    )
 
 
 class _GateStub:
