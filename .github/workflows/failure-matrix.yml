@@ -49,6 +49,7 @@ jobs:
             tests/test_ntfs_writer_fault_coverage.py \
             tests/test_ext4_writer_fault_coverage.py \
             tests/test_ntfs_crash_oracle_matrix.py \
+            tests/test_ntfs_replay.py \
             tests/test_jbd2_checkpoint_interruption.py \
             -q --junitxml=failure-matrix.xml
       - name: Emit test, checker and acceptance evidence separately
