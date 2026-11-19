@@ -68,8 +68,20 @@ def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
         "/target",
         b"fault trace\n",
     )
-    assert len(trace) == len(FAULT_POINTS)
-    assert set(trace) == set(FAULT_POINTS)
+    # The staged writer additionally emits replay:* sub-phase seams between the
+    # declared top-level boundaries; every declared point must still fire
+    # exactly once and nothing outside the declared set may appear.
+    assert set(FAULT_POINTS) <= set(trace)
+    assert set(trace) <= set(FAULT_POINTS) | {
+        "replay:redo:start",
+        "replay:redo:done",
+        "replay:journal:clean-pages",
+        "replay:volume:dirty-flag",
+        "replay:mirror:update",
+        "replay:flush",
+    }
+    for point in FAULT_POINTS:
+        assert trace.count(point) == 1
     assert trace.count("mutation:start") == 1
     assert trace.count("mutation:flush") == 1
     assert trace.count("mutation:done") == 1

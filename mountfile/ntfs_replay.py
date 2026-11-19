@@ -153,6 +153,20 @@ SUPPORTED_OPERATIONS = frozenset(
     )
 )
 
+# Durable phase boundaries exposed through the existing native-write fault seam.
+# These names are intentionally stable so acceptance harnesses can inject a
+# process kill without guessing internal function names.
+NTFS_REPLAY_FAULT_POINTS = (
+    "replay:redo:start",
+    "replay:redo:done",
+    "replay:undo:start",
+    "replay:undo:done",
+    "replay:journal:clean-pages",
+    "replay:volume:dirty-flag",
+    "replay:mirror:update",
+    "replay:flush",
+)
+
 
 class NtfsReplayError(NtfsReplayExecutorError):
     """The replay cannot be proven safe for this bounded NTFS profile."""
@@ -1337,6 +1351,8 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
     _fault("mutation:start")
     with open(image_path, "r+b") as handle:
         mft = _Mft(handle, profile.boot, mft_data, base_offset=offset)
+        if plan.redo:
+            _fault("replay:redo:start")
         for record in plan.redo:
             writes, streamed = _apply_one(
                 mft,
@@ -1350,6 +1366,10 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             records_written += writes
             stream_writes += streamed
             redo_applied += 1
+        if plan.redo:
+            _fault("replay:redo:done")
+        if plan.undo:
+            _fault("replay:undo:start")
         for record in plan.undo:
             writes, streamed = _apply_one(
                 mft,
@@ -1363,6 +1383,9 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             records_written += writes
             stream_writes += streamed
             undo_applied += 1
+        if plan.undo:
+            _fault("replay:undo:done")
+        _fault("replay:journal:clean-pages")
         clean_pages = _write_clean_restart_pages(
             handle,
             logfile,
@@ -1371,12 +1394,15 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             cluster_size=cluster_size,
             base_offset=offset,
         )
+        _fault("replay:volume:dirty-flag")
         volume_before, volume_after = _clear_volume_dirty(mft)
+        _fault("replay:mirror:update")
         mirror_updated = _update_mft_mirror(
             handle, mft, profile.boot, base_offset=offset
         )
         handle.flush()
         os.fsync(handle.fileno())
+    _fault("replay:flush")
     _fault("mutation:flush")
     verify_stream, verify_cluster, _verify_logfile = read_logfile_stream(
         image_path, offset=offset

@@ -97,7 +97,7 @@ def _analysis(step: ReplayStep) -> NtfsLogFileAnalysis:
         redo_plan=(step,),
         undo_plan=(),
         truncated=False,
-        executable=False,
+        executable=True,  # bounded synthetic fixture: resolver+candidate are supplied
     )
 
 

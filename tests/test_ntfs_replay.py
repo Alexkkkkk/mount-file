@@ -13,8 +13,10 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import signal
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -49,6 +51,22 @@ needs_ntfs = pytest.mark.skipif(
     shutil.which("mkntfs") is None or shutil.which("ntfscp") is None,
     reason="mkntfs/ntfscp are not installed",
 )
+
+_SIGKILL_REPLAY_CHILD = r"""
+import os
+import signal
+import sys
+
+from mountfile.native_write import fault_hook_installed
+from mountfile.ntfs_replay import native_ntfs_recover
+
+image_path, target_phase = sys.argv[1:]
+def kill_at(phase):
+    if phase == target_phase:
+        os.kill(os.getpid(), signal.SIGKILL)
+fault_hook_installed(kill_at)
+native_ntfs_recover(image_path)
+"""
 
 
 def _sha256(path: Path) -> str:
@@ -132,6 +150,43 @@ def test_second_recovery_is_a_clean_noop(tmp_path):
     assert second.changed is False
     assert second.redo_applied == 0
     assert _sha256(fixture.image) == digest
+
+
+@needs_ntfs
+@pytest.mark.parametrize(
+    ("phase", "active"),
+    (
+        ("replay:redo:start", False),
+        ("replay:redo:done", False),
+        ("replay:undo:start", True),
+        ("replay:undo:done", True),
+        ("replay:journal:clean-pages", False),
+        ("replay:volume:dirty-flag", False),
+        ("replay:mirror:update", False),
+        ("replay:flush", False),
+    ),
+)
+def test_native_replay_sigkill_matrix_reaches_each_declared_phase(
+    tmp_path, phase, active
+):
+    """Each declared replay phase is killable on a disposable real NTFS image."""
+    fixture = make_crash_fixture(tmp_path, active=active)
+    repo_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(repo_root)
+    result = subprocess.run(
+        [sys.executable, "-c", _SIGKILL_REPLAY_CHILD, str(fixture.image), phase],
+        cwd=str(repo_root),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == -signal.SIGKILL, (
+        phase,
+        result.stdout,
+        result.stderr,
+    )
 
 
 def test_mft_allocation_and_bitmap_operations_are_not_allowlisted():

@@ -60,6 +60,7 @@ from mountfile.native_write import (
     NativeWriteUnsafe,
     NtfsTransactionalWriter,
 )
+from mountfile.ntfs_replay import NTFS_REPLAY_FAULT_POINTS
 
 #: Declared cells, in the order ``write_file`` must emit them.  A storage step
 #: added to the runtime without a cell here fails the order assertion, so the
@@ -74,6 +75,19 @@ DECLARED_STEPS: tuple[str, ...] = (
     "identity_verify",
     "publish",
 )
+
+
+def test_native_ntfs_replay_exposes_stable_transaction_phase_boundaries():
+    assert NTFS_REPLAY_FAULT_POINTS == (
+        "replay:redo:start",
+        "replay:redo:done",
+        "replay:undo:start",
+        "replay:undo:done",
+        "replay:journal:clean-pages",
+        "replay:volume:dirty-flag",
+        "replay:mirror:update",
+        "replay:flush",
+    )
 
 
 class _GateStub:

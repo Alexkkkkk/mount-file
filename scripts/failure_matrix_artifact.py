@@ -174,10 +174,14 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
         "process_kill": [
             _case(
                 "test_ntfs_writer_fault_coverage",
-                "test_ntfs_process_kill_preserves_source_until_atomic_publish",
+                "test_ntfs_process_kill_preserves_source_until_atomic_replace",
                 exclude=("[helper:",),
-            )
-        ],
+            ),
+            _case(
+                "test_ntfs_replay",
+                "test_native_replay_sigkill_matrix_reaches_each_declared_phase",
+            ),
+        ]
     },
 }
 

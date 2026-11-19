@@ -10,12 +10,13 @@ import mountfile.ntfs_replay_executor as replay_executor
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
 from mountfile.ntfs_mft_allocation import MftAllocationCandidate
 from mountfile.ntfs_replay_executor import (
+    NTFS_EXECUTOR_FAULT_POINTS,
     NtfsReplayResolutionError,
     publish_ntfs_replay,
 )
 
 
-def _analysis(*steps: ReplayStep) -> NtfsLogFileAnalysis:
+def _analysis(*steps: ReplayStep, executable: bool = True) -> NtfsLogFileAnalysis:
     return NtfsLogFileAnalysis(
         restart=None,  # type: ignore[arg-type] - synthetic bounded fixture
         page_size=4096,
@@ -28,11 +29,17 @@ def _analysis(*steps: ReplayStep) -> NtfsLogFileAnalysis:
         redo_plan=tuple(steps),
         undo_plan=(),
         truncated=False,
-        executable=False,
+        executable=executable,
     )
 
 
-def _step(payload: bytes = b"XYZ", *, operation: int = 0x07) -> ReplayStep:
+def _step(
+    payload: bytes = b"XYZ",
+    *,
+    operation: int = 0x07,
+    target_attr: int = 128,
+    target_vcn: int = 0,
+) -> ReplayStep:
     return ReplayStep(
         lsn=1,
         transaction_id=1,
@@ -40,8 +47,8 @@ def _step(payload: bytes = b"XYZ", *, operation: int = 0x07) -> ReplayStep:
         operation=operation,
         length=len(payload),
         payload=payload,
-        target_attr=128,
-        target_vcn=0,
+        target_attr=target_attr,
+        target_vcn=target_vcn,
         record_off=1024,
         attr_off=96,
         cluster_off=8,
@@ -98,6 +105,20 @@ def test_resolution_failure_happens_before_source_publication(tmp_path) -> None:
     assert list(tmp_path.glob(".mountfile-image-*")) == []
 
 
+def test_non_executable_analysis_is_refused_before_staging(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    before = image.read_bytes()
+    with pytest.raises(NtfsReplayResolutionError, match="non-executable"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_step(), executable=False),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+        )
+    assert image.read_bytes() == before
+    assert list(tmp_path.glob(".mountfile-image-*")) == []
+
+
 def test_replay_step_preserves_filesystem_target_hints() -> None:
     step = _step()
     assert step.record_off == 1024
@@ -120,6 +141,23 @@ def test_resolver_backed_replay_publishes_only_after_readback(tmp_path) -> None:
     assert publication.sha256_before == hashlib.sha256(b"abcdef").hexdigest()
     assert publication.sha256_after == hashlib.sha256(b"abXYZf").hexdigest()
     assert len(publication.provenance) == 1
+
+
+def test_overlapping_distinct_targets_are_refused_before_staging_mutation(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    before = image.read_bytes()
+    analysis = _analysis(_step(), _step(target_attr=129))
+
+    with pytest.raises(NtfsReplayResolutionError, match="overlap"):
+        publish_ntfs_replay(
+            str(image),
+            analysis,
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+        )
+
+    assert image.read_bytes() == before
+    assert list(tmp_path.glob(".mountfile-image-*")) == []
 
 
 def test_mft_candidate_gate_validates_mirror_before_publication(tmp_path) -> None:
@@ -221,6 +259,32 @@ def test_publication_boundaries_are_emitted_once(tmp_path, monkeypatch) -> None:
     assert trace.count("publish:done") == 1
 
 
+def test_executor_phase_hooks_cover_preflight_verify_and_source_identity(
+    tmp_path,
+):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    trace: list[str] = []
+    previous = native_write.FAULT_HOOK
+    native_write.fault_hook_installed(trace.append)
+    try:
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_step()),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+            verify=lambda staged: None,
+        )
+    finally:
+        native_write.fault_hook_installed(previous)
+    assert NTFS_EXECUTOR_FAULT_POINTS == (
+        "executor:preflight:done",
+        "executor:verify:start",
+        "executor:verify:done",
+        "executor:source:unchanged",
+    )
+    assert all(point in trace for point in NTFS_EXECUTOR_FAULT_POINTS)
+
+
 def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(
     tmp_path, monkeypatch
 ) -> None:
@@ -320,6 +384,25 @@ def test_bounded_mft_allocation_refuses_bitmap_range_out_of_bounds(tmp_path) -> 
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
             mft_candidate_provider=lambda _step: candidate,
         )
+
+
+def test_bounded_mft_allocation_refuses_overlapping_metadata_extents(tmp_path) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 512)
+    candidate = MftAllocationCandidate(
+        free, free, (8 << 48) | 42, 42, 0, 0, 1024, bytes(16), 42
+    )
+
+    with pytest.raises(NtfsReplayResolutionError, match="candidate extents overlap"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+    assert image.read_bytes() == free + b"\x00" * 512
 
 
 def test_bounded_mft_allocation_publish_failure_leaves_source_unchanged(

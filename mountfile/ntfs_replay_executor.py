@@ -73,6 +73,62 @@ _ALLOCATION_SENSITIVE_OPERATIONS = frozenset(
     (0x02, 0x03, *range(0x0C, 0x17), *range(0x21, 0x25))
 )
 _MAX_MFT_CANDIDATE_RANGE_BYTES = 1 << 20
+_MAX_REPLAY_TARGET_BYTES = 1 << 30
+NTFS_EXECUTOR_FAULT_POINTS = (
+    "executor:preflight:done",
+    "executor:verify:start",
+    "executor:verify:done",
+    "executor:source:unchanged",
+)
+
+
+def _validate_target_geometry(
+    targets: dict[tuple[int, int], ReplayTarget],
+) -> None:
+    """Reject malformed or physically overlapping targets before mutation."""
+    ranges: list[tuple[int, int, tuple[int, int]]] = []
+    for key, target in targets.items():
+        values = (target.target_attr, target.target_vcn, target.offset, target.length)
+        if any(type(value) is not int for value in values):
+            raise NtfsReplayResolutionError(
+                f"resolver target {key} contains a non-integer coordinate"
+            )
+        if target.offset < 0 or target.length <= 0:
+            raise NtfsReplayResolutionError(f"resolver target {key} range is invalid")
+        if target.length > _MAX_REPLAY_TARGET_BYTES:
+            raise NtfsReplayResolutionError(
+                f"resolver target {key} exceeds the bounded range limit"
+            )
+        end = target.offset + target.length
+        if end <= target.offset or end > (1 << 63):
+            raise NtfsReplayResolutionError(f"resolver target {key} range overflows")
+        ranges.append((target.offset, end, key))
+    for index, (start, end, key) in enumerate(ranges):
+        for other_start, other_end, other_key in ranges[index + 1 :]:
+            if start < other_end and other_start < end:
+                raise NtfsReplayResolutionError(
+                    f"resolver targets {key} and {other_key} overlap"
+                )
+
+
+def _validate_disjoint_ranges(
+    ranges: tuple[tuple[int, bytes, str], ...],
+) -> None:
+    """Reject overlapping physical extents used by coordinated metadata writes."""
+    normalized: list[tuple[int, int, str]] = []
+    for offset, payload, name in ranges:
+        if type(offset) is not int or offset < 0 or not isinstance(payload, bytes):
+            raise NtfsReplayResolutionError(f"{name} extent is invalid")
+        end = offset + len(payload)
+        if end <= offset or end > (1 << 63):
+            raise NtfsReplayResolutionError(f"{name} extent overflows")
+        normalized.append((offset, end, name))
+    for index, (start, end, name) in enumerate(normalized):
+        for other_start, other_end, other_name in normalized[index + 1 :]:
+            if start < other_end and other_start < end:
+                raise NtfsReplayResolutionError(
+                    f"{name} and {other_name} candidate extents overlap"
+                )
 
 
 def _validate_mft_candidate(
@@ -132,6 +188,10 @@ def _resolve_targets(
         raise NtfsReplayResolutionError(
             "cannot publish replay from a truncated $LogFile stream"
         )
+    if not analysis.executable:
+        raise NtfsReplayResolutionError(
+            "cannot publish replay from a non-executable $LogFile analysis"
+        )
     if not callable(resolver):
         raise NtfsReplayResolutionError(
             "a filesystem-aware replay resolver is required"
@@ -178,6 +238,7 @@ def _resolve_targets(
                 f"resolver returned inconsistent targets for attr/vcn {key}"
             )
         targets[key] = target
+    _validate_target_geometry(targets)
     return targets, allocations
 
 
@@ -267,6 +328,7 @@ def _replay_mft_allocation(
         (candidate.mirror_offset, candidate.raw_mirror, "MFT mirror"),
         (candidate.bitmap_offset, candidate.bitmap_bytes, "bitmap"),
     )
+    _validate_disjoint_ranges(ranges)
     for offset, expected, name in ranges:
         if _read_candidate_range(stream, offset, expected, name) != expected:
             raise NtfsReplayResolutionError(
@@ -340,6 +402,7 @@ def _replay_staged(
     mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> tuple[OverlayProvenance, ...]:
     targets, allocations = _resolve_targets(analysis, resolver, mft_candidate_provider)
+    _fault("executor:preflight:done")
     _fault("mutation:start")
     if allocations:
         return _replay_mft_allocation(stream, analysis, targets, allocations)
@@ -389,9 +452,12 @@ def publish_ntfs_replay(
                 stream, analysis, resolver, mft_candidate_provider
             )
             if verify is not None:
+                _fault("executor:verify:start")
                 verify(temporary)
+                _fault("executor:verify:done")
             _fsync_path(temporary)
         _require_source_unchanged(source_path, before)
+        _fault("executor:source:unchanged")
         # ``_atomic_replace`` owns the publication boundary and emits both
         # publish fault points.  Do not emit them here as well: duplicate
         # boundaries make process-kill acceptance ambiguous and can kill a
@@ -419,6 +485,7 @@ __all__ = [
     "NtfsReplayPublication",
     "NtfsReplayResolutionError",
     "MftCandidateProvider",
+    "NTFS_EXECUTOR_FAULT_POINTS",
     "ReplayResolver",
     "publish_ntfs_replay",
 ]
