@@ -1,0 +1,455 @@
+{
+  "schema": "mountfile.acceptance-blocks/v1",
+  "generated": "2026-11-18T08:17:48Z",
+  "declared_checks": 32,
+  "counts": {
+    "verified": 15,
+    "partial": 16,
+    "blocked": 1,
+    "total": 32
+  },
+  "drift": [
+    "B10: manifest=verified probe=partial",
+    "B4: manifest=verified probe=partial",
+    "B7: manifest=verified probe=partial",
+    "C2: manifest=verified probe=partial",
+    "C8: manifest=verified probe=partial",
+    "E2: manifest=verified probe=partial"
+  ],
+  "checkers": {
+    "e2fsck": {
+      "tool": "e2fsck",
+      "state": "clean",
+      "detail": "/usr/sbin/e2fsck (e2fsck 1.47.0 (5-Feb-2023))",
+      "returncode": null
+    },
+    "ntfsfix": {
+      "tool": "ntfsfix",
+      "state": "unavailable",
+      "detail": "ntfsfix not found on PATH",
+      "returncode": null
+    },
+    "ntfscat": {
+      "tool": "ntfscat",
+      "state": "unavailable",
+      "detail": "ntfscat not found on PATH",
+      "returncode": null
+    },
+    "debugfs": {
+      "tool": "debugfs",
+      "state": "clean",
+      "detail": "/usr/sbin/debugfs (debugfs 1.47.0 (5-Feb-2023))",
+      "returncode": null
+    },
+    "mkfs.ext4": {
+      "tool": "mkfs.ext4",
+      "state": "clean",
+      "detail": "/usr/sbin/mkfs.ext4 (mke2fs 1.47.0 (5-Feb-2023))",
+      "returncode": null
+    },
+    "mkfs.ntfs": {
+      "tool": "mkfs.ntfs",
+      "state": "unavailable",
+      "detail": "mkfs.ntfs not found on PATH",
+      "returncode": null
+    }
+  },
+  "checker_counts": {
+    "clean": 3,
+    "dirty": 0,
+    "error": 0,
+    "unavailable": 3,
+    "total": 6
+  },
+  "items": [
+    {
+      "id": "A1",
+      "block": "A",
+      "title": "Unsafe replay helper removed from runtime",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "runtime contains no unsafe draft helper symbol",
+      "payload": {}
+    },
+    {
+      "id": "A2",
+      "block": "A",
+      "title": "Release contains the safe code",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "nearest release tag v1.97.0 contains HEAD b2b2bb5",
+      "payload": {
+        "tag": "v1.97.0",
+        "head": "b2b2bb5"
+      }
+    },
+    {
+      "id": "A3",
+      "block": "A",
+      "title": "docs/proposals not wired into runtime",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "docs/proposals holds no executable code and is never imported",
+      "payload": {}
+    },
+    {
+      "id": "A4",
+      "block": "A",
+      "title": "README keeps ext3/ext4 and NTFS read-only",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "README keeps ext3/ext4 and NTFS read-only",
+      "payload": {}
+    },
+    {
+      "id": "B1",
+      "block": "B",
+      "title": "Journal gate refuses instead of resetting",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "gate refuses junk image: short ext4 superblock",
+      "payload": {}
+    },
+    {
+      "id": "B2",
+      "block": "B",
+      "title": "Recovery via independent checker on a copy",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "recovery on a disposable copy left the source byte-identical",
+      "payload": {}
+    },
+    {
+      "id": "B3",
+      "block": "B",
+      "title": "Descriptor/data/commit records",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "descriptor/commit checksums written, verified and tamper-detected",
+      "payload": {}
+    },
+    {
+      "id": "B4",
+      "block": "B",
+      "title": "Revoke records",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "revoke handling present in mountfile/acceptance/blocks.py, mountfile/capabilities.py, mountfile/ext3_reader.py",
+      "payload": {
+        "files": [
+          "mountfile/acceptance/blocks.py",
+          "mountfile/capabilities.py",
+          "mountfile/ext3_reader.py",
+          "mountfile/ext4_jbd2_csum.py",
+          "mountfile/jbd2_checkpoint.py",
+          "mountfile/jbd2_writer.py"
+        ]
+      }
+    },
+    {
+      "id": "B5",
+      "block": "B",
+      "title": "Sequence wrap / rollover",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "sequence wrap handled by tid_after_or_equal",
+      "payload": {}
+    },
+    {
+      "id": "B6",
+      "block": "B",
+      "title": "Transaction checksums end-to-end",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "commit checksum verified, tampering rejected",
+      "payload": {}
+    },
+    {
+      "id": "B7",
+      "block": "B",
+      "title": "Checkpointing inside the writer cycle",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "checkpoint code in mountfile/acceptance/blocks.py, mountfile/ext3_reader.py, mountfile/ext4_journal_gate.py; writer-cycle coverage declared by tests/test_jbd2_checkpoint.py",
+      "payload": {
+        "files": [
+          "mountfile/acceptance/blocks.py",
+          "mountfile/ext3_reader.py",
+          "mountfile/ext4_journal_gate.py",
+          "mountfile/ext4_native_writer.py",
+          "mountfile/jbd2_checkpoint.py",
+          "mountfile/jbd2_writer.py",
+          "mountfile/native_write.py",
+          "mountfile/ntfs_logfile.py",
+          "mountfile/ntfs_replay.py"
+        ]
+      }
+    },
+    {
+      "id": "B8",
+      "block": "B",
+      "title": "Process-kill at selected ext4 boundaries",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "local process-kill coverage exists; two consecutive scheduled runs unproven",
+      "payload": {
+        "evidence": "tests/test_ext4_writer_fault_coverage.py"
+      }
+    },
+    {
+      "id": "B9",
+      "block": "B",
+      "title": "Interrupted commit and malformed journal",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "malformed-journal refusal present and covered by tests/test_jbd2_malformed_journal_refusal.py",
+      "payload": {}
+    },
+    {
+      "id": "B10",
+      "block": "B",
+      "title": "e2fsck -fn after each writer operation",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "e2fsck present (/usr/sbin/e2fsck (e2fsck 1.47.0 (5-Feb-2023))); per-operation invocation not enumerated here",
+      "payload": {}
+    },
+    {
+      "id": "C1",
+      "block": "C",
+      "title": "Fail-closed by default",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "refused with preservation: NativeWriteDisabled: required native tools are unavailable: ntfscp, ntfscat",
+      "payload": {}
+    },
+    {
+      "id": "C2",
+      "block": "C",
+      "title": "$LogFile parser",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "code present, behaviour not exercised by this probe: $LogFile structures parsed in mountfile/ntfs_logfile.py",
+      "payload": {}
+    },
+    {
+      "id": "C3",
+      "block": "C",
+      "title": "redo/undo applied to $MFT, $BITMAP, indexes",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "executor exists but no independently checked reference image proves the result",
+      "payload": {
+        "evidence": "mountfile/ntfs_replay_executor.py"
+      }
+    },
+    {
+      "id": "C4",
+      "block": "C",
+      "title": "$ATTRIBUTE_LIST",
+      "tier": "structure",
+      "status": "blocked",
+      "detail": "explicit refusal present in mountfile/acceptance/blocks.py, mountfile/capabilities.py, mountfile/ntfs_logfile.py",
+      "payload": {
+        "files": [
+          "mountfile/acceptance/blocks.py",
+          "mountfile/capabilities.py",
+          "mountfile/ntfs_logfile.py",
+          "mountfile/ntfs_reader.py",
+          "mountfile/ntfs_replay.py"
+        ]
+      }
+    },
+    {
+      "id": "C5",
+      "block": "C",
+      "title": "MFT record allocation/reuse and $MFTMirr",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "allocation helper exists in mountfile/ntfs_mft_allocation.py; reuse parity unproven",
+      "payload": {}
+    },
+    {
+      "id": "C6",
+      "block": "C",
+      "title": "Synthetic NTFS crash fixtures",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "synthetic fixtures only; ntfsfix -n is secondary and chkdsk captures are absent",
+      "payload": {
+        "fixtures": [
+          "tests/ntfs_crash_fixture.py"
+        ]
+      }
+    },
+    {
+      "id": "C7",
+      "block": "C",
+      "title": "Quarantine when replay is unproven",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "quarantine copy written; source unchanged",
+      "payload": {}
+    },
+    {
+      "id": "C8",
+      "block": "C",
+      "title": "MIT-compatible external dfir_ntfs boundary",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "adapter boundary present in mountfile/acceptance/blocks.py, mountfile/experimental/dfir_ntfs_adapter.py",
+      "payload": {
+        "files": [
+          "mountfile/acceptance/blocks.py",
+          "mountfile/experimental/dfir_ntfs_adapter.py"
+        ]
+      }
+    },
+    {
+      "id": "D1",
+      "block": "D",
+      "title": "Failure injection after each step",
+      "tier": "behaviour",
+      "status": "partial",
+      "detail": "5/9 cells exercised; 4 phase(s) belong to the writer, not to this primitive",
+      "payload": {
+        "total": 9,
+        "counts": {
+          "not_exercised": 4,
+          "staged_leaked": 4,
+          "passed": 1
+        },
+        "exercised": 5
+      }
+    },
+    {
+      "id": "D2",
+      "block": "D",
+      "title": "Process-kill at staged-writer boundaries",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "2/2 fault-coverage modules present; nightly streak unproven",
+      "payload": {
+        "present": [
+          "tests/test_ext4_writer_fault_coverage.py",
+          "tests/test_ntfs_writer_fault_coverage.py"
+        ]
+      }
+    },
+    {
+      "id": "D3",
+      "block": "D",
+      "title": "Hash preservation on refusal and failure",
+      "tier": "behaviour",
+      "status": "partial",
+      "detail": "publication primitive preserved the source on both refusal cases; the full profile x operation x phase matrix is not exercised by this probe",
+      "payload": {}
+    },
+    {
+      "id": "D4",
+      "block": "D",
+      "title": "Source identity / concurrent modification",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "concurrent modification raises SourceChanged",
+      "payload": {}
+    },
+    {
+      "id": "D5",
+      "block": "D",
+      "title": "Independent checker and read-back",
+      "tier": "behaviour",
+      "status": "partial",
+      "detail": "unavailable and available checkers are typed apart; read-back after every supported operation is not exercised by this probe",
+      "payload": {}
+    },
+    {
+      "id": "D6",
+      "block": "D",
+      "title": "JUnit-backed failure-state artifact",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "scripts/failure_matrix_artifact.py present; CI wiring declared in 35 workflow(s)",
+      "payload": {
+        "workflows": [
+          "auto-label.yml",
+          "auto-merge.yml",
+          "autofix.yml",
+          "branch-hygiene.yml",
+          "chatops.yml",
+          "ci-guardian.yml",
+          "ci-healer-v3.yml",
+          "ci-nightly.yml",
+          "ci.yml",
+          "codeql.yml",
+          "copilot-setup-steps.yml",
+          "create-release.yml",
+          "deploy.yml",
+          "docker-publish.yml",
+          "docker.yml",
+          "docs-deploy.yml",
+          "docs.yml",
+          "failure-matrix.yml",
+          "issue-182-progress.yml",
+          "labeler.yml",
+          "mfsync-sync.yml",
+          "mfsync.yml",
+          "mirror.yml",
+          "ntfs-windows-acceptance.yml",
+          "quality.yml",
+          "release-drafter.yml",
+          "release.yml",
+          "replay-nightly.yml",
+          "security.yml",
+          "self-heal.yml",
+          "stale.yml",
+          "status-sync.yml",
+          "sync.yml",
+          "type-check.yml",
+          "version-bump.yml"
+        ]
+      }
+    },
+    {
+      "id": "D7",
+      "block": "D",
+      "title": "Unsupported cells as typed refusals",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "12 profiles published, 0 unsupported gate(s) all typed",
+      "payload": {
+        "profiles": 12,
+        "unsupported": 0
+      }
+    },
+    {
+      "id": "E1",
+      "block": "E",
+      "title": "Windows/macOS evidence, unavailable vs pass",
+      "tier": "behaviour",
+      "status": "partial",
+      "detail": "Windows runner declared; macOS evidence absent",
+      "payload": {}
+    },
+    {
+      "id": "E2",
+      "block": "E",
+      "title": "CI gate on README/CLI/runtime drift",
+      "tier": "structure",
+      "status": "partial",
+      "detail": "scripts/product_status_contract.py present; gate wiring declared in 10 script(s)",
+      "payload": {}
+    },
+    {
+      "id": "E3",
+      "block": "E",
+      "title": "Single capability/refusal contract",
+      "tier": "behaviour",
+      "status": "verified",
+      "detail": "10 canonical operations, 8 refusal codes",
+      "payload": {}
+    }
+  ],
+  "parity": "not_claimed",
+  "note": "Probe states describe this tree only. replay and native NTFS writes remain unsupported, and no probe claims filesystem parity or power-loss safety."
+}
