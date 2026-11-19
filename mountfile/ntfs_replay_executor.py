@@ -105,6 +105,26 @@ def _validate_target_geometry(
                 )
 
 
+def _validate_disjoint_ranges(
+    ranges: tuple[tuple[int, bytes, str], ...],
+) -> None:
+    """Reject overlapping physical extents used by coordinated metadata writes."""
+    normalized: list[tuple[int, int, str]] = []
+    for offset, payload, name in ranges:
+        if type(offset) is not int or offset < 0 or not isinstance(payload, bytes):
+            raise NtfsReplayResolutionError(f"{name} extent is invalid")
+        end = offset + len(payload)
+        if end <= offset or end > (1 << 63):
+            raise NtfsReplayResolutionError(f"{name} extent overflows")
+        normalized.append((offset, end, name))
+    for index, (start, end, name) in enumerate(normalized):
+        for other_start, other_end, other_name in normalized[index + 1 :]:
+            if start < other_end and other_start < end:
+                raise NtfsReplayResolutionError(
+                    f"{name} and {other_name} candidate extents overlap"
+                )
+
+
 def _validate_mft_candidate(
     step: ReplayStep,
     provider: MftCandidateProvider | None,
@@ -298,6 +318,7 @@ def _replay_mft_allocation(
         (candidate.mirror_offset, candidate.raw_mirror, "MFT mirror"),
         (candidate.bitmap_offset, candidate.bitmap_bytes, "bitmap"),
     )
+    _validate_disjoint_ranges(ranges)
     for offset, expected, name in ranges:
         if _read_candidate_range(stream, offset, expected, name) != expected:
             raise NtfsReplayResolutionError(

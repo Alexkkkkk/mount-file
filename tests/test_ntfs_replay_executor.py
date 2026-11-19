@@ -345,6 +345,25 @@ def test_bounded_mft_allocation_refuses_bitmap_range_out_of_bounds(tmp_path) -> 
         )
 
 
+def test_bounded_mft_allocation_refuses_overlapping_metadata_extents(tmp_path) -> None:
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 512)
+    candidate = MftAllocationCandidate(
+        free, free, (8 << 48) | 42, 42, 0, 0, 1024, bytes(16), 42
+    )
+
+    with pytest.raises(NtfsReplayResolutionError, match="candidate extents overlap"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+    assert image.read_bytes() == free + b"\x00" * 512
+
+
 def test_bounded_mft_allocation_publish_failure_leaves_source_unchanged(
     tmp_path, monkeypatch
 ) -> None:
