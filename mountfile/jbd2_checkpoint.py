@@ -41,6 +41,20 @@ from .jbd2_writer import (
     parse_classic_jbd2_superblock,
     parse_jbd2_superblock,
 )
+from .native_write import _fault
+
+#: Durable phase boundaries of the checkpoint executor, exposed through the
+#: existing native-write fault seam.  The names are intentionally stable so
+#: acceptance harnesses can inject a process kill without guessing internal
+#: function names (issue #510 D1/B8; mirrors ``NTFS_REPLAY_FAULT_POINTS``).
+JBD2_CHECKPOINT_FAULT_POINTS = (
+    "checkpoint:data:start",
+    "checkpoint:data:done",
+    "checkpoint:data:sync",
+    "checkpoint:marker:start",
+    "checkpoint:marker:done",
+    "checkpoint:marker:sync",
+)
 
 
 @dataclass(frozen=True)
@@ -813,15 +827,21 @@ def execute_classic_jbd2_checkpoint(
                 raise JBD2CheckpointExecutionError("data writes are not ordered first")
             if fault_injector is not None:
                 fault_injector(write)
+            _fault("checkpoint:data:start")
             _write_full_block(stream, write.block, write.data, block_size)
+            _fault("checkpoint:data:done")
         sync_fn()
+        _fault("checkpoint:data:sync")
         marker = plan.writes[-1]
         if marker.phase != "journal-superblock":
             raise JBD2CheckpointExecutionError("clean marker is not the final write")
         if fault_injector is not None:
             fault_injector(marker)
+        _fault("checkpoint:marker:start")
         _write_full_block(stream, marker.block, marker.data, block_size)
+        _fault("checkpoint:marker:done")
         sync_fn()
+        _fault("checkpoint:marker:sync")
     except JBD2CheckpointExecutionError:
         raise
     except Exception as exc:
