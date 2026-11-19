@@ -53,7 +53,6 @@ import pytest
 
 import mountfile.native_write as native_write
 from mountfile.journal_safety import JournalSafetyError, NTFSLogFileManager
-from mountfile.ntfs_replay import NTFS_REPLAY_FAULT_POINTS
 from mountfile.native_write import (
     ENABLE_ENV,
     NativeWriteDisabled,
@@ -61,6 +60,7 @@ from mountfile.native_write import (
     NativeWriteUnsafe,
     NtfsTransactionalWriter,
 )
+from mountfile.ntfs_replay import NTFS_REPLAY_FAULT_POINTS
 
 #: Declared cells, in the order ``write_file`` must emit them.  A storage step
 #: added to the runtime without a cell here fails the order assertion, so the

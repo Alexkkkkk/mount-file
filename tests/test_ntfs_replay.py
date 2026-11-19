@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-import signal
 import shutil
+import signal
 import struct
 import subprocess
 import sys
