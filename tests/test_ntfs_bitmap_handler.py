@@ -42,6 +42,9 @@ def _record(operation: int) -> LogRecord:
     )
 
 
+def _attribute(
+    data_size: int = 512, name: str = "$Bitmap", type_code: int = 0xB0
+) -> NtfsAttributeSummary:
     return NtfsAttributeSummary(
         type_code=type_code,
         length=0,
@@ -122,6 +125,52 @@ def test_bitmap_handler_refuses_unrecognized_bitmap_stream_name() -> None:
             stream,
             None,
             _attribute(name="$UNTRUSTED"),
+            _record(OP_SET_BITS_IN_NONRESIDENT_BITMAP),
+            struct.pack("<II", 3, 7),
+            cluster_size=512,
+            base_offset=0,
+            redo=True,
+        )
+
+    assert stream.getvalue() == before
+
+
+@pytest.mark.parametrize("name", ["$bitmap", "$I30", "$i30"])
+def test_bitmap_handler_accepts_only_known_metadata_stream_names(name: str) -> None:
+    image = bytearray(512)
+    stream = io.BytesIO(image)
+
+    result = _apply_stream_operation(
+        stream,
+        None,
+        _attribute(name=name),
+        _record(OP_SET_BITS_IN_NONRESIDENT_BITMAP),
+        struct.pack("<II", 0, 1),
+        cluster_size=512,
+        base_offset=0,
+        redo=True,
+    )
+
+    assert result == 1
+    assert stream.getvalue()[0] == 0x01
+
+
+@pytest.mark.parametrize(
+    ("name", "type_code"),
+    [("$Bitmap", 0x80), ("", 0xB0)],
+)
+def test_bitmap_handler_refuses_non_metadata_identity_without_writing(
+    name: str, type_code: int
+) -> None:
+    image = bytearray([0xA5] * 512)
+    stream = io.BytesIO(image)
+    before = stream.getvalue()
+
+    with pytest.raises(NtfsReplayError, match="(non-bitmap|unrecognized bitmap)"):
+        _apply_stream_operation(
+            stream,
+            None,
+            _attribute(name=name, type_code=type_code),
             _record(OP_SET_BITS_IN_NONRESIDENT_BITMAP),
             struct.pack("<II", 3, 7),
             cluster_size=512,

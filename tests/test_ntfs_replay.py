@@ -52,7 +52,7 @@ needs_ntfs = pytest.mark.skipif(
     reason="mkntfs/ntfscp are not installed",
 )
 
-_SIGKILL_REPLAY_CHILD = r'''
+_SIGKILL_REPLAY_CHILD = r"""
 import os
 import signal
 import sys
@@ -66,7 +66,7 @@ def kill_at(phase):
         os.kill(os.getpid(), signal.SIGKILL)
 fault_hook_installed(kill_at)
 native_ntfs_recover(image_path)
-'''
+"""
 
 
 def _sha256(path: Path) -> str:
