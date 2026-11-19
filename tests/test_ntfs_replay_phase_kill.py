@@ -141,7 +141,13 @@ def test_replay_declares_exactly_the_three_mutation_boundaries(
         "mountfile.native_write.FAULT_HOOK", trace.append, raising=False
     )
     native_ntfs_recover(str(fixture.image))
-    assert trace == ["mutation:start", "mutation:flush", "mutation:done"]
+    # The crash fixture carries real redo/undo records, so the seam also emits
+    # the replay:* sub-phase hooks between the three mutation boundaries.
+    assert [point for point in trace if point.startswith("mutation:")] == [
+        "mutation:start",
+        "mutation:flush",
+        "mutation:done",
+    ]
 
 
 @needs_ntfs
