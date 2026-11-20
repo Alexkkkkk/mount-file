@@ -23,9 +23,18 @@ $reportPath = Join-Path $OutputDirectory "windows-ntfs-acceptance.json"
 $drive = "R:"
 $report = [ordered]@{
     schema = "mountfile.windows-ntfs-acceptance/v1"
+    fixture_id = "windows-ntfs-crash-v1"
     checker = "chkdsk"
     checker_authority = "windows_native"
     status = "unavailable"
+    provenance = [ordered]@{
+        captured_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+        os_version = [Environment]::OSVersion.VersionString
+        powershell_version = $PSVersionTable.PSVersion.ToString()
+        github_sha = $env:GITHUB_SHA
+        github_run_id = $env:GITHUB_RUN_ID
+        github_workflow = $env:GITHUB_WORKFLOW
+    }
     vhd = $vhd
     drive = $drive
     stages = @()
@@ -85,8 +94,8 @@ try {
     $rawAfter = Join-Path $OutputDirectory "raw-after"
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
-        --volume-size ([int64]$partition.Size) `
-        --sector-size $sectorSize --out $rawBefore
+        --volume-size ([int64]$partition.Size) --sector-size $sectorSize `
+        --out $rawBefore --raw-image (Join-Path $rawBefore "volume.img")
     if ($LASTEXITCODE -ne 0) { throw "raw pre-repair NTFS snapshot failed" }
     $report.raw_device = $device
     $report.raw_partition_offset = [int64]$partition.Offset
@@ -142,8 +151,8 @@ for ($i = 0; $i -lt 10000; $i++) {
     }
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
-        --volume-size ([int64]$partition.Size) `
-        --sector-size $sectorSize --out $rawCrash
+        --volume-size ([int64]$partition.Size) --sector-size $sectorSize `
+        --out $rawCrash --raw-image (Join-Path $rawCrash "volume.img")
     if ($LASTEXITCODE -ne 0) { throw "raw crash NTFS snapshot failed" }
 
     # Simulate an interrupted/unclean lifecycle at the volume level. This is
@@ -181,8 +190,8 @@ for ($i = 0; $i -lt 10000; $i++) {
 
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
-        --volume-size ([int64]$partition.Size) `
-        --sector-size $sectorSize --out $rawAfter
+        --volume-size ([int64]$partition.Size) --sector-size $sectorSize `
+        --out $rawAfter --raw-image (Join-Path $rawAfter "volume.img")
     if ($LASTEXITCODE -ne 0) { throw "raw post-repair NTFS snapshot failed" }
     $comparison = Join-Path $OutputDirectory "raw-snapshot-comparison.json"
     & python scripts/compare_ntfs_snapshots.py `
@@ -194,6 +203,18 @@ for ($i = 0; $i -lt 10000; $i++) {
         --before $rawCrash --after $rawAfter --out $crashComparison
     if ($LASTEXITCODE -ne 0) { throw "raw crash/repaired comparison failed" }
     $report.raw_crash_repair_comparison = Get-Content $crashComparison | ConvertFrom-Json
+
+    $nativeReplayImage = Join-Path $OutputDirectory "native-replayed-volume.img"
+    $nativeReplayComparison = Join-Path $OutputDirectory "native-replay-comparison.json"
+    & python scripts/compare_ntfs_replay.py `
+        --crash-image (Join-Path $rawCrash "volume.img") `
+        --chkdsk-image (Join-Path $rawAfter "volume.img") `
+        --native-image $nativeReplayImage --out $nativeReplayComparison
+    $report.native_replay_comparison = Get-Content $nativeReplayComparison | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw "native replay/checker comparison failed" }
+    if ($report.native_replay_comparison.status -ne "pass") {
+        throw "native replay/checker metadata comparison was not byte-identical"
+    }
 
     $afterHash = (Get-FileHash -Algorithm SHA256 "$drive\before.txt").Hash
     if ($beforeHash -ne $afterHash) { throw "sentinel hash changed during checker lifecycle" }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Compare two raw NTFS metadata snapshot directories byte-for-byte."""
+"""Compare raw NTFS metadata snapshot directories byte-for-byte."""
 
 from __future__ import annotations
 
@@ -60,18 +60,34 @@ def main() -> int:
     parser.add_argument("--after", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = {
-        "schema": "mountfile.windows-ntfs-snapshot-comparison/v1",
-        "mft": compare_file(args.before / "MFT.bin", args.after / "MFT.bin"),
-        "mftmirr": compare_file(
-            args.before / "MFTMirr.bin", args.after / "MFTMirr.bin"
-        ),
-        "bitmap": compare_file(args.before / "BITMAP.bin", args.after / "BITMAP.bin"),
-        "claims": [
-            "Comparison is byte-for-byte over the extracted stream files.",
-            "A difference is evidence of metadata mutation, not proof that replay is correct.",
-        ],
+    stream_names = {
+        "mft": "MFT.bin",
+        "mftmirr": "MFTMirr.bin",
+        "bitmap": "BITMAP.bin",
+        "logfile": "LogFile.bin",
     }
+    missing = [
+        name
+        for name, filename in stream_names.items()
+        if not (args.before / filename).is_file()
+        or not (args.after / filename).is_file()
+    ]
+    if missing:
+        raise SystemExit(
+            "snapshot is missing required stream(s): " + ", ".join(sorted(missing))
+        )
+    result = {"schema": "mountfile.windows-ntfs-snapshot-comparison/v1"}
+    result.update(
+        {
+            name: compare_file(args.before / filename, args.after / filename)
+            for name, filename in stream_names.items()
+        }
+    )
+    result["claims"] = [
+        "Comparison is byte-for-byte over the extracted stream files.",
+        "A difference is evidence of metadata mutation, not proof that replay is correct.",
+        "$LogFile equality is provenance evidence; it does not replace native replay comparison.",
+    ]
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2))
     return 0

@@ -67,6 +67,10 @@ jobs:
           if (-not $report.raw_crash_repair_comparison.mft) { throw 'missing crash/repaired $MFT comparison' }
           if (-not $report.raw_crash_repair_comparison.mftmirr) { throw 'missing crash/repaired $MFTMirr comparison' }
           if (-not $report.raw_crash_repair_comparison.bitmap) { throw 'missing crash/repaired $BITMAP comparison' }
+          if (-not $report.raw_snapshot_comparison.logfile) { throw 'missing $LogFile comparison' }
+          if (-not $report.raw_crash_repair_comparison.logfile) { throw 'missing crash/repaired $LogFile comparison' }
+          if (-not $report.native_replay_comparison) { throw 'missing native replay comparison' }
+          if ($report.native_replay_comparison.status -ne 'pass') { throw 'native replay comparison did not pass' }
 
       - name: Upload Windows checker evidence
         if: always()
@@ -80,5 +84,7 @@ jobs:
             ${{ runner.temp }}/mountfile-ntfs-windows/raw-after/
             ${{ runner.temp }}/mountfile-ntfs-windows/raw-snapshot-comparison.json
             ${{ runner.temp }}/mountfile-ntfs-windows/raw-crash-repair-comparison.json
+            ${{ runner.temp }}/mountfile-ntfs-windows/native-replay-comparison.json
+            ${{ runner.temp }}/mountfile-ntfs-windows/native-replayed-volume.img
           if-no-files-found: error
           retention-days: 30
