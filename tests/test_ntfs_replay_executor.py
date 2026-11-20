@@ -10,6 +10,7 @@ import mountfile.ntfs_replay_executor as replay_executor
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
 from mountfile.ntfs_mft_allocation import MftAllocationCandidate
 from mountfile.ntfs_replay_executor import (
+    NTFS_ALLOCATION_FAULT_POINTS,
     NTFS_EXECUTOR_FAULT_POINTS,
     NtfsReplayResolutionError,
     publish_ntfs_replay,
@@ -283,6 +284,58 @@ def test_executor_phase_hooks_cover_preflight_verify_and_source_identity(
         "executor:source:unchanged",
     )
     assert all(point in trace for point in NTFS_EXECUTOR_FAULT_POINTS)
+
+
+def test_allocation_fault_boundaries_are_emitted_in_write_order(tmp_path):
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
+    trace: list[str] = []
+    previous = native_write.FAULT_HOOK
+    native_write.fault_hook_installed(trace.append)
+    try:
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
+    finally:
+        native_write.fault_hook_installed(previous)
+    phases = [
+        "executor:preflight:done",
+        "executor:allocation:mft:start",
+        "executor:allocation:mft:done",
+        "executor:allocation:mirror:start",
+        "executor:allocation:mirror:done",
+        "executor:allocation:bitmap:start",
+        "executor:allocation:bitmap:done",
+        "executor:mutation:done",
+        "executor:source:unchanged",
+    ]
+    assert [item for item in trace if item in phases] == phases
+    assert all(point in trace for point in NTFS_ALLOCATION_FAULT_POINTS)
+
+
+def test_allocation_refuses_mismatched_mirror_record_size(tmp_path):
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    image.write_bytes(free + b"\x00" * 1024)
+    candidate = MftAllocationCandidate(
+        free, free[:-1], (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
+    with pytest.raises(NtfsReplayResolutionError, match="sizes differ"):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(_raw_mft_record(8, in_use=True))),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            mft_candidate_provider=lambda _step: candidate,
+        )
 
 
 def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(
