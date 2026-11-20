@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import signal
 import struct
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -355,6 +360,75 @@ def test_allocation_phase_failure_preserves_source_and_cleans_stage(tmp_path, ph
 
     assert reached == [phase]
     assert image.read_bytes() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["image.bin"]
+
+
+_SIGKILL_ALLOCATION_CHILD = r"""
+import os
+import signal
+import sys
+
+import mountfile.native_write as native_write
+from mountfile.ntfs_logfile import ReplayTarget
+from mountfile.ntfs_replay_executor import publish_ntfs_replay
+from tests.test_ntfs_replay_executor import (
+    _allocation_step,
+    _analysis,
+    _raw_mft_record,
+)
+from mountfile.ntfs_mft_allocation import MftAllocationCandidate
+
+image, target_phase = sys.argv[1:]
+free = _raw_mft_record(7)
+mirror = _raw_mft_record(7)
+initialized = _raw_mft_record(8, in_use=True)
+candidate = MftAllocationCandidate(
+    free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+)
+
+def kill_at(name):
+    if name == target_phase:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+native_write.fault_hook_installed(kill_at)
+publish_ntfs_replay(
+    image,
+    _analysis(_allocation_step(initialized)),
+    lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+    mft_candidate_provider=lambda _step: candidate,
+)
+"""
+
+
+@pytest.mark.parametrize("phase", NTFS_ALLOCATION_FAULT_POINTS)
+def test_allocation_phase_sigkill_preserves_source(tmp_path, phase):
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
+    before = image.read_bytes()
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run(
+        [sys.executable, "-c", _SIGKILL_ALLOCATION_CHILD, str(image), phase],
+        cwd=environment["PYTHONPATH"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == -signal.SIGKILL, (
+        phase,
+        result.stdout,
+        result.stderr,
+    )
+    assert image.read_bytes() == before
+    # SIGKILL prevents the child from running the executor's finally block.
+    # The staged copy must therefore remain unpublished and disposable; the
+    # harness removes it after proving source preservation.
+    stages = sorted(tmp_path.glob(".mountfile-image-*.tmp"))
+    assert len(stages) == 1
+    stages[0].unlink()
     assert sorted(path.name for path in tmp_path.iterdir()) == ["image.bin"]
 
 

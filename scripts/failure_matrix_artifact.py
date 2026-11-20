@@ -187,6 +187,10 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
                 "test_ntfs_replay",
                 "test_native_replay_sigkill_matrix_reaches_each_declared_phase",
             ),
+            _case(
+                "test_ntfs_replay_executor",
+                "test_allocation_phase_sigkill_preserves_source",
+            ),
         ]
     },
 }
