@@ -1,0 +1,51 @@
+name: Acceptance gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay-acceptance-gates:
+    name: Replay acceptance gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install gate dependencies
+        run: python -m pip install --upgrade pip pytest hypothesis
+
+      - name: Check replay acceptance manifest
+        run: python scripts/replay_acceptance_status.py --check
+
+      - name: Check acceptance probes
+        run: python scripts/acceptance_blocks.py --check
+
+      - name: Check tracker slice
+        run: python scripts/replay_slice_sync.py --check --strict
+
+      - name: Run gate regression tests
+        env:
+          PYTHONPATH: .
+        run: >-
+          pytest -q
+          tests/test_acceptance_blocks.py
+          tests/test_acceptance_cells_typed.py
+          tests/test_failure_matrix_artifact.py
+          tests/test_replay_acceptance_status.py
+          tests/test_replay_slice_sync.py
+          tests/test_replay_nightly_evidence.py

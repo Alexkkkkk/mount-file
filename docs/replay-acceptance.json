@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "feat/issue-510-d7-typed-refusals",
-    "commit": "819841b",
+    "branch": "main",
+    "commit": "5dd689e",
     "version": "1.99.0",
     "checked": "2026-11-20"
   },

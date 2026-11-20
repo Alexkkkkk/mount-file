@@ -14,7 +14,8 @@ moved to ``1.96.1``.  A reader cannot tell a stale header from a fresh one.
 This script makes the header testable::
 
     python scripts/replay_slice_sync.py             # human report
-    python scripts/replay_slice_sync.py --check     # exit 1 on a stale slice
+    python scripts/replay_slice_sync.py --check     # exit 1 on a stale version
+    python scripts/replay_slice_sync.py --check --strict  # also fail on unresolved git refs
     python scripts/replay_slice_sync.py --write     # rewrite the slice header
     python scripts/replay_slice_sync.py --json      # machine output
 
@@ -155,8 +156,15 @@ def slice_drift(
     root: Path,
     *,
     git_state: Optional[Tuple[Optional[str], Optional[str]]] = None,
+    strict: bool = False,
 ) -> Tuple[List[str], List[str]]:
-    """Return ``(blocking, advisory)`` reasons the slice header is stale."""
+    """Return ``(blocking, advisory)`` reasons the slice header is stale.
+
+    In normal mode a gitless or shallow checkout reports unresolved branch and
+    commit references as advisories.  Strict CI mode promotes those unresolved
+    references to blocking only when git itself is available; it never turns a
+    gitless checkout into a fabricated failure.
+    """
     blocking: List[str] = []
     advisory: List[str] = []
 
@@ -182,7 +190,7 @@ def slice_drift(
     if claimed_commit and not _git_ok(
         root, "cat-file", "-e", f"{claimed_commit}^{{commit}}"
     ):
-        advisory.append(
+        (blocking if strict else advisory).append(
             f"slice.commit = {claimed_commit!r} в этом checkout не разрешается"
         )
 
@@ -190,7 +198,7 @@ def slice_drift(
     if claimed_branch:
         known = git_branches(root)
         if known and claimed_branch not in known:
-            advisory.append(
+            (blocking if strict else advisory).append(
                 f"slice.branch = {claimed_branch!r} среди веток репозитория не существует"
             )
 
@@ -250,6 +258,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode.add_argument("--check", action="store_true", help="exit 1, если срез устарел")
     mode.add_argument("--write", action="store_true", help="переписать секцию slice")
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="в git checkout считать неразрешённые branch/commit ошибкой",
+    )
+    parser.add_argument(
         "--checked", default=None, help="дата сверки для --write (YYYY-MM-DD)"
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
@@ -267,7 +280,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.write:
             manifest = sync_slice(manifest, root, checked=args.checked)
             dump_manifest(manifest, manifest_path)
-        blocking, advisory = slice_drift(manifest, root)
+        blocking, advisory = slice_drift(manifest, root, strict=args.strict)
     except SliceError as exc:
         print(f"ошибка конфигурации: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR

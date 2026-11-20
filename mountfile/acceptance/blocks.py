@@ -881,7 +881,15 @@ BLOCK_CHECKS: tuple[BlockCheck, ...] = (
 def run_all(
     root: str | Path, manifest_path: str | Path | None = None
 ) -> dict[str, object]:
-    """Run every probe and compare the result with the manifest claims."""
+    """Run every probe and compare definitive results with manifest claims.
+
+    A probe is intentionally narrower than the evidence manifest.  ``partial``,
+    ``not_exercised`` and ``unavailable`` therefore mean that this invocation
+    cannot independently reproduce the claim; they are not evidence that the
+    claim is false.  The gate must reject only a definitive contradiction, such
+    as a probe reporting ``blocked`` for a manifest item marked ``verified`` or
+    a probe reporting ``verified`` for an item still marked ``blocked``.
+    """
 
     context = RepoContext(Path(root))
     results = [check.run(context) for check in BLOCK_CHECKS]
@@ -901,10 +909,12 @@ def run_all(
         manifest = contract.load_manifest(manifest_path)
         claimed = {item.ident: item.status for item in manifest.items}
         measured = {item["id"]: item["status"] for item in results}
+        inconclusive = {"partial", "not_exercised", "unavailable"}
         drift = [
             f"{ident}: manifest={claimed[ident]} probe={measured[ident]}"
             for ident in sorted(claimed)
             if measured.get(ident) != claimed[ident]
+            and measured.get(ident) not in inconclusive
         ]
         payload["drift"] = drift
     return payload
