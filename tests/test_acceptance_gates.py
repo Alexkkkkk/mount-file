@@ -227,3 +227,81 @@ def test_manifest_slice_describes_main_and_cites_the_d3_matrix() -> None:
     assert "tests/test_hash_preservation_matrix.py" in items["D3"]["evidence"]
     for item in payload["items"]:
         assert item["status"] in {"verified", "partial", "not_started", "blocked"}
+
+
+# --------------------------------------------------------------------------
+# probe gate baseline (six structure-tier items)
+# --------------------------------------------------------------------------
+BASELINE = REPO_ROOT / "docs" / "acceptance-known-drift.txt"
+
+
+def _load_blocks_script():
+    spec = importlib.util.spec_from_file_location(
+        "acceptance_blocks_gate", REPO_ROOT / "scripts" / "acceptance_blocks.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+blocks_script = _load_blocks_script()
+
+
+def test_baseline_parses_and_is_fully_explained() -> None:
+    entries = blocks_script.load_baseline(BASELINE)
+    assert set(entries) == {"B4", "B7", "B10", "C2", "C8", "E2"}
+    for ident, reason in entries.items():
+        assert reason, f"{ident} has no explanation"
+
+
+def test_baseline_only_names_structure_probes() -> None:
+    """A behavioural probe disagrees with the manifest only if something broke."""
+
+    from mountfile.acceptance import blocks as block_defs
+
+    tiers = {check.ident: check.tier for check in block_defs.BLOCK_CHECKS}
+    for ident in blocks_script.load_baseline(BASELINE):
+        assert tiers[ident] == block_defs.STRUCTURE, ident
+
+
+def test_baseline_matches_the_drift_observed_today() -> None:
+    """No stale ids: a fixed item must delete its entry, not inherit a waiver."""
+
+    from mountfile.acceptance import artifact
+
+    payload = artifact.build_artifact(REPO_ROOT, MANIFEST)
+    known, new, stale = blocks_script.split_drift(
+        payload["drift"], blocks_script.load_baseline(BASELINE)
+    )
+    assert new == [], f"new drift not explained by the baseline: {new}"
+    assert stale == [], f"baseline entries that no longer drift: {stale}"
+    assert len(known) == 6
+
+
+def test_split_drift_separates_new_and_stale() -> None:
+    baseline = {"B4": "explained"}
+    drift = [
+        "B4: manifest=verified probe=partial",
+        "D3: manifest=partial probe=verified",
+    ]
+    known, new, stale = blocks_script.split_drift(drift, baseline)
+    assert known == ["B4: manifest=verified probe=partial"]
+    assert new == ["D3: manifest=partial probe=verified"]
+    assert stale == []
+
+    _, new, stale = blocks_script.split_drift([], baseline)
+    assert new == []
+    assert stale == ["B4"]
+
+
+def test_baseline_file_rejects_a_duplicate_id(tmp_path: Path) -> None:
+    path = tmp_path / "dup.txt"
+    path.write_text("B4  # one\nB4  # two\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        blocks_script.load_baseline(path)
+
+
+def test_workflow_uses_the_baseline() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--baseline docs/acceptance-known-drift.txt" in text

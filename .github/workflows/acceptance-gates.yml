@@ -53,16 +53,21 @@ jobs:
         run: python scripts/replay_acceptance_status.py --check
 
       # The probes execute production code and compare observation with claim.
+      # Six structure-tier probes can never report `verified` by construction,
+      # so the checked-in baseline names exactly those ids; anything else is a
+      # new contradiction and fails here.
       - name: Run the acceptance probes and compare with the manifest
-        run: python scripts/acceptance_blocks.py --check
+        run: >-
+          python scripts/acceptance_blocks.py --check
+          --baseline docs/acceptance-known-drift.txt
 
       # Machine-checked slice header. Strict mode is only meaningful on main:
       # on a pull request the claimed commit is legitimately behind HEAD.
-      - name: Verify the slice header (pull request: advisory drift only)
+      - name: Verify the slice header (pull request - advisory drift only)
         if: github.event_name != 'push'
         run: python scripts/replay_slice_sync.py --check
 
-      - name: Verify the slice header (main: strict)
+      - name: Verify the slice header (main - strict)
         if: github.event_name == 'push'
         run: python scripts/replay_slice_sync.py --check --strict
 
