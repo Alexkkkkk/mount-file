@@ -92,6 +92,8 @@ def test_native_replay_comparator_is_fail_closed_and_four_stream_based():
     assert '"logfile": "LogFile.bin"' in replay
     assert '"status": "blocked"' in replay
     assert 'return 0 if result["status"] == "pass" else 2' in replay
+    assert "except ModuleNotFoundError" in replay
+    assert "from compare_ntfs_snapshots import compare_file" in replay
 
 
 def test_raw_snapshot_accepts_the_bounded_ci_volume_window():
