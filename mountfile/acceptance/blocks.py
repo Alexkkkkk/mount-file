@@ -719,7 +719,7 @@ def probe_d5(context: RepoContext) -> Probe:
 
 
 def probe_d6(context: RepoContext) -> Probe:
-    """A JUnit-backed matrix artifact must exist and be regenerated in CI."""
+    """A JUnit-backed matrix artifact must round-trip and be regenerated in CI."""
 
     script = "scripts/failure_matrix_artifact.py"
     if not context.exists(script):
@@ -731,10 +731,55 @@ def probe_d6(context: RepoContext) -> Probe:
     )
     if not workflows:
         return Probe(PARTIAL, f"{script} exists but no workflows found")
+
+    # Exercise the artifact contract, rather than merely checking that its
+    # generator is present.  An empty JUnit document is intentional here: this
+    # probe verifies schema/validation plumbing without pretending that a local
+    # probe run is a scheduled acceptance run.
+    try:
+        from scripts.failure_matrix_artifact import build_report, validate_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            junit = base / "matrix.xml"
+            junit.write_text(
+                "<testsuites><testsuite name=\"probe\"></testsuite></testsuites>\n",
+                encoding="utf-8",
+            )
+            report = build_report(context.root, junit)
+            validation = validate_report(report, context.root, junit)
+    except Exception as exc:  # noqa: BLE001 - probes must stay typed
+        return Probe(PARTIAL, f"artifact contract could not be exercised: {exc}")
+
+    if validation.get("verdict") != "pass":
+        return Probe(
+            PARTIAL,
+            f"artifact validation failed: {validation.get('verdict', 'unknown')}",
+            {"validation": validation},
+        )
+
+    missing_validation_wiring = []
+    for workflow in workflows:
+        text = context.read(f".github/workflows/{workflow}")
+        if "failure_matrix_artifact.py" in text and "--validate" not in text:
+            missing_validation_wiring.append(workflow)
+    if missing_validation_wiring:
+        return Probe(
+            PARTIAL,
+            "artifact round-trip passes, but validation is absent from: "
+            + ", ".join(missing_validation_wiring),
+            {"workflows": workflows, "missing_validation": missing_validation_wiring},
+        )
+
     return Probe(
         PARTIAL,
-        f"{script} present; CI wiring declared in {len(workflows)} workflow(s)",
-        {"workflows": workflows},
+        f"artifact round-trip passes; CI validation wiring declared in "
+        f"{len(workflows)} workflow(s); scheduled acceptance remains unproven",
+        {
+            "workflows": workflows,
+            "artifact_verdict": report.get("verdict"),
+            "validation_verdict": validation.get("verdict"),
+        },
     )
 
 

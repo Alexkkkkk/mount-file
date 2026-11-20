@@ -239,6 +239,13 @@ def test_d7_typed_refusals_for_unsupported_cells():
     assert result.status in {blocks.VERIFIED, blocks.PARTIAL}
 
 
+def test_d6_exercises_artifact_round_trip_and_ci_validation():
+    result = blocks.probe_d6(blocks.RepoContext(REPO_ROOT))
+    assert result.status == blocks.PARTIAL
+    assert result.payload["artifact_verdict"] == "execution_recorded"
+    assert result.payload["validation_verdict"] == "pass"
+
+
 # --------------------------------------------------------------------------
 # E. parity and status
 # --------------------------------------------------------------------------

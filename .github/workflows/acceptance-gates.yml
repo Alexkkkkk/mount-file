@@ -38,6 +38,19 @@ jobs:
       - name: Check tracker slice
         run: python scripts/replay_slice_sync.py --check --strict
 
+      - name: Validate failure-matrix artifact contract
+        run: |
+          printf '%s\n' '<testsuites><testsuite name="acceptance-probe"></testsuite></testsuites>' > acceptance-probe.xml
+          python scripts/failure_matrix_artifact.py \
+            --repo-root . \
+            --junitxml acceptance-probe.xml \
+            --json-out acceptance-probe.json
+          python scripts/failure_matrix_artifact.py \
+            --repo-root . \
+            --junitxml acceptance-probe.xml \
+            --validate acceptance-probe.json \
+            --json-out acceptance-probe-validation.json
+
       - name: Run gate regression tests
         env:
           PYTHONPATH: .
