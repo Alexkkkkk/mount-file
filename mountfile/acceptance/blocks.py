@@ -743,7 +743,7 @@ def probe_d6(context: RepoContext) -> Probe:
             base = Path(tmp)
             junit = base / "matrix.xml"
             junit.write_text(
-                "<testsuites><testsuite name=\"probe\"></testsuite></testsuites>\n",
+                '<testsuites><testsuite name="probe"></testsuite></testsuites>\n',
                 encoding="utf-8",
             )
             report = build_report(context.root, junit)

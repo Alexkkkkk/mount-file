@@ -65,12 +65,16 @@ def compare_replay(
         }
         result["streams"] = streams
         result["status"] = (
-            "pass" if all(item["byte_identical"] for item in streams.values()) else "mismatch"
+            "pass"
+            if all(item["byte_identical"] for item in streams.values())
+            else "mismatch"
         )
     except (NtfsReplayError, OSError, ValueError) as exc:
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return result
 
 
@@ -81,7 +85,9 @@ def main() -> int:
     parser.add_argument("--native-image", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = compare_replay(args.crash_image, args.chkdsk_image, args.native_image, args.out)
+    result = compare_replay(
+        args.crash_image, args.chkdsk_image, args.native_image, args.out
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["status"] == "pass" else 2
 
