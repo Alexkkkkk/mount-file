@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "feat/issue-510-d7-typed-refusals",
-    "commit": "819841b",
+    "branch": "main",
+    "commit": "163ac5e",
     "version": "1.99.0",
     "checked": "2026-11-20"
   },
@@ -317,7 +317,8 @@
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_jbd2_malformed_journal_refusal.py",
         "tests/test_ntfs_write_phase_injection.py",
-        "tests/test_ntfs_native_write_phase_injection.py"
+        "tests/test_ntfs_native_write_phase_injection.py",
+        "tests/test_hash_preservation_matrix.py"
       ],
       "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; the native NTFS chain now proves byte-identical source preservation at every declared injection phase (copy, gate_pre, data_write, post_verify, identity_verify, publish) with no surviving stage, mirroring the ext4 matrix; SIGKILL matrix covers all 9 FAULT_POINTS with SHA-256 before/after. This still does not prove preservation for every profile x operation x phase cell beyond the two native writers.",
       "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_native_write_phase_injection.py -> 8 passed (assert after == before in each cell; leftovers == [clean.img]); tests/test_ntfs_writer_fault_coverage.py -> 10 passed"

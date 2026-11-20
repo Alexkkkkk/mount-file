@@ -1,0 +1,74 @@
+name: Tracker acceptance gates (#510)
+
+# The #510 tracker had three mechanical guards in the tree but none of them ran
+# in CI: `scripts/replay_slice_sync.py`, `scripts/replay_acceptance_status.py`
+# and `scripts/acceptance_blocks.py` were only ever invoked by hand.  That is
+# exactly how the slice header drifted twice (a merged branch and an older
+# version) without anyone noticing, and how the prose tracker in the issue body
+# could disagree with `docs/replay-acceptance.json`.
+#
+# This workflow only *checks* the tracker. It never promotes a checklist item
+# and never edits a file: every gate here fails on drift and stays green on an
+# honest "not proven" status.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acceptance-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tracker-gates:
+    name: Tracker consistency (#510)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The slice gate resolves the claimed commit and branch, so a shallow
+          # clone would turn every reference into an unanswerable advisory.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-timeout hypothesis
+
+      # Every evidence file cited by the manifest must exist, `verified` needs a
+      # reproduction record, and `not_started` must not cite evidence.
+      - name: Verify the tracker manifest against the tree
+        run: python scripts/replay_acceptance_status.py --check
+
+      # The probes execute production code and compare observation with claim.
+      - name: Run the acceptance probes and compare with the manifest
+        run: python scripts/acceptance_blocks.py --check
+
+      # Machine-checked slice header. Strict mode is only meaningful on main:
+      # on a pull request the claimed commit is legitimately behind HEAD.
+      - name: Verify the slice header (pull request: advisory drift only)
+        if: github.event_name != 'push'
+        run: python scripts/replay_slice_sync.py --check
+
+      - name: Verify the slice header (main: strict)
+        if: github.event_name == 'push'
+        run: python scripts/replay_slice_sync.py --check --strict
+
+      - name: Guard the gates themselves
+        run: |
+          python -m pytest -q \
+            tests/test_acceptance_gates.py \
+            tests/test_replay_slice_sync.py \
+            tests/test_acceptance_blocks.py

@@ -25,7 +25,13 @@ itself - never from a claim written in the manifest.
 
 Checks that cannot be answered without git refs (a merged branch name, a commit
 that is not reachable in a shallow CI checkout) are reported as advisories and
-never fail the gate, so a shallow clone cannot invent a failure.
+never fail the default gate, so a shallow clone cannot invent a failure.
+``--strict`` promotes the *existence* findings to blocking: a slice branch that
+no longer exists and a slice commit this checkout cannot resolve both mean the
+header names a tree that is not here.  Two advisories stay advisory even under
+strict, because neither is a defect: a gitless checkout cannot answer the
+question at all, and a slice commit behind HEAD is the normal state between two
+sync points (the header records when it was last verified, not the current tip).
 """
 
 from __future__ import annotations
@@ -155,10 +161,21 @@ def slice_drift(
     root: Path,
     *,
     git_state: Optional[Tuple[Optional[str], Optional[str]]] = None,
+    strict: bool = False,
 ) -> Tuple[List[str], List[str]]:
-    """Return ``(blocking, advisory)`` reasons the slice header is stale."""
+    """Return ``(blocking, advisory)`` reasons the slice header is stale.
+
+    With ``strict=True`` the existence findings become blocking, so a header
+    naming a branch or commit this checkout cannot resolve fails the gate.
+    A missing ``.git`` and a slice commit behind HEAD stay advisory: the first
+    is a property of the checkout, the second is the header's intended shape.
+    """
     blocking: List[str] = []
     advisory: List[str] = []
+
+    def _record(reason: str) -> None:
+        """Keep a git-derived existence finding, blocking under strict mode."""
+        (blocking if strict else advisory).append(reason)
 
     slice_block = manifest.get("slice")
     if not isinstance(slice_block, dict):
@@ -182,20 +199,21 @@ def slice_drift(
     if claimed_commit and not _git_ok(
         root, "cat-file", "-e", f"{claimed_commit}^{{commit}}"
     ):
-        advisory.append(
-            f"slice.commit = {claimed_commit!r} в этом checkout не разрешается"
-        )
+        _record(f"slice.commit = {claimed_commit!r} в этом checkout не разрешается")
 
     claimed_branch = slice_block.get("branch")
     if claimed_branch:
         known = git_branches(root)
         if known and claimed_branch not in known:
-            advisory.append(
+            _record(
                 f"slice.branch = {claimed_branch!r} среди веток репозитория не существует"
             )
 
     if claimed_branch and branch and claimed_branch == branch and claimed_commit:
         if claimed_commit != commit:
+            # Deliberately advisory in every mode: the slice records the
+            # commit the checklist was last verified against, so it trails the
+            # tip by design and must not redden every merge to main.
             advisory.append(
                 f"slice.commit = {claimed_commit!r} отстаёт от {commit!r} на ветке {branch!r}"
             )
@@ -252,6 +270,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--checked", default=None, help="дата сверки для --write (YYYY-MM-DD)"
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="считать неразрешимые ветку/коммит блокирующими (гейт main)",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args(argv)
 
@@ -267,7 +290,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.write:
             manifest = sync_slice(manifest, root, checked=args.checked)
             dump_manifest(manifest, manifest_path)
-        blocking, advisory = slice_drift(manifest, root)
+        blocking, advisory = slice_drift(manifest, root, strict=args.strict)
     except SliceError as exc:
         print(f"ошибка конфигурации: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
