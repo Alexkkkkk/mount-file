@@ -16,6 +16,7 @@ WORKFLOW = ROOT / ".github/workflows/ntfs-windows-acceptance.yml"
 SCRIPT = ROOT / "scripts/windows_ntfs_acceptance.ps1"
 SNAPSHOT = ROOT / "scripts/windows_ntfs_raw_snapshot.py"
 COMPARE = ROOT / "scripts/compare_ntfs_snapshots.py"
+REPLAY_COMPARE = ROOT / "scripts/compare_ntfs_replay.py"
 
 
 def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
@@ -32,6 +33,8 @@ def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
     assert "compare_ntfs_snapshots.py" in script
     assert "PhysicalSectorSize" in script
     assert script.count("--sector-size $sectorSize") == 3
+    assert script.count("--raw-image") == 3
+    assert "compare_ntfs_replay.py" in script
 
 
 def test_windows_acceptance_has_clean_dirty_and_repair_stages():
@@ -49,6 +52,9 @@ def test_windows_acceptance_has_clean_dirty_and_repair_stages():
     assert "Stop-Process -Id $writer.Id -Force" in script
     assert "$rawCrash" in script
     assert "raw-crash-repair-comparison.json" in script
+    assert 'fixture_id = "windows-ntfs-crash-v1"' in script
+    assert "captured_at_utc" in script
+    assert "github_run_id" in script
 
 
 def test_windows_acceptance_does_not_claim_replay_parity():
@@ -67,10 +73,24 @@ def test_raw_snapshot_tools_are_bounded_and_byte_comparison_is_explicit():
     assert '"MFT.bin"' in snapshot
     assert '"MFTMirr.bin"' in snapshot
     assert '"BITMAP.bin"' in snapshot
+    assert '"LogFile.bin"' in snapshot
     assert "byte_identical" in compare
     assert "differing_bytes" in compare
     assert '"mftmirr"' in compare
+    assert '"logfile"' in compare
+    assert "required stream(s)" in compare
     assert "not proof that replay is correct" in compare
+
+
+def test_native_replay_comparator_is_fail_closed_and_four_stream_based():
+    replay = REPLAY_COMPARE.read_text(encoding="utf-8")
+    assert "native_ntfs_recover" in replay
+    assert '"mft": "MFT.bin"' in replay
+    assert '"mftmirr": "MFTMirr.bin"' in replay
+    assert '"bitmap": "BITMAP.bin"' in replay
+    assert '"logfile": "LogFile.bin"' in replay
+    assert '"status": "blocked"' in replay
+    assert 'return 0 if result["status"] == "pass" else 2' in replay
 
 
 def test_raw_snapshot_accepts_the_bounded_ci_volume_window():

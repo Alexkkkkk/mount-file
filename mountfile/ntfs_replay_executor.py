@@ -80,6 +80,15 @@ NTFS_EXECUTOR_FAULT_POINTS = (
     "executor:verify:done",
     "executor:source:unchanged",
 )
+NTFS_ALLOCATION_FAULT_POINTS = (
+    "executor:allocation:mft:start",
+    "executor:allocation:mft:done",
+    "executor:allocation:mirror:start",
+    "executor:allocation:mirror:done",
+    "executor:allocation:bitmap:start",
+    "executor:allocation:bitmap:done",
+    "executor:mutation:done",
+)
 
 
 def _validate_target_geometry(
@@ -162,6 +171,14 @@ def _validate_mft_candidate(
     else:
         raise NtfsReplayResolutionError(
             "MFT candidate provider must return MftAllocationCandidate, a 4-tuple or None"
+        )
+    if not isinstance(raw_record, bytes) or not isinstance(raw_mirror, bytes):
+        raise NtfsReplayResolutionError(
+            "MFT allocation candidate records must be byte strings"
+        )
+    if len(raw_record) != len(raw_mirror):
+        raise NtfsReplayResolutionError(
+            "MFT allocation candidate record and mirror sizes differ"
         )
     try:
         plan_mft_record_reuse(
@@ -323,6 +340,16 @@ def _replay_mft_allocation(
         raise NtfsReplayResolutionError(
             "MFT allocation requires an explicit physical bitmap byte range"
         )
+    if not isinstance(candidate.raw_record, bytes) or not isinstance(
+        candidate.raw_mirror, bytes
+    ):
+        raise NtfsReplayResolutionError(
+            "MFT allocation candidate records must be byte strings"
+        )
+    if len(candidate.raw_record) != len(candidate.raw_mirror):
+        raise NtfsReplayResolutionError(
+            "MFT allocation candidate record and mirror sizes differ"
+        )
     ranges = (
         (candidate.record_offset, candidate.raw_record, "MFT"),
         (candidate.mirror_offset, candidate.raw_mirror, "MFT mirror"),
@@ -366,12 +393,19 @@ def _replay_mft_allocation(
         (candidate.mirror_offset, raw_initialized),
         (candidate.bitmap_offset, bytes(updated_bitmap)),
     )
-    for offset, payload in writes:
+    write_phases = (
+        ("executor:allocation:mft:start", "executor:allocation:mft:done"),
+        ("executor:allocation:mirror:start", "executor:allocation:mirror:done"),
+        ("executor:allocation:bitmap:start", "executor:allocation:bitmap:done"),
+    )
+    for (offset, payload), (start_phase, done_phase) in zip(writes, write_phases):
+        _fault(start_phase)
         stream.seek(offset)
         if stream.write(payload) != len(payload):
             raise NtfsReplayResolutionError(
                 "short write during MFT/$MFTMirr allocation"
             )
+        _fault(done_phase)
     stream.flush()
     with suppress(AttributeError, OSError):
         os.fsync(stream.fileno())
@@ -381,6 +415,7 @@ def _replay_mft_allocation(
             raise NtfsReplayResolutionError(
                 "MFT/$MFTMirr/bitmap allocation read-back mismatch"
             )
+    _fault("executor:mutation:done")
     return (
         OverlayProvenance(
             step.lsn,
@@ -486,6 +521,7 @@ __all__ = [
     "NtfsReplayResolutionError",
     "MftCandidateProvider",
     "NTFS_EXECUTOR_FAULT_POINTS",
+    "NTFS_ALLOCATION_FAULT_POINTS",
     "ReplayResolver",
     "publish_ntfs_replay",
 ]

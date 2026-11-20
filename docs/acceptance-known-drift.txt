@@ -3,22 +3,20 @@
 # Read by `python scripts/acceptance_blocks.py --check --baseline <this file>`.
 # Each entry is `<item id>  # <why the probe cannot agree today>`.
 #
-# The six items below are ALL `structure`-tier probes.  By construction a
-# structure probe can never report `verified` (see BlockCheck.run in
-# mountfile/acceptance/blocks.py: a file existing is not the property
-# holding), while their manifest entries cite behavioural evidence that lives
-# elsewhere - the JBD2/NTFS test modules listed in each item's `evidence`.
-# Comparing the two 1:1 is a category error, so the gate tolerates exactly
-# these ids and fails on any other drift.
+# NO ACTIVE WAIVERS as of 2026-11-20.  The six structure-tier ids this file
+# used to waive (B4, B7, B10, C2, C8, E2) were reconciled in the manifest
+# itself, so the probe tier and the recorded status now agree and the gate is
+# closed in both directions: any new disagreement fails, and any entry left
+# here that no longer drifts fails as "stale".
+#
+# A structure probe can never report `verified` on its own (see BlockCheck.run
+# in mountfile/acceptance/blocks.py: a file existing is not the property
+# holding).  If such an item is ever recorded as `verified` while its probe
+# reports lower, that is a category mismatch to waive HERE with a reason -
+# never by editing the probe or by lowering the manifest status to match it.
 #
 # Rules enforced by tests/test_acceptance_gates.py:
 #   * a baselined id must be a structure-tier probe;
 #   * the baseline must match the drift observed today (no stale ids), so a
 #     fixed item forces its entry to be deleted instead of silently hiding a
 #     future regression.
-B4   # structure probe; revoke handling is behavioural evidence in the JBD2 tests
-B7   # structure probe; writer-cycle checkpointing is proven by test_jbd2_checkpoint
-B10  # structure probe; per-operation e2fsck lives in test_checker_acceptance
-C2   # structure probe; parser behaviour is exercised by test_ntfs_logfile_parser
-C8   # structure probe; adapter boundary only, no dfir_ntfs roundtrip in this probe
-E2   # structure probe; the README/CLI gate is wired in ci.yml, not observable here

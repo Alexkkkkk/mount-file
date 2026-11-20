@@ -148,3 +148,20 @@ def test_unresolvable_commit_is_advisory_not_blocking(tmp_path: Path) -> None:
     blocking, advisory = sync.slice_drift(_read(manifest), root)
     assert blocking == []
     assert any("git недоступен" in reason for reason in advisory)
+
+
+def test_strict_promotes_unresolvable_git_refs_to_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strict CI mode must fail on unresolved refs when git is available."""
+    root = _tree(tmp_path)
+    manifest = _manifest(root, version="1.96.1")
+    monkeypatch.setattr(sync, "git_slice", lambda _root: ("main", "abcdef0"))
+    monkeypatch.setattr(sync, "_git_ok", lambda *_args: False)
+    monkeypatch.setattr(sync, "git_branches", lambda _root: ["main"])
+
+    blocking, advisory = sync.slice_drift(_read(manifest), root, strict=True)
+
+    assert any("slice.commit" in reason for reason in blocking)
+    assert any("slice.branch" in reason for reason in blocking)
+    assert advisory == []

@@ -171,6 +171,12 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
         ],
     },
     "ntfs": {
+        "injected_exception": [
+            _case(
+                "test_ntfs_replay_executor",
+                "test_allocation_phase_failure_preserves_source_and_cleans_stage",
+            )
+        ],
         "process_kill": [
             _case(
                 "test_ntfs_writer_fault_coverage",
@@ -180,6 +186,10 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
             _case(
                 "test_ntfs_replay",
                 "test_native_replay_sigkill_matrix_reaches_each_declared_phase",
+            ),
+            _case(
+                "test_ntfs_replay_executor",
+                "test_allocation_phase_sigkill_preserves_source",
             ),
         ]
     },

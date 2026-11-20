@@ -217,6 +217,27 @@ def test_ci_calls_every_tracker_gate() -> None:
     assert "fetch-depth: 0" in text
 
 
+def test_acceptance_workflow_validates_artifact_and_regression_suite() -> None:
+    """Merged from the base branch: main also pinned the artifact contract.
+
+    The workflow must keep exercising the failure-matrix artifact round trip and
+    the gate regression modules, not only the three tracker scripts.
+    """
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "python scripts/failure_matrix_artifact.py" in text
+    assert "--validate acceptance-probe.json" in text
+    for test_file in (
+        "tests/test_acceptance_blocks.py",
+        "tests/test_acceptance_cells_typed.py",
+        "tests/test_failure_matrix_artifact.py",
+        "tests/test_replay_acceptance_status.py",
+        "tests/test_replay_slice_sync.py",
+        "tests/test_replay_nightly_evidence.py",
+    ):
+        assert test_file in text, test_file
+
+
 def test_manifest_slice_describes_main_and_cites_the_d3_matrix() -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     header = payload["slice"]
@@ -230,7 +251,13 @@ def test_manifest_slice_describes_main_and_cites_the_d3_matrix() -> None:
 
 
 # --------------------------------------------------------------------------
-# probe gate baseline (six structure-tier items)
+# probe gate baseline
+#
+# The baseline exists so a *known, explained* category mismatch can be waived
+# without silencing a real regression.  On 2026-11-20 the six structure-tier
+# items it used to waive (B4, B7, B10, C2, C8, E2) were reconciled in the
+# manifest itself, so the file carries no active waivers and both directions
+# of the gate are live: unexpected drift fails, and a stale waiver fails too.
 # --------------------------------------------------------------------------
 BASELINE = REPO_ROOT / "docs" / "acceptance-known-drift.txt"
 
@@ -248,25 +275,30 @@ def _load_blocks_script():
 blocks_script = _load_blocks_script()
 
 
-def test_baseline_parses_and_is_fully_explained() -> None:
+def test_baseline_carries_no_active_waivers() -> None:
+    """Every entry must be justified - and today none of them are needed."""
+
     entries = blocks_script.load_baseline(BASELINE)
-    assert set(entries) == {"B4", "B7", "B10", "C2", "C8", "E2"}
-    for ident, reason in entries.items():
-        assert reason, f"{ident} has no explanation"
+    assert entries == {}, f"unexplained active waiver: {entries}"
 
 
 def test_baseline_only_names_structure_probes() -> None:
-    """A behavioural probe disagrees with the manifest only if something broke."""
+    """A behavioural probe disagreeing with the manifest means something broke."""
 
     from mountfile.acceptance import blocks as block_defs
 
     tiers = {check.ident: check.tier for check in block_defs.BLOCK_CHECKS}
+    # Guard the guard: keep the tier taxonomy from silently flattening to one
+    # value, which would make the membership assertion below vacuous.
+    structure = [ident for ident, tier in tiers.items() if tier == block_defs.STRUCTURE]
+    assert "B4" in structure
+    assert len(structure) < len(tiers)
     for ident in blocks_script.load_baseline(BASELINE):
         assert tiers[ident] == block_defs.STRUCTURE, ident
 
 
-def test_baseline_matches_the_drift_observed_today() -> None:
-    """No stale ids: a fixed item must delete its entry, not inherit a waiver."""
+def test_no_drift_today() -> None:
+    """The manifest and the probes agree, so the gate fires only on regressions."""
 
     from mountfile.acceptance import artifact
 
@@ -274,9 +306,9 @@ def test_baseline_matches_the_drift_observed_today() -> None:
     known, new, stale = blocks_script.split_drift(
         payload["drift"], blocks_script.load_baseline(BASELINE)
     )
-    assert new == [], f"new drift not explained by the baseline: {new}"
+    assert new == [], f"drift not explained by the baseline: {new}"
     assert stale == [], f"baseline entries that no longer drift: {stale}"
-    assert len(known) == 6
+    assert known == []
 
 
 def test_split_drift_separates_new_and_stale() -> None:
