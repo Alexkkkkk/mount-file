@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+from mountfile.ntfs_replay import NTFS_REPLAY_WRITE_FAULT_POINTS
 from scripts.failure_matrix_artifact import SCHEMA, build_report, validate_report
 
 
@@ -225,3 +226,41 @@ def test_missing_trigger_metadata_is_not_scheduled(tmp_path, monkeypatch):
         "sha": None,
         "schedule_eligible": False,
     }
+
+
+def test_ntfs_replay_subphase_kills_are_mapped_separately(tmp_path):
+    test_name = "test_ntfs_process_kill_preserves_source_until_atomic_replace"
+    junit = _junit(
+        tmp_path / "ntfs-replay-phases.xml",
+        [
+            (
+                "tests.test_ntfs_writer_fault_coverage",
+                f"{test_name}[{point}]",
+                "passed",
+            )
+            for point in NTFS_REPLAY_WRITE_FAULT_POINTS
+        ],
+    )
+
+    cell = _cell(build_report(tmp_path, junit), "ntfs", "process_kill")
+
+    for point in NTFS_REPLAY_WRITE_FAULT_POINTS:
+        assert any(point in evidence for evidence in cell["test_evidence"])
+        assert all(point not in selector for selector in cell["missing_test_selectors"])
+    assert cell["acceptance_status"] == "not_accepted"
+
+
+def test_fault_seam_catalog_includes_ntfs_replay_source(tmp_path):
+    source_dir = tmp_path / "mountfile"
+    source_dir.mkdir()
+    (source_dir / "native_write.py").write_text('_fault("copy:start")\n')
+    (source_dir / "ntfs_replay.py").write_text(
+        '_fault("ntfs:replay:stream_write:applied")\n'
+    )
+
+    report = build_report(tmp_path)
+
+    assert report["fault_seams"] == [
+        "copy:start",
+        "ntfs:replay:stream_write:applied",
+    ]

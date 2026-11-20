@@ -16,8 +16,13 @@ import shutil
 from pathlib import Path
 
 from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
-from scripts.compare_ntfs_snapshots import compare_file
-from scripts.windows_ntfs_raw_snapshot import snapshot_image
+
+if __package__:
+    from .compare_ntfs_snapshots import compare_file
+    from .windows_ntfs_raw_snapshot import snapshot_image
+else:  # Direct invocation as ``python scripts/compare_ntfs_replay.py``.
+    from compare_ntfs_snapshots import compare_file
+    from windows_ntfs_raw_snapshot import snapshot_image
 
 
 def _sha256(path: Path) -> str:

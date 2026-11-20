@@ -14,6 +14,7 @@ import pytest
 
 from mountfile.native_write import ENABLE_ENV, FAULT_POINTS, fault_point_trace
 from mountfile.ntfs_native_writer import NtfsNativeWriter
+from mountfile.ntfs_replay import NTFS_REPLAY_WRITE_FAULT_POINTS
 from tests.ntfs_crash_fixture import make_crash_fixture
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -59,29 +60,46 @@ def _ntfscat(image: Path, path: str) -> bytes:
     or shutil.which("ntfscat") is None,
     reason="ntfs-3g tools (mkntfs/ntfscp/ntfscat) are unavailable",
 )
-def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("nonresident", "expected_replay_points"),
+    [
+        (
+            False,
+            (
+                "ntfs:replay:mft_record:applied",
+                "ntfs:replay:restart_pages:applied",
+                "ntfs:replay:volume_marker:applied",
+                "ntfs:replay:mft_mirror:applied",
+            ),
+        ),
+        (
+            True,
+            (
+                "ntfs:replay:stream_write:applied",
+                "ntfs:replay:restart_pages:applied",
+                "ntfs:replay:volume_marker:applied",
+                "ntfs:replay:mft_mirror:applied",
+            ),
+        ),
+    ],
+)
+def test_ntfs_writer_emits_declared_and_replay_stage_boundaries(
+    tmp_path, monkeypatch, nonresident, expected_replay_points
+):
     monkeypatch.setenv(ENABLE_ENV, "1")
-    fixture = make_crash_fixture(tmp_path)
+    fixture = make_crash_fixture(tmp_path, nonresident=nonresident)
     trace = fault_point_trace(
         NtfsNativeWriter(recover="native").write_file,
         str(fixture.image),
         "/target",
         b"fault trace\n",
     )
-    # The staged writer additionally emits replay:* sub-phase seams between the
-    # declared top-level boundaries; every declared point must still fire
-    # exactly once and nothing outside the declared set may appear.
     assert set(FAULT_POINTS) <= set(trace)
-    assert set(trace) <= set(FAULT_POINTS) | {
-        "replay:redo:start",
-        "replay:redo:done",
-        "replay:journal:clean-pages",
-        "replay:volume:dirty-flag",
-        "replay:mirror:update",
-        "replay:flush",
-    }
-    for point in FAULT_POINTS:
-        assert trace.count(point) == 1
+    assert all(trace.count(point) == 1 for point in FAULT_POINTS)
+    assert (
+        tuple(point for point in trace if point in NTFS_REPLAY_WRITE_FAULT_POINTS)
+        == expected_replay_points
+    )
     assert trace.count("mutation:start") == 1
     assert trace.count("mutation:flush") == 1
     assert trace.count("mutation:done") == 1
@@ -94,13 +112,17 @@ def test_ntfs_writer_emits_each_declared_fault_boundary(tmp_path, monkeypatch):
     or shutil.which("ntfscat") is None,
     reason="ntfs-3g tools (mkntfs/ntfscp/ntfscat) are unavailable",
 )
-@pytest.mark.parametrize("point", FAULT_POINTS)
-def test_ntfs_process_kill_preserves_source_until_atomic_publish(
+@pytest.mark.parametrize("point", (*FAULT_POINTS, *NTFS_REPLAY_WRITE_FAULT_POINTS))
+def test_ntfs_process_kill_preserves_source_until_atomic_replace(
     tmp_path, point
 ) -> None:
     """Every crash boundary preserves the source until replace has completed."""
 
-    fixture = make_crash_fixture(tmp_path)
+    stream_point = "ntfs:replay:stream_write:applied"
+    active = point in {"replay:undo:start", "replay:undo:done"}
+    fixture = make_crash_fixture(
+        tmp_path, nonresident=point == stream_point, active=active
+    )
     image = fixture.image
     before = _sha256(image)
     environment = os.environ.copy()
