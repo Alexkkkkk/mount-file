@@ -171,6 +171,12 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
         ],
     },
     "ntfs": {
+        "injected_exception": [
+            _case(
+                "test_ntfs_replay_executor",
+                "test_allocation_phase_failure_preserves_source_and_cleans_stage",
+            )
+        ],
         "process_kill": [
             _case(
                 "test_ntfs_writer_fault_coverage",
