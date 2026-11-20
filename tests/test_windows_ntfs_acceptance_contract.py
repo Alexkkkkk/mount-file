@@ -31,9 +31,10 @@ def test_windows_acceptance_uses_native_chkdsk_and_vhdx():
     assert "format fs=ntfs" in script
     assert "windows_ntfs_raw_snapshot.py" in script
     assert "compare_ntfs_snapshots.py" in script
+    assert "maximum=1024 type=expandable" in script
     assert "PhysicalSectorSize" in script
     assert script.count("--sector-size $sectorSize") == 3
-    assert script.count("--raw-image") == 3
+    assert script.count("--raw-image") == 2
     assert "compare_ntfs_replay.py" in script
 
 

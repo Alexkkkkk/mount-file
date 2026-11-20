@@ -74,7 +74,9 @@ try {
     }
 
     Invoke-Diskpart @(
-        "create vdisk file=$vhd maximum=65536 type=expandable"
+        # Metadata parity fixtures need only a small volume; keeping the raw
+        # crash/repair images bounded prevents the hosted Windows disk filling.
+        "create vdisk file=$vhd maximum=1024 type=expandable"
         "select vdisk file=$vhd"
         "attach vdisk"
         "create partition primary"
@@ -95,7 +97,7 @@ try {
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
         --volume-size ([int64]$partition.Size) --sector-size $sectorSize `
-        --out $rawBefore --raw-image (Join-Path $rawBefore "volume.img")
+        --out $rawBefore
     if ($LASTEXITCODE -ne 0) { throw "raw pre-repair NTFS snapshot failed" }
     $report.raw_device = $device
     $report.raw_partition_offset = [int64]$partition.Offset

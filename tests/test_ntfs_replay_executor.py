@@ -400,6 +400,7 @@ publish_ntfs_replay(
 """
 
 
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
 @pytest.mark.parametrize("phase", NTFS_ALLOCATION_FAULT_POINTS)
 def test_allocation_phase_sigkill_preserves_source(tmp_path, phase):
     image = tmp_path / "image.bin"
