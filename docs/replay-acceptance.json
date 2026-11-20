@@ -284,10 +284,11 @@
       "evidence": [
         "mountfile/native_write.py",
         "tests/test_ext4_write_phase_injection.py",
-        "tests/test_ntfs_write_phase_injection.py"
+        "tests/test_ntfs_write_phase_injection.py",
+        "tests/test_ntfs_native_write_phase_injection.py"
       ],
-      "note": "Ext4 operation chain has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. NTFS operation chain now has a declared 6-step injection matrix (copy, gate_pre, data_write, post_verify, identity_verify, publish) with the same per-cell contract: reach assertion, fail-closed propagation, byte-identical source, no surviving stage, plus a control cell. JBD2 transaction sub-phases are instrumented via the checkpoint executor fault boundaries (PR #578).",
-      "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_write_phase_injection.py -> 8 passed (7 cells + control; mkntfs 2022.10.3, Python 3.12.3); tests/test_ext4_write_phase_injection.py -> 10 passed; tests/test_jbd2_checkpoint_fault_points.py -> 8 passed"
+      "note": "Ext4 operation chain has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. Native NTFS operation chain (NtfsNativeWriter on a clean mkntfs volume) now has a declared 6-step injection matrix (copy, gate_pre, data_write, post_verify, identity_verify, publish) with the same per-cell contract: reach assertion, fail-closed propagation, byte-identical source, no surviving stage, plus a control cell; the application NTFS chain keeps its own declared matrix in tests/test_ntfs_write_phase_injection.py. JBD2 transaction sub-phases are instrumented via the checkpoint executor fault boundaries (PR #578).",
+      "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_native_write_phase_injection.py -> 8 passed (7 cells + control; mkntfs 2022.10.3, Python 3.12.3); tests/test_ext4_write_phase_injection.py -> 10 passed; tests/test_jbd2_checkpoint_fault_points.py -> 8 passed"
     },
     {
       "id": "D2",
@@ -315,10 +316,11 @@
         "mountfile/native_write.py",
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_jbd2_malformed_journal_refusal.py",
-        "tests/test_ntfs_write_phase_injection.py"
+        "tests/test_ntfs_write_phase_injection.py",
+        "tests/test_ntfs_native_write_phase_injection.py"
       ],
-      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; NTFS chain now proves byte-identical source preservation at every declared injection phase (copy, gate_pre, data_write, post_verify, identity_verify, publish) with no surviving stage, mirroring the ext4 matrix; SIGKILL matrix covers all 9 FAULT_POINTS with SHA-256 before/after. This still does not prove preservation for every profile x operation x phase cell beyond the two native writers.",
-      "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_write_phase_injection.py -> 8 passed (assert after == before in each cell; leftovers == [clean.img]); tests/test_ntfs_writer_fault_coverage.py -> 10 passed"
+      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; the native NTFS chain now proves byte-identical source preservation at every declared injection phase (copy, gate_pre, data_write, post_verify, identity_verify, publish) with no surviving stage, mirroring the ext4 matrix; SIGKILL matrix covers all 9 FAULT_POINTS with SHA-256 before/after. This still does not prove preservation for every profile x operation x phase cell beyond the two native writers.",
+      "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_native_write_phase_injection.py -> 8 passed (assert after == before in each cell; leftovers == [clean.img]); tests/test_ntfs_writer_fault_coverage.py -> 10 passed"
     },
     {
       "id": "D4",
