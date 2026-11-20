@@ -322,6 +322,42 @@ def test_allocation_fault_boundaries_are_emitted_in_write_order(tmp_path):
     assert all(point in trace for point in NTFS_ALLOCATION_FAULT_POINTS)
 
 
+@pytest.mark.parametrize("phase", NTFS_ALLOCATION_FAULT_POINTS)
+def test_allocation_phase_failure_preserves_source_and_cleans_stage(tmp_path, phase):
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
+    before = image.read_bytes()
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
+    reached: list[str] = []
+    previous = native_write.FAULT_HOOK
+
+    def fail_at(name: str) -> None:
+        if name == phase:
+            reached.append(name)
+            raise RuntimeError(f"injected failure at {name}")
+
+    native_write.fault_hook_installed(fail_at)
+    try:
+        with pytest.raises(RuntimeError, match="injected failure"):
+            publish_ntfs_replay(
+                str(image),
+                _analysis(_allocation_step(initialized)),
+                lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+                mft_candidate_provider=lambda _step: candidate,
+            )
+    finally:
+        native_write.fault_hook_installed(previous)
+
+    assert reached == [phase]
+    assert image.read_bytes() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["image.bin"]
+
+
 def test_allocation_refuses_mismatched_mirror_record_size(tmp_path):
     image = tmp_path / "image.bin"
     free = _raw_mft_record(7)
