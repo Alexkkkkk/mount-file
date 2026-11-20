@@ -23,6 +23,23 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _settle_qt_between_tests():
+    """Delete closed windows before the next test builds Qt objects.
+
+    The ubuntu py3.10 runner segfaulted inside ``MainWindow.__init__``
+    (``tc_style.apply_theme``) while a window closed by the previous test
+    was still being torn down asynchronously.  Flushing deferred deletes
+    at a deterministic point keeps that teardown race out of the next
+    test instead of crashing inside widget construction.
+    """
+    yield
+    app = QApplication.instance()
+    if app is not None:
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+
+
 def test_panel_list_error_has_visible_retry_button(app, monkeypatch):
     monkeypatch.setenv("MOUNTFILE_NO_UPDATE", "1")
     monkeypatch.setattr(tc_style, "save_settings", lambda: True)

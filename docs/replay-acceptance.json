@@ -2,10 +2,10 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "main",
-    "commit": "83e2b30",
-    "version": "1.98.1",
-    "checked": "2026-11-19"
+    "branch": "feat/issue-510-d7-typed-refusals",
+    "commit": "819841b",
+    "version": "1.99.0",
+    "checked": "2026-11-20"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -283,10 +283,12 @@
       "status": "partial",
       "evidence": [
         "mountfile/native_write.py",
-        "tests/test_ext4_write_phase_injection.py"
+        "tests/test_ext4_write_phase_injection.py",
+        "tests/test_ntfs_write_phase_injection.py",
+        "tests/test_ntfs_native_write_phase_injection.py"
       ],
-      "note": "Ext4 operation chain now has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. NTFS steps and JBD2 transaction sub-phases still uninstrumented, so D1 stays partial.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "note": "Ext4 operation chain has a declared 8-step injection matrix (copy, profile_check, journal_gate, pre_check, data_write, post_verify, identity_verify, publish): per-cell reach assertion, fail-closed check, byte-identical source, no surviving stage, plus a control cell. Run 2026-11-17: 10 passed. Native NTFS operation chain (NtfsNativeWriter on a clean mkntfs volume) now has a declared 6-step injection matrix (copy, gate_pre, data_write, post_verify, identity_verify, publish) with the same per-cell contract: reach assertion, fail-closed propagation, byte-identical source, no surviving stage, plus a control cell; the application NTFS chain keeps its own declared matrix in tests/test_ntfs_write_phase_injection.py. JBD2 transaction sub-phases are instrumented via the checkpoint executor fault boundaries (PR #578).",
+      "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_native_write_phase_injection.py -> 8 passed (7 cells + control; mkntfs 2022.10.3, Python 3.12.3); tests/test_ext4_write_phase_injection.py -> 10 passed; tests/test_jbd2_checkpoint_fault_points.py -> 8 passed"
     },
     {
       "id": "D2",
@@ -313,10 +315,12 @@
         "mountfile/ntfs_native_writer.py",
         "mountfile/native_write.py",
         "tests/test_ntfs_writer_fault_coverage.py",
-        "tests/test_jbd2_malformed_journal_refusal.py"
+        "tests/test_jbd2_malformed_journal_refusal.py",
+        "tests/test_ntfs_write_phase_injection.py",
+        "tests/test_ntfs_native_write_phase_injection.py"
       ],
-      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; this does not prove preservation for every profile × operation × phase cell. NTFS post-publish correctness is checked by exact target read-back, not by expecting the image hash to remain unchanged after commit.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; the native NTFS chain now proves byte-identical source preservation at every declared injection phase (copy, gate_pre, data_write, post_verify, identity_verify, publish) with no surviving stage, mirroring the ext4 matrix; SIGKILL matrix covers all 9 FAULT_POINTS with SHA-256 before/after. This still does not prove preservation for every profile x operation x phase cell beyond the two native writers.",
+      "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_native_write_phase_injection.py -> 8 passed (assert after == before in each cell; leftovers == [clean.img]); tests/test_ntfs_writer_fault_coverage.py -> 10 passed"
     },
     {
       "id": "D4",
