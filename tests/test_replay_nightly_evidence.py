@@ -105,6 +105,19 @@ def test_transport_payload_requires_explicit_schedule_event():
     assert "explicit event" in report["reason"]
 
 
+def test_transport_payload_rejects_unexpected_event():
+    report = module.build_report(
+        "owner/name",
+        token="t0ken",
+        transport=lambda url, token: {
+            "workflow_runs": [_run(9, event="workflow_dispatch")]
+        },
+    )
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "unexpected event" in report["reason"]
+
+
 def test_cli_fails_closed_without_a_token(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)

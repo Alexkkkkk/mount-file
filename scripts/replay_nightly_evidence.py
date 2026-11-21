@@ -109,6 +109,10 @@ def fetch_scheduled_runs(
             raise EvidenceUnavailable(
                 "workflow_runs contains an entry without an explicit event"
             )
+        if event != "schedule":
+            raise EvidenceUnavailable(
+                f"workflow_runs contains unexpected event: {event!r}"
+            )
         normalised.append(
             {
                 "id": run.get("id"),
