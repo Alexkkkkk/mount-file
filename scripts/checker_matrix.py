@@ -58,7 +58,10 @@ MATRIX = (
         "checker": "ntfsfix",
         "checker_package": "ntfs-3g",
         "checker_authoritative": False,
-        "fixture_tests": ["test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"],
+        "fixture_tests": [
+            "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix",
+            "test_replay_matches_external_ntfsfix_oracle",
+        ],
     },
     {
         "profile": "all-native-readers",
