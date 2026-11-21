@@ -31,6 +31,16 @@ jobs:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.AUTOMATION_TOKEN || secrets.GITHUB_TOKEN }}
+      # Issue #595: this job runs the full offline regression suite
+      # (`python -m pytest tests/ -q`), whose GUI tests import PyQt6. Without
+      # the system Qt runtime libraries (libEGL, libGL, libxcb-*) three tests
+      # died with ImportError on the runner (run 44557327159, job
+      # 135676820104) while the identical tree was green in ci.yml, which
+      # installs this exact composite action. Single source of truth stays
+      # tools/system-packages-debian.txt.
+      - name: Install system tools (Linux)
+        uses: ./.github/actions/setup-system-deps
+
       - name: Install reproducible formatters and test dependencies
         uses: ./.github/actions/setup-python-env
         with:

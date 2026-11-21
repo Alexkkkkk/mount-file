@@ -99,7 +99,18 @@ def get_logs(run_id: str) -> str:
         ["gh", "run", "view", run_id, "--log"], env={**os.environ, "GH_TOKEN": token}
     )
     if result.returncode:
-        raise RuntimeError(result.stderr[-2000:])
+        # GitHub deletes the log blobs of cancelled runs after a while
+        # ("BlobNotFound") and ``gh run view --log`` also fails for runs whose
+        # jobs never uploaded logs.  Missing evidence is an availability
+        # problem, not a patchable CI failure: log it and return an empty log
+        # so main() fails closed (the category is not patchable) instead of
+        # crashing the healer workflow itself (run 44561618905).
+        LOG.warning(
+            "run log unavailable (gh exit %s): %s",
+            result.returncode,
+            (result.stderr or "").strip()[-500:],
+        )
+        return ""
     return result.stdout[-120_000:]
 
 
