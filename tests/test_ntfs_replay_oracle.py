@@ -12,11 +12,7 @@ import shutil
 
 import pytest
 
-from tests.ntfs_oracle import (
-    SCENARIOS,
-    build_dirty_fixture,
-    run_oracle,
-)
+from tests.ntfs_oracle import SCENARIOS, build_dirty_fixture, run_oracle
 
 needs_ntfs = pytest.mark.skipif(
     shutil.which("mkntfs") is None
@@ -55,6 +51,5 @@ def test_oracle_evidence_covers_every_cataloged_scenario(tmp_path):
     assert len(evidence["scenarios"]) == len(SCENARIOS)
     assert evidence["unavailable_scenarios"] == 0
     assert all(
-        item["verdict"] in ("pass", "divergence")
-        for item in evidence["scenarios"]
+        item["verdict"] in ("pass", "divergence") for item in evidence["scenarios"]
     )
