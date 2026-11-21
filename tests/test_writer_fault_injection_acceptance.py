@@ -41,12 +41,22 @@ import pytest
 
 from mountfile.ext4_native_writer import (
     Ext4NativeWriter,
+    libext2fs,
     libext2fs_available,
     probe_journal,
 )
 from mountfile.journal_safety import JournalState
-from mountfile.native_write import ENABLE_ENV, FAULT_POINTS, fault_hook_installed
-from mountfile.ntfs_native_writer import NtfsNativeWriter, probe_ntfs_log
+from mountfile.native_write import (
+    ENABLE_ENV,
+    FAULT_POINTS,
+    NativeWriteError,
+    fault_hook_installed,
+)
+from mountfile.ntfs_native_writer import (
+    NtfsNativeWriter,
+    NtfsProfileUnsupported,
+    probe_ntfs_log,
+)
 from tests.ntfs_crash_fixture import make_crash_fixture
 
 PAYLOAD = b"injected fault acceptance\n"
@@ -229,6 +239,131 @@ def test_refused_write_leaves_image_writable(tmp_path, monkeypatch, profile, kin
             _write(profile, image)
     finally:
         fault_hook_installed(None)
+    assert _sha256(image) == before
+    assert list(tmp_path.glob(STAGING_GLOB)) == []
+
+    _write(profile, image)
+    assert _sha256(image) != before
+    _assert_published(profile, image)
+
+
+class _ShortWriteFacade:
+    """``ctypes`` facade whose ``ext2fs_file_write`` really writes fewer bytes.
+
+    libext2fs offers no fault injection, so the partial write is produced by the
+    binding itself: the call that would write ``nbytes`` is issued with a smaller
+    count, which is exactly what a truncated ``write(2)`` looks like to the
+    caller - the file receives part of the payload and the out-parameter reports
+    the short count.  No root, no loop mount, no privileged helper is involved.
+    """
+
+    def __init__(self, real, written: int) -> None:
+        self._real = real
+        self._written = written
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def ext2fs_file_write(self, handle, buffer, nbytes, done):
+        return self._real.ext2fs_file_write(handle, buffer, self._written, done)
+
+
+class _ShortWriteLibrary:
+    """``LibExt2fs`` stand-in that injects a genuine partial data write."""
+
+    def __init__(self, real, written: int) -> None:
+        self._real = real
+        self.lib = _ShortWriteFacade(real.lib, written)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _short_run(real_run, written: int = 1):
+    """Make ``ntfscp`` publish a truncated payload, as a short copy would.
+
+    ``ntfscp`` is the NTFS data primitive; truncating the staged payload before
+    the helper runs is the same observable event as a helper that stops early.
+    """
+
+    def runner(command, **kwargs):
+        command = list(command)
+        if command and command[0] == "ntfscp":
+            payload = Path(command[3])
+            payload.write_bytes(payload.read_bytes()[:written])
+        return real_run(command, **kwargs)
+
+    return runner
+
+
+def _short_write_ext4(image: Path, written: int = 1) -> None:
+    Ext4NativeWriter(library=_ShortWriteLibrary(libext2fs(), written)).write_file(
+        str(image), "/target", PAYLOAD
+    )
+
+
+def _short_write_ntfs(image: Path) -> None:
+    NtfsNativeWriter(recover="native").write_file(str(image), "/target", PAYLOAD)
+
+
+@pytest.mark.parametrize("profile", _PROFILES)
+def test_short_write_at_the_data_primitive_refuses_publication(
+    tmp_path, monkeypatch, profile
+) -> None:
+    """A truncated data write is refused; the caller's image is never replaced.
+
+    FAT12/16, FAT32 and exFAT already assert that a short primitive write rolls
+    back instead of publishing.  This is the same cell for ext4/JBD2 and NTFS:
+    ext4 reports ``short ext4 write: n/m bytes`` from the binding, NTFS is caught
+    by the exact staged read-back, and in both cases publication must not happen.
+    """
+
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_image(profile, tmp_path)
+    before = _sha256(image)
+    # The NTFS fixture is a deliberate crash image, so its gate is *expected* to
+    # be dirty; the contract here is that the refused write leaves that state
+    # exactly as it found it.
+    gate_before = probe_ntfs_log(str(image)).as_dict() if profile == "ntfs" else None
+
+    if profile == "ext4":
+        with pytest.raises(NativeWriteError, match="short ext4 write"):
+            _short_write_ext4(image)
+    else:
+        import mountfile.ntfs_native_writer as ntfs_writer
+
+        with monkeypatch.context() as scope:
+            scope.setattr(ntfs_writer, "_run", _short_run(ntfs_writer._run))
+            with pytest.raises(NtfsProfileUnsupported, match="read-back mismatch"):
+                _short_write_ntfs(image)
+
+    assert _sha256(image) == before, "a short write must never reach the source image"
+    assert list(tmp_path.glob(STAGING_GLOB)) == [], "staging copy left behind"
+    if profile == "ntfs":
+        assert probe_ntfs_log(str(image)).as_dict() == gate_before
+
+
+@pytest.mark.parametrize("profile", _PROFILES)
+def test_short_write_refusal_leaves_image_writable(
+    tmp_path, monkeypatch, profile
+) -> None:
+    """After a refused short write the same image still accepts a full write."""
+
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_image(profile, tmp_path)
+    before = _sha256(image)
+
+    if profile == "ext4":
+        with pytest.raises(NativeWriteError, match="short ext4 write"):
+            _short_write_ext4(image)
+    else:
+        import mountfile.ntfs_native_writer as ntfs_writer
+
+        with monkeypatch.context() as scope:
+            scope.setattr(ntfs_writer, "_run", _short_run(ntfs_writer._run))
+            with pytest.raises(NtfsProfileUnsupported, match="read-back mismatch"):
+                _short_write_ntfs(image)
+
     assert _sha256(image) == before
     assert list(tmp_path.glob(STAGING_GLOB)) == []
 
