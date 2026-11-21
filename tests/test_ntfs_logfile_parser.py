@@ -298,6 +298,100 @@ def test_identical_redo_and_undo_bytes_are_still_separate_slices():
     assert record.redo_data == record.undo_data == payload
 
 
+def test_multi_page_record_body_is_joined_and_scan_resumes_after_continuation():
+    first_body = bytes(368)
+    stream, lsns = build_log([{"body": first_body, "txid": 0}])
+    first_page_offset = 4 * PAGE
+    multi_offset = 480
+    multi_lsn = (first_page_offset + multi_offset) >> 3
+    following_offset = 0x40 + 5000 - (PAGE - multi_offset - lf.LFS_RECORD_HDR.size)
+    following_lsn = (5 * PAGE + following_offset) >> 3
+    body = record_body(
+        redo_op=0x07,
+        undo_op=0x07,
+        redo=b"R" * 2464,
+        undo=b"U" * 2496,
+        target_attr=0x18,
+        lcns=(0x40,),
+    )
+    assert len(body) == 5000
+
+    stream = bytearray(stream)
+    first_page = bytearray(
+        lf._fixup_page(
+            bytes(stream[first_page_offset : first_page_offset + PAGE]),
+            lf.RCRD_MAGIC,
+            page_size=PAGE,
+        )
+    )
+    header = lf.LFS_RECORD_HDR.pack(
+        multi_lsn,
+        lsns[0],
+        0,
+        len(body),
+        0,
+        0,
+        lf.LFS_CLIENT_RECORD,
+        0,
+        lf.LOG_RECORD_MULTI_PAGE,
+    )
+    first_page[multi_offset : multi_offset + len(header)] = header
+    first_capacity = PAGE - multi_offset - len(header)
+    first_page[multi_offset + len(header) :] = body[:first_capacity]
+    struct.pack_into("<Q", first_page, 0x08, multi_lsn)
+    struct.pack_into("<HH", first_page, 0x14, 2, 1)
+    struct.pack_into("<H", first_page, 0x18, multi_offset)
+    struct.pack_into("<Q", first_page, 0x20, lsns[0])
+    stream[first_page_offset : first_page_offset + PAGE] = _seal(first_page, 0x28)
+
+    continuation = bytearray(PAGE)
+    continuation[0:4] = lf.RCRD_MAGIC
+    remainder = body[first_capacity:]
+    continuation[0x40 : 0x40 + len(remainder)] = remainder
+    marker = record_body()
+    marker_header = lf.LFS_RECORD_HDR.pack(
+        following_lsn,
+        multi_lsn,
+        0,
+        len(marker),
+        0,
+        0,
+        lf.LFS_CLIENT_RECORD,
+        0,
+        0,
+    )
+    continuation[following_offset : following_offset + len(marker_header)] = (
+        marker_header
+    )
+    continuation[
+        following_offset
+        + len(marker_header) : following_offset
+        + len(marker_header)
+        + len(marker)
+    ] = marker
+    struct.pack_into("<Q", continuation, 0x08, following_lsn)
+    struct.pack_into("<I", continuation, 0x10, 1)
+    struct.pack_into("<HH", continuation, 0x14, 2, 2)
+    struct.pack_into(
+        "<H", continuation, 0x18, following_offset + len(marker_header) + len(marker)
+    )
+    struct.pack_into("<Q", continuation, 0x20, following_lsn)
+    continuation_offset = 5 * PAGE
+    stream[continuation_offset : continuation_offset + PAGE] = _seal(continuation, 0x28)
+
+    analysis = lf.analyze_logfile(bytes(stream), cluster_size=512)
+    assert len(analysis.records) == 3
+    multi_record = analysis.records[1]
+    assert multi_record.lsn == multi_lsn
+    assert multi_record.page_index == 4
+    assert multi_record.data_length == 5000
+    assert multi_record.redo_data == b"R" * 2464
+    assert multi_record.undo_data == b"U" * 2496
+    assert analysis.records[2].lsn == following_lsn
+    assert analysis.records[2].page_index == 5
+    assert analysis.records[2].byte_offset == continuation_offset + following_offset
+
+
 def test_committed_transaction_is_redone_and_never_undone():
     stream, lsns = build_log(
         [
@@ -520,6 +614,14 @@ def test_page_lcns_and_target_coordinates_are_preserved():
         (
             lambda s, lsns: _poke(s, 4 * PAGE + 0x40 + 0x18, struct.pack("<I", 0x1)),
             "unaligned data length",
+        ),
+        (
+            lambda s, lsns: _poke(
+                s,
+                4 * PAGE + 0x40 + lf.LFS_RECORD_HDR.size + 6,
+                struct.pack("<H", 0x100),
+            ),
+            "redo slice",
         ),
         (
             lambda s, lsns: _poke(s, 4 * PAGE + 0x40 + 0x24, struct.pack("<I", 0x17)),

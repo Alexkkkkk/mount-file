@@ -155,6 +155,33 @@ different lengths. Using one payload for both (the v1 draft of issue #510) makes
 an undo write redo bytes -- that is corruption, not recovery. The v2 draft
 (`docs/ci-drafts/ntfs_logfile_replay_v2.py`) and this module keep them separate.
 
+### Multi-page records
+
+When `LOG_RECORD_MULTI_PAGE` is set, the LFS header occurs only on the first
+page. The parser copies the declared `client_data_len` beginning immediately
+after that header, then continues at `data_off` on each following `RCRD` page.
+It validates the continuation page's USA and LSN, and requires the final page's
+`LOG_PAGE_LOG_RECORD_END` marker and `last_end_lsn` to cover the record. After
+the body ends, scanning resumes at the next aligned record on that final page.
+Ring-wrapping multi-page records remain a typed refusal; the parser does not
+guess the ring's logical start. A non-multi-page record whose redo or undo slice
+extends beyond `client_data_len` is also rejected before replay.
+
+The Windows acceptance capture in CI run `44788528276` is not a replay pass.
+The parser assembled four multi-page records, then reached LSN `2117148` at page
+39 offset `224`. Its LFS header declares 40 client-data bytes, while the body
+declares a redo slice `[40:752)`. The native executor refuses this malformed
+record; it does not skip it or mutate the captured volume. The captured
+`LogFile.bin` SHA-256 is
+`e6d1da6460f3f92d1ba31377f1e23755e3650ed9c63206b457013174c7fbbc22`, and the
+captured volume SHA-256 remained
+`1f140fae91ff6aff9484e843d4e8b3593dc284b0f10ff9032accb48b91fae913` before and
+after the refusal. This is evidence of safe refusal, not Windows replay parity.
+The harness terminates a writer child and sets the dirty bit; it does not
+simulate an OS or power failure, so this run is not a C6 crash fixture. NTFS
+replay acceptance remains blocked pending an authoritative explanation or a
+valid independent Windows crash capture with byte-level replay parity.
+
 ## Operations
 
 `enum NTFS_LOG_OPERATION` (fslog.c:298-340): `Noop` 0x00,
