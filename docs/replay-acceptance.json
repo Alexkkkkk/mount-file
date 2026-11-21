@@ -319,7 +319,8 @@
         "tests/test_ntfs_native_write_phase_injection.py",
         "tests/test_ntfs_write_phase_injection.py",
         "tests/test_ntfs_writer_fault_coverage.py",
-        "tests/test_writer_fault_injection_acceptance.py"
+        "tests/test_writer_fault_injection_acceptance.py",
+        "tests/test_hash_preservation_matrix.py"
       ],
       "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; the native NTFS chain now proves byte-identical source preservation at every declared injection phase (copy, gate_pre, data_write, post_verify, identity_verify, publish) with no surviving stage, mirroring the ext4 matrix; SIGKILL matrix covers all 9 FAULT_POINTS with SHA-256 before/after. This still does not prove preservation for every profile x operation x phase cell beyond the two native writers. Byte-identical source preservation is asserted at every declared boundary under injected exception and cancellation, and no staging copy may survive a refused write.",
       "reproduced": "2026-11-21: tests/test_writer_fault_injection_acceptance.py -> 40 passed; SHA-256 of the source image unchanged for all 8 pre-publish boundaries on both profiles."

@@ -27,6 +27,7 @@ import json
 import shutil
 from pathlib import Path
 
+from mountfile.ntfs_logfile import NtfsLogFileError
 from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
 
 try:  # Works both as ``python -m scripts...`` and as a direct file on Windows.
@@ -117,7 +118,7 @@ def compare_replay(
         result["status"] = status
         if status == "not_applicable":
             result["not_applicable_reason"] = NOT_APPLICABLE_REASON
-    except (NtfsReplayError, OSError, ValueError) as exc:
+    except (NtfsLogFileError, NtfsReplayError, OSError, ValueError) as exc:
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)
     output.write_text(

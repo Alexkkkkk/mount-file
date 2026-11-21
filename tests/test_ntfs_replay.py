@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from mountfile.ntfs_logfile import analyze_image, read_logfile_stream
+from mountfile.ntfs_logfile import NtfsLogFileError, analyze_image, read_logfile_stream
 from mountfile.ntfs_mft import parse_ntfs_file_record_header
 from mountfile.ntfs_native_writer import (
     NtfsNativeWriter,
@@ -291,6 +291,26 @@ def test_mft_mirror_is_repaired_on_the_volume(tmp_path):
     profile = probe_ntfs_metadata(str(image), volume_size=os.path.getsize(image))
     assert profile.mirror_matches_mft is True
     assert probe_ntfs_log(str(image)).clean is True
+
+
+@needs_ntfs
+def test_malformed_active_restart_pages_fail_closed_without_mutation(tmp_path):
+    fixture = make_crash_fixture(tmp_path)
+    logfile_stream, cluster_size, logfile = read_logfile_stream(str(fixture.image))
+    damaged = bytearray(logfile_stream)
+    damaged[:4] = b"BAD!"
+    with open(fixture.image, "r+b") as handle:
+        for run in logfile.runs:
+            start = run.vcn * cluster_size
+            length = run.length * cluster_size
+            handle.seek(run.lcn * cluster_size)
+            handle.write(damaged[start : start + length])
+    before = _sha256(fixture.image)
+
+    with pytest.raises(NtfsLogFileError, match="restart page 0"):
+        native_ntfs_recover(str(fixture.image))
+
+    assert _sha256(fixture.image) == before
 
 
 def _log_record(

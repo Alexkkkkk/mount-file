@@ -234,7 +234,32 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
             _case(
                 "test_ntfs_writer_fault_coverage",
                 "test_ntfs_process_kill_preserves_source_until_atomic_replace",
-                exclude=("[helper:",),
+                exclude=("[helper:", "[ntfs:replay:"),
+            ),
+            _case(
+                "test_ntfs_writer_fault_coverage",
+                "test_ntfs_process_kill_preserves_source_until_atomic_replace",
+                include=("[ntfs:replay:mft_record:applied]",),
+            ),
+            _case(
+                "test_ntfs_writer_fault_coverage",
+                "test_ntfs_process_kill_preserves_source_until_atomic_replace",
+                include=("[ntfs:replay:stream_write:applied]",),
+            ),
+            _case(
+                "test_ntfs_writer_fault_coverage",
+                "test_ntfs_process_kill_preserves_source_until_atomic_replace",
+                include=("[ntfs:replay:restart_pages:applied]",),
+            ),
+            _case(
+                "test_ntfs_writer_fault_coverage",
+                "test_ntfs_process_kill_preserves_source_until_atomic_replace",
+                include=("[ntfs:replay:volume_marker:applied]",),
+            ),
+            _case(
+                "test_ntfs_writer_fault_coverage",
+                "test_ntfs_process_kill_preserves_source_until_atomic_replace",
+                include=("[ntfs:replay:mft_mirror:applied]",),
             ),
             _case(
                 "test_ntfs_replay",
@@ -334,12 +359,18 @@ PROFILE_OPERATIONS = {
 }
 
 
-def _collect_seams(native_write_path: Path) -> list[str]:
-    try:
-        text = native_write_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    return sorted(set(SEAM_RE.findall(text)))
+def _collect_seams(repo_root: Path) -> list[str]:
+    seams: set[str] = set()
+    for source in (
+        repo_root / "mountfile" / "native_write.py",
+        repo_root / "mountfile" / "ntfs_replay.py",
+    ):
+        try:
+            text = source.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        seams.update(SEAM_RE.findall(text))
+    return sorted(seams)
 
 
 def _run_provenance() -> dict[str, Any]:
@@ -520,7 +551,7 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
         "acceptance": "not_claimed",
         "production_ready": False,
         "run_provenance": _run_provenance(),
-        "fault_seams": _collect_seams(root / "mountfile" / "native_write.py"),
+        "fault_seams": _collect_seams(root),
         "junit_report": junit_summary,
         "test_status_counts": summary,
         "cells": cells,
