@@ -191,7 +191,7 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
                 "test_ntfs_replay_executor",
                 "test_allocation_phase_sigkill_preserves_source",
             ),
-        ]
+        ],
     },
 }
 
