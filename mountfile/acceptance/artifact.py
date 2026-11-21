@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import subprocess
 from pathlib import Path
 
 from mountfile.acceptance.blocks import BLOCK_CHECKS, run_all
@@ -31,6 +33,41 @@ PARITY_NOTE = (
 )
 
 
+def generated_timestamp(root: str | Path) -> str:
+    """Return a reproducible UTC timestamp for an artifact.
+
+    ``SOURCE_DATE_EPOCH`` is the explicit build input. In a checked-out
+    repository the HEAD commit timestamp is the next stable source. A
+    non-git temporary tree gets the Unix epoch rather than the wall clock.
+    """
+    source_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if source_epoch is not None:
+        try:
+            epoch = int(source_epoch)
+            if epoch < 0:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError(
+                "SOURCE_DATE_EPOCH must be a non-negative integer"
+            ) from exc
+    else:
+        try:
+            result = subprocess.run(
+                ["git", "show", "-s", "--format=%ct", "HEAD"],
+                cwd=str(Path(root)),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            epoch = int(result.stdout.strip()) if result.returncode == 0 else 0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            epoch = 0
+    return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
 def build_artifact(root: str | Path, manifest_path: str | Path | None = None) -> dict:
     """Run every probe and return the combined artifact payload."""
 
@@ -42,7 +79,7 @@ def build_artifact(root: str | Path, manifest_path: str | Path | None = None) ->
     checkers = probe_checkers()
     return {
         "schema": SCHEMA,
-        "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated": generated_timestamp(repo),
         "declared_checks": len(BLOCK_CHECKS),
         "counts": result["counts"],
         "drift": result["drift"],

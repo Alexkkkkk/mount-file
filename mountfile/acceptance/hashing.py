@@ -106,14 +106,27 @@ def _fsync_file(path: Path) -> None:
     flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
     try:
         descriptor = os.open(path, flags)
-    except OSError:
-        return
+    except OSError as exc:
+        raise PublishRefused(
+            f"cannot open staged file for durability sync: {path}",
+            RefusalCode.INTEGRITY_CHECK_FAILED,
+        ) from exc
+    failure: OSError | None = None
     try:
         os.fsync(descriptor)
-    except OSError:
-        pass
+    except OSError as exc:
+        failure = exc
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if failure is None:
+                failure = exc
+    if failure is not None:
+        raise PublishRefused(
+            f"cannot durably sync staged file: {path}",
+            RefusalCode.INTEGRITY_CHECK_FAILED,
+        ) from failure
 
 
 def _fsync_directory(path: Path) -> None:
