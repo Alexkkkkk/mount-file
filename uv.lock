@@ -1463,7 +1463,7 @@ wheels = [
 
 [[package]]
 name = "mountfile"
-version = "1.96.1"
+version = "1.100.1"
 source = { editable = "." }
 dependencies = [
     { name = "pyqt6" },
@@ -1581,7 +1581,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.30,<1.0" },
     { name = "uvicorn", marker = "extra == 'ci'", specifier = ">=0.30,<1.0" },
     { name = "wheel", marker = "extra == 'ci'" },
-    { name = "yara-python", marker = "(python_full_version >= '3.10' or sys_platform != 'win32') and extra == 'dfir'", specifier = ">=4.5.0" },
+    { name = "yara-python", marker = "(python_full_version >= '3.10' and extra == 'dfir') or (sys_platform != 'win32' and extra == 'dfir')", specifier = ">=4.5.0" },
 ]
 provides-extras = ["legacy-tsk", "dev", "ci", "images", "api", "dfir", "ai", "rw", "rw-ext", "rw-ntfs", "fuzz"]
 

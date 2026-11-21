@@ -130,6 +130,29 @@ def test_a4_accepts_readonly_rows(tmp_path):
     assert blocks.probe_a4(blocks.RepoContext(tmp_path)).status == blocks.VERIFIED
 
 
+def test_a2_does_not_claim_non_ancestor_release_tag(tmp_path, monkeypatch):
+    """A tag name alone cannot prove that HEAD contains the tag."""
+
+    class Result:
+        def __init__(self, stdout="", returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "describe", "--tags"]:
+            return Result("v1.0.0\n")
+        if command[:2] == ["git", "rev-parse"]:
+            return Result("abcdef1\n")
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return Result(returncode=1)
+        raise AssertionError(command)
+
+    monkeypatch.setattr(blocks.subprocess, "run", fake_run)
+    result = blocks.probe_a2(blocks.RepoContext(tmp_path))
+    assert result.status == blocks.PARTIAL
+    assert result.payload["tag_is_ancestor"] is False
+
+
 # --------------------------------------------------------------------------
 # B. ext4 / JBD2
 # --------------------------------------------------------------------------
@@ -296,6 +319,34 @@ def test_publish_refuses_concurrent_change(tmp_path):
     assert target.read_bytes() == b"changed"
 
 
+@pytest.mark.parametrize("operation", ["open", "fsync"])
+def test_publish_refuses_when_staged_fsync_cannot_complete(
+    tmp_path, monkeypatch, operation
+):
+    target = tmp_path / "image.img"
+    target.write_bytes(b"old")
+    staged = tmp_path / "staged.bin"
+    staged.write_bytes(b"new")
+    identity = hashing.SourceIdentity.capture(target)
+    if operation == "open":
+
+        def fail_open(*args, **kwargs):
+            raise OSError("open failure")
+
+        monkeypatch.setattr(hashing.os, "open", fail_open)
+    else:
+
+        def fail_fsync(*args, **kwargs):
+            raise OSError("fsync failure")
+
+        monkeypatch.setattr(hashing.os, "fsync", fail_fsync)
+    with pytest.raises(hashing.PublishRefused) as raised:
+        hashing.publish_atomically(staged, target, identity)
+    assert raised.value.code == hashing.RefusalCode.INTEGRITY_CHECK_FAILED
+    assert target.read_bytes() == b"old"
+    assert staged.read_bytes() == b"new"
+
+
 def test_publish_emits_declared_points(tmp_path):
     seen: list[str] = []
     target = tmp_path / "image.img"
@@ -324,6 +375,17 @@ def test_artifact_is_written_and_self_describing(tmp_path):
     assert payload["declared_checks"] == 32
     assert len(payload["items"]) == 32
     assert "checkers" in payload
+
+
+def test_artifact_timestamp_uses_source_date_epoch(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1700000000")
+    assert artifact.generated_timestamp(tmp_path) == "2023-11-14T22:13:20Z"
+
+
+def test_artifact_timestamp_rejects_invalid_source_date_epoch(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "not-a-number")
+    with pytest.raises(ValueError, match="SOURCE_DATE_EPOCH"):
+        artifact.generated_timestamp(tmp_path)
 
 
 def test_artifact_reports_drift_against_manifest():
