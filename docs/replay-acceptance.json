@@ -4,8 +4,8 @@
   "slice": {
     "branch": "main",
     "commit": "0cc2633",
-    "version": "1.99.0",
-    "checked": "2026-11-20"
+    "version": "1.100.0",
+    "checked": "2026-11-21"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
