@@ -224,18 +224,35 @@ def probe_a2(context: RepoContext) -> Probe:
         return Probe(UNAVAILABLE, "git is not available; release ancestry unproven")
     if not tag:
         return Probe(UNAVAILABLE, "no release tag reachable from HEAD")
-    head = subprocess.run(
+    head_result = subprocess.run(
         ["git", "rev-parse", "--short=7", "HEAD"],
         cwd=str(context.root),
         capture_output=True,
         text=True,
         timeout=20,
         check=False,
-    ).stdout.strip()
+    )
+    head = head_result.stdout.strip()
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", tag, "HEAD"],
+        cwd=str(context.root),
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if not head or ancestry.returncode not in (0, 1):
+        return Probe(UNAVAILABLE, f"cannot prove release ancestry for {tag}")
+    if ancestry.returncode == 1:
+        return Probe(
+            PARTIAL,
+            f"release tag {tag} is not an ancestor of HEAD {head}",
+            {"tag": tag, "head": head, "tag_is_ancestor": False},
+        )
     return Probe(
-        VERIFIED if head else UNAVAILABLE,
-        f"nearest release tag {tag} contains HEAD {head or '?'}",
-        {"tag": tag, "head": head},
+        VERIFIED,
+        f"release tag {tag} is an ancestor of HEAD {head}",
+        {"tag": tag, "head": head, "tag_is_ancestor": True},
     )
 
 

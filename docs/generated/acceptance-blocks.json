@@ -1,6 +1,6 @@
 {
   "schema": "mountfile.acceptance-blocks/v1",
-  "generated": "2026-11-18T08:17:48Z",
+  "generated": "2026-11-18T08:18:13Z",
   "declared_checks": 32,
   "counts": {
     "verified": 15,
@@ -77,10 +77,11 @@
       "title": "Release contains the safe code",
       "tier": "behaviour",
       "status": "verified",
-      "detail": "nearest release tag v1.97.0 contains HEAD b2b2bb5",
+      "detail": "release tag v1.98.0 is an ancestor of HEAD bd06b9f",
       "payload": {
-        "tag": "v1.97.0",
-        "head": "b2b2bb5"
+        "tag": "v1.98.0",
+        "head": "bd06b9f",
+        "tag_is_ancestor": true
       }
     },
     {
