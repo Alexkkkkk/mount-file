@@ -14,7 +14,15 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
+
+# When launched as ``python scripts/windows_ntfs_raw_snapshot.py`` Python puts
+# only ``scripts/`` on sys.path. Add the repository root before importing the
+# production package so the documented direct CLI form works from any cwd.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from mountfile.image_source import WindowsRawDeviceImageSource
 from mountfile.ntfs_reader import NativeNtfsMetadataImage, NtfsMetadataError

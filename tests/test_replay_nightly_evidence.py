@@ -84,7 +84,7 @@ def test_malformed_payload_never_turns_green():
     assert report["criterion_satisfied"] is False
 
 
-def test_transport_payload_is_normalised_and_queried_with_schedule_filter():
+def test_transport_payload_requires_explicit_schedule_event():
     seen = {}
 
     def transport(url, token):
@@ -94,12 +94,62 @@ def test_transport_payload_is_normalised_and_queried_with_schedule_filter():
             "workflow_runs": [{"id": 9, "status": "completed", "conclusion": "success"}]
         }
 
-    runs = module.fetch_scheduled_runs("owner/name", token="t0ken", transport=transport)
+    report = module.build_report(
+        "owner/name", token="t0ken", transport=transport, required=1
+    )
     assert "event=schedule" in seen["url"]
     assert "/repos/owner/name/actions/workflows/replay-nightly.yml/runs" in seen["url"]
     assert seen["token"] == "t0ken"
-    assert runs[0]["event"] == "schedule"
-    assert runs[0]["html_url"] is None
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "explicit event" in report["reason"]
+
+
+def test_transport_payload_rejects_unexpected_event():
+    report = module.build_report(
+        "owner/name",
+        token="t0ken",
+        transport=lambda url, token: {
+            "workflow_runs": [_run(9, event="workflow_dispatch")]
+        },
+    )
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "unexpected event" in report["reason"]
+
+
+def test_transport_payload_rejects_incomplete_run_schema():
+    report = module.build_report(
+        "owner/name",
+        token="t0ken",
+        transport=lambda url, token: {
+            "workflow_runs": [
+                {
+                    "id": 10,
+                    "event": "schedule",
+                    "status": "completed",
+                    "conclusion": "success",
+                    # created_at is intentionally missing.
+                }
+            ]
+        },
+    )
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "invalid run schema" in report["reason"]
+
+
+def test_transport_payload_rejects_invalid_created_at():
+    malformed = _run(11)
+    malformed["created_at"] = "not-an-iso-timestamp"
+    report = module.build_report(
+        "owner/name",
+        token="t0ken",
+        transport=lambda url, token: {"workflow_runs": [malformed]},
+    )
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "invalid created_at" in report["reason"]
 
 
 def test_cli_fails_closed_without_a_token(tmp_path, monkeypatch, capsys):

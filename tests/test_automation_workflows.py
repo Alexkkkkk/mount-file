@@ -4,7 +4,10 @@ The actual GitHub Actions schema is validated separately with actionlint.
 These assertions protect the security conditions from accidental removal.
 """
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +15,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def workflow(name):
     return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+
+def test_native_read_evidence_help_is_dependency_light(tmp_path):
+    script = ROOT / "scripts" / "native_read_evidence.py"
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--json-out" in result.stdout
 
 
 def test_autosync_requires_successful_verification_and_manual_request():

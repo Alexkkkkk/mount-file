@@ -144,6 +144,22 @@ def test_replay_comparator_supports_direct_script_invocation(tmp_path):
     assert "--crash-image" in result.stdout
 
 
+def test_raw_snapshot_supports_direct_script_invocation(tmp_path):
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, str(SNAPSHOT), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--device" in result.stdout
+
+
 def test_windows_acceptance_treats_not_applicable_replay_as_typed_outcome():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     script = SCRIPT.read_text(encoding="utf-8")

@@ -26,7 +26,9 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any
 
 API_ROOT = "https://api.github.com"
 DEFAULT_WORKFLOW = "replay-nightly.yml"
@@ -103,13 +105,44 @@ def fetch_scheduled_runs(
     for run in runs:
         if not isinstance(run, dict):
             raise EvidenceUnavailable("workflow_runs contains a non-object entry")
+        event = run.get("event")
+        if not isinstance(event, str) or not event:
+            raise EvidenceUnavailable(
+                "workflow_runs contains an entry without an explicit event"
+            )
+        if event != "schedule":
+            raise EvidenceUnavailable(
+                f"workflow_runs contains unexpected event: {event!r}"
+            )
+        run_id = run.get("id")
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        created_at = run.get("created_at")
+        if (
+            not isinstance(run_id, int)
+            or isinstance(run_id, bool)
+            or not isinstance(status, str)
+            or not status
+            or (conclusion is not None and not isinstance(conclusion, str))
+            or not isinstance(created_at, str)
+            or not created_at
+        ):
+            raise EvidenceUnavailable(
+                "workflow_runs contains an entry with an invalid run schema"
+            )
+        try:
+            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise EvidenceUnavailable(
+                "workflow_runs contains an entry with an invalid created_at"
+            ) from exc
         normalised.append(
             {
-                "id": run.get("id"),
-                "status": run.get("status"),
-                "conclusion": run.get("conclusion"),
-                "event": run.get("event") or "schedule",
-                "created_at": run.get("created_at"),
+                "id": run_id,
+                "status": status,
+                "conclusion": conclusion,
+                "event": event,
+                "created_at": created_at,
                 "head_sha": run.get("head_sha"),
                 "head_branch": run.get("head_branch"),
                 "html_url": run.get("html_url"),
