@@ -85,25 +85,27 @@
       "reason": "required checker/runtime is unavailable on this runner"
     },
     {
-      "availability": "unavailable",
+      "availability": "available",
       "checker": "ntfsfix",
       "checker_authoritative": false,
       "checker_package": "ntfs-3g",
-      "checker_path": null,
-      "checker_version": null,
+      "checker_path": "/usr/bin/ntfsfix",
+      "checker_version": "ntfsfix v2022.10.3",
       "evidence": "fixture_required",
       "fixture_status": "fixture_declared",
       "fixture_tests": [
-        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix",
+        "test_replay_matches_external_ntfsfix_oracle"
       ],
       "fixture_tests_found": [
-        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix"
+        "test_real_mkfs_ntfs_is_never_declared_clean_by_ntfsfix",
+        "test_replay_matches_external_ntfsfix_oracle"
       ],
       "fixture_tests_missing": [],
       "native": false,
       "parity": "not_claimed",
       "profile": "ntfs-native-ro",
-      "reason": "required checker/runtime is unavailable on this runner"
+      "reason": "fixture-specific test exists but was not executed; inventory alone is not parity"
     },
     {
       "availability": "unavailable",

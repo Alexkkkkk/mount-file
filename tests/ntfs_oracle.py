@@ -19,10 +19,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.ntfs_crash_fixture import (
-    corrupt_mft_mirror,
-    make_crash_fixture,
-)
+from tests.ntfs_crash_fixture import corrupt_mft_mirror, make_crash_fixture
 
 #: Scenario name -> constructor kwargs applied on top of the base crash image.
 SCENARIOS: dict[str, dict[str, object]] = {
@@ -184,9 +181,9 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         "target_content_consistent": content_correct,
         "source_untouched": _sha256(fixture.image) == _sha256(ours)
         or True,  # replay works on copies; source hash tracked by executor
-        "verdict": "pass"
-        if (mft_bytes_equal and bitmap_equal and clean)
-        else "divergence",
+        "verdict": (
+            "pass" if (mft_bytes_equal and bitmap_equal and clean) else "divergence"
+        ),
     }
 
 
