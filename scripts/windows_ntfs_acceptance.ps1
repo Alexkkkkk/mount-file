@@ -76,7 +76,7 @@ try {
     Invoke-Diskpart @(
         # Metadata parity fixtures need only a small volume; keeping the raw
         # crash/repair images bounded prevents the hosted Windows disk filling.
-        "create vdisk file=$vhd maximum=1024 type=expandable"
+        "create vdisk file=$vhd maximum=256 type=expandable"
         "select vdisk file=$vhd"
         "attach vdisk"
         "create partition primary"
