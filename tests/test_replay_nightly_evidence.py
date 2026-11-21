@@ -118,6 +118,27 @@ def test_transport_payload_rejects_unexpected_event():
     assert "unexpected event" in report["reason"]
 
 
+def test_transport_payload_rejects_incomplete_run_schema():
+    report = module.build_report(
+        "owner/name",
+        token="t0ken",
+        transport=lambda url, token: {
+            "workflow_runs": [
+                {
+                    "id": 10,
+                    "event": "schedule",
+                    "status": "completed",
+                    "conclusion": "success",
+                    # created_at is intentionally missing.
+                }
+            ]
+        },
+    )
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "invalid run schema" in report["reason"]
+
+
 def test_cli_fails_closed_without_a_token(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)

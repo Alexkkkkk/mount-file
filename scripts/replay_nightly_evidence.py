@@ -113,13 +113,29 @@ def fetch_scheduled_runs(
             raise EvidenceUnavailable(
                 f"workflow_runs contains unexpected event: {event!r}"
             )
+        run_id = run.get("id")
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        created_at = run.get("created_at")
+        if (
+            not isinstance(run_id, int)
+            or isinstance(run_id, bool)
+            or not isinstance(status, str)
+            or not status
+            or (conclusion is not None and not isinstance(conclusion, str))
+            or not isinstance(created_at, str)
+            or not created_at
+        ):
+            raise EvidenceUnavailable(
+                "workflow_runs contains an entry with an invalid run schema"
+            )
         normalised.append(
             {
-                "id": run.get("id"),
-                "status": run.get("status"),
-                "conclusion": run.get("conclusion"),
+                "id": run_id,
+                "status": status,
+                "conclusion": conclusion,
                 "event": event,
-                "created_at": run.get("created_at"),
+                "created_at": created_at,
                 "head_sha": run.get("head_sha"),
                 "head_branch": run.get("head_branch"),
                 "html_url": run.get("html_url"),
