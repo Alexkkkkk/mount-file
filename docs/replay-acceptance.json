@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "automation/release-1.100.2",
-    "commit": "9e8a043425e347fe0b227ba2ed1db0b6e07be7f9",
+    "branch": "main",
+    "commit": "b9f819bd3eef6ccc7bf0d9186fbeac49a56439b9",
     "version": "1.100.2",
     "checked": "2026-11-21"
   },
