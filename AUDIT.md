@@ -1,6 +1,7 @@
 # Аудит состояния репозитория mount-file
 
 **Дата:** 2026-11-21 · **Срез:** `main` @ `96bda60` · **Версия:** `1.100.1`
+**Правка 2026-11-21:** исправлены четыре неверных утверждения (раздел 8), добавлен блок про Dependabot. На момент правки `main` ушёл вперёд — `d4e29f7`.
 **Источник:** GitHub API (`gh issue list`, `gh pr list`, `gh api .../milestones`) + локальный клон `origin/main`.
 
 ## 1. Сводка
@@ -22,11 +23,11 @@
 | Issue | Тема | Готовность | Что уже сделано | Что блокирует |
 |---|---|---|---|---|
 | #384 | [EPIC] native filesystem до production-ready | 🔴 не готов | Определён контракт: native write только FAT12/16, FAT32, ext2, one-FAT exFAT; ext3/ext4 и NTFS — read-only по дизайну | Дочерние #385, #386, #387, #389, #390, #530 открыты |
-| #385 | ext3/ext4 writer + JBD2 | 🟡 частично | `ext4_journal_gate.py`, `ext4_native_writer.py`, `jbd2_checkpoint.py`; тесты `test_jbd2_writer.py`, `test_jbd2_csum_replay.py`, `test_jbd2_checkpoint.py`, `test_ext3_jbd2_sequence_rollover.py`, `test_jbd2_malformed_journal_refusal.py` (последний уже в `main`) | Checkpoint-план только планируется, образ не мутирует; checksummed-журналы через `allow_checksums=True` не включены |
+| #385 | ext3/ext4 writer + JBD2 | 🟡 частично | `ext4_journal_gate.py`, `ext4_native_writer.py`, `jbd2_checkpoint.py`; тесты `test_jbd2_writer.py`, `test_jbd2_csum_replay.py`, `test_jbd2_checkpoint.py`, `test_ext3_jbd2_sequence_rollover.py`, `test_jbd2_malformed_journal_refusal.py` (последний уже в `main`) | Исполнение checkpoint-плана отсутствует: `jbd2_checkpoint.py:71` — «Immutable checkpoint plan; no image bytes are changed by this module». `allow_checksums=True` при этом **уже включён** (`ext4_native_writer.py:401`, `:439`, `:621`) |
 | #386 | NTFS writer + `$LogFile` replay | 🟡 частично | `ntfs_logfile.py`, `ntfs_replay.py`, `ntfs_replay_executor.py`, `ntfs_native_writer.py`, `quarantine_ntfs_image()`; `tests/ntfs_crash_fixture.py` и `test_ntfs_replay*.py` | Нет независимого оракула: сравнение только с собственным парсером; `$ATTRIBUTE_LIST` — отказ по дизайну |
 | #387 | Матрица приёмки: failure injection, process-kill, quarantine | 🔴 не готов | Fault seam в коде; ext4 process-kill тесты | #530 требует два ночных прогона без расхождений; матрица в nightly не вынесена в полном объёме |
-| #389 | Кросс-платформенные фикстуры и checker CI | 🔴 не готов | `checker_matrix.py`, `cross_platform_evidence.py`, `native_read_evidence.py`; Windows-раннеры (`ci.yml:482`, `ci-nightly.yml:18`, `release.yml:92`) | macOS-раннера нет ни в одном workflow (`grep -rniE 'runs-on: macos' .github/` → пусто); `macos_read_only_adapter_contract` → `not_collected` |
-| #390 | Benchmark matrix и синхронизация статуса | 🟡 частично | `product_status_contract.py` → `verdict: pass`; `verify_generated_status.py` → артефакты совпадают с генератором, exit 0; `benchmark_artifact.py`, провенанс-тесты | Job `Verify repository status` отсутствует в required checks `main`, поэтому рассинхронизация не блокирует мерж |
+| #389 | Кросс-платформенные фикстуры и checker CI | 🔴 не готов | `checker_matrix.py`, `cross_platform_evidence.py`, `native_read_evidence.py`; Windows-раннеры (`ci.yml:482`, `ci-nightly.yml:18`, `release.yml:92`) | macOS-раннер **есть** (`macos-latest` на py3.10/3.12 в полном tier `ci.yml`; `MOUNTFILE_EXPECTED_PLATFORMS: linux,windows,macos`). Блокер другой: JUnit macOS-ног не доходит до evidence-job → `macos_read_only_adapter_contract` = `not_collected`; в PR-tier macOS отключён намеренно |
+| #390 | Benchmark matrix и синхронизация статуса | 🟡 частично | `product_status_contract.py` → `verdict: pass`; `verify_generated_status.py` → артефакты совпадают с генератором, exit 0; `benchmark_artifact.py`, провенанс-тесты | Полный benchmark из clean checkout не подтверждён прогоном. Гейт статуса **в required checks есть** — `Verify (status, secrets, versions, tests)` |
 | #530 | Чек-лист P1–P4 (production readiness) | 🔴 не готов | Составлен на baseline v1.100.1; 19 пунктов с конкретными файлами и командами | **0 из 19** чекбоксов закрыто |
 | #87 | [EPIC] roadmap DFIR-инструмента | 🔴 не готов | Актуализирован на `96bda60` / v1.100.1 | Все 7 связанных дочерних issue открыты (0/7) |
 
@@ -43,7 +44,7 @@
 Acceptance по телу: «Writer остаётся disabled до positive/negative fixtures, rollback, process-kill recovery, malformed-journal refusal и independent-checker tests. До этого ext3/ext4 остаются read-only.»
 
 Готово: journal gate на `RECOVER`, независимый чекер `e2fsck -fn` на disposable copy, descriptor/data/commit/revoke-записи, sequence rollover, checkpointing-планировщик, malformed-journal refusal (`tests/test_jbd2_malformed_journal_refusal.py` уже присутствует в `main`).
-Не готово: применение checkpoint-плана (сейчас `mountfile/jbd2_checkpoint.py` только планирует), включение checksummed-журналов через `allow_checksums=True`, полная negative-fixture матрица.
+Не готово: исполнение checkpoint-плана — `mountfile/jbd2_checkpoint.py:71` прямо указывает, что модуль не меняет байты образа; полная negative-fixture матрица. **Уточнение:** `allow_checksums=True` уже включён в боевом пути (`ext4_native_writer.py:401`, `:439`, `:621`) — прежняя формулировка была неверной.
 
 ### #386 — NTFS writer + `$LogFile`
 `labels: enhancement, core, priority:high, blocked`
@@ -59,7 +60,7 @@ Acceptance: «NTFS mutation нельзя включать до transaction/repla
 Acceptance: «`power_loss` или `process_kill` нельзя публиковать как supported без воспроизводимого теста. Unsupported cells должны быть typed refusals, а не скрытыми skips.»
 
 Готово: точки инъекции отказов в писателях, process-kill тесты для ext4.
-Не готово: систематическая матрица по всем включённым писателям и фазам, публикация артефакта `failure-matrix` из nightly, условие закрытия — два ночных прогона подряд без расхождений.
+Не готово: полный прогон матрицы по всем включённым писателям и фазам. **Уточнение:** валидация артефакта в CI уже есть — `scripts/failure_matrix_artifact.py` вызывается в `ci.yml:150` и `acceptance-gates.yml:44,48,61`, плюс `tests/test_failure_matrix_artifact.py`; отсутствует именно исполнение всех ячеек, а не сам скрипт. Условие закрытия — два ночных прогона подряд без расхождений.
 
 ### #389 — кросс-платформенные фикстуры и checker CI
 `labels: enhancement, ci, tests, priority:medium`
@@ -67,7 +68,7 @@ Acceptance: «`power_loss` или `process_kill` нельзя публикова
 Acceptance: «Missing checker должен быть `unavailable` и не может превращать parity в pass. Каждый supported profile должен иметь independent oracle или явно документированное ограничение.»
 
 Готово: typed-вердикты чекеров (`CLEAN`, `NOT_VERIFIED_CLEAN`, `INCONCLUSIVE`, `UNAVAILABLE`, `TIMED_OUT`), матрица чекеров, Windows-раннеры, машинно-читаемые артефакты провенанса.
-Не готово: **macOS-раннера нет ни в одном workflow**; `macos_read_only_adapter_contract` → `not_collected` / `blocked`. Ключевое условие приёмки не выполнено.
+Не готово: **macOS-evidence не собирается**. **Уточнение:** macOS-раннер в матрице есть (`macos-latest`, полный tier), но evidence-job не получает JUnit этих ног, поэтому `macos_read_only_adapter_contract` = `not_collected` / `blocked`; в PR-tier macOS отключён намеренно. Не выполнено ключевое условие: у macOS-адаптера нет независимого оракула и собранных данных.
 
 ### #390 — benchmark matrix и синхронизация статуса
 `labels: documentation, enhancement, ci, priority:medium`
@@ -75,7 +76,7 @@ Acceptance: «Missing checker должен быть `unavailable` и не мож
 Acceptance: «Benchmark output должен запускаться из clean checkout. Status synchronization должен ломать CI, если docs или UI заявляют unsupported native writes или crash guarantees.»
 
 Готово: контракт статуса проходит (`verdict: pass`, claims `native_ext3_ext4_write=unsupported`, `native_ntfs_write=unsupported`, `power_loss=unsupported`, `parity=not_claimed`); генератор статуса сверяется с закоммиченными артефактами и совпадает (exit 0).
-Не готово: job `Verify repository status` отсутствует в required status checks ветки `main`, то есть рассинхронизация не блокирует мерж. Полный benchmark не подтверждён прогоном из clean checkout.
+Готово: job **присутствует** в required status checks `main` как `Verify (status, secrets, versions, tests)` — рассинхронизация мерж блокирует. Не готово: полный benchmark не подтверждён прогоном из clean checkout.
 
 ### #530 — чек-лист P1–P4
 `labels: priority:high, checklist, blocked`
@@ -134,23 +135,39 @@ Roadmap-эпик, актуализирован на `96bda60` / v1.100.1. Все
 | `scripts/product_status_contract.py` | присутствует |
 | `scripts/verify_generated_status.py` | присутствует |
 | `docs/generated/recovery-matrix.json` | присутствует |
-| macOS-раннер в `.github/` | **отсутствует** |
+| macOS-раннер в матрице `ci.yml` | присутствует (`macos-latest`, полный tier) |
+| JUnit macOS-ног в evidence-job | **отсутствует** — отсюда `not_collected` |
 
 ## 6. Риски
 
-1. **macOS-ветка не доказана.** Для #389 это прямое нарушение acceptance: у macOS-адаптера нет ни оракула, ни собранных данных.
-2. **Незакрытый гейт статуса.** Без `Verify repository status` в required checks регрессия README/UI пройдёт молча.
+1. **macOS-ветка не доказана.** Раннер есть, но его JUnit не доходит до evidence-job, поэтому у macOS-адаптера нет собранных данных — прямое нарушение acceptance #389.
+2. **30 уязвимостей Dependabot: 5 critical + 25 high.** Все в `Pillow` и `filelock`. `Pillow>=10.0` объявлен в `pyproject.toml:82`, но **не импортируется нигде** — `git grep 'from PIL|import PIL'` по `mountfile/`, `main.py`, `scripts/`, `tests/` на `96bda60` пуст. Фикс для всех critical — `13.0.0`.
 3. **Оракул NTFS остаётся собственным.** Пока сравнение идёт с тем же парсером, что и replay, доказательство круговое.
 4. **Шум автоматизации.** 71 из 81 закрытых issue — сгенерированные CI-инциденты; они маскируют содержательную историю.
 
 ## 7. Что делать по порядку
 
-1. #389 — добавить macOS-раннер в evidence-job (список платформ в `cross_platform_evidence.py` уже включает `macos`).
-2. #390 — вынести `Verify repository status` в required checks, переведя триггер на `pull_request`, чтобы чек отчитывался в head PR.
+1. **P0 — Pillow/filelock.** Поднять `Pillow>=13.0.0` (закрывает все 5 critical) либо удалить зависимость из `pyproject.toml:82`, если она не нужна; отдельно разобрать `filelock` (high). Проверка — `pip-audit`, уже в required checks.
+2. #389 — передать JUnit macOS/Windows-ног в evidence-job (список платформ в `cross_platform_evidence.py` уже включает `macos`).
 3. #530 — закрыть P1: `tests/ntfs_crash_fixture.py` (≥5 dirty-фикстур) + сравнение с эталоном после `chkdsk`.
-4. #385 — реализовать применение checkpoint-плана, затем включать `allow_checksums=True`.
+4. #385 — реализовать исполнение checkpoint-плана (`jbd2_checkpoint.py` пока не пишет байты); `allow_checksums=True` уже включён.
 5. #387 — вынести матрицу в nightly и закрыть после двух чистых прогонов.
 6. #384, #87 — закрывать только после #385, #386, #387, #389, #390, #530.
 
 ---
-Собрано автоматически; ссылки на issue — в разделе 2. Все утверждения о наличии файлов проверены в клоне `origin/main` @ `96bda60`.
+Собрано автоматически; ссылки на issue — в разделе 2. Наличие файлов проверялось в клоне `origin/main` @ `96bda60`; четыре утверждения оказались неверными и исправлены 2026-11-21 — см. раздел 8.
+
+## 8. Исправления от 2026-11-21
+
+Четыре утверждения первой редакции противоречили коду и сняты. Проверка выполнена на закреплённом срезе `96bda60`.
+
+| Что утверждалось | Что на самом деле | Чем проверено |
+|---|---|---|
+| «macOS-раннера нет ни в одном workflow» | Раннер есть: `macos-latest` на py3.10 и py3.12 в полном tier | `git show 96bda60:.github/workflows/ci.yml \| grep macos-latest`; `MOUNTFILE_EXPECTED_PLATFORMS: linux,windows,macos` |
+| «`Verify repository status` отсутствует в required checks» | Присутствует как `Verify (status, secrets, versions, tests)` | `gh api repos/.../branches/main/protection --jq .required_status_checks.contexts` |
+| «`allow_checksums=True` не включён» | Включён в боевом пути | `ext4_native_writer.py:401`, `:439`, `:621` |
+| «Матрица отказов не вынесена в CI» | Скрипт и валидация в CI есть; отсутствует исполнение всех ячеек | `ci.yml:150`; `acceptance-gates.yml:44,48,61` |
+
+Причины ошибок: greп по `runs-on: macos`, тогда как матрица использует `runs-on: ${{ matrix.os }}`; список required checks читался до его обновления; у `allow_checksums` проверялась только сигнатура с параметром, а не места вызова; workflows не проверялись на `failure_matrix_artifact.py`.
+
+Добавлено по итогам перепроверки: **30 открытых алертов Dependabot** — 5 critical, 25 high, 26 moderate, 4 low; critical целиком в `Pillow`, фикс `13.0.0`. Зависимость объявлена в `pyproject.toml:82` и не используется ни одним импортом, то есть это единственный настоящий P0 в репозитории — остальные открытые issue касаются ещё не включённых профилей записи и не создают риска в текущем продуктовом статусе.
