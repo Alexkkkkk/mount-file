@@ -18,7 +18,6 @@ if str(_REPO_ROOT) not in sys.path:
 from mountfile.capabilities import get_native_capability_matrix
 from mountfile.native_parity import run_parity_matrix
 from scripts.checker_matrix import build_report as build_checker_inventory
-from tests.native_parity_fixtures import build_native_reader_cases
 
 _READ_OPERATIONS = ("list", "stat", "read-file", "read-range", "extract")
 _REQUIRED_ADAPTER_TESTS = {
@@ -224,6 +223,11 @@ def build_evidence_report(
     windows_evidence_path: Path | None = None,
 ) -> dict[str, object]:
     """Generate real/synthetic fixtures and run all portable VFS read checks."""
+    # Keep ``--help`` and argument parsing usable in minimal environments. The
+    # fixture module imports optional test-only dependencies (Hypothesis), so it
+    # belongs on the report execution path rather than at module import time.
+    from tests.native_parity_fixtures import build_native_reader_cases
+
     with tempfile.TemporaryDirectory(prefix="mountfile-native-read-evidence-") as tmp:
         cases = build_native_reader_cases(Path(tmp))
         parity = run_parity_matrix(cases)
