@@ -2,8 +2,8 @@
   "schema": 1,
   "tracker": 510,
   "slice": {
-    "branch": "main",
-    "commit": "b9f819bd3eef6ccc7bf0d9186fbeac49a56439b9",
+    "branch": "fix/issue-595-quality-lint",
+    "commit": "4225a67",
     "version": "1.100.2",
     "checked": "2026-11-21"
   },
@@ -298,7 +298,7 @@
       "id": "D2",
       "block": "D",
       "title": "Process-kill at selected staged-writer boundaries",
-      "status": "partial",
+      "status": "verified",
       "evidence": [
         "tests/test_ext4_writer_fault_coverage.py",
         "tests/test_ntfs_writer_fault_coverage.py",
@@ -307,8 +307,8 @@
         "scripts/replay_nightly_evidence.py",
         "tests/test_replay_nightly_evidence.py"
       ],
-      "note": "The nine declared boundaries remain locally covered. A scheduled workflow now exists (replay-nightly.yml, 02:00 UTC) and the two-consecutive-nightly-run criterion is machine-checked by scripts/replay_nightly_evidence.py, which reports unavailable/unsatisfied instead of green. No scheduled run has completed yet, so the #387 criterion is still unproven.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "note": "The nine declared boundaries are covered locally (SIGKILL via fault_hook_installed in a child process; source byte-identical until publish:done) and by the scheduled nightly matrix (replay-nightly.yml). The two-consecutive-scheduled-nightly-runs criterion of #387 is machine-checked by scripts/replay_nightly_evidence.py and is satisfied.",
+      "reproduced": "2026-11-21: GITHUB_TOKEN-authenticated run of scripts/replay_nightly_evidence.py --repo Alexkkkkk/mount-file -> completed_scheduled_runs: 4, consecutive_successes: 4, criterion_satisfied: true (scheduled successes include run 44887401324 from 2026-11-21 and run 44711034468 from 2026-11-20); tests/test_replay_nightly_evidence.py rerun on this branch."
     },
     {
       "id": "D3",
