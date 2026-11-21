@@ -79,7 +79,7 @@ ci = [
     "regex>=2024.0.0",
 ]
 images = [
-    "Pillow>=10.0",
+    "Pillow>=13.0.0",
 ]
 api = [
     "fastapi>=0.115,<1.0",
