@@ -527,7 +527,9 @@ def test_unix_build_script_checks_real_exit_and_preserves_spec(tmp_path, failure
     (source / "dist").mkdir()
     (source / "dist" / "AuditBuild").write_bytes(b"old executable")
     fake = tmp_path / "fake-python"
-    fake.write_text("#!/usr/bin/env python3\n" + """
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        + """
 import json, os, pathlib, sys
 args = sys.argv[1:]
 with open(os.environ['CALL_LOG'], 'a') as log:
@@ -541,7 +543,8 @@ if args[:2] == ['-m', 'PyInstaller']:
     if os.environ['FAILURE'] == 'build':
         sys.exit(47)
     pathlib.Path('dist', args[args.index('--name') + 1]).write_bytes(b'new executable')
-""")
+"""
+    )
     fake.chmod(0o755)
     env = {
         **os.environ,
