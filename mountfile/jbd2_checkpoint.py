@@ -68,7 +68,12 @@ class JBD2CheckpointWrite:
 
 @dataclass(frozen=True)
 class JBD2CheckpointPlan:
-    """Immutable checkpoint plan; no image bytes are changed by this module."""
+    """Immutable description of one checkpoint.
+
+    Planning changes no image bytes.  Applying the plan to an image is the
+    job of :func:`execute_classic_jbd2_checkpoint`, which writes every data
+    block before the durable clean marker.
+    """
 
     writes: tuple[JBD2CheckpointWrite, ...]
     clean_superblock: bytes
