@@ -94,15 +94,15 @@ def test_transport_payload_requires_explicit_schedule_event():
             "workflow_runs": [{"id": 9, "status": "completed", "conclusion": "success"}]
         }
 
-    runs = module.fetch_scheduled_runs("owner/name", token="t0ken", transport=transport)
+    report = module.build_report(
+        "owner/name", token="t0ken", transport=transport, required=1
+    )
     assert "event=schedule" in seen["url"]
     assert "/repos/owner/name/actions/workflows/replay-nightly.yml/runs" in seen["url"]
     assert seen["token"] == "t0ken"
-    assert runs[0]["event"] is None
-    assert runs[0]["html_url"] is None
-    report = module.evaluate(runs, required=1)
-    assert report["completed_scheduled_runs"] == 0
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
     assert report["criterion_satisfied"] is False
+    assert "explicit event" in report["reason"]
 
 
 def test_cli_fails_closed_without_a_token(tmp_path, monkeypatch, capsys):

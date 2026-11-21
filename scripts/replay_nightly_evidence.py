@@ -104,15 +104,17 @@ def fetch_scheduled_runs(
     for run in runs:
         if not isinstance(run, dict):
             raise EvidenceUnavailable("workflow_runs contains a non-object entry")
+        event = run.get("event")
+        if not isinstance(event, str) or not event:
+            raise EvidenceUnavailable(
+                "workflow_runs contains an entry without an explicit event"
+            )
         normalised.append(
             {
                 "id": run.get("id"),
                 "status": run.get("status"),
                 "conclusion": run.get("conclusion"),
-                # The API request filters by event, but a missing event in a
-                # malformed or mocked payload must not be promoted to
-                # ``schedule``. Keep it invalid so evaluate() excludes it.
-                "event": run.get("event"),
+                "event": event,
                 "created_at": run.get("created_at"),
                 "head_sha": run.get("head_sha"),
                 "head_branch": run.get("head_branch"),
