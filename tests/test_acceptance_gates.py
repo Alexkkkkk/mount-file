@@ -242,7 +242,7 @@ def test_manifest_slice_describes_main_and_cites_the_d3_matrix() -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     header = payload["slice"]
     assert header["branch"] == "main", header
-    assert header["checked"] == "2026-11-20"
+    assert header["checked"] == "2026-11-21"
 
     items = {item["id"]: item for item in payload["items"]}
     assert "tests/test_hash_preservation_matrix.py" in items["D3"]["evidence"]
