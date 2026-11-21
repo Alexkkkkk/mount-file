@@ -249,9 +249,12 @@
         "tests/test_ntfs_acceptance_independent_checker.py",
         "scripts/windows_ntfs_acceptance.ps1",
         ".github/workflows/ntfs-windows-acceptance.yml",
-        "tests/test_windows_ntfs_acceptance_contract.py"
+        "tests/test_windows_ntfs_acceptance_contract.py",
+        "tests/ntfs_oracle.py",
+        "tests/test_ntfs_replay_oracle.py",
+        "scripts/ntfs_oracle_evidence.py"
       ],
-      "note": "The Windows harness now captures an actual child-process termination during NTFS writes, then compares bounded raw $MFT/$BITMAP snapshots from the crash state to the post-chkdsk-repair state. ntfsfix -n remains secondary evidence only. This is a real Windows crash/checker lifecycle, but it is not yet a native MountFile replay fixture: full replay parity still requires a captured $LogFile transaction and byte-level comparison against native replay output.",
+      "note": "оракул ntfsfix + побайтовое сравнение добавлены (#595); вердикт pass ждёт ночного прогона с ntfs-3g",
       "reproduced": "2026-11-18: Windows run 44232313344 on windows-latest passed the abrupt child-process kill fixture, raw crash snapshot, chkdsk /f repair, raw repaired snapshot, exact $MFT/$BITMAP comparator, clean post-repair /scan and unchanged sentinel SHA-256. The focused contract/nightly-evidence tests passed locally. C6 remains partial only for the still-unimplemented native replay-parity oracle."
     },
     {
