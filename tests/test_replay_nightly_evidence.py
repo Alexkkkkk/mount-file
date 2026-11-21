@@ -84,7 +84,7 @@ def test_malformed_payload_never_turns_green():
     assert report["criterion_satisfied"] is False
 
 
-def test_transport_payload_is_normalised_and_queried_with_schedule_filter():
+def test_transport_payload_requires_explicit_schedule_event():
     seen = {}
 
     def transport(url, token):
@@ -98,8 +98,11 @@ def test_transport_payload_is_normalised_and_queried_with_schedule_filter():
     assert "event=schedule" in seen["url"]
     assert "/repos/owner/name/actions/workflows/replay-nightly.yml/runs" in seen["url"]
     assert seen["token"] == "t0ken"
-    assert runs[0]["event"] == "schedule"
+    assert runs[0]["event"] is None
     assert runs[0]["html_url"] is None
+    report = module.evaluate(runs, required=1)
+    assert report["completed_scheduled_runs"] == 0
+    assert report["criterion_satisfied"] is False
 
 
 def test_cli_fails_closed_without_a_token(tmp_path, monkeypatch, capsys):

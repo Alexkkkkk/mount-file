@@ -26,7 +26,8 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 API_ROOT = "https://api.github.com"
 DEFAULT_WORKFLOW = "replay-nightly.yml"
@@ -108,7 +109,10 @@ def fetch_scheduled_runs(
                 "id": run.get("id"),
                 "status": run.get("status"),
                 "conclusion": run.get("conclusion"),
-                "event": run.get("event") or "schedule",
+                # The API request filters by event, but a missing event in a
+                # malformed or mocked payload must not be promoted to
+                # ``schedule``. Keep it invalid so evaluate() excludes it.
+                "event": run.get("event"),
                 "created_at": run.get("created_at"),
                 "head_sha": run.get("head_sha"),
                 "head_branch": run.get("head_branch"),
