@@ -1,8 +1,10 @@
 # Issue #510 acceptance status
 
-Status snapshot: 2026-11-17. This follow-up starts from `main@9769bab`. The full local suite on code head `57b3c77` completed with **2763 passed, 99 skipped** in 225.59s; the focused writer/checker/failure suite reported **97 passed, 3 skipped**. Skips were for optional/platform tools unavailable in the sandbox. Earlier per-subsystem counts below are historical unless explicitly tied to this run. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
+# Historical status snapshot: 2026-11-17
 
-Update 2026-11-17 (housekeeping): the branch `fix/issue-510-ntfs-post-crash-readback` @ `57b3c77` that carried this snapshot has been merged into `main` (`4fe6b4e`) via PRs #537-#544 (staged NTFS read-back, ext4/NTFS failure-injection matrices, nightly-evidence gate, tracker syncs). Evidence references to `57b3c77` remain valid as historical run provenance; the current code head is `main @ 4fe6b4e` (v1.96.0). The machine-readable tracker slice in `docs/replay-acceptance.json` is resynced separately in PR #546. No status is promoted by this note.
+This follow-up started from `main@9769bab`. The full local suite on code head `57b3c77` completed with **2763 passed, 99 skipped** in 225.59s; the focused writer/checker/failure suite reported **97 passed, 3 skipped**. Skips were for optional/platform tools unavailable in the sandbox. Earlier per-subsystem counts below are historical unless explicitly tied to this run. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
+
+Update 2026-11-17 (historical housekeeping): the branch `fix/issue-510-ntfs-post-crash-readback` @ `57b3c77` that carried this snapshot was merged into `main` (`4fe6b4e`) via PRs #537-#544 (staged NTFS read-back, ext4/NTFS failure-injection matrices, nightly-evidence gate, tracker syncs). Evidence references to `57b3c77` remain valid as historical run provenance; the current code head at the time of this note was `main @ 4fe6b4e` (v1.96.0). The live tracker slice is maintained in `docs/replay-acceptance.json` and currently points to `main @ c9937f5` (v1.100.1). No status is promoted by this note.
 
 ## ext4 / JBD2
 

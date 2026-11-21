@@ -29,8 +29,8 @@
         "pyproject.toml",
         "mountfile/__init__.py"
       ],
-      "reproduced": "2026-11-16: тег v1.96.0 = 3a59d36 (git ls-remote) содержит #508; pyproject.toml и __version__ = 1.96.0",
-      "note": "v1.96.0 = 3a59d36; HEAD main (a9d21a3) впереди тега только фиксами доказательной базы (#532, #533)"
+      "reproduced": "2026-11-21: git merge-base --is-ancestor v1.100.1 HEAD; pyproject.toml и mountfile/__init__.py = 1.100.1",
+      "note": "v1.100.1 является предком текущего HEAD; ancestry проверяется probe_a2."
     },
     {
       "id": "A3",

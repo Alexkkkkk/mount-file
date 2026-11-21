@@ -1,6 +1,6 @@
 {
   "schema": "mountfile.acceptance-blocks/v1",
-  "generated": "2026-11-18T08:18:13Z",
+  "generated": "2026-11-21T14:48:24Z",
   "declared_checks": 32,
   "counts": {
     "verified": 15,
@@ -8,14 +8,7 @@
     "blocked": 1,
     "total": 32
   },
-  "drift": [
-    "B10: manifest=verified probe=partial",
-    "B4: manifest=verified probe=partial",
-    "B7: manifest=verified probe=partial",
-    "C2: manifest=verified probe=partial",
-    "C8: manifest=verified probe=partial",
-    "E2: manifest=verified probe=partial"
-  ],
+  "drift": [],
   "checkers": {
     "e2fsck": {
       "tool": "e2fsck",
@@ -77,10 +70,10 @@
       "title": "Release contains the safe code",
       "tier": "behaviour",
       "status": "verified",
-      "detail": "release tag v1.98.0 is an ancestor of HEAD bd06b9f",
+      "detail": "release tag v1.100.1 is an ancestor of HEAD 84d85e6",
       "payload": {
-        "tag": "v1.98.0",
-        "head": "bd06b9f",
+        "tag": "v1.100.1",
+        "head": "84d85e6",
         "tag_is_ancestor": true
       }
     },
@@ -370,9 +363,10 @@
       "title": "JUnit-backed failure-state artifact",
       "tier": "structure",
       "status": "partial",
-      "detail": "scripts/failure_matrix_artifact.py present; CI wiring declared in 35 workflow(s)",
+      "detail": "artifact round-trip passes; CI validation wiring declared in 36 workflow(s); scheduled acceptance remains unproven",
       "payload": {
         "workflows": [
+          "acceptance-gates.yml",
           "auto-label.yml",
           "auto-merge.yml",
           "autofix.yml",
@@ -408,7 +402,9 @@
           "sync.yml",
           "type-check.yml",
           "version-bump.yml"
-        ]
+        ],
+        "artifact_verdict": "execution_recorded",
+        "validation_verdict": "pass"
       }
     },
     {
