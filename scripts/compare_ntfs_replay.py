@@ -25,7 +25,15 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 from pathlib import Path
+
+# When launched as ``python scripts/compare_ntfs_replay.py`` Python puts only
+# ``scripts/`` on sys.path. Add the repository root before importing the
+# production package so the documented direct CLI form works from any cwd.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from mountfile.ntfs_logfile import NtfsLogFileError
 from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
