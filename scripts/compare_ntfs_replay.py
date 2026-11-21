@@ -30,10 +30,10 @@ from pathlib import Path
 from mountfile.ntfs_logfile import NtfsLogFileError
 from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
 
-if __package__:
-    from .compare_ntfs_snapshots import compare_file
-    from .windows_ntfs_raw_snapshot import snapshot_image
-else:  # Direct invocation as ``python scripts/compare_ntfs_replay.py``.
+try:  # Works both as ``python -m scripts...`` and as a direct file on Windows.
+    from scripts.compare_ntfs_snapshots import compare_file
+    from scripts.windows_ntfs_raw_snapshot import snapshot_image
+except ModuleNotFoundError:  # pragma: no cover - exercised by direct CLI launch
     from compare_ntfs_snapshots import compare_file
     from windows_ntfs_raw_snapshot import snapshot_image
 
