@@ -182,6 +182,22 @@ simulate an OS or power failure, so this run is not a C6 crash fixture. NTFS
 replay acceptance remains blocked pending an authoritative explanation or a
 valid independent Windows crash capture with byte-level replay parity.
 
+A follow-up capture from CI run `44866571253` (PR head
+`6e5e743a590f98a2d94f14381f4dc31f53bb50a8`) is also blocked, not a replay pass.
+Its `$LogFile` is 2,686,976 bytes with SHA-256
+`27148b60f8c1cc06e7c6c011e6ac59ac1a10dd618754c34680dcd3047f56b230`; the captured
+raw volume is 267,321,344 bytes with SHA-256
+`8d04fbce6de60944d9255e636334219ac607d49c23c5c8bdc7c86ca77c01b661`. The parser
+reaches LSN `1068572` at RCRD page 39, offset 224 (stream offset 159,968). This
+non-multi-page record declares a 40-byte client body, but redo is `[40:752)`
+(`ZeroEndOfFileRecord`), so the record is refused. Windows `chkdsk /scan` was
+clean before the harness set the dirty bit; the dirty scan required offline
+repair, `chkdsk /f` succeeded, and the post-repair scan was clean. The comparator
+did not catch `NtfsLogFileError` and raised before emitting its JSON report, so
+no native-vs-Windows byte-parity result exists. As above, terminating the writer
+child and setting the dirty bit does not simulate OS or power failure; C6 and
+NTFS replay acceptance remain blocked.
+
 ## Operations
 
 `enum NTFS_LOG_OPERATION` (fslog.c:298-340): `Noop` 0x00,

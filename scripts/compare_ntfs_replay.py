@@ -15,6 +15,7 @@ import json
 import shutil
 from pathlib import Path
 
+from mountfile.ntfs_logfile import NtfsLogFileError
 from mountfile.ntfs_replay import NtfsReplayError, native_ntfs_recover
 
 if __package__:
@@ -74,7 +75,7 @@ def compare_replay(
             if all(item["byte_identical"] for item in streams.values())
             else "mismatch"
         )
-    except (NtfsReplayError, OSError, ValueError) as exc:
+    except (NtfsLogFileError, NtfsReplayError, OSError, ValueError) as exc:
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)
     output.write_text(

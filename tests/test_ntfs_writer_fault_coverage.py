@@ -14,7 +14,10 @@ import pytest
 
 from mountfile.native_write import ENABLE_ENV, FAULT_POINTS, fault_point_trace
 from mountfile.ntfs_native_writer import NtfsNativeWriter
-from mountfile.ntfs_replay import NTFS_REPLAY_WRITE_FAULT_POINTS
+from mountfile.ntfs_replay import (
+    NTFS_REPLAY_FAULT_POINTS,
+    NTFS_REPLAY_WRITE_FAULT_POINTS,
+)
 from tests.ntfs_crash_fixture import make_crash_fixture
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -112,7 +115,10 @@ def test_ntfs_writer_emits_declared_and_replay_stage_boundaries(
     or shutil.which("ntfscat") is None,
     reason="ntfs-3g tools (mkntfs/ntfscp/ntfscat) are unavailable",
 )
-@pytest.mark.parametrize("point", (*FAULT_POINTS, *NTFS_REPLAY_WRITE_FAULT_POINTS))
+@pytest.mark.parametrize(
+    "point",
+    (*FAULT_POINTS, *NTFS_REPLAY_WRITE_FAULT_POINTS, *NTFS_REPLAY_FAULT_POINTS),
+)
 def test_ntfs_process_kill_preserves_source_until_atomic_replace(
     tmp_path, point
 ) -> None:
