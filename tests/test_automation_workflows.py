@@ -286,6 +286,26 @@ def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs
     assert "  security-gate:\n    name: security-gate" in security
 
 
+def test_ci_full_tier_and_status_gate_cover_issue_595_contract():
+    ci = workflow("ci.yml")
+    status_sync = workflow("status-sync.yml")
+
+    # The expensive macOS evidence is intentionally a main-push/full-tier
+    # concern, while PRs retain the Linux+Windows fast tier.
+    assert '"os":"macos-latest","python":"3.10"' in ci
+    assert '"os":"macos-latest","python":"3.12"' in ci
+    assert "MOUNTFILE_EXPECTED_PLATFORMS" in ci
+    assert "'linux,windows,macos'" in ci
+
+    # Status synchronization must validate PR data from a trusted workflow
+    # without writing to the PR branch. The required protected context is
+    # emitted by repo-status-verify in ci.yml, not by a write-back workflow.
+    assert "pull_request_target:" in status_sync
+    assert "name: Verify (status, secrets, versions, tests)" in ci
+    assert "git push" not in status_sync
+    assert "git commit" not in status_sync
+
+
 def test_workflow_quality_validation_is_integrity_checked():
     text = workflow("quality.yml")
     assert "actionlint" in text

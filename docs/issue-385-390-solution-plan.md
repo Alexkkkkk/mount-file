@@ -17,7 +17,7 @@
 - **#387:** PR #407 добавил machine-readable recovery matrix, PR #417 — executable recovery acceptance и Linux artifacts. Это ограниченные тесты, а не полная матрица acceptance; `power_loss` остаётся `unsupported`. [26] [27] [8]
 - **#388:** PR #399 добавил `stat`, PR #400 — bounded RW `read_range` (до 1 MiB). Требование полного вызова каждой положительной/отрицательной operation cell и сохранения refusal/fallback parity across interfaces всё ещё требует отдельного conformance прохода. [28] [29] [30]
 - **#389:** PR #397/#404/#416 добавили bounded tool inventory и checker acceptance; PR #441 расширил cross-platform native-read evidence. Текущая полная main matrix включает Linux, Windows и macOS, но read-only VFS evidence не является independent filesystem parity. [31] [32] [33] [34]
-- **#390:** status contract и benchmark artifact validator присутствуют. Required `Verify (status, secrets, versions, tests)` check сейчас входит в branch protection; отдельный `status-sync.yml` не добавлен в required contexts этим изменением. Benchmark coverage остаётся read-only и Linux-specific. [35] [36] [37] [38] [39] [40]
+- **#390:** status contract и benchmark artifact validator присутствуют. Required `Verify (status, secrets, versions, tests)` check входит в branch protection and is emitted by `repo-status-verify` on every push/PR. `status-sync.yml` is a separate trusted `pull_request_target` validation path; it does not write back to PR branches and is not a required context. Benchmark coverage remains read-only and Linux-specific. [35] [36] [37] [38] [39] [40]
 
 ## #385 — ext3/ext4 writer с JBD2
 
