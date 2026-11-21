@@ -38,10 +38,10 @@ result back.  Neither API guesses MFT/attribute/runlist locations or replaces
 the missing filesystem-aware image executor.
 
 Refusals are typed, never silent: a log page whose size differs from the 4 KiB
-system page, records that cross the page's free-space boundary, multi-page
-records, ``transact_id`` values that are not valid table offsets, redo/undo
-slices that leave the record body, duplicated LSNs and unknown page signatures
-all raise :class:`NtfsLogFileError`.
+system page, records that cross a page without the multi-page flag, unsupported
+ring-wrapping records, ``transact_id`` values that are not valid table offsets,
+redo/undo slices that leave the record body, duplicated LSNs and unknown page
+signatures all raise :class:`NtfsLogFileError`.
 """
 
 from __future__ import annotations
@@ -195,6 +195,10 @@ EXECUTION_BLOCKERS = (
 
 class NtfsLogFileError(NativeWriteUnsafe):
     """The log stream is outside the parsed-and-proven bounded profile."""
+
+
+class NtfsLogFileNeverWritten(NtfsLogFileError):
+    """Both restart pages are still erased, so the log was never initialized."""
 
 
 class NtfsReplayOverlayError(NtfsLogFileError):
@@ -1024,6 +1028,12 @@ def parse_restart_pages(stream: bytes) -> tuple[NtfsLogFileRestartArea, bytes]:
 
     if len(stream) < 2 * RESTART_PAGE_SIZE:
         raise NtfsLogFileError("$LogFile is too small to hold two restart pages")
+    restart_pages = (
+        stream[:RESTART_PAGE_SIZE],
+        stream[RESTART_PAGE_SIZE : 2 * RESTART_PAGE_SIZE],
+    )
+    if all(not page.strip(b"\xff") for page in restart_pages):
+        raise NtfsLogFileNeverWritten("NTFS $LogFile restart pages were never written")
     pages = []
     for index in range(2):
         raw = stream[index * RESTART_PAGE_SIZE : (index + 1) * RESTART_PAGE_SIZE]
@@ -1143,6 +1153,7 @@ def _parse_record(
     offset: int,
     free_offset: int,
     area: NtfsLogFileRestartArea,
+    assembled_body: bytes | None = None,
 ) -> LogRecord:
     """Validate one LFS record header and its log-record body."""
 
@@ -1154,11 +1165,6 @@ def _parse_record(
     rec_hdr_len = area.log_record_header_length
     if rtype not in (LFS_CLIENT_RECORD, LFS_CLIENT_RESTART):
         raise NtfsLogFileError(f"log record at LSN {this_lsn} has unknown type {rtype}")
-    if flags & LOG_RECORD_MULTI_PAGE:
-        raise NtfsLogFileError(
-            f"log record at LSN {this_lsn} is flagged multi-page; records that span "
-            "pages are outside the parsed profile"
-        )
     if index not in (0, LFS_NO_CLIENT):
         raise NtfsLogFileError(
             f"log record at LSN {this_lsn} belongs to client {index}, not the single "
@@ -1168,13 +1174,26 @@ def _parse_record(
         raise NtfsLogFileError(
             f"log record at LSN {this_lsn} has an unaligned data length {data_len}"
         )
-    end = offset + rec_hdr_len + data_len
-    if end > free_offset:
-        raise NtfsLogFileError(
-            f"log record at LSN {this_lsn} ends at {end}, past the page's free-space "
-            f"offset {free_offset}"
-        )
-    body = page[offset + rec_hdr_len : end]
+    if flags & LOG_RECORD_MULTI_PAGE:
+        if assembled_body is None or len(assembled_body) != data_len:
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {this_lsn} has no complete body"
+            )
+        body = assembled_body
+    else:
+        if assembled_body is not None:
+            raise NtfsLogFileError("non-multi-page log record has an assembled body")
+        end = offset + rec_hdr_len + data_len
+        if end > free_offset:
+            raise NtfsLogFileError(
+                f"log record at LSN {this_lsn} ends at {end}, past the page's free-space "
+                f"offset {free_offset}"
+            )
+        if end > len(page):
+            raise NtfsLogFileError(
+                f"log record at LSN {this_lsn} crosses a page without the multi-page flag"
+            )
+        body = page[offset + rec_hdr_len : end]
 
     restart = None
     redo_op = undo_op = 0
@@ -1275,6 +1294,88 @@ def _parse_record(
     )
 
 
+def _read_multi_page_body(
+    stream: bytes,
+    area: NtfsLogFileRestartArea,
+    *,
+    first_page: bytes,
+    first_page_offset: int,
+    record_offset: int,
+    record_lsn: int,
+    data_length: int,
+) -> tuple[bytes, int, int]:
+    """Collect a record body across consecutive RCRD pages.
+
+    The first page contains the LFS header and the first part of the body.
+    Continuation pages start at ``log_page_data_offset`` and contain no LFS
+    header. Ring-wrapping records are refused rather than parsed incompletely;
+    their logical ordering needs a separate ring-start reconstruction.
+    """
+
+    page_size = area.log_page_size
+    first_body_offset = record_offset + area.log_record_header_length
+    first_capacity = page_size - first_body_offset
+    if data_length <= first_capacity:
+        raise NtfsLogFileError(
+            f"log record at LSN {record_lsn} is flagged multi-page but fits on one page"
+        )
+    if data_length > area.file_size or data_length > MAX_LOG_BYTES:
+        raise NtfsLogFileError(
+            f"multi-page log record at LSN {record_lsn} exceeds the parser budget"
+        )
+    chunks = [first_page[first_body_offset:page_size]]
+    remaining = data_length - first_capacity
+    next_page_offset = first_page_offset + page_size
+    end_cursor = area.log_page_data_offset
+    while remaining:
+        if next_page_offset >= area.file_size:
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {record_lsn} wraps the log-file ring"
+            )
+        if next_page_offset + page_size > len(stream):
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {record_lsn} has a truncated continuation"
+            )
+        raw = stream[next_page_offset : next_page_offset + page_size]
+        try:
+            continuation = _fixup_page(raw, RCRD_MAGIC, page_size=page_size)
+        except (_UnusedPage, NtfsLogFileError) as exc:
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {record_lsn} has an invalid continuation "
+                f"on page {next_page_offset // page_size}: {exc}"
+            ) from exc
+        page_lsn = struct.unpack_from("<Q", continuation, 0x08)[0]
+        if page_lsn < record_lsn:
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {record_lsn} continues on an older page"
+            )
+        take = min(remaining, page_size - area.log_page_data_offset)
+        chunks.append(
+            continuation[area.log_page_data_offset : area.log_page_data_offset + take]
+        )
+        remaining -= take
+        page_end_flag = struct.unpack_from("<I", continuation, 0x10)[0] & 1
+        last_end_lsn = struct.unpack_from("<Q", continuation, 0x20)[0]
+        if remaining:
+            if page_end_flag and last_end_lsn >= record_lsn:
+                raise NtfsLogFileError(
+                    f"multi-page log record at LSN {record_lsn} is followed by an end-page "
+                    "marker before its body is complete"
+                )
+            next_page_offset += page_size
+            continue
+        if not page_end_flag or last_end_lsn < record_lsn:
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {record_lsn} does not end on a validated page"
+            )
+        end_cursor = _align8(area.log_page_data_offset + take)
+        if end_cursor > page_size:
+            raise NtfsLogFileError(
+                f"multi-page log record at LSN {record_lsn} has an invalid end offset"
+            )
+    return b"".join(chunks), next_page_offset, end_cursor
+
+
 def _scan_records(
     stream: bytes, area: NtfsLogFileRestartArea, *, first_page: int
 ) -> tuple[list[LogRecord], bool]:
@@ -1283,12 +1384,14 @@ def _scan_records(
     usable = min(area.file_size, len(stream))
     truncated = len(stream) < area.file_size
     offset = first_page
+    cursor = area.log_page_data_offset
     while offset + page_size <= usable:
         raw = stream[offset : offset + page_size]
         try:
             page = _fixup_page(raw, RCRD_MAGIC, page_size=page_size)
         except _UnusedPage:
             offset += page_size
+            cursor = area.log_page_data_offset
             continue
         page_index = offset // page_size
         free_offset = struct.unpack_from("<H", page, 0x18)[0]
@@ -1301,9 +1404,31 @@ def _scan_records(
                 f"log page {page_index} free-space offset {free_offset} is below the "
                 f"record area start {area.log_page_data_offset}"
             )
-        cursor = area.log_page_data_offset
-        while cursor + area.log_record_header_length <= free_offset:
+        continued_to_later_page = False
+        while cursor + area.log_record_header_length <= page_size:
+            if cursor > free_offset:
+                break
             if not any(page[cursor : cursor + area.log_record_header_length]):
+                break
+            flags = struct.unpack_from("<H", page, cursor + 0x28)[0]
+            if cursor == free_offset and not flags & LOG_RECORD_MULTI_PAGE:
+                break
+            assembled_body = None
+            end_page_offset = offset
+            end_cursor = 0
+            if flags & LOG_RECORD_MULTI_PAGE:
+                record_lsn = struct.unpack_from("<Q", page, cursor)[0]
+                data_length = struct.unpack_from("<I", page, cursor + 0x18)[0]
+                assembled_body, end_page_offset, end_cursor = _read_multi_page_body(
+                    stream,
+                    area,
+                    first_page=page,
+                    first_page_offset=offset,
+                    record_offset=cursor,
+                    record_lsn=record_lsn,
+                    data_length=data_length,
+                )
+            elif cursor + area.log_record_header_length > free_offset:
                 break
             try:
                 record = _parse_record(
@@ -1312,6 +1437,7 @@ def _scan_records(
                     offset=cursor,
                     free_offset=free_offset,
                     area=area,
+                    assembled_body=assembled_body,
                 )
             except _EndOfRecords:
                 break
@@ -1319,10 +1445,21 @@ def _scan_records(
             records.append(record)
             if len(records) > MAX_RECORDS:
                 raise NtfsLogFileError("$LogFile exceeds the parsed record budget")
-            cursor = _align8(
-                cursor + area.log_record_header_length + record.data_length
-            )
+            if flags & LOG_RECORD_MULTI_PAGE:
+                if end_page_offset != offset:
+                    offset = end_page_offset
+                    cursor = end_cursor
+                    continued_to_later_page = True
+                    break
+                cursor = end_cursor
+            else:
+                cursor = _align8(
+                    cursor + area.log_record_header_length + record.data_length
+                )
+        if continued_to_later_page:
+            continue
         offset += page_size
+        cursor = area.log_page_data_offset
     return records, truncated
 
 

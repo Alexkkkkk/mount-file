@@ -400,6 +400,7 @@ publish_ntfs_replay(
 """
 
 
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
 @pytest.mark.parametrize("phase", NTFS_ALLOCATION_FAULT_POINTS)
 @pytest.mark.skipif(
     not hasattr(signal, "SIGKILL"),

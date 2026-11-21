@@ -4,8 +4,8 @@
   "slice": {
     "branch": "main",
     "commit": "0cc2633",
-    "version": "1.99.0",
-    "checked": "2026-11-20"
+    "version": "1.100.0",
+    "checked": "2026-11-21"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -317,7 +317,8 @@
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_jbd2_malformed_journal_refusal.py",
         "tests/test_ntfs_write_phase_injection.py",
-        "tests/test_ntfs_native_write_phase_injection.py"
+        "tests/test_ntfs_native_write_phase_injection.py",
+        "tests/test_hash_preservation_matrix.py"
       ],
       "note": "Hash/sentinel assertions exist for selected writer fault and refusal cases; the native NTFS chain now proves byte-identical source preservation at every declared injection phase (copy, gate_pre, data_write, post_verify, identity_verify, publish) with no surviving stage, mirroring the ext4 matrix; SIGKILL matrix covers all 9 FAULT_POINTS with SHA-256 before/after. This still does not prove preservation for every profile x operation x phase cell beyond the two native writers.",
       "reproduced": "2026-11-20: python -m pytest tests/test_ntfs_native_write_phase_injection.py -> 8 passed (assert after == before in each cell; leftovers == [clean.img]); tests/test_ntfs_writer_fault_coverage.py -> 10 passed"

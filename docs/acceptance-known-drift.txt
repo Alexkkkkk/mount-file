@@ -1,0 +1,22 @@
+# Known drift between docs/replay-acceptance.json and the #510 probes.
+#
+# Read by `python scripts/acceptance_blocks.py --check --baseline <this file>`.
+# Each entry is `<item id>  # <why the probe cannot agree today>`.
+#
+# NO ACTIVE WAIVERS as of 2026-11-20.  The six structure-tier ids this file
+# used to waive (B4, B7, B10, C2, C8, E2) were reconciled in the manifest
+# itself, so the probe tier and the recorded status now agree and the gate is
+# closed in both directions: any new disagreement fails, and any entry left
+# here that no longer drifts fails as "stale".
+#
+# A structure probe can never report `verified` on its own (see BlockCheck.run
+# in mountfile/acceptance/blocks.py: a file existing is not the property
+# holding).  If such an item is ever recorded as `verified` while its probe
+# reports lower, that is a category mismatch to waive HERE with a reason -
+# never by editing the probe or by lowering the manifest status to match it.
+#
+# Rules enforced by tests/test_acceptance_gates.py:
+#   * a baselined id must be a structure-tier probe;
+#   * the baseline must match the drift observed today (no stale ids), so a
+#     fixed item forces its entry to be deleted instead of silently hiding a
+#     future regression.

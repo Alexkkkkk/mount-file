@@ -33,7 +33,7 @@ jobs:
         run: python scripts/replay_acceptance_status.py --check
 
       - name: Check acceptance probes
-        run: python scripts/acceptance_blocks.py --check
+        run: python scripts/acceptance_blocks.py --check --baseline docs/acceptance-known-drift.txt
 
       - name: Check tracker slice
         run: python scripts/replay_slice_sync.py --check --strict

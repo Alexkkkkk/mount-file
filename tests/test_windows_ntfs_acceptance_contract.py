@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Static contract tests for the real Windows NTFS acceptance workflow."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -123,6 +126,22 @@ def test_raw_snapshot_rejects_invalid_sector_sizes(sector_size):
 def test_raw_snapshot_rejects_invalid_or_unbounded_device_windows(offset, volume_size):
     with pytest.raises(NtfsMetadataError):
         _validate_device_window(offset, volume_size)
+
+
+def test_replay_comparator_supports_direct_script_invocation(tmp_path):
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, str(REPLAY_COMPARE), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--crash-image" in result.stdout
 
 
 def test_windows_acceptance_treats_not_applicable_replay_as_typed_outcome():

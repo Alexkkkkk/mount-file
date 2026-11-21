@@ -155,6 +155,49 @@ different lengths. Using one payload for both (the v1 draft of issue #510) makes
 an undo write redo bytes -- that is corruption, not recovery. The v2 draft
 (`docs/ci-drafts/ntfs_logfile_replay_v2.py`) and this module keep them separate.
 
+### Multi-page records
+
+When `LOG_RECORD_MULTI_PAGE` is set, the LFS header occurs only on the first
+page. The parser copies the declared `client_data_len` beginning immediately
+after that header, then continues at `data_off` on each following `RCRD` page.
+It validates the continuation page's USA and LSN, and requires the final page's
+`LOG_PAGE_LOG_RECORD_END` marker and `last_end_lsn` to cover the record. After
+the body ends, scanning resumes at the next aligned record on that final page.
+Ring-wrapping multi-page records remain a typed refusal; the parser does not
+guess the ring's logical start. A non-multi-page record whose redo or undo slice
+extends beyond `client_data_len` is also rejected before replay.
+
+The Windows acceptance capture in CI run `44788528276` is not a replay pass.
+The parser assembled four multi-page records, then reached LSN `2117148` at page
+39 offset `224`. Its LFS header declares 40 client-data bytes, while the body
+declares a redo slice `[40:752)`. The native executor refuses this malformed
+record; it does not skip it or mutate the captured volume. The captured
+`LogFile.bin` SHA-256 is
+`e6d1da6460f3f92d1ba31377f1e23755e3650ed9c63206b457013174c7fbbc22`, and the
+captured volume SHA-256 remained
+`1f140fae91ff6aff9484e843d4e8b3593dc284b0f10ff9032accb48b91fae913` before and
+after the refusal. This is evidence of safe refusal, not Windows replay parity.
+The harness terminates a writer child and sets the dirty bit; it does not
+simulate an OS or power failure, so this run is not a C6 crash fixture. NTFS
+replay acceptance remains blocked pending an authoritative explanation or a
+valid independent Windows crash capture with byte-level replay parity.
+
+A follow-up capture from CI run `44866571253` (PR head
+`6e5e743a590f98a2d94f14381f4dc31f53bb50a8`) is also blocked, not a replay pass.
+Its `$LogFile` is 2,686,976 bytes with SHA-256
+`27148b60f8c1cc06e7c6c011e6ac59ac1a10dd618754c34680dcd3047f56b230`; the captured
+raw volume is 267,321,344 bytes with SHA-256
+`8d04fbce6de60944d9255e636334219ac607d49c23c5c8bdc7c86ca77c01b661`. The parser
+reaches LSN `1068572` at RCRD page 39, offset 224 (stream offset 159,968). This
+non-multi-page record declares a 40-byte client body, but redo is `[40:752)`
+(`ZeroEndOfFileRecord`), so the record is refused. Windows `chkdsk /scan` was
+clean before the harness set the dirty bit; the dirty scan required offline
+repair, `chkdsk /f` succeeded, and the post-repair scan was clean. The comparator
+did not catch `NtfsLogFileError` and raised before emitting its JSON report, so
+no native-vs-Windows byte-parity result exists. As above, terminating the writer
+child and setting the dirty bit does not simulate OS or power failure; C6 and
+NTFS replay acceptance remain blocked.
+
 ## Operations
 
 `enum NTFS_LOG_OPERATION` (fslog.c:298-340): `Noop` 0x00,

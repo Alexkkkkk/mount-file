@@ -14,8 +14,7 @@ moved to ``1.96.1``.  A reader cannot tell a stale header from a fresh one.
 This script makes the header testable::
 
     python scripts/replay_slice_sync.py             # human report
-    python scripts/replay_slice_sync.py --check     # exit 1 on a stale version
-    python scripts/replay_slice_sync.py --check --strict  # also fail on unresolved git refs
+    python scripts/replay_slice_sync.py --check     # exit 1 on a stale slice
     python scripts/replay_slice_sync.py --write     # rewrite the slice header
     python scripts/replay_slice_sync.py --json      # machine output
 
@@ -26,7 +25,13 @@ itself - never from a claim written in the manifest.
 
 Checks that cannot be answered without git refs (a merged branch name, a commit
 that is not reachable in a shallow CI checkout) are reported as advisories and
-never fail the gate, so a shallow clone cannot invent a failure.
+never fail the default gate, so a shallow clone cannot invent a failure.
+``--strict`` promotes the *existence* findings to blocking: a slice branch that
+no longer exists and a slice commit this checkout cannot resolve both mean the
+header names a tree that is not here.  Two advisories stay advisory even under
+strict, because neither is a defect: a gitless checkout cannot answer the
+question at all, and a slice commit behind HEAD is the normal state between two
+sync points (the header records when it was last verified, not the current tip).
 """
 
 from __future__ import annotations
@@ -160,13 +165,17 @@ def slice_drift(
 ) -> Tuple[List[str], List[str]]:
     """Return ``(blocking, advisory)`` reasons the slice header is stale.
 
-    In normal mode a gitless or shallow checkout reports unresolved branch and
-    commit references as advisories.  Strict CI mode promotes those unresolved
-    references to blocking only when git itself is available; it never turns a
-    gitless checkout into a fabricated failure.
+    With ``strict=True`` the existence findings become blocking, so a header
+    naming a branch or commit this checkout cannot resolve fails the gate.
+    A missing ``.git`` and a slice commit behind HEAD stay advisory: the first
+    is a property of the checkout, the second is the header's intended shape.
     """
     blocking: List[str] = []
     advisory: List[str] = []
+
+    def _record(reason: str) -> None:
+        """Keep a git-derived existence finding, blocking under strict mode."""
+        (blocking if strict else advisory).append(reason)
 
     slice_block = manifest.get("slice")
     if not isinstance(slice_block, dict):
@@ -190,20 +199,21 @@ def slice_drift(
     if claimed_commit and not _git_ok(
         root, "cat-file", "-e", f"{claimed_commit}^{{commit}}"
     ):
-        (blocking if strict else advisory).append(
-            f"slice.commit = {claimed_commit!r} в этом checkout не разрешается"
-        )
+        _record(f"slice.commit = {claimed_commit!r} в этом checkout не разрешается")
 
     claimed_branch = slice_block.get("branch")
     if claimed_branch:
         known = git_branches(root)
         if known and claimed_branch not in known:
-            (blocking if strict else advisory).append(
+            _record(
                 f"slice.branch = {claimed_branch!r} среди веток репозитория не существует"
             )
 
     if claimed_branch and branch and claimed_branch == branch and claimed_commit:
         if claimed_commit != commit:
+            # Deliberately advisory in every mode: the slice records the
+            # commit the checklist was last verified against, so it trails the
+            # tip by design and must not redden every merge to main.
             advisory.append(
                 f"slice.commit = {claimed_commit!r} отстаёт от {commit!r} на ветке {branch!r}"
             )
@@ -258,12 +268,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode.add_argument("--check", action="store_true", help="exit 1, если срез устарел")
     mode.add_argument("--write", action="store_true", help="переписать секцию slice")
     parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="в git checkout считать неразрешённые branch/commit ошибкой",
+        "--checked", default=None, help="дата сверки для --write (YYYY-MM-DD)"
     )
     parser.add_argument(
-        "--checked", default=None, help="дата сверки для --write (YYYY-MM-DD)"
+        "--strict",
+        action="store_true",
+        help="считать неразрешимые ветку/коммит блокирующими (гейт main)",
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args(argv)

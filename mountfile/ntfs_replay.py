@@ -33,7 +33,7 @@ from mountfile.ntfs_logfile import (
     LOG_REC_HDR,
     LogRecord,
     NtfsLogFileAnalysis,
-    NtfsLogFileError,
+    NtfsLogFileNeverWritten,
     NtfsReplayExecutorError,
     analyze_logfile,
     parse_restart_pages,
@@ -48,7 +48,6 @@ from mountfile.ntfs_probe import NtfsBootProfile
 from mountfile.ntfs_reader import (
     NtfsAttributeSummary,
     NtfsMetadataError,
-    NtfsRun,
     parse_ntfs_attribute_stream,
     probe_ntfs_metadata,
 )
@@ -57,6 +56,14 @@ SECTOR_SIZE = 512
 MFT_RECORD_VOLUME = 3
 MFT_RECORD_MIRROR = 1
 MFT_MIRROR_RECORDS = 4
+
+NTFS_REPLAY_WRITE_FAULT_POINTS = (
+    "ntfs:replay:mft_record:applied",
+    "ntfs:replay:stream_write:applied",
+    "ntfs:replay:restart_pages:applied",
+    "ntfs:replay:volume_marker:applied",
+    "ntfs:replay:mft_mirror:applied",
+)
 
 # NTFS attribute type codes used by the replay profile.
 ATTR_STANDARD_INFORMATION = 0x10
@@ -930,7 +937,7 @@ def _apply_stream_operation(
         length = roff + dlen
         segments = _run_segments(attribute, cluster_size, vbo, length, base_offset)
         buffer = bytearray()
-        for offset, physical, size in segments:
+        for _offset, physical, size in segments:
             stream.seek(physical)
             chunk = stream.read(size)
             if len(chunk) != size:
@@ -959,7 +966,7 @@ def _apply_stream_operation(
         )
         set_bit = op == OP_SET_BITS_IN_NONRESIDENT_BITMAP
         buffer = bytearray()
-        for offset, physical, size in segments:
+        for _offset, physical, size in segments:
             stream.seek(physical)
             chunk = stream.read(size)
             if len(chunk) != size:
@@ -1098,7 +1105,7 @@ def _validate_attribute_type(
 
 
 def _apply_one(
-    mft: "_Mft",
+    mft: _Mft,
     tables: NtfsRestartTables,
     record: LogRecord,
     payload: bytes,
@@ -1140,6 +1147,7 @@ def _apply_one(
             fixed = bytearray(initialized.fixed_record)
             _set_record_lsn(fixed, record.lsn)
             mft.write_record(rno, bytes(fixed))
+            _fault("ntfs:replay:mft_record:applied")
             return 1, 0
         header = mft.read_record(rno)
         if op in (
@@ -1157,6 +1165,7 @@ def _apply_one(
             _validate_attribute_type(header, record.record_off, entry.type_code)
         modified, _kind = _apply_mft_operation(header, record, payload, redo=redo)
         mft.write_record(rno, modified)
+        _fault("ntfs:replay:mft_record:applied")
         return 1, 0
     if op in STREAM_OPERATIONS:
         if entry.record_number >= mft.record_count:
@@ -1170,7 +1179,7 @@ def _apply_one(
                 "open attribute entry sequence does not match the FILE record"
             )
         attribute = _find_attribute_by_type(header, entry.type_code)
-        _apply_stream_operation(
+        stream_writes = _apply_stream_operation(
             mft._stream,
             header,
             attribute,
@@ -1180,13 +1189,15 @@ def _apply_one(
             base_offset=base_offset,
             redo=redo,
         )
-        return 0, 1
+        if stream_writes:
+            _fault("ntfs:replay:stream_write:applied")
+        return 0, stream_writes
     raise NtfsReplayError(
         f"operation 0x{op:02x} at LSN 0x{record.lsn:x} has no image-level handler"
     )
 
 
-def _clear_volume_dirty(mft: "_Mft") -> tuple[int, int]:
+def _clear_volume_dirty(mft: _Mft) -> tuple[int, int]:
     """Clear ``VOLUME_FLAG_DIRTY`` in ``$Volume`` and return (before, after)."""
 
     header = mft.read_record(MFT_RECORD_VOLUME)
@@ -1214,7 +1225,7 @@ def _clear_volume_dirty(mft: "_Mft") -> tuple[int, int]:
 
 
 def _update_mft_mirror(
-    stream, mft: "_Mft", boot: NtfsBootProfile, *, base_offset: int
+    stream, mft: _Mft, boot: NtfsBootProfile, *, base_offset: int
 ) -> bool:
     """Copy the first four MFT records to ``$MFTMirr`` (ntfs_update_mftmirr)."""
 
@@ -1252,9 +1263,11 @@ def _repair_volume_markers(
     with open(image_path, "r+b") as handle:
         mft = _Mft(handle, profile.boot, mft_data, base_offset=offset)
         before, after = _clear_volume_dirty(mft)
+        _fault("ntfs:replay:volume_marker:applied")
         mirror_updated = _update_mft_mirror(
             handle, mft, profile.boot, base_offset=offset
         )
+        _fault("ntfs:replay:mft_mirror:applied")
         handle.flush()
         os.fsync(handle.fileno())
     return before, after, mirror_updated
@@ -1281,11 +1294,9 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             image_path, offset=offset, validate_mirror=False
         )
         analysis = analyze_logfile(stream, cluster_size=cluster_size)
-    except NtfsLogFileError:
-        if profile.logfile_restart is not None:
-            raise
-        # A never-written $LogFile carries no restart page.  The only replay
-        # work is the dirty-bit/$MFTMirr repair that a mount would perform.
+    except NtfsLogFileNeverWritten:
+        # Only two fully erased restart pages qualify as a never-written log.
+        # Any malformed or unsupported active log propagates without mutation.
         _fault("mutation:start")
         before, after, mirror = _repair_volume_markers(image_path, profile, offset)
         _fault("mutation:flush")
@@ -1293,7 +1304,9 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             image_path, offset=offset, volume_size=volume_size
         )
         if not verified_profile.mirror_matches_mft:
-            raise NtfsReplayError("$MFT and $MFTMirr still differ after repair")
+            raise NtfsReplayError(
+                "$MFT and $MFTMirr still differ after repair"
+            ) from None
         _fault("mutation:done")
         return NtfsReplayResult(
             changed=before != after or mirror,
@@ -1306,7 +1319,9 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             volume_flags_before=before,
             volume_flags_after=after,
             mirror_updated=mirror,
-            notes=("$LogFile has no restart page; repaired $Volume/$MFTMirr only",),
+            notes=(
+                "$LogFile restart pages were never written; repaired $Volume/$MFTMirr only",
+            ),
         )
     if not analysis.dirty:
         _fault("mutation:start")
@@ -1316,7 +1331,9 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             image_path, offset=offset, volume_size=volume_size
         )
         if not verified_profile.mirror_matches_mft:
-            raise NtfsReplayError("$MFT and $MFTMirr still differ after repair")
+            raise NtfsReplayError(
+                "$MFT and $MFTMirr still differ after repair"
+            ) from None
         _fault("mutation:done")
         return NtfsReplayResult(
             changed=before != after or mirror,
@@ -1394,12 +1411,15 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             cluster_size=cluster_size,
             base_offset=offset,
         )
+        _fault("ntfs:replay:restart_pages:applied")
         _fault("replay:volume:dirty-flag")
         volume_before, volume_after = _clear_volume_dirty(mft)
+        _fault("ntfs:replay:volume_marker:applied")
         _fault("replay:mirror:update")
         mirror_updated = _update_mft_mirror(
             handle, mft, profile.boot, base_offset=offset
         )
+        _fault("ntfs:replay:mft_mirror:applied")
         handle.flush()
         os.fsync(handle.fileno())
     _fault("replay:flush")
