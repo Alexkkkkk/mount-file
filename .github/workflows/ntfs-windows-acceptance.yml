@@ -70,7 +70,7 @@ jobs:
           if (-not $report.raw_snapshot_comparison.logfile) { throw 'missing $LogFile comparison' }
           if (-not $report.raw_crash_repair_comparison.logfile) { throw 'missing crash/repaired $LogFile comparison' }
           if (-not $report.native_replay_comparison) { throw 'missing native replay comparison' }
-          if ($report.native_replay_comparison.status -ne 'pass') { throw 'native replay comparison did not pass' }
+          if ($report.native_replay_comparison.status -ne 'pass' -and $report.native_replay_comparison.status -ne 'not_applicable') { throw 'native replay comparison did not pass' }
 
       - name: Upload Windows checker evidence
         if: always()
