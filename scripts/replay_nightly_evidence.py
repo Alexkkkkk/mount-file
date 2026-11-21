@@ -27,6 +27,7 @@ import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 API_ROOT = "https://api.github.com"
@@ -129,6 +130,12 @@ def fetch_scheduled_runs(
             raise EvidenceUnavailable(
                 "workflow_runs contains an entry with an invalid run schema"
             )
+        try:
+            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise EvidenceUnavailable(
+                "workflow_runs contains an entry with an invalid created_at"
+            ) from exc
         normalised.append(
             {
                 "id": run_id,

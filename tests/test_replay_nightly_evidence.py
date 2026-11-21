@@ -139,6 +139,19 @@ def test_transport_payload_rejects_incomplete_run_schema():
     assert "invalid run schema" in report["reason"]
 
 
+def test_transport_payload_rejects_invalid_created_at():
+    malformed = _run(11)
+    malformed["created_at"] = "not-an-iso-timestamp"
+    report = module.build_report(
+        "owner/name",
+        token="t0ken",
+        transport=lambda url, token: {"workflow_runs": [malformed]},
+    )
+    assert report["outcome"] == module.OUTCOME_UNAVAILABLE
+    assert report["criterion_satisfied"] is False
+    assert "invalid created_at" in report["reason"]
+
+
 def test_cli_fails_closed_without_a_token(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
