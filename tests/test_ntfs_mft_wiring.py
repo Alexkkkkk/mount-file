@@ -32,7 +32,7 @@ class _FakeStream:
     """Minimal seek/read stream backed by one in-memory mirror window."""
 
     def __init__(self, mirror_window: bytes) -> None:
-        assert len(mirror_window) == MIRROR_WINDOW
+        assert not mirror_window or len(mirror_window) == MIRROR_WINDOW
         self._window = mirror_window
         self.pos = 0
 

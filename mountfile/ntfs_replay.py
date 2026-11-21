@@ -1303,7 +1303,9 @@ def gate_mft_record_reuse(
         raise NtfsReplayError("short read from $MFTMirr during allocation gate")
     reference = (initialized.sequence_number << 48) | record_number
     try:
-        plan_mft_record_reuse(raw_before, raw_mirror, reference)
+        plan_mft_record_reuse(
+            raw_before, raw_mirror, reference, candidate_record_number=record_number
+        )
     except NtfsMftAllocationError as exc:
         raise NtfsReplayError(
             f"MFT record {record_number} reuse refused before write: {exc}"
