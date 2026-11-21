@@ -5,6 +5,18 @@ The command never mutates ``--crash-image`` or ``--chkdsk-image``. It copies the
 crash image, runs the explicitly bounded native replay on that copy, extracts
 four validated metadata streams, and compares them byte-for-byte with the
 checker-recovered image. A replay refusal is a typed blocked result, not a pass.
+
+Typed outcomes:
+
+* ``pass`` - every stream is byte-identical with the checker-recovered image;
+* ``not_applicable`` - the crash ``$LogFile`` carries no restart page, so the
+  bounded replay fabricates no records and byte identity with ``chkdsk /f``
+  (which performs its own heavier repair) is not a replay-parity claim. The
+  comparator still proves that replay invented nothing and reports the raw
+  stream diffs as provenance evidence;
+* ``mismatch`` - replay applied records but the streams differ: this is a
+  replay-parity bug and stays a hard failure (exit 2);
+* ``blocked`` - the replay refused the image with a typed refusal (exit 2).
 """
 
 from __future__ import annotations
@@ -25,12 +37,48 @@ except ModuleNotFoundError:  # pragma: no cover - exercised by direct CLI launch
     from windows_ntfs_raw_snapshot import snapshot_image
 
 
+STREAMS = {
+    "mft": "MFT.bin",
+    "mftmirr": "MFTMirr.bin",
+    "bitmap": "BITMAP.bin",
+    "logfile": "LogFile.bin",
+}
+
+NOT_APPLICABLE_REASON = (
+    "The crash $LogFile carries no restart page: the bounded replay fabricates "
+    "no records, so byte identity with chkdsk /f is not a replay-parity claim. "
+    "Stream diffs below are provenance evidence only."
+)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _replay_fabricated_nothing(replay: dict[str, object]) -> bool:
+    """True when the bounded replay performed no record or stream mutation."""
+    counters = ("records_written", "redo_applied", "undo_applied", "stream_writes")
+    notes = replay.get("notes") or []
+    return (
+        replay.get("clean_restart_pages") == 0
+        and all(replay.get(key) == 0 for key in counters)
+        and any("no restart page" in str(note) for note in notes)
+    )
+
+
+def replay_comparison_status(
+    replay: dict[str, object], streams: dict[str, dict[str, object]]
+) -> str:
+    """Classify the comparison without ever masking a real parity bug."""
+    if all(item["byte_identical"] for item in streams.values()):
+        return "pass"
+    if _replay_fabricated_nothing(replay):
+        return "not_applicable"
+    return "mismatch"
 
 
 def compare_replay(
@@ -49,6 +97,7 @@ def compare_replay(
         "claims": [
             "The native replay is run only on a disposable copy of the crash image.",
             "A pass requires byte-identical MFT, MFTMirr, BITMAP and LogFile streams.",
+            "not_applicable means the crash $LogFile had no restart page and the bounded replay invented nothing; it is not a parity claim.",
             "This does not claim product NTFS write support or power-loss durability.",
         ],
     }
@@ -61,21 +110,19 @@ def compare_replay(
         snapshot_image(chkdsk_image, checker_dir)
         streams = {
             name: compare_file(native_dir / filename, checker_dir / filename)
-            for name, filename in {
-                "mft": "MFT.bin",
-                "mftmirr": "MFTMirr.bin",
-                "bitmap": "BITMAP.bin",
-                "logfile": "LogFile.bin",
-            }.items()
+            for name, filename in STREAMS.items()
         }
         result["streams"] = streams
-        result["status"] = (
-            "pass" if all(item["byte_identical"] for item in streams.values()) else "mismatch"
-        )
+        status = replay_comparison_status(replay.as_dict(), streams)
+        result["status"] = status
+        if status == "not_applicable":
+            result["not_applicable_reason"] = NOT_APPLICABLE_REASON
     except (NtfsReplayError, OSError, ValueError) as exc:
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return result
 
 
@@ -86,9 +133,11 @@ def main() -> int:
     parser.add_argument("--native-image", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = compare_replay(args.crash_image, args.chkdsk_image, args.native_image, args.out)
+    result = compare_replay(
+        args.crash_image, args.chkdsk_image, args.native_image, args.out
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["status"] == "pass" else 2
+    return 0 if result["status"] in ("pass", "not_applicable") else 2
 
 
 if __name__ == "__main__":
