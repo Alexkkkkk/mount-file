@@ -42,14 +42,14 @@ read-only анализ и умеет ограниченно писать — т�
 
 ## Содержание
 
-- [Генерируемый статус проекта](#генерируемый-статус-проекта)
+- [Generated project status](#generated-project-status)
 - [Что поддерживается сейчас](#что-поддерживается-сейчас)
 - [Установка](#установка)
 - [Графический интерфейс](#графический-интерфейс)
 - [Командная строка](#командная-строка)
 - [Переменные окружения](#переменные-окружения)
 - [Отдельный помощник монтирования](#отдельный-помощник-монтирования)
-- [Опциональные AI-, API- и layer-компоненты](#опциональные-ai-api--и-layer-компоненты)
+- [Опциональные компоненты AI и API](#опциональные-компоненты-ai-и-api)
 - [Границы безопасности](#границы-безопасности)
 - [Разработка](#разработка)
 - [Структура репозитория](#структура-репозитория)
@@ -82,19 +82,24 @@ This generated summary is informational: unsupported, dirty, ambiguous and recov
 Нативный слой файловых систем поддерживает **проверенные ограниченные
 профили**, а не любые раскладки, допустимые спецификацией:
 
-| Семейство | Нативное чтение | Нативная запись | Область применения |
+**Эта таблица проверяется машинно (`scripts/product_status_contract.py`): ячейки `Family`, `Native read`, `Native write` должны оставаться на английском. Перевод `Read-only` / `No` ломает чек `verify`.**
+
+| Family | Native read | Native write | Scope |
 |---|---:|---:|---|
-| FAT12/16/32 | Да | Ограниченно | Ограниченная геометрия и метаданные; для FAT12/16 — фиксированный корневой каталог |
-| exFAT | Да | Ограниченно | Профиль с одной FAT, проверенные метаданные и состояние тома |
-| ext2 | Да | Ограниченно | Метаданные из allow-list, ограниченная прямая/косвенная ёмкость |
-| ext3/ext4 | Только чтение | Нет | Консервативные профили; журнал, recovery и неподдерживаемые возможности → отказ |
-| NTFS | Только чтение | Нет | Ограниченный читатель; нативный писатель намеренно отключён |
+| FAT12/16/32 | Yes | Limited | Bounded geometry and metadata; FAT12/16 use fixed-root constraints |
+| exFAT | Yes | Limited | One-FAT profile with validated metadata and volume state |
+| ext2 | Yes | Limited | Allowlisted metadata and bounded direct/indirect capacity |
+| ext3/ext4 | Read-only | No | Conservative profiles; journal/recovery and unsupported features fail closed |
+| NTFS | Read-only | No | Bounded reader; native writer is intentionally disabled |
+
+Native ext3/ext4 and NTFS writes are unsupported; power-loss safety is
+unsupported. Limited writes are available only through the explicitly enabled
+bounded profiles above. Backup, rollback and benchmark evidence do not imply
+power-loss safety or full filesystem parity.
 
 Нативная запись в ext3/ext4 и NTFS не поддерживается, устойчивость к потере
-питания не заявляется. Ограниченная запись доступна только в перечисленных
-профилях, и включать её нужно осознанно. Резервные копии, откаты и
-бенчмарк-отчёты не означают ни устойчивости к сбоям питания, ни полного
-соответствия спецификациям.
+питания не заявляется: ограниченная запись доступна только в перечисленных
+профилях, и включать её нужно осознанно.
 
 > **Предупреждение о guarded recovery:** `MOUNTFILE_ENABLE_NATIVE_WRITE=1` включает
 > только проверочное восстановление и копирование для ограниченных нативных
@@ -340,8 +345,9 @@ python -m mountfile rm dump.img /docs/new --recursive --backup --yes
 
 `--backup` создаёт соседний файл `<image>.bak`; это не транзакция.
 
-Коды возврата: `0` — успех, `1` — ошибка, `2` — нет подтверждения,
-`130` — прерывание.
+Коды возврата: `0` — успех, `1` — ошибка, `130` — прерывание по `Ctrl+C`
+(`mountfile/cli.py:1823`). Отдельного кода «нет подтверждения» в CLI нет:
+без `--yes` команда только печатает предупреждение и завершается.
 
 ### Помощники для RT809H и NAND/eMMC
 
@@ -422,7 +428,7 @@ python mountfile.py --version
 команды PowerShell для дисковых образов в Windows. Доступность и права зависят
 от хоста.
 
-## Опциональные AI-, API- и layer-компоненты
+## Опциональные компоненты AI и API
 
 Всё перечисленное включается по желанию и не требуется для офлайн-просмотра
 образов:
