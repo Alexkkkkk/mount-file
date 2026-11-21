@@ -214,7 +214,8 @@ for ($i = 0; $i -lt 10000; $i++) {
         --native-image $nativeReplayImage --out $nativeReplayComparison
     $report.native_replay_comparison = Get-Content $nativeReplayComparison | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "native replay/checker comparison failed" }
-    if ($report.native_replay_comparison.status -ne "pass") {
+    if ($report.native_replay_comparison.status -ne "pass" -and
+        $report.native_replay_comparison.status -ne "not_applicable") {
         throw "native replay/checker metadata comparison was not byte-identical"
     }
 

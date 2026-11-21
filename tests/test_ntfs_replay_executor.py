@@ -402,6 +402,10 @@ publish_ntfs_replay(
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
 @pytest.mark.parametrize("phase", NTFS_ALLOCATION_FAULT_POINTS)
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGKILL"),
+    reason="SIGKILL is a POSIX-only signal; abrupt-termination coverage on Windows is provided by the Windows NTFS acceptance harness (ntfs-windows-acceptance.yml), which kills a real child writer and validates the volume with chkdsk",
+)
 def test_allocation_phase_sigkill_preserves_source(tmp_path, phase):
     image = tmp_path / "image.bin"
     free = _raw_mft_record(7)

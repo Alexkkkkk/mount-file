@@ -94,7 +94,11 @@ def test_native_replay_comparator_is_fail_closed_and_four_stream_based():
     assert '"bitmap": "BITMAP.bin"' in replay
     assert '"logfile": "LogFile.bin"' in replay
     assert '"status": "blocked"' in replay
-    assert 'return 0 if result["status"] == "pass" else 2' in replay
+    assert 'return 0 if result["status"] in ("pass", "not_applicable") else 2' in replay
+    assert "def replay_comparison_status" in replay
+    assert "_replay_fabricated_nothing" in replay
+    assert "except ModuleNotFoundError" in replay
+    assert "from compare_ntfs_snapshots import compare_file" in replay
 
 
 def test_raw_snapshot_accepts_the_bounded_ci_volume_window():
@@ -138,3 +142,13 @@ def test_replay_comparator_supports_direct_script_invocation(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "--crash-image" in result.stdout
+
+
+def test_windows_acceptance_treats_not_applicable_replay_as_typed_outcome():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "'not_applicable'" in workflow
+    assert '"not_applicable"' in script
+    assert "was not byte-identical" in script
+    # a mismatch (replay applied records, streams differ) must stay a failure
+    assert '"mismatch"' not in workflow
