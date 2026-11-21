@@ -18,6 +18,7 @@ import pytest
 
 import install_mountfile as installer
 from mountfile import ollama_setup, updater
+from tests.qt_env import HAVE_QT
 
 ROOT = Path(__file__).resolve().parents[1]
 # Loop devices, udisksctl and /proc/mounts exist only where os.geteuid does;
@@ -49,14 +50,35 @@ _no_qt = importlib.util.find_spec("PyQt6") is None
     reason="нет установленных Qt-биндингов: проверка выполняется в CI с PyQt6",
 )
 def test_install_verifies_compiled_qt_and_real_cli_import():
+    """The installer's probe strings must run in a child interpreter.
+
+    The Qt probe is only meaningful where Qt can actually load. A headless Linux
+    runner can install the PyQt6 wheel without its system libraries, and then the
+    child exits with ``libEGL.so.1`` - an environment defect the installer does
+    not control. Only the probes this environment can satisfy are executed; every
+    other probe still has to pass, and the probe *content* is asserted above
+    regardless of the environment.
+    """
     probes = dict(installer.checks_for_profile(minimal=True, dev=False))
     assert "QtWidgets" in probes["PyQt6"]
     assert "mountfile.__main__" in probes["mountfile"]
-    for code in probes.values():
+
+    unavailable = []
+    for name, code in probes.items():
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True
         )
+        if result.returncode == 0:
+            continue
+        if name == "PyQt6" and not HAVE_QT:
+            unavailable.append(name)
+            continue
         assert result.returncode == 0, result.stderr
+    if unavailable:
+        pytest.skip(
+            "this environment cannot import PyQt6 (missing system libraries): %s"
+            % ", ".join(sorted(unavailable))
+        )
 
 
 def test_full_profile_checks_all_runtime_extras():

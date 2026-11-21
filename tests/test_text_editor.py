@@ -21,19 +21,7 @@ sys.path.insert(0, ROOT)
 import pytest  # noqa: E402
 
 from mountfile import text_editor  # noqa: E402
-
-# pytest.importorskip здесь не работает: mountfile.qt_compat бросает
-# ImportError сам, но pytest 8.2+ считает «нет Qt» ошибкой (reason=... только
-# для отсутствующего модуля), поэтому GUI-тест падал вместо skip на джобах
-# без PyQt. Проверяем доступность Qt вручную.
-try:  # pragma: no cover - зависит от окружения
-    import mountfile.qt_compat as _qt_compat  # noqa: F401
-
-    HAVE_QT = True
-except ImportError:  # pragma: no cover
-    HAVE_QT = False
-
-needs_qt = pytest.mark.skipif(not HAVE_QT, reason="нет установленных Qt-биндингов")
+from tests.qt_env import needs_qt  # noqa: E402
 
 
 class FakeProvider:

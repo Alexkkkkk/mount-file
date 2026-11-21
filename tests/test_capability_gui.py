@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from mountfile.capabilities import get_native_capability_status
+from tests.qt_env import needs_qt
 
 
 class _Button:
@@ -16,7 +17,8 @@ class _Button:
 
 
 def _write_controls(profile_id, *, write_enabled):
-    pytest.importorskip("PyQt6")
+    # Importing mountfile.qt_compat is the real availability probe: PyQt6 can be
+    # installed yet unimportable on a headless runner without libEGL.so.1.
     from mountfile.mainwindow import MainWindow
 
     class Writer:
@@ -40,6 +42,7 @@ def _write_controls(profile_id, *, write_enabled):
     }
 
 
+@needs_qt
 def test_gui_keeps_native_ext3_write_controls_disabled():
     assert _write_controls("ext3-native-ro", write_enabled=False) == {
         "write-file": False,
@@ -49,6 +52,7 @@ def test_gui_keeps_native_ext3_write_controls_disabled():
     }
 
 
+@needs_qt
 def test_gui_enables_only_operations_advertised_for_fat32_writer():
     assert _write_controls("fat32-native-rw", write_enabled=True) == {
         "write-file": True,
