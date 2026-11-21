@@ -14,6 +14,6 @@ Ext4/JBD2 and NTFS native writes are not production-supported. Product-facing ca
 
 Synthetic NTFS fixtures are not Windows crash captures. `ntfsfix -n` is auxiliary and does not establish Windows/`chkdsk` parity. No byte-level `$MFT`/`$BITMAP` comparison against Windows `chkdsk`-recovered images is available. A manual failure-matrix workflow run does not satisfy the two-consecutive-scheduled-nightly criterion.
 
-The main-push read-only VFS evidence includes Linux, Windows, and macOS; PR/merge-queue fast runs use Linux and Windows. Neither matrix establishes independent filesystem parity. The required `Verify (status, secrets, versions, tests)` context remains in branch protection; this change does not add the separate `status-sync.yml` check or alter branch-protection settings.
+The main-push read-only VFS evidence includes Linux, Windows, and macOS; PR/merge-queue fast runs use Linux and Windows. Neither matrix establishes independent filesystem parity. The required `Verify (status, secrets, versions, tests)` context is present in the protected `main` branch and is emitted by `repo-status-verify` on every push/PR. `status-sync.yml` separately validates generated PR status data through `pull_request_target`; it does not write to PR branches and is not itself a required context.
 
 Until independent acceptance evidence closes the remaining criteria, do not describe the experimental/bounded writers as production-ready or change the product-level read-only status.

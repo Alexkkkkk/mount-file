@@ -411,7 +411,7 @@
         "tests/test_readme_status_gate.py",
         ".github/workflows/ci.yml"
       ],
-      "note": "Required Verify (status, secrets, versions, tests) context enforces repository/product-status consistency; the separate status-sync.yml check is not a required context. Product-facing ext3/ext4 and NTFS status remains read-only.",
+      "note": "Required Verify (status, secrets, versions, tests) context is emitted by repo-status-verify on every push/PR and enforces repository/product-status consistency; status-sync.yml separately validates generated PR data without writing back and is not a required context. Product-facing ext3/ext4 and NTFS status remains read-only.",
       "reproduced": "2026-11-16: branch protection required_status_checks API returned Verify (status, secrets, versions, tests); local product-status/README gates pass."
     },
     {
