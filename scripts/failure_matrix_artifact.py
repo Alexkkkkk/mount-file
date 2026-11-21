@@ -38,6 +38,54 @@ def _case(
     }
 
 
+def _staged_short_write_cases(profile: str) -> list[dict[str, Any]]:
+    """Short-write cells for the staged ext4 and NTFS writers.
+
+    Selectors point at ``tests/test_writer_fault_injection_acceptance.py``: the
+    data primitive reports a truncated write, publication is refused, the source
+    stays byte-identical and the image remains writable afterwards.
+    """
+
+    module = "test_writer_fault_injection_acceptance"
+    return [
+        _case(
+            module,
+            "test_short_write_at_the_data_primitive_refuses_publication",
+            include=(profile,),
+        ),
+        _case(
+            module,
+            "test_short_write_refusal_leaves_image_writable",
+            include=(profile,),
+        ),
+    ]
+
+
+def _staged_injection_cases(kind: str, profile: str) -> list[dict[str, Any]]:
+    """Injected-exception / cancellation cells for staged ext4 and NTFS writers.
+
+    Selectors point at ``tests/test_writer_fault_injection_acceptance.py``, which
+    raises at every declared ``FAULT_POINTS`` boundary.  A green cell means those
+    cases ran and passed for that profile; it is not checker execution and it is
+    not acceptance.
+    """
+
+    module = "test_writer_fault_injection_acceptance"
+    shared = (profile, kind)
+    return [
+        _case(
+            module,
+            "test_injected_failure_at_each_boundary_preserves_source_or_publishes_fully",
+            include=shared,
+        ),
+        _case(
+            module,
+            "test_refused_write_leaves_image_writable",
+            include=shared,
+        ),
+    ]
+
+
 # These are test selectors, not declarations of completed acceptance. Parameter
 # selectors narrow evidence to a particular FAT width or a real process-kill seam.
 TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
@@ -162,6 +210,8 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
         ],
     },
     "ext4": {
+        "short_write": _staged_short_write_cases("ext4"),
+        "injected_exception": _staged_injection_cases("injected_exception", "ext4"),
         "process_kill": [
             _case(
                 "test_ext4_writer_fault_coverage",
@@ -169,14 +219,17 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
                 exclude=("[helper:",),
             )
         ],
+        "cancellation": _staged_injection_cases("cancellation", "ext4"),
     },
     "ntfs": {
+        "short_write": _staged_short_write_cases("ntfs"),
         "injected_exception": [
             _case(
                 "test_ntfs_replay_executor",
                 "test_allocation_phase_failure_preserves_source_and_cleans_stage",
             )
-        ],
+        ]
+        + _staged_injection_cases("injected_exception", "ntfs"),
         "process_kill": [
             _case(
                 "test_ntfs_writer_fault_coverage",
@@ -217,6 +270,7 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
                 "test_allocation_phase_sigkill_preserves_source",
             ),
         ],
+        "cancellation": _staged_injection_cases("cancellation", "ntfs"),
     },
 }
 
