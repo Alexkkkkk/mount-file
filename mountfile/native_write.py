@@ -148,10 +148,15 @@ def _image_copy(image_path: str) -> tuple[str, str]:
     try:
         _fault("copy:start")
         shutil.copy2(source, temporary)
-    except Exception:
+        _fault("copy:done")
+    except BaseException:
+        # ``BaseException`` is deliberate: a cancelled write and an interrupted
+        # one are not ``Exception`` instances, and a staging copy left beside the
+        # caller's evidence image is exactly the artefact this path must not
+        # create (issue #510 / #387 failure injection at ``copy:start`` and
+        # ``copy:done``).
         _unlink(temporary)
         raise
-    _fault("copy:done")
     return source, temporary
 
 
