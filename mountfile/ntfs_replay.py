@@ -44,6 +44,10 @@ from mountfile.ntfs_mft import (
     NtfsRecordError,
     parse_ntfs_file_record_header,
 )
+from mountfile.ntfs_mft_allocation import (
+    NtfsMftAllocationError,
+    plan_mft_record_reuse,
+)
 from mountfile.ntfs_probe import NtfsBootProfile
 from mountfile.ntfs_reader import (
     NtfsAttributeSummary,
@@ -1144,6 +1148,17 @@ def _apply_one(
                 raise NtfsReplayError(
                     f"InitializeFileRecordSegment payload is invalid: {exc}"
                 ) from exc
+            raw_before = mft.read_record_raw(rno)
+            gate_mft_record_reuse(
+                mft._stream,
+                mft,
+                mft.boot,
+                base_offset=base_offset,
+                record_number=rno,
+                raw_before=raw_before,
+                initialized=initialized,
+                lsn=record.lsn,
+            )
             fixed = bytearray(initialized.fixed_record)
             _set_record_lsn(fixed, record.lsn)
             mft.write_record(rno, bytes(fixed))
@@ -1243,6 +1258,56 @@ def _update_mft_mirror(
                 raise NtfsReplayError("short write to $MFTMirr")
             changed = True
     return changed
+
+
+def gate_mft_record_reuse(
+    stream,
+    mft: _Mft,
+    boot: NtfsBootProfile,
+    *,
+    base_offset: int,
+    record_number: int,
+    raw_before: bytes,
+    initialized: NtfsFileRecordHeader,
+    lsn: int,
+) -> None:
+    """Gate reuse of a free MFT record slot through the allocation planner (#510 C5).
+
+    A free (not-in-use) candidate must be backed by a byte-identical
+    ``$MFTMirr`` copy and carry a sequence that continues the pre-image
+    (mod 2**16) before the executor may initialize it.  Zeroed or unreadable
+    pre-images and re-initialization of a live record keep their existing
+    behavior; records outside the mirrored window are refused outright.
+    Every refusal happens before a single byte is written.
+    """
+    try:
+        current = parse_ntfs_file_record_header(raw_before, require_in_use=False)
+    except NtfsRecordError:
+        # A zeroed or structurally unreadable pre-image has no mirror contract
+        # to check; the payload itself stays fully validated by the caller.
+        return
+    if current.in_use:
+        # Overwriting a live record is re-initialization, not allocation.
+        return
+    if record_number >= MFT_MIRROR_RECORDS:
+        raise NtfsReplayError(
+            f"log record 0x{lsn:x} allocates MFT record {record_number} outside "
+            "the $MFTMirr window; record reuse is refused"
+        )
+    mirror_offset = (
+        base_offset + boot.mft_mirror_offset + record_number * mft.record_size
+    )
+    stream.seek(mirror_offset)
+    raw_mirror = stream.read(mft.record_size)
+    if len(raw_mirror) != mft.record_size:
+        raise NtfsReplayError("short read from $MFTMirr during allocation gate")
+    reference = (initialized.sequence_number << 48) | record_number
+    try:
+        plan_mft_record_reuse(raw_before, raw_mirror, reference)
+    except NtfsMftAllocationError as exc:
+        raise NtfsReplayError(
+            f"MFT record {record_number} reuse refused before write: {exc}"
+        ) from exc
 
 
 def _find_mft_data(profile) -> NtfsAttributeSummary:
