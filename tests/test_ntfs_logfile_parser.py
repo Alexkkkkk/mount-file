@@ -766,7 +766,7 @@ def test_geometry_validation_delegates_to_the_shipped_restart_parser():
 def test_log_page_smaller_than_system_page_is_refused():
     page = bytearray(_restart_page(0, dirty=True))
     struct.pack_into("<I", page, 0x14, 512)  # log_page_size
-    stream = bytearray(bytes(page) * 2) + UNUSED * (FILE_SIZE - 2 * PAGE)
+    stream = bytearray(bytes(page) * 2) + UNUSED * ((FILE_SIZE - 2 * PAGE) // PAGE)
     with pytest.raises(
         lf.NtfsLogFileError, match="mixed geometry|restart page geometry"
     ):
