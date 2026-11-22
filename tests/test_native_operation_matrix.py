@@ -39,12 +39,7 @@ import pytest
 import mountfile.ext4_native_writer as ext4_module
 import mountfile.native_write as native_write
 from mountfile.ext4_native_writer import Ext4NativeWriter, libext2fs_available
-from mountfile.journal_safety import JournalSafetyError
-from mountfile.native_write import (
-    ENABLE_ENV,
-    NativeWriteError,
-    NtfsTransactionalWriter,
-)
+from mountfile.native_write import ENABLE_ENV, NativeWriteError, NtfsTransactionalWriter
 
 #: operation -> declared phase list, in runtime order.
 OPERATION_PHASES: dict[str, tuple[str, ...]] = {
@@ -147,9 +142,9 @@ def test_declared_operations_match_the_runtime():
     declared = set(OPERATION_PHASES)
     for profile, unsupported in UNSUPPORTED_OPERATIONS.items():
         for name in unsupported:
-            assert f"{profile}.{name}" not in declared, (
-                f"{profile}.{name} is declared unsupported yet has a phase matrix"
-            )
+            assert (
+                f"{profile}.{name}" not in declared
+            ), f"{profile}.{name} is declared unsupported yet has a phase matrix"
     writers = {"ext4": Ext4NativeWriter, "ntfs": NtfsTransactionalWriter}
     for profile, writer in writers.items():
         for name in UNSUPPORTED_OPERATIONS[profile]:
@@ -171,7 +166,10 @@ def test_ext4_create_file_publishes_so_the_cells_are_not_vacuous(tmp_path, monke
     before = _sha256(image)
     Ext4NativeWriter().create_file(str(image), "created.txt", b"created content\n")
     assert _sha256(image) != before
-    assert subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode == 0
+    assert (
+        subprocess.run(["e2fsck", "-fn", str(image)], capture_output=True).returncode
+        == 0
+    )
     read = subprocess.run(
         ["debugfs", "-R", "cat /created.txt", str(image)],
         capture_output=True,
@@ -184,7 +182,9 @@ def test_ext4_create_file_publishes_so_the_cells_are_not_vacuous(tmp_path, monke
 
 @needs_ext
 @pytest.mark.parametrize("phase", OPERATION_PHASES["ext4.create_file"])
-def test_ext4_create_file_phase_failure_preserves_the_image(tmp_path, monkeypatch, phase):
+def test_ext4_create_file_phase_failure_preserves_the_image(
+    tmp_path, monkeypatch, phase
+):
     """Every declared phase of create_file fails closed and keeps the source."""
     monkeypatch.setenv(ENABLE_ENV, "1")
     image = _make_ext4(tmp_path)
@@ -241,9 +241,9 @@ def test_ext4_create_file_phase_failure_preserves_the_image(tmp_path, monkeypatc
     assert caught.value is not None
     assert phase in reached, f"phase {phase!r} never reached; trace={reached}"
     assert _sha256(image) == before, f"failure at {phase!r} mutated the image"
-    assert _staged(tmp_path, known) == [], (
-        f"failure at {phase!r} leaked staged files: {_staged(tmp_path, known)}"
-    )
+    assert (
+        _staged(tmp_path, known) == []
+    ), f"failure at {phase!r} leaked staged files: {_staged(tmp_path, known)}"
 
 
 def test_ntfs_single_operation_surface_is_declared():
