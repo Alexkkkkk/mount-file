@@ -7,7 +7,7 @@ PY ?= python3
 .PHONY: help install tools tools-check test test-ai test-standalone lint
 .PHONY: lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images
 .PHONY: test-changed lint-fast fmt-check tracker-status dev-sync sync sync-status sync-check
-.PHONY: sync-pr sync-watch test-fast
+.PHONY: sync-pr sync-watch test-fast test-unit watch-test
 
 help:
 	@echo "make install    - install runtime dependencies"
@@ -53,6 +53,16 @@ test:
 test-fast:
 	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "not gui and not e2e" \
 		--durations=25
+
+# Быстрее test-fast для правок чистой логики: только marker unit (<50 мс
+# каждый тест). GUI- и integration-фикстуры не собираются вовсе.
+test-unit:
+	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "unit" --durations=10
+
+# Перезапуск быстрого прогона после каждого сохранения: правка -> Ctrl+S ->
+# тесты сами. Без внешних пакетов (см. scripts/watch-test.sh). Ctrl+C — стоп.
+watch-test:
+	bash scripts/watch-test.sh
 
 test-ai:
 	$(PY) -m pytest \
