@@ -339,10 +339,22 @@ jobs:
           extra-pip: 'pytsk3'
           requirements-file: 'requirements.txt'
 
-      - name: Run the full suite with pytsk3 available
-        run: >-
-          python -m pytest tests/ -v --cov=mountfile --cov-report=term
-          --cov-fail-under=20
+      # pytsk3 is installed only on this leg, so its job is to exercise the
+      # bridge code paths the main matrix cannot import (where the package is
+      # absent and those tests skip). Running the whole suite here a second time
+      # duplicated ~12 min of every PR's wall clock without exercising anything
+      # the ubuntu/3.12 leg had not already covered, coverage included: the
+      # coverage floor stays on ubuntu/3.12, the only leg whose matrix entry
+      # sets `coverage: true` and the only one that writes coverage.xml.
+      # The slice is derived from the sources that actually reference
+      # pytsk3/bridge, so it cannot fall out of date when a test is added.
+      - name: Run the pytsk3/bridge slice with pytsk3 available
+        run: |
+          mapfile -t slice < <(grep -rl --include='test_*.py' \
+            -e 'pytsk3' -e 'mountfile\.bridge' -e 'MountFileBridge' tests/ | sort)
+          printf 'pytsk3/bridge slice: %s files\n' "${#slice[@]}"
+          test "${#slice[@]}" -gt 0
+          python -m pytest -v --timeout=600 --timeout-method=thread "${slice[@]}"
 
       - name: Emit external-checker capability matrix
         run: python scripts/checker_matrix.py --json-out checker-matrix.json
