@@ -129,6 +129,18 @@ def _ntfsfix_check(image: Path) -> tuple[bool, str]:
     return result.returncode == 0, output.strip()
 
 
+def source_integrity(before_sha256: str, after_sha256: str) -> bool:
+    """Return True only when both digests exist and are equal.
+
+    This helper exists so the invariant is expressed once and can be tested
+    on its own.  It replaced an ``... or True`` expression that made every
+    ``source_untouched`` claim unfalsifiable (issue #510).
+    """
+    if not before_sha256 or not after_sha256:
+        return False
+    return before_sha256 == after_sha256
+
+
 def _mft_record_stream(image: Path, fixture: DirtyFixture) -> bytes:
     mft = _ntfscat(image, "$MFT")
     start = fixture.record_number * fixture.record_size
@@ -142,6 +154,8 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
     comparisons are against raw streams extracted with external ``ntfscat``,
     never with our own parser.
     """
+    work.mkdir(parents=True, exist_ok=True)
+    source_sha256 = _sha256(fixture.image)
     ours = work / f"{fixture.scenario}-ours.img"
     twin = work / f"{fixture.scenario}-twin.img"
     shutil.copyfile(fixture.image, ours)
@@ -161,6 +175,11 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         bitmap_equal = False
     clean, ntfsfix_output = _ntfsfix_check(ours)
 
+    # The replay runs on disposable copies.  The source digest is measured
+    # again *after* both executor runs; a change here is a real defect and
+    # must be visible in the artifact, not masked.
+    source_untouched = source_integrity(source_sha256, _sha256(fixture.image))
+
     content_correct: bool | None = None
     try:
         written = subprocess.run(
@@ -179,10 +198,12 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         "mft_record_bytes_equal": mft_bytes_equal,
         "bitmap_bytes_equal": bitmap_equal,
         "target_content_consistent": content_correct,
-        "source_untouched": _sha256(fixture.image) == _sha256(ours)
-        or True,  # replay works on copies; source hash tracked by executor
+        "source_sha256": source_sha256,
+        "source_untouched": source_untouched,
         "verdict": (
-            "pass" if (mft_bytes_equal and bitmap_equal and clean) else "divergence"
+            "pass"
+            if (mft_bytes_equal and bitmap_equal and clean and source_untouched)
+            else "divergence"
         ),
     }
 
@@ -193,4 +214,5 @@ __all__ = [
     "build_all_fixtures",
     "build_dirty_fixture",
     "run_oracle",
+    "source_integrity",
 ]
