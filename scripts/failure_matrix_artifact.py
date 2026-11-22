@@ -94,6 +94,7 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
             _case(
                 "test_fat1216_writer",
                 "test_fat1216_short_write_rolls_back_and_preserves_sentinels",
+                include=("[12]",),
             )
         ],
         "injected_exception": [
@@ -110,8 +111,22 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
                 include=("[12]",),
             )
         ],
+        "cancellation": [
+            _case(
+                "test_fat1216_writer",
+                "test_fat1216_cancellation_during_write_preserves_source_and_cleans_stage",
+                include=("[12]",),
+            )
+        ],
     },
     "fat16": {
+        "short_write": [
+            _case(
+                "test_fat1216_writer",
+                "test_fat1216_short_write_rolls_back_and_preserves_sentinels",
+                include=("[16]",),
+            )
+        ],
         "injected_exception": [
             _case(
                 "test_fat1216_writer",
@@ -123,6 +138,13 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
             _case(
                 "test_fat1216_writer",
                 "test_fat1216_process_kill_before_atomic_replace_never_publishes",
+                include=("[16]",),
+            )
+        ],
+        "cancellation": [
+            _case(
+                "test_fat1216_writer",
+                "test_fat1216_cancellation_during_write_preserves_source_and_cleans_stage",
                 include=("[16]",),
             )
         ],

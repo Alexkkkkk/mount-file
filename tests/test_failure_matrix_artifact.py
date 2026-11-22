@@ -62,7 +62,12 @@ def test_only_matching_passed_node_ids_are_recorded(tmp_path):
         [
             (
                 "tests.test_fat1216_writer",
-                "test_fat1216_short_write_rolls_back_and_preserves_sentinels",
+                "test_fat1216_short_write_rolls_back_and_preserves_sentinels[12]",
+                "passed",
+            ),
+            (
+                "tests.test_fat1216_writer",
+                "test_fat1216_short_write_rolls_back_and_preserves_sentinels[16]",
                 "passed",
             ),
             (
@@ -81,7 +86,13 @@ def test_only_matching_passed_node_ids_are_recorded(tmp_path):
     report = build_report(tmp_path, junit)
 
     assert _cell(report, "fat12", "short_write")["test_status"] == "passed"
-    assert _cell(report, "fat16", "short_write")["test_status"] == "not_proven"
+    assert _cell(report, "fat12", "short_write")["test_evidence"] == [
+        "tests.test_fat1216_writer::test_fat1216_short_write_rolls_back_and_preserves_sentinels[12]"
+    ]
+    assert _cell(report, "fat16", "short_write")["test_status"] == "passed"
+    assert _cell(report, "fat16", "short_write")["test_evidence"] == [
+        "tests.test_fat1216_writer::test_fat1216_short_write_rolls_back_and_preserves_sentinels[16]"
+    ]
     assert _cell(report, "fat12", "process_kill")["test_evidence"] == [
         "tests.test_fat1216_writer::test_fat1216_process_kill_before_atomic_replace_never_publishes[12]"
     ]
@@ -118,7 +129,7 @@ def test_skipped_case_is_unavailable_and_failed_case_is_failed(tmp_path):
         [
             (
                 "tests.test_fat1216_writer",
-                "test_fat1216_short_write_rolls_back_and_preserves_sentinels",
+                "test_fat1216_short_write_rolls_back_and_preserves_sentinels[12]",
                 "skipped",
             ),
             (
