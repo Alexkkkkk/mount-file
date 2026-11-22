@@ -46,11 +46,14 @@ def test_fat1216_full_mutation_matrix_and_partition_sentinels(tmp_path, fat_type
     assert updated[offset + size :] == suffix
 
 
-def test_fat1216_short_write_rolls_back_and_preserves_sentinels(tmp_path, monkeypatch):
-    volume = tmp_path / "fat12.partition"
-    _make_fat1216_image(volume, 12)
+@pytest.mark.parametrize("fat_type", [12, 16])
+def test_fat1216_short_write_rolls_back_and_preserves_sentinels(
+    tmp_path, monkeypatch, fat_type
+):
+    volume = tmp_path / f"fat{fat_type}.partition"
+    _make_fat1216_image(volume, fat_type)
     prefix, suffix = b"P" * 97, b"S" * 113
-    image = tmp_path / "disk.img"
+    image = tmp_path / f"fat{fat_type}.disk"
     image.write_bytes(prefix + volume.read_bytes() + suffix)
     before = image.read_bytes()
     writer = Fat1216RW(image, offset=len(prefix), volume_size=volume.stat().st_size)
@@ -63,6 +66,31 @@ def test_fat1216_short_write_rolls_back_and_preserves_sentinels(tmp_path, monkey
         writer.write_file("/failed.bin", b"must rollback")
     writer.close()
     assert image.read_bytes() == before
+
+
+@pytest.mark.parametrize("fat_type", [12, 16])
+def test_fat1216_cancellation_during_write_preserves_source_and_cleans_stage(
+    tmp_path, monkeypatch, fat_type
+):
+    volume = tmp_path / f"fat{fat_type}-cancel.partition"
+    _make_fat1216_image(volume, fat_type)
+    prefix, suffix = b"C-PREFIX" * 13, b"C-SUFFIX" * 15
+    image = tmp_path / f"fat{fat_type}-cancel.disk"
+    image.write_bytes(prefix + volume.read_bytes() + suffix)
+    before = image.read_bytes()
+    writer = Fat1216RW(image, offset=len(prefix), volume_size=volume.stat().st_size)
+
+    def cancel(*_args, **_kwargs):
+        raise BaseException("injected cancellation")
+
+    monkeypatch.setattr(writer, "_write_cluster", cancel)
+    with pytest.raises(BaseException, match="injected cancellation"):
+        writer.write_file("/cancelled.bin", b"must not publish")
+    writer.close()
+    assert image.read_bytes() == before
+    # The staged mutation must leave neither the staging copy nor the
+    # rollback copy behind: a cancelled write never publishes anything.
+    assert not list(tmp_path.glob(".*mountfile-*"))
 
 
 @pytest.mark.parametrize("fat_type", [12, 16])
