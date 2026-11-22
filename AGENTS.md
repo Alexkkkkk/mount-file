@@ -1,19 +1,25 @@
 # Agent instructions for MountFile
 
-Repository-wide rules for AI coding agents (Copilot, Claude Code, Codex, Cursor)
-and for the human contributors who review their output. `AGENTS.md` is the
+Repository-wide rules for AI coding agents (Copilot agent mode, Claude Code, Codex,
+Cursor) and for the human contributors who review their output. `AGENTS.md` is the
 single source of process truth; `.github/copilot-instructions.md` keeps the
 *safety and architecture* rules and both must agree.
+
+MountFile is a Python 3.10+ desktop/CLI tool for examining raw disk and flash
+images (PyQt6 GUI, package under `mountfile/`).
 
 ## 1. Fast loop before any PR
 
 Run the narrowest thing that can fail, then widen:
 
 ```bash
-make test-fast                 # parallel, no gui/e2e (pytest -n auto)
+make test-fast                 # parallel, no gui/e2e (pytest -n auto --dist=worksteal)
 make test-changed              # only tests touched since origin/main
 python -m pytest tests/test_x.py -q -x --lf   # while iterating on one module
 make lint-fast                 # ruff: syntax + undefined names + correctness rules
+make lint                      # ruff static check (E9,F63,F7,F82)
+make lint-correctness          # B006,E722,S110,S112,F841
+make fmt                       # ruff --fix + isort + black (only on files you touched)
 make fmt-check                 # black + isort --check (CI parity)
 make tracker-status            # regenerate the #510 slice block instead of editing it by hand
 ```
@@ -21,6 +27,11 @@ make tracker-status            # regenerate the #510 slice block instead of edit
 A change is not "verified" because it passes locally on Linux: the CI matrix
 covers Windows and macOS, and integrations skip when `pytsk3`, `dosfstools`,
 `mtools` or YARA are missing. Report skips as skips.
+
+Prefer `make test-fast` over `make test`: it is a 10-50x faster loop and the
+same tier CI runs on PRs. Test markers (pyproject `[tool.pytest.ini_options]`):
+`unit`, `integration`, `gui` (needs `QT_QPA_PLATFORM=offscreen`), `e2e`, `slow`.
+Tag new tests with the right marker instead of leaving them in the default gate.
 
 ## 2. Quality gates that must stay green
 
@@ -31,7 +42,8 @@ protected. Do not weaken them to get a change through:
   passing. **Never** add a new `--ignore` or `per-file-ignores` entry to silence a
   finding you introduced.
 - `black --check` and `isort --check-only` are authoritative for formatting. If you
-  reformat a file, reformat it in its own commit so the reviewer can skip it.
+  reformat a file, reformat it in its own commit so the reviewer can skip it; do not
+  mix formatting changes with logic changes in one commit.
 - `.pre-commit-config.yaml` intentionally runs a *narrow* ruff selection; widening it
   is a separate, reviewed change (see `docs/speedup-playbook.md`, item 3).
 
@@ -52,12 +64,35 @@ is skipped by `paths-ignore` never reports them and blocks the PR forever, so:
 `pyproject.toml` dependency edit without a re-lock makes CI fail with a frozen-lock
 error. Rules:
 
+- `uv sync --extra dev` for the dev stack; `uv sync --frozen --extra ci` reproduces
+  CI exactly.
 - never add, remove or bump a dependency by hand;
 - relock with `uv lock` (and commit `uv.lock` in the same commit) or leave the
   dependency alone;
-- `extra ci` / `extra dev` are the supported test stacks — do not invent a third one.
+- `extra ci` / `extra dev` are the supported test stacks — do not invent a third one;
+- never edit `uv.lock` by hand and never bump versions manually —
+  python-semantic-release owns `mountfile/__init__.py:__version__` and
+  `pyproject.toml:project.version` together (release pipeline only).
 
-## 5. Evidence, not prose
+## 5. Code style
+
+- One formatter trio, already wired in pre-commit and CI: **ruff** (lint),
+  **black** (format), **isort** (black profile). Line length 100 for ruff,
+  88 for black/isort — don't fight it, run `make fmt`.
+
+## 6. Hard rules (from .github/copilot-instructions.md — do not violate)
+
+- Treat image offsets/lengths as untrusted; validate extents against the
+  selected volume; fail closed on malformed/ambiguous filesystems.
+- Native writes stay limited to validated profiles; no network, subprocess,
+  or host mounting in parse/write paths.
+- Preserve transaction / read-back verification / rollback guarantees.
+- Prefer existing VFS and format-specific backends; read neighboring tests
+  before changing public behavior.
+- Update tests and docs when changing filesystem support, bounds, capabilities,
+  or write semantics.
+
+## 7. Evidence, not prose
 
 Acceptance work for #385 / #386 / #387 / #510 is evidence-driven:
 
@@ -72,7 +107,7 @@ Acceptance work for #385 / #386 / #387 / #510 is evidence-driven:
 - Never write "supported", "production-ready", "parity" or "verified" in a doc,
   README or comment unless the tracker item that proves it is closed.
 
-## 6. Tracker comments
+## 8. Tracker comments
 
 The #510 thread is long and manual edits drifted from `main`. Generate the status
 block instead of typing it:
@@ -87,7 +122,7 @@ python scripts/tracker_status.py --markdown --similarity last-comment.md
 you pass, which is the "did I already post this?" gate the thread used to apply by
 hand. Do not post a near-duplicate comment.
 
-## 7. Parallel work
+## 9. Parallel work
 
 Use one worktree per task so switching branches never rebuilds the environment:
 
@@ -95,12 +130,23 @@ Use one worktree per task so switching branches never rebuilds the environment:
 git worktree add ../mount-file-c6 -b feat/c6-oracle
 ```
 
-## 8. Commits and PRs
+## 10. Commits and PRs
 
-- Conventional commits (`feat(#510): ...`, `fix: ...`, `test: ...`, `docs: ...`,
-  `chore: ...`). `semantic-release` derives the version from them.
+- Conventional commits are mandatory (`feat(#510): ...`, `fix: ...`, `test: ...`,
+  `docs: ...`, `chore: ...` — see recent `git log`). `semantic-release` derives
+  the version from them, and release notes are generated from them.
 - One logical change per PR; the PR body states which tracker item it moves and
   which evidence file proves it.
+- Actions must be pinned to full commit SHAs; keep workflow `permissions:` minimal.
 - Do not commit tokens, image data, build artifacts (`build/`, `dist/`), or secrets.
   `tools/mfsync.py scan --all` runs in CI.
 - Do not force-push `main`; it is protected — use a branch and a PR.
+
+## 11. PR checklist (self-serve before requesting review)
+
+1. `make test-fast` green.
+2. `make lint` + `make lint-correctness` green.
+3. If GUI code touched: `QT_QPA_PLATFORM=offscreen python -m pytest tests -m gui`.
+4. Conventional commit message; branch up to date with main (`git pull --rebase`).
+5. Bot PRs get auto-merged when labeled `auto-merge` — keep changes small so
+   gates stay green quickly.

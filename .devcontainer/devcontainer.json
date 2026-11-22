@@ -9,5 +9,18 @@
       "label": "noVNC desktop",
       "onAutoForward": "notify"
     }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.isort",
+        "charliermarsh.ruff",
+        "github.copilot",
+        "github.copilot-chat"
+      ]
+    }
   }
 }
