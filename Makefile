@@ -4,14 +4,15 @@
 
 PY ?= python3
 
-.PHONY: help install tools tools-check test test-ai test-standalone lint
+.PHONY: help install tools tools-check test test-ai test-standalone lint setup setup-check
 .PHONY: lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images
 .PHONY: test-changed lint-fast fmt-check tracker-status dev-sync sync sync-status sync-check
-.PHONY: sync-pr sync-watch test-fast setup setup-check
+.PHONY: sync-pr sync-watch test-fast test-unit watch-test
 
 help:
 	@echo "make install    - install runtime dependencies"
 	@echo "make setup      - full Linux adaptation: system packages + venv + smoke + gates"
+	@echo "make setup-check - setup without the pytest leg"
 	@echo "make tools      - install the complete Linux checker and Python toolchain"
 	@echo "make tools-check - verify all optional tools are available"
 	@echo "make test       - run the test suite"
@@ -40,15 +41,6 @@ help:
 install:
 	$(PY) -m pip install -e ".[api,ai,dfir]"
 
-# Reproducible Linux workstation adaptation: CI package set + editable dev
-# install + headless Qt smoke + gates. Idempotent; see scripts/dev-setup-linux.sh.
-setup:
-	bash scripts/dev-setup-linux.sh
-
-# Same, without the (long) pytest leg: packages, venv, install, smoke, lint.
-setup-check:
-	bash scripts/dev-setup-linux.sh --no-tests
-
 tools:
 	bash scripts/bootstrap-tools.sh
 
@@ -63,6 +55,16 @@ test:
 test-fast:
 	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "not gui and not e2e" \
 		--durations=25
+
+# Быстрее test-fast для правок чистой логики: только marker unit (<50 мс
+# каждый тест). GUI- и integration-фикстуры не собираются вовсе.
+test-unit:
+	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "unit" --durations=10
+
+# Перезапуск быстрого прогона после каждого сохранения: правка -> Ctrl+S ->
+# тесты сами. Без внешних пакетов (см. scripts/watch-test.sh). Ctrl+C — стоп.
+watch-test:
+	bash scripts/watch-test.sh
 
 test-ai:
 	$(PY) -m pytest \
@@ -171,3 +173,12 @@ sync-pr:
 
 sync-watch:
 	$(PY) tools/mfsync.py watch --push
+
+# Reproducible Linux workstation adaptation: CI package set + editable install
+# + headless Qt smoke + gates. Idempotent; see scripts/dev-setup-linux.sh.
+setup:
+	bash scripts/dev-setup-linux.sh
+
+# Same, without the (long) pytest leg: packages, venv, install, smoke, lint.
+setup-check:
+	bash scripts/dev-setup-linux.sh --no-tests

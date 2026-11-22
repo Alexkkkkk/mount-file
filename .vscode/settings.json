@@ -1,0 +1,43 @@
+{
+  // Format on save with the exact toolchain CI uses: black + isort + ruff.
+  // Saves a round-trip to `make fmt` for every edit.
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit",
+      "source.fixAll.ruff": "explicit"
+    }
+  },
+  "black-formatter.args": ["--target-version", "py310"],
+  "isort.args": ["--profile", "black", "--line-length", "88"],
+  "ruff.lint.args": [
+    "--select", "E,F,W,I,UP,B,SIM,S110,S112",
+    "--ignore", "E501,E402",
+    "--line-length", "100",
+    "--target-version", "py310"
+  ],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.exclude": ["build", "dist", "archive", "**/__pycache__"],
+  // Fast dev-loop tests: same tier as the PR CI gate (no gui/e2e).
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests", "-q", "-m", "not gui and not e2e"],
+  "python.testing.unittestEnabled": false,
+  // Keep search and file lists fast on a repo with generated artifacts.
+  "search.exclude": {
+    "build": true,
+    "dist": true,
+    "archive": true,
+    "uv.lock": true,
+    "**/__pycache__": true
+  },
+  "files.watcherExclude": {
+    "build/**": true,
+    "dist/**": true,
+    "archive/**": true
+  },
+  "editor.rulers": [100],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}
