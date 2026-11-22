@@ -135,6 +135,16 @@ def _mft_record_stream(image: Path, fixture: DirtyFixture) -> bytes:
     return mft[start : start + fixture.record_size]
 
 
+def _source_integrity(image: Path, source_hash_before: str) -> dict[str, object]:
+    """Prove (not assert) that the dirty fixture was left untouched."""
+    source_hash_after = _sha256(image)
+    return {
+        "source_hash_before": source_hash_before,
+        "source_hash_after": source_hash_after,
+        "source_untouched": source_hash_before == source_hash_after,
+    }
+
+
 def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
     """Replay the fixture twice independently and compare with the oracle.
 
@@ -142,6 +152,7 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
     comparisons are against raw streams extracted with external ``ntfscat``,
     never with our own parser.
     """
+    source_hash_before = _sha256(fixture.image)
     ours = work / f"{fixture.scenario}-ours.img"
     twin = work / f"{fixture.scenario}-twin.img"
     shutil.copyfile(fixture.image, ours)
@@ -179,8 +190,12 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         "mft_record_bytes_equal": mft_bytes_equal,
         "bitmap_bytes_equal": bitmap_equal,
         "target_content_consistent": content_correct,
-        "source_untouched": _sha256(fixture.image) == _sha256(ours)
-        or True,  # replay works on copies; source hash tracked by executor
+        # Proven, not asserted: the fixture hash is snapshotted before any
+        # executor call and compared afterwards.  A previous revision
+        # short-circuited this comparison with a constant-true expression,
+        # a tautology that could never report tampering.
+        **_source_integrity(fixture.image, source_hash_before),
+        "replay_mutated_copy": _sha256(ours) != source_hash_before,
         "verdict": (
             "pass" if (mft_bytes_equal and bitmap_equal and clean) else "divergence"
         ),

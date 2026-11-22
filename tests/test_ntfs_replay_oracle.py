@@ -9,6 +9,7 @@ legs; elsewhere they skip - a skip is never reported as a pass.
 """
 
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -40,6 +41,38 @@ def test_replay_matches_external_ntfsfix_oracle(tmp_path, scenario):
         # clean by the external checker.  The mirror scenario may legitimately
         # leave mirror repair to ntfsfix; the divergence is recorded, not hidden.
         assert result["ntfsfix_check"] == "pass", result["ntfsfix_output"]
+
+
+def test_source_integrity_flag_is_a_real_comparison(tmp_path):
+    """Regression guard for the oracle tautology found on 2026-11-22.
+
+    ``source_untouched`` used to be computed as
+    ``sha256(source) == sha256(ours) or True`` — always truthy, so the
+    evidence artifact could never report fixture tampering.  The flag is
+    now a snapshot comparison; prove it can actually go false.
+    """
+    from tests.ntfs_oracle import _sha256, _source_integrity
+
+    fixture = tmp_path / "fixture.img"
+    fixture.write_bytes(b"PRE-RUN-SNAPSHOT" * 8)
+    before = _sha256(fixture)
+
+    untouched = _source_integrity(fixture, before)
+    assert untouched["source_untouched"] is True
+    assert untouched["source_hash_after"] == before
+
+    fixture.write_bytes(b"TAMPERED-AFTER-RUN" * 8)
+    touched = _source_integrity(fixture, before)
+    assert touched["source_untouched"] is False
+    assert touched["source_hash_after"] != touched["source_hash_before"]
+
+
+def test_oracle_module_does_not_short_circuit_source_untouched():
+    """The ``or True`` tautology must not silently come back."""
+    import tests.ntfs_oracle as oracle_module
+
+    source = Path(oracle_module.__file__).read_text(encoding="utf-8")
+    assert "or True" not in source
 
 
 @needs_ntfs
