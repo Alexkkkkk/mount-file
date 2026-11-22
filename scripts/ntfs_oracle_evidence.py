@@ -76,9 +76,11 @@ def build_evidence(root: Path) -> dict[str, object]:
         "unavailable_scenarios": unavailable,
         "skipped_cells": 0,
         "scenarios": scenarios,
-        "verdict": "pass"
-        if passed >= 5 and diverged == 0
-        else ("blocked" if diverged else "unavailable"),
+        "verdict": (
+            "pass"
+            if passed >= 5 and diverged == 0
+            else ("blocked" if diverged else "unavailable")
+        ),
     }
 
 

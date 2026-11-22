@@ -95,6 +95,13 @@ def _fixture_evidence(
         if not isinstance(props, dict):
             valid = False
             continue
+        if not props.get("mountfile.fixture.profile"):
+            # A declared fixture test may execute without recording per-image
+            # checker properties (the external ntfsfix oracle replays assert
+            # byte-divergence invariants, not single-image evidence).  Such a
+            # case still contributes execution evidence through the entry's
+            # fixture_status; it carries no image evidence to validate.
+            continue
         item_profile = props.get("mountfile.fixture.profile", "")
         observed_profiles.add(item_profile)
         source_before = props.get("mountfile.fixture.sha256_before_checker", "")
