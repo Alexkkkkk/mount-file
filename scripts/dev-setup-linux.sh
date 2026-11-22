@@ -45,8 +45,11 @@ fi
 . "$ROOT/.venv/bin/activate"
 python -m pip install --quiet --upgrade pip
 
-say "[3/5] editable install with dev extras"
-python -m pip install --quiet -e ".[dev]"
+say "[3/5] editable install with dev + optional runtime extras"
+# api/ai/dfir/images are what the rest of the suite imports; installing them here
+# is why a fresh host does not silently skip the REST, AI and DFIR tests.
+EXTRAS="${MOUNTFILE_EXTRAS:-dev,api,ai,dfir,images}"
+python -m pip install --quiet -e ".[${EXTRAS}]"
 
 say "[4/5] smoke: version, diagnostics, headless GUI construction"
 python main.py --version
@@ -72,7 +75,8 @@ python -m ruff check . --select E9,F63,F7,F82
 python -m ruff check . --select B006,E722,S110,S112,F841
 if [ "$RUN_TESTS" = "1" ]; then
   QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}" \
-    python -m pytest tests/ -q -n auto --dist=worksteal -m "not gui and not e2e"
+    python -m pytest tests/ -q -n "${PYTEST_WORKERS:-auto}" --dist=loadfile \
+    -m "not gui and not e2e"
 fi
 
 say "done: source .venv/bin/activate, then python main.py"
