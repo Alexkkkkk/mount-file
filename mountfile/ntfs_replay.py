@@ -44,10 +44,7 @@ from mountfile.ntfs_mft import (
     NtfsRecordError,
     parse_ntfs_file_record_header,
 )
-from mountfile.ntfs_mft_allocation import (
-    NtfsMftAllocationError,
-    plan_mft_record_reuse,
-)
+from mountfile.ntfs_mft_allocation import NtfsMftAllocationError, plan_mft_record_reuse
 from mountfile.ntfs_probe import NtfsBootProfile
 from mountfile.ntfs_reader import (
     NtfsAttributeSummary,
