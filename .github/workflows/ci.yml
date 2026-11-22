@@ -40,9 +40,9 @@ jobs:
       - id: set
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
-            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40,"coverage":true},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40,"coverage":false}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40},{"os":"windows-latest","python":"3.10","check_name":"Tests (windows-latest, py3.10)","timeout":40},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40},{"os":"macos-latest","python":"3.10","check_name":"Tests (macos-latest, py3.10)","timeout":75},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40,"coverage":true},{"os":"windows-latest","python":"3.10","check_name":"Tests (windows-latest, py3.10)","timeout":40,"coverage":false},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40,"coverage":false},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40,"coverage":false},{"os":"macos-latest","python":"3.10","check_name":"Tests (macos-latest, py3.10)","timeout":75,"coverage":false},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75,"coverage":false}]}' >> "$GITHUB_OUTPUT"
           fi
 
   tests:
@@ -120,13 +120,26 @@ jobs:
       # Modest package-wide floor: OS-specific and optional GUI/backends are
       # intentionally not exercised on every matrix leg; fail only on a broad
       # loss of exercised MountFile code, while still publishing the report.
+      #
+      # Coverage instrumentation costs 20-30 % of the run and one coverage.xml is
+      # enough, so only the ubuntu/3.12 leg (matrix `coverage: true`) enables it.
+      # --junitxml stays on every leg: failure_matrix_artifact.py,
+      # platform_benchmark_provenance.py and native_read_evidence.py all parse it.
       - name: Run tests with coverage
+        if: ${{ matrix.coverage }}
         run: >-
           python -m pytest tests/ -v
           --timeout=600 --timeout-method=thread
           --cov=mountfile --cov-report=term --cov-report=xml:coverage.xml
           --junitxml=test-results.xml
           --cov-fail-under=20
+
+      - name: Run tests (no coverage instrumentation)
+        if: ${{ !matrix.coverage }}
+        run: >-
+          python -m pytest tests/ -v
+          --timeout=600 --timeout-method=thread
+          --junitxml=test-results.xml
 
       # Every evidence generator is cheap (pure Python over the JUnit XML) and
       # used to be its own workflow step: nine step startups, nine runner log
