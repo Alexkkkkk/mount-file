@@ -4,13 +4,15 @@
 
 PY ?= python3
 
-.PHONY: help install tools tools-check test test-ai test-standalone lint
+.PHONY: help install tools tools-check test test-ai test-standalone lint setup setup-check
 .PHONY: lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images
 .PHONY: test-changed lint-fast fmt-check tracker-status dev-sync sync sync-status sync-check
 .PHONY: sync-pr sync-watch test-fast test-unit watch-test
 
 help:
 	@echo "make install    - install runtime dependencies"
+	@echo "make setup      - full Linux adaptation: system packages + venv + smoke + gates"
+	@echo "make setup-check - setup without the pytest leg"
 	@echo "make tools      - install the complete Linux checker and Python toolchain"
 	@echo "make tools-check - verify all optional tools are available"
 	@echo "make test       - run the test suite"
@@ -171,3 +173,12 @@ sync-pr:
 
 sync-watch:
 	$(PY) tools/mfsync.py watch --push
+
+# Reproducible Linux workstation adaptation: CI package set + editable install
+# + headless Qt smoke + gates. Idempotent; see scripts/dev-setup-linux.sh.
+setup:
+	bash scripts/dev-setup-linux.sh
+
+# Same, without the (long) pytest leg: packages, venv, install, smoke, lint.
+setup-check:
+	bash scripts/dev-setup-linux.sh --no-tests
