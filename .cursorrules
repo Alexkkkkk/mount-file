@@ -1,0 +1,13 @@
+# Cursor rules: read AGENTS.md (single source of process truth) before the first edit.
+# Safety and architecture rules: .github/copilot-instructions.md.
+#
+# Fast loop (in this order):
+#   make test-unit    - only marker "unit" (<50ms/test), fastest possible check
+#   make test-fast    - parallel pytest -n auto, no gui/e2e (same tier as PR CI)
+#   make test-changed - only test files touched since origin/main
+#   make lint-fast    - ruff syntax + undefined names + correctness rules
+#   make fmt          - ruff --fix + isort + black (only on files you touched)
+#   make watch-test   - re-run test-fast after every save (Ctrl+S -> tests run)
+#
+# Hard rules: conventional commits; never weaken quality.yml/ci.yml gates;
+# never edit uv.lock by hand; treat image offsets as untrusted and fail closed.
