@@ -4,8 +4,10 @@
 
 PY ?= python3
 
-.PHONY: help install tools tools-check test test-ai test-standalone lint lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images \
-        sync sync-status sync-check sync-pr sync-watch test-fast
+.PHONY: help install tools tools-check test test-ai test-standalone lint
+.PHONY: lint-correctness fmt exe mountfile-exe clean all-in-one sample smoke-images
+.PHONY: test-changed lint-fast fmt-check tracker-status dev-sync sync sync-status sync-check
+.PHONY: sync-pr sync-watch test-fast
 
 help:
 	@echo "make install    - install runtime dependencies"
@@ -28,6 +30,11 @@ help:
 	@echo "make sync-check - fail on version mismatch between pyproject/__init__"
 	@echo "make sync-pr    - sync through a pull request (protected main)"
 	@echo "make sync-watch - auto-commit + push on every save"
+	@echo "make test-changed - run only tests touched since origin/main"
+	@echo "make lint-fast - ruff syntax + undefined names + correctness rules"
+	@echo "make fmt-check - black/isort check without rewriting (CI parity)"
+	@echo "make tracker-status - generate the #510 status block from the manifest"
+	@echo "make dev-sync  - uv sync --frozen --extra ci (no resolver)"
 
 install:
 	$(PY) -m pip install -e ".[api,ai,dfir]"
@@ -44,7 +51,8 @@ test:
 # Быстрый локальный гейт: параллельно по ядрам, без GUI/e2e,
 # та же конфигурация, что в PR-прогоне CI.
 test-fast:
-	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "not gui and not e2e"
+	$(PY) -m pytest tests/ -q -n auto --dist=worksteal -m "not gui and not e2e" \
+		--durations=25
 
 test-ai:
 	$(PY) -m pytest \
@@ -102,6 +110,38 @@ sample:
 # is missing are skipped. Work dir:  make smoke-images WORK=/tmp/mf-smoke
 smoke-images:
 	bash scripts/smoke-real-images.sh $(WORK)
+
+# Only the test files that differ from origin/main, plus the modules they name.
+# The full suite is 218 files; a one-module edit does not need all of them.
+test-changed:
+	@files=$$(git diff --name-only --diff-filter=d origin/main...HEAD -- 'tests/*.py' 'tests/**/*.py' 2>/dev/null); \
+	if [ -z "$$files" ]; then \
+		echo "no changed test files vs origin/main (run make test-fast)"; \
+	else \
+		echo "$$files" | tr '\\n' ' '; echo; \
+		$(PY) -m pytest $$files -q -n auto --dist=worksteal --durations=15; \
+	fi
+
+# Exactly the two ruff selections ci/quality.yml fail on, so a commit does not
+# discover them for the first time on the runner.
+lint-fast:
+	$(PY) -m ruff check . --select E9,F63,F7,F82
+	$(PY) -m ruff check . --select B006,E722,S110,S112,F841
+
+# Formatting gate without rewriting files: same tools and pins as quality.yml.
+fmt-check:
+	$(PY) -m black --check --diff .
+	$(PY) -m isort --check-only --diff .
+
+# The #510 status block is generated, never typed: counts, evidence links and
+# the slice line all come from docs/replay-acceptance.json.
+tracker-status:
+	$(PY) scripts/tracker_status.py --markdown
+
+# Locked local environment: no resolver, same versions CI installs.
+dev-sync:
+	@command -v uv >/dev/null 2>&1 || { echo "uv is not installed: https://docs.astral.sh/uv/"; exit 1; }
+	uv sync --frozen --extra ci
 
 # --------------------------------------------------------------- sync targets
 # Requires only git + Python 3.8 (stdlib). Token is read from GH_TOKEN at call

@@ -64,3 +64,4 @@ nav:
       - UniversalFSRW snippet: tc_window_universal_fs_rw_snippet.md
       - VFS benchmarks: benchmarks.md
       - Автоматика веток: branch-hygiene.md
+      - Ускорение цикла разработки: speedup-playbook.md
