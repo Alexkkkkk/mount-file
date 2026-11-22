@@ -1,0 +1,82 @@
+name: B8 log-writes durable ordering
+
+# DRAFT (unverified): the dm-log-writes target, loop devices and the
+# xfstests log-writes.py parser have never executed in this repository's CI.
+# Every prerequisite probe below is fail-closed: a missing capability aborts
+# the job instead of degrading into a weaker claim. This gate does not run on
+# a schedule and is not merge-gating until a real ubuntu-latest run proves
+# the wiring.
+
+# Trigger is dispatch-only until a verified pin exists: an unreviewed draft
+# job must not paint a pull request red with its intentional fail-closed
+# refusal. The contract tests below run inside the regular CI matrix.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: b8-log-writes-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # TODO(owner): after the first successful fetch, replace with the SHA-256
+  # of the pinned log-writes.py copy. An empty pin keeps the job red on
+  # purpose: an unpinned third-party parser must never gate durable-order
+  # evidence.
+  LOG_WRITES_SHA256: ''
+
+jobs:
+  durable-order:
+    name: dm-log-writes replay gate (B8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Refuse to run with an unpinned parser
+        run: |
+          if [ -z "$LOG_WRITES_SHA256" ]; then
+            echo "::error::LOG_WRITES_SHA256 is empty: pin the xfstests log-writes.py parser by SHA-256 before this gate may run"
+            exit 1
+          fi
+
+      - name: Probe kernel prerequisites (fail closed)
+        run: |
+          set -euo pipefail
+          sudo modprobe dm-log-writes
+          sudo dmsetup targets | grep -q '^log-writes' || {
+            echo '::error::log-writes target unavailable on this runner'
+            exit 1
+          }
+          test -e /dev/loop-control || {
+            echo '::error::/dev/loop-control is missing'
+            exit 1
+          }
+
+      - name: Fetch and pin the canonical parser
+        run: |
+          set -euo pipefail
+          mkdir -p tools/log-writes
+          curl --fail --location --retry 3 \
+            'https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git/plain/tools/log-writes/log-writes.py' \
+            -o tools/log-writes/log-writes.py
+          printf '%s  %s\n' "$LOG_WRITES_SHA256" tools/log-writes/log-writes.py | sha256sum --check -
+
+      - name: Run the durable-ordering gate
+        run: sudo -E --preserve-env=LOG_WRITES_SHA256 python scripts/log_writes_replay_check.py --out b8-log-writes.json
+
+      - name: Upload B8 evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: b8-log-writes-${{ github.sha }}
+          path: b8-log-writes.json
+          if-no-files-found: error
+          retention-days: 30
