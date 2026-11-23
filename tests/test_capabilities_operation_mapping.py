@@ -37,12 +37,22 @@ class TestOperationMappingRoundTrip:
     def test_every_registered_operation_maps_both_ways(self):
         for interface, aliases in _INTERFACE_OPERATION_ALIASES.items():
             for canonical, api_op in aliases.items():
-                assert api_operation_for_canonical_operation(interface, canonical) == api_op
-                assert canonical_operation_for_api_operation(interface, api_op) == canonical
+                assert (
+                    api_operation_for_canonical_operation(interface, canonical)
+                    == api_op
+                )
+                assert (
+                    canonical_operation_for_api_operation(interface, api_op)
+                    == canonical
+                )
 
     def test_unknown_interface_returns_none(self):
-        assert canonical_operation_for_api_operation("no-such-interface", "list") is None
-        assert api_operation_for_canonical_operation("no-such-interface", "list") is None
+        assert (
+            canonical_operation_for_api_operation("no-such-interface", "list") is None
+        )
+        assert (
+            api_operation_for_canonical_operation("no-such-interface", "list") is None
+        )
 
     def test_unknown_operation_returns_none(self):
         assert canonical_operation_for_api_operation("vfs", "no-such-op") is None
