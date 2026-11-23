@@ -6,13 +6,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from filelock import FileLock
+from hypothesis import settings
 
 # Hypothesis profiles: быстрый профиль для локального цикла, насыщенный —
 # для CI/ночного прогона. Активный профиль выбирается переменной
 # HYPOTHESIS_PROFILE (по умолчанию "dev" — 25 примеров на свойство).
-import os
-
-from hypothesis import settings
 
 settings.register_profile("dev", max_examples=25, deadline=None)
 settings.register_profile("ci", max_examples=100, deadline=None)
