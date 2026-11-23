@@ -552,7 +552,10 @@ jobs:
 
   ci-gate:
     name: CI-Gate
-    needs: [tests, ubuntu-py312-compat, integration, build, gui-import, gui, ai-safety]
+    # repo-status-verify входит в needs, чтобы расхождение README/CLI/runtime
+    # (пункт E2 трекера #510) рвало агрегированный гейт, а не только свой
+    # отдельный required-контекст.
+    needs: [tests, ubuntu-py312-compat, integration, build, gui-import, gui, ai-safety, repo-status-verify]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -564,11 +567,12 @@ jobs:
       GUI_IMPORT: ${{ needs.gui-import.result }}
       GUI: ${{ needs.gui.result }}
       AI_SAFETY: ${{ needs.ai-safety.result }}
+      REPO_STATUS: ${{ needs.repo-status-verify.result }}
     steps:
       - name: Require every CI stage to succeed
         run: |
           set -euo pipefail
-          for result in "$TESTS" "$UBUNTU_PY312" "$INTEGRATION" "$BUILD" "$GUI_IMPORT" "$GUI" "$AI_SAFETY"; do
+          for result in "$TESTS" "$UBUNTU_PY312" "$INTEGRATION" "$BUILD" "$GUI_IMPORT" "$GUI" "$AI_SAFETY" "$REPO_STATUS"; do
             if [ "$result" != 'success' ]; then
               echo "::error::A required CI stage ended with $result"
               exit 1
