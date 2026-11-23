@@ -7,6 +7,7 @@ timestomp, slack and live diff.
 Everything runs against fakes or tiny synthetic images, so the suite passes
 with and without ``pytsk3`` / ``yara-python`` installed.
 """
+
 from __future__ import annotations
 
 import sqlite3

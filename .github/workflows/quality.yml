@@ -28,7 +28,7 @@ jobs:
         uses: ./.github/actions/setup-python-env
         with:
           install-test-stack: 'false'
-          extra-pip: 'ruff==0.4.10 black==24.4.2 isort==5.13.2'
+          extra-pip: 'ruff==0.17.6 black==26.10.1 isort==9.0.2'
       - name: Static check (syntax + undefined names)
         run: ruff check . --select E9,F63,F7,F82 --output-format=github
       - name: Correctness lint (issue #182 safety rules)

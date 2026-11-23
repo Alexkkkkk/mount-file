@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Execute declared checker fixtures and emit bounded acceptance evidence."""
+
 from __future__ import annotations
 
 import argparse

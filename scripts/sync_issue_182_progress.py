@@ -7,6 +7,7 @@ that every issue-related commit updates it. Only the current main head can
 publish the canonical comment, using the status sheet fetched at that exact SHA.
 Feature branches perform read-only validation, never canonical publication.
 """
+
 from __future__ import annotations
 
 import json

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate a saved read-only VFS benchmark artifact conservatively."""
+
 from __future__ import annotations
 
 import argparse

@@ -24,6 +24,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
@@ -106,6 +107,24 @@ def _context(data: bytes, start: int, end: int, width: int, encoding: str) -> st
     return text.replace("\x00", "")
 
 
+@lru_cache(maxsize=256)
+def _compile_text_regex(pattern: str) -> Any:
+    """Compile a ``str`` regex once per pattern for the whole scan."""
+    try:
+        return re.compile(pattern)
+    except re.error as exc:
+        raise SearchError("invalid regex: %s" % exc) from exc
+
+
+@lru_cache(maxsize=256)
+def _compile_bytes_regex(pattern: str, encoding: Any) -> Any:
+    """Compile a ``bytes`` regex once per (pattern, encoding) pair."""
+    try:
+        return re.compile(pattern.encode(encoding or "utf-8", "replace"))
+    except (re.error, LookupError) as exc:
+        raise SearchError("invalid regex: %s" % exc) from exc
+
+
 def _byte_hits(
     data: bytes, needle: bytes, base: int, width: int, encoding: str
 ) -> Iterator[tuple[int, int]]:
@@ -170,10 +189,7 @@ def search_blob(
 
     if regex:
         if enc in _UTF16_LE or enc in _UTF16_BE:
-            try:
-                rx = re.compile(pattern)
-            except re.error as exc:
-                raise SearchError("invalid regex: %s" % exc) from exc
+            rx = _compile_text_regex(pattern)
             size = 2
             pairs = _text_regex_hits(blob, rx, base_offset, enc, size)
             for offset, length, exact in pairs:
@@ -196,10 +212,7 @@ def search_blob(
                 if max_hits and len(hits) >= max_hits:
                     break
             return hits
-        try:
-            rx = re.compile(pattern.encode(encoding or "utf-8", "replace"))
-        except (re.error, LookupError) as exc:
-            raise SearchError("invalid regex: %s" % exc) from exc
+        rx = _compile_bytes_regex(pattern, encoding)
         pairs = _regex_hits(blob, rx, base_offset)
     else:
         needle = encode_pattern(pattern, encoding)

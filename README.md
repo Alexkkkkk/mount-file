@@ -33,7 +33,7 @@ read-only анализ и умеет ограниченно писать — т�
 
 | | |
 |---|---|
-| Версия пакета | `1.100.1` — синхронизирована в `pyproject.toml` и `mountfile/__init__.py`; готовые сборки в [Releases](https://github.com/Alexkkkkk/mount-file/releases) |
+| Версия пакета | `1.103.0` — синхронизирована в `pyproject.toml` и `mountfile/__init__.py`; готовые сборки в [Releases](https://github.com/Alexkkkkk/mount-file/releases) |
 | Документация | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Репозиторий | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | Лицензия | [MIT](LICENSE) |

@@ -9,6 +9,7 @@ heuristics: an ordering or boundary anomaly is a reason for review, not proof
 of timestomping and not an assertion about any particular operating system or
 filesystem.
 """
+
 from __future__ import annotations
 
 import math

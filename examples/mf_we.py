@@ -99,16 +99,14 @@ class TransactionManager:
         self.backup_dir = image_path.with_suffix(image_path.suffix + ".mfwe-backups")
         self.backup_dir.mkdir(exist_ok=True)
         self._conn = sqlite3.connect(self.journal_path)
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS journal (
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS journal (
                    tx_id TEXT PRIMARY KEY,
                    op TEXT NOT NULL,
                    path TEXT NOT NULL,
                    backup_path TEXT,
                    sha256 TEXT,
                    created_at REAL NOT NULL
-               )"""
-        )
+               )""")
         self._conn.commit()
         self._current_tx: Optional[str] = None
 

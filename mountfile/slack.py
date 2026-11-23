@@ -9,6 +9,7 @@ run maps cannot safely locate physical slack and are explicitly refused.
 Filesystem offsets are byte offsets in the image; the default is a filesystem
 starting at byte zero. No allocation-state discovery is performed here.
 """
+
 from __future__ import annotations
 
 import operator

@@ -67,6 +67,8 @@ ci = [
     # runtime bindings (PyQt6 is a base dependency), the REST API stack and
     # `regex`. Kept as its own extra so `uv sync --frozen --extra ci` installs a
     # pre-resolved, hash-verified environment instead of running a resolver.
+    # pytest-shard ships 0.1.2 as its newest release on PyPI; a >=0.9 floor
+    # made the whole `ci` extra unsatisfiable and broke `uv lock`.
     "pytest>=7",
     "pytest-cov>=4",
     "pytest-timeout>=2.3",
@@ -84,7 +86,8 @@ ci = [
     "regex>=2024.0.0",
 ]
 images = [
-    # Pillow 13 dropped Python 3.10; keep a resolvable floor on 3.10.
+    # Pillow 13 dropped Python 3.10 (its floor is >=3.11), while this project
+    # still supports 3.10, so the newest line is pinned per interpreter.
     "Pillow>=13.0.0; python_version >= '3.11'",
     "Pillow>=12.3.0; python_version < '3.11'",
 ]

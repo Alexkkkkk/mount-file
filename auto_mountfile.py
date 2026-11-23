@@ -146,7 +146,7 @@ FS_SIGNATURES = [
         "FAT12/16/32",
         lambda b: len(b) > 0x5A
         and (
-            b[0:3] in (b"\xEB\x3C\x90", b"\xEB\x3E\x90", b"\xE9\x00\x00")
+            b[0:3] in (b"\xeb\x3c\x90", b"\xeb\x3e\x90", b"\xe9\x00\x00")
             or b[0x36:0x3B] in (b"FAT12", b"FAT16")
             or b[0x52:0x57] == b"FAT32"
         ),
@@ -208,7 +208,7 @@ def read_mbr(f) -> list[Volume]:
     f.seek(0)
     mbr = f.read(512)
     out: list[Volume] = []
-    if len(mbr) < 512 or mbr[510:512] != b"\x55\xAA":
+    if len(mbr) < 512 or mbr[510:512] != b"\x55\xaa":
         return out
     for i in range(4):
         e = mbr[446 + i * 16 : 446 + (i + 1) * 16]

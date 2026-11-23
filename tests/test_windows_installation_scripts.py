@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Packaging and mock-only PowerShell tests; never execute a real installation."""
+
 from __future__ import annotations
 
 import shutil

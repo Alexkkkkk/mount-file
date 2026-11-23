@@ -17,6 +17,7 @@ Two granularities:
 
 Read-only in both directions: the diff never writes to either image.
 """
+
 from __future__ import annotations
 
 import hashlib

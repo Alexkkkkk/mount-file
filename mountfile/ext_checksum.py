@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Small, bounded checksum primitives for read-only ext validation."""
+
 from __future__ import annotations
 
 _CRC32C_REVERSED_POLY = 0x82F63B78

@@ -181,8 +181,7 @@ def color(key):
 
 def stylesheet(name=None):
     t = THEMES.get(name or SETTINGS["theme"], THEMES["dark"])
-    return (
-        """
+    return """
 QWidget { background: %(chrome)s; color: %(text)s; }
 QMainWindow, QDialog { background: %(chrome)s; }
 
@@ -321,9 +320,7 @@ QCheckBox:focus, QRadioButton:focus { color: %(text_dir)s; }
 QProgressBar { background: %(chrome_dark)s; border: 1px solid %(border)s; border-radius: 5px; color: %(text)s; text-align: center; }
 QProgressBar::chunk { background: %(accent)s; border-radius: 4px; }
 QToolTip { background: %(header)s; color: %(text)s; border: 1px solid %(border)s; border-radius: 4px; padding: 4px 6px; }
-"""
-        % t
-    )
+""" % t
 
 
 def apply_theme(app, name=None):

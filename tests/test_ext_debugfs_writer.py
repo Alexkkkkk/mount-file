@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Regression tests for the optional transactional ext debugfs writer."""
+
 import shutil
 import subprocess
 

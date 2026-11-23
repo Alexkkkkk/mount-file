@@ -674,7 +674,7 @@ def test_turbo_controller_attach_and_sync_to(qapp, tmp_path):
     from PyQt6.QtWidgets import QWidget
 
     src = tmp_path / "src.img"
-    src.write_bytes(b"\xAB" * 40000)
+    src.write_bytes(b"\xab" * 40000)
     win = QWidget()
     win.image_path = str(src)
 

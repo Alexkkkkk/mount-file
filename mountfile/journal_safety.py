@@ -6,6 +6,7 @@ The module deliberately does not mutate filesystem metadata.  Recovery is
 performed by the filesystem's checked utility on a temporary image copy, then
 this module verifies that the copy is clean before publication.
 """
+
 from __future__ import annotations
 
 import struct

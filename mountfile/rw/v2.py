@@ -355,7 +355,7 @@ def test_rollback_restores_bytes():
         # Меняем 512 байт по offset 1024
         with open(img, "r+b") as f:
             f.seek(1024)
-            f.write(b"\xFF" * 512)
+            f.write(b"\xff" * 512)
         mutated = img.read_bytes()
         assert mutated != original
         assert j.rollback() is True
@@ -441,7 +441,7 @@ def _fuzz_one(data: bytes) -> None:
                 if len(path) > 1:
                     j.backup_region(0, 512)
                     with open(img, "r+b") as f:
-                        f.write(b"\xAA" * 512)
+                        f.write(b"\xaa" * 512)
                     j.commit()
             except Exception:
                 j.rollback(tx)

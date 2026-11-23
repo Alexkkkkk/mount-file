@@ -12,6 +12,7 @@ checker acceptance matrix, including the experimental ext4/NTFS profiles that
 are not yet part of the capability matrix, is published separately by
 ``build_acceptance_report``.
 """
+
 from __future__ import annotations
 
 import argparse

@@ -21,7 +21,6 @@ from mountfile.ext4_jbd2_csum import (
     JBD2ChecksumError,
     commit_checksum,
     descriptor_checksum,
-    journal_superblock_checksum,
     parse_tag,
     tag_bytes_for_features,
     tag_checksum,

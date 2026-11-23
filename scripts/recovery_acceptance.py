@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Execute recovery fixtures and report evidence without upgrading claims."""
+
 from __future__ import annotations
 
 import argparse

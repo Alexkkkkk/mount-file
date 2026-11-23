@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Bounded, fail-closed CI repair proposals for Mount File."""
+
 from __future__ import annotations
 
 import argparse

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate conservative product-status claims across repository surfaces."""
+
 from __future__ import annotations
 
 import argparse

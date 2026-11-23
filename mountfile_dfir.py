@@ -142,8 +142,7 @@ class TimelineDB:
         self.path = safe_path(db_path)
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute(
-            """
+        self.conn.execute("""
             CREATE TABLE IF NOT EXISTS timeline (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT NOT NULL,
@@ -154,8 +153,7 @@ class TimelineDB:
                 birth REAL,
                 sha256 TEXT
             )
-            """
-        )
+            """)
         self.conn.commit()
 
     def add(self, records: Iterable[TimelineRecord]) -> int:

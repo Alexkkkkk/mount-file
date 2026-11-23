@@ -20,6 +20,7 @@ Two targets are supported, mirroring the epic:
 Rules are compiled from a single ``.yar`` file or from a directory of them
 (``rules/`` ships ``pii.yar`` and ``anti_forensics.yar``).
 """
+
 from __future__ import annotations
 
 import logging

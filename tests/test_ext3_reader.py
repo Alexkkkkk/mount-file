@@ -582,7 +582,7 @@ def test_explicit_journal_replay_uses_read_only_overlay(tmp_path, monkeypatch):
 
 def test_jbd2_replay_restores_escaped_data_in_memory_only(tmp_path):
     image_path = tmp_path / "escaped-replay-journal.img"
-    payload = _JBD2_MAGIC_BYTES + b"\xA7" * (BLOCK_SIZE - 4)
+    payload = _JBD2_MAGIC_BYTES + b"\xa7" * (BLOCK_SIZE - 4)
     _make_revoke_journal_image(
         image_path,
         [(7, [(3, payload)], [])],
@@ -606,7 +606,7 @@ def test_jbd2_replay_restores_escaped_data_in_memory_only(tmp_path):
 
 def test_clean_jbd2_scan_accepts_escaped_data_block(tmp_path):
     image_path = tmp_path / "escaped-clean-journal.img"
-    payload = _JBD2_MAGIC_BYTES + b"\xC1" * (BLOCK_SIZE - 4)
+    payload = _JBD2_MAGIC_BYTES + b"\xc1" * (BLOCK_SIZE - 4)
     _make_revoke_journal_image(
         image_path,
         [(7, [(3, payload)], [])],
@@ -625,7 +625,7 @@ def test_clean_jbd2_scan_accepts_escaped_data_block(tmp_path):
 @pytest.mark.parametrize("damage", ["escaped-prefix", "missing-flag"])
 def test_jbd2_replay_rejects_inconsistent_escape_encoding(tmp_path, damage):
     image_path = tmp_path / f"invalid-escape-{damage}.img"
-    payload = _JBD2_MAGIC_BYTES + b"\xD2" * (BLOCK_SIZE - 4)
+    payload = _JBD2_MAGIC_BYTES + b"\xd2" * (BLOCK_SIZE - 4)
     _make_revoke_journal_image(
         image_path,
         [(7, [(3, payload)], [])],

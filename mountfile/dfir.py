@@ -8,6 +8,7 @@ SHA-256 identity, CSV timeline ingestion and conservative timestomp heuristics.
 Filesystem-aware collection, carving, YARA and slack discovery remain optional
 layers and are not implied by these primitives.
 """
+
 from __future__ import annotations
 
 import csv
@@ -15,10 +16,17 @@ import hashlib
 import mmap
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 from .dfir_unallocated_scan import UnallocatedExtractor
+
+
+@lru_cache(maxsize=128)
+def _cached_regex(pattern):
+    """Compile a search expression once per unique needle."""
+    return re.compile(pattern)
 
 
 @dataclass(frozen=True)
@@ -92,7 +100,7 @@ def grep_image(
         stream.seek(0)
         with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as mm:
             if regex:
-                expression = re.compile(needle)
+                expression = _cached_regex(needle)
                 iterator = expression.finditer(mm)
             else:
 
