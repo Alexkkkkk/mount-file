@@ -47,7 +47,11 @@ legacy-tsk = [
     "pytsk3>=20260715",
 ]
 dev = [
-    "pytest>=7",
+    # Этажи подняты до фактических версий в uv.lock и в CI
+    # (quality.yml: ruff==0.17.6, black==26.10.1, isort==9.0.2; pytest 9.2.0 —
+    # весь suite на нём зелёный). hypothesis оставлен >=6: uv.lock сам
+    # разрешает 6.168.5 для Python 3.10 и 6.170.15 для >=3.11 по маркерам.
+    "pytest>=9",
     "pytest-cov>=4",
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
@@ -55,9 +59,9 @@ dev = [
     "filelock>=3.13",
     "hypothesis>=6",
     "pydantic>=2.0",
-    "ruff>=0.4",
-    "black>=24.4",
-    "isort>=5.13",
+    "ruff>=0.17",
+    "black>=26.10",
+    "isort>=9.0",
     "pre-commit>=3.0",
     "pyinstaller>=6.22.3",
 ]
@@ -69,7 +73,7 @@ ci = [
     # pre-resolved, hash-verified environment instead of running a resolver.
     # pytest-shard ships 0.1.2 as its newest release on PyPI; a >=0.9 floor
     # made the whole `ci` extra unsatisfiable and broke `uv lock`.
-    "pytest>=7",
+    "pytest>=9",
     "pytest-cov>=4",
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
