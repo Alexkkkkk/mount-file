@@ -24,14 +24,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.cross_platform_evidence import (  # noqa: E402
-    EXPECTED_PLATFORMS,
-    aggregate,
-    expected_platforms,
-)
-from scripts import failure_matrix_artifact  # noqa: E402
-from scripts import replay_nightly_evidence as nightly  # noqa: E402
-
+from mountfile.ntfs_mft import parse_ntfs_file_record_header  # noqa: E402
 from mountfile.ntfs_replay import (  # noqa: E402
     NTFS_REPLAY_FAULT_POINTS,
     OP_ADD_INDEX_ENTRY_ALLOCATION,
@@ -46,7 +39,13 @@ from mountfile.ntfs_replay import (  # noqa: E402
     NtfsReplayError,
     gate_mft_record_reuse,
 )
-from mountfile.ntfs_mft import parse_ntfs_file_record_header  # noqa: E402
+from scripts import failure_matrix_artifact  # noqa: E402
+from scripts import replay_nightly_evidence as nightly  # noqa: E402
+from scripts.cross_platform_evidence import (  # noqa: E402
+    EXPECTED_PLATFORMS,
+    aggregate,
+    expected_platforms,
+)
 from tests.test_ntfs_mft_allocation import _raw_record  # noqa: E402
 
 RECORD_SIZE = 512
