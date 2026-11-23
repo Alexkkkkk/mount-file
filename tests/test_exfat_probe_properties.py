@@ -46,7 +46,9 @@ def test_reserved_offsets_do_not_affect_checksum(sector_size, seed):
 @pytest.mark.parametrize("sector_size", SECTOR_SIZES)
 @pytest.mark.parametrize("seed", [1, 2])
 def test_checksum_fits_in_32_bits(sector_size, seed):
-    checksum = exfat_boot_checksum(_random_region(sector_size, seed), sector_size=sector_size)
+    checksum = exfat_boot_checksum(
+        _random_region(sector_size, seed), sector_size=sector_size
+    )
     assert 0 <= checksum <= 0xFFFFFFFF
 
 

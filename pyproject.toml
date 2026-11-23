@@ -73,7 +73,7 @@ ci = [
     "pytest-xdist>=3.6",
     "pytest-randomly>=3.15",
     "filelock>=3.13",
-    "pytest-shard>=0.9",
+    "pytest-shard>=0.1.2",
     "hypothesis>=6",
     "setuptools",
     "wheel",
