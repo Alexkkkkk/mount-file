@@ -82,9 +82,7 @@ class _FakeStream(_ShortReadStream):
 
 def _mirror_window(slot_records: dict[int, bytes]) -> bytes:
     filler = _raw_record(1, in_use=True)
-    return b"".join(
-        slot_records.get(i, filler) for i in range(MFT_MIRROR_RECORDS)
-    )
+    return b"".join(slot_records.get(i, filler) for i in range(MFT_MIRROR_RECORDS))
 
 
 def _run_gate(
