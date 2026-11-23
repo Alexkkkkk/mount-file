@@ -136,9 +136,7 @@ def test_unknown_item_reference_is_reported() -> None:
 
 
 def test_duplicate_gap_entry_is_reported() -> None:
-    problems = evaluate(
-        [_item("X1", "partial")], [_gap("X1"), _gap("X1")], _REPO_ROOT
-    )
+    problems = evaluate([_item("X1", "partial")], [_gap("X1"), _gap("X1")], _REPO_ROOT)
 
     assert "duplicate" in _kinds(problems)
 

@@ -110,7 +110,9 @@ def evaluate(
         seen[ident] = seen.get(ident, 0) + 1
         if ident not in by_item:
             problems.append(
-                Problem("unknown_item", ident, "пункта нет в docs/replay-acceptance.json")
+                Problem(
+                    "unknown_item", ident, "пункта нет в docs/replay-acceptance.json"
+                )
             )
             continue
         item = by_item[ident]
@@ -150,7 +152,9 @@ def evaluate(
         evidence = gap.get("evidence") or []
         if not evidence:
             problems.append(
-                Problem("no_evidence", ident, "не указаны файлы, к которым относится пробел")
+                Problem(
+                    "no_evidence", ident, "не указаны файлы, к которым относится пробел"
+                )
             )
         missing = _existing_evidence(root, evidence)
         for entry in missing:
