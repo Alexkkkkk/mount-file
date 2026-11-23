@@ -691,13 +691,17 @@ class _Mft:
         return segments
 
     def read(self, stream_offset: int, length: int) -> bytes:
-        result = bytearray()
-        for _offset, physical, size in self._map(stream_offset, length):
+        segments = list(self._map(stream_offset, length))
+        result = bytearray(sum(size for _offset, _physical, size in segments))
+        view = memoryview(result)
+        position = 0
+        for _offset, physical, size in segments:
             self._stream.seek(physical)
             chunk = self._stream.read(size)
             if len(chunk) != size:
                 raise NtfsReplayError("short read from $MFT")
-            result += chunk
+            view[position : position + size] = chunk
+            position += size
         return bytes(result)
 
     def write(self, stream_offset: int, data: bytes) -> None:
@@ -937,13 +941,16 @@ def _apply_stream_operation(
     if op == OP_UPDATE_NONRESIDENT_VALUE:
         length = roff + dlen
         segments = _run_segments(attribute, cluster_size, vbo, length, base_offset)
-        buffer = bytearray()
+        buffer = bytearray(sum(size for _offset, _physical, size in segments))
+        view = memoryview(buffer)
+        position = 0
         for _offset, physical, size in segments:
             stream.seek(physical)
             chunk = stream.read(size)
             if len(chunk) != size:
                 raise NtfsReplayError("short read from nonresident stream")
-            buffer += chunk
+            view[position : position + size] = chunk
+            position += size
         buffer[roff : roff + dlen] = payload
         cursor = 0
         for _offset, physical, size in segments:
@@ -966,13 +973,16 @@ def _apply_stream_operation(
             attribute, cluster_size, range_offset, byte_end - byte_start, base_offset
         )
         set_bit = op == OP_SET_BITS_IN_NONRESIDENT_BITMAP
-        buffer = bytearray()
+        buffer = bytearray(sum(size for _offset, _physical, size in segments))
+        view = memoryview(buffer)
+        position = 0
         for _offset, physical, size in segments:
             stream.seek(physical)
             chunk = stream.read(size)
             if len(chunk) != size:
                 raise NtfsReplayError("short read from bitmap stream")
-            buffer += chunk
+            view[position : position + size] = chunk
+            position += size
         for bit in range(bitmap_off, bitmap_off + bits):
             # ``buffer`` starts at byte_start, not at the requested bit. Keep
             # the bit's intra-byte offset while preserving adjacent bits.
