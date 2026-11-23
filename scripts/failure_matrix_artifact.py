@@ -13,9 +13,18 @@ import hashlib
 import json
 import os
 import re
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+
+# Launched as ``python scripts/failure_matrix_artifact.py`` Python puts only
+# ``scripts/`` on sys.path; add the repository root before the package import.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from mountfile.acceptance import checker_row  # noqa: E402
 
 SCHEMA = "mountfile.failure-matrix/v2"
 VALIDATION_SCHEMA = "mountfile.failure-matrix-validation/v1"
@@ -567,6 +576,12 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
             else "junit_unavailable" if junit_status == "unavailable" else "not_run"
         )
     )
+    c6_row = checker_row.build_row(
+        captured_at=os.environ.get("MOUNTFILE_CAPTURED_AT", "unavailable")
+    )
+    c6_row["test_evidence"] = checker_row.select_cases(
+        checker_row.C6_DECLARED_TEST_IDS, cases
+    )
     return {
         "schema": SCHEMA,
         "verdict": overall,
@@ -577,6 +592,7 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
         "junit_report": junit_summary,
         "test_status_counts": summary,
         "cells": cells,
+        "c6_checker_row": c6_row,
         "checker_evidence": checker_evidence,
         "limitations": [
             "A passing pytest case records test execution only; it does not establish complete operation-by-phase coverage.",
@@ -604,11 +620,27 @@ def validate_report(
         blockers.append("junit_unreadable")
     if expected is not None and report != expected:
         blockers.append("report_does_not_match_junit_and_declared_selectors")
+    row = report.get("c6_checker_row")
+    if not isinstance(row, dict):
+        blockers.append("c6_checker_row_missing")
+        c6 = {"present": False}
+    else:
+        evidence = row.get("test_evidence") or {}
+        c6 = {
+            "present": True,
+            "outcome": row.get("outcome"),
+            "checker_state": row.get("checker_state"),
+            "authoritative": row.get("authoritative"),
+            "exit_code": row.get("exit_code"),
+            "test_status": evidence.get("status"),
+            "declared_test_ids": len(checker_row.C6_DECLARED_TEST_IDS),
+        }
     return {
         "schema": VALIDATION_SCHEMA,
         "verdict": "pass" if not blockers else "blocked",
         "acceptance": "not_evaluated",
         "blockers": sorted(set(blockers)),
+        "c6_checker_row": c6,
     }
 
 
@@ -617,8 +649,38 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--junitxml", type=Path)
     parser.add_argument("--validate", type=Path)
+    parser.add_argument(
+        "--c6-checker-state",
+        default="auto",
+        choices=("auto", *checker_row.CHECKER_STATES),
+        help="Force the C6 authoritative-checker state and exit with its code.",
+    )
+    parser.add_argument(
+        "--inject-unknown",
+        action="store_true",
+        help="Emit a C6 row whose difference cannot be attributed (must fail).",
+    )
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
+    if args.c6_checker_state != "auto" or args.inject_unknown:
+        # ``--inject-unknown`` must reach the parity classifier, so it forces an
+        # available checker: on a host without chkdsk the row would otherwise
+        # stop at ``unavailable`` and never exercise the unknown branch.
+        forced_state = (
+            "available" if args.inject_unknown and args.c6_checker_state == "auto"
+            else args.c6_checker_state
+        )
+        c6_only = checker_row.build_row(
+            checker_state=forced_state,
+            differences={"mft": True} if args.inject_unknown else {"mft": False},
+            unattributed=("mft:resident_attribute_flags",) if args.inject_unknown else (),
+            captured_at=os.environ.get("MOUNTFILE_CAPTURED_AT", "unavailable"),
+        )
+        print(
+            json.dumps(c6_only, ensure_ascii=False, indent=2, sort_keys=True),
+            end="",
+        )
+        return checker_row.exit_code(c6_only)
     if args.validate:
         report = json.loads(args.validate.read_text(encoding="utf-8"))
         result = validate_report(report, args.repo_root, args.junitxml)
