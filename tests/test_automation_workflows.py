@@ -92,8 +92,14 @@ def test_ci_gate_accounts_for_every_build_and_test_stage():
         "build",
         "gui-import",
         "gui",
+        "ai-safety",
+        # E2 (#510): status drift must tear the aggregate gate, not only its
+        # own separate required context.
+        "repo-status-verify",
     ):
         assert f"needs.{job}.result" in text
+    assert "REPO_STATUS: ${{ needs.repo-status-verify.result }}" in text
+    assert '"$REPO_STATUS"' in text
     assert "exit 1" in text
 
 
