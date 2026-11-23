@@ -4,18 +4,6 @@
   "purpose": "Для каждого пункта #510, который не verified, зафиксирован пробел: почему свойство нельзя заявить сегодня, что именно его закроет и какое issue за это отвечает. Файл проверяется scripts/replay_acceptance_gaps.py --check в обе стороны: молчаливый partial и устаревшая запись о закрытом пункте одинаково ломают гейт.",
   "gaps": [
     {
-      "id": "B8",
-      "status": "partial",
-      "blocker": "SIGKILL доказан на объявленных границах staged-writer'а (copy, payload, gate, write, read-back, identity, publish), но не на каждой JBD2-фазе (descriptor/data/commit/checkpoint) и не на уровне power-loss.",
-      "closes_when": "Появятся kill-точки на каждой JBD2-фазе, эти точки прогоняются в CI, и для каждой доказано «оригинал или завершённая транзакция».",
-      "owner_issue": 385,
-      "evidence": [
-        "mountfile/native_write.py",
-        "tests/test_ext4_writer_fault_coverage.py",
-        "tests/test_native_journal_writers.py"
-      ]
-    },
-    {
       "id": "C3",
       "status": "partial",
       "blocker": "Redo/undo применяется к данным записи $MFT и к нерезидентному $BITMAP через byte-handler, но allocation-sensitive операции исключены из allowlist, а независимого volume-level checker'а метаданных нет.",
@@ -78,13 +66,14 @@
     {
       "id": "D3",
       "status": "partial",
-      "blocker": "Сохранение SHA-256 источника доказано для 20 объявленных клеток и для SIGKILL на девяти границах, но не для всех клеток profile × operation × phase за пределами двух native writers.",
+      "blocker": "Сохранение SHA-256 источника доказано для 20 объявленных клеток, для SIGKILL на девяти staged-writer границах и для каждой фазы ring-записи JBD2-транзакции (новый jbd2:*-seam), но не для всех клеток profile × operation × phase за пределами двух native writers.",
       "closes_when": "Матрица хэшей строится из runtime-инструмента для всех профилей, и каждая клетка несёт наблюдаемое значение sha256 до/после.",
       "owner_issue": 387,
       "evidence": [
         "mountfile/native_write.py",
         "tests/test_hash_preservation_matrix.py",
-        "tests/test_writer_fault_injection_acceptance.py"
+        "tests/test_writer_fault_injection_acceptance.py",
+        "tests/test_jbd2_ring_phase_kill.py"
       ]
     },
     {
