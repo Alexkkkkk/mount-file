@@ -29,14 +29,18 @@ jobs:
         python: ["3.12"]
         shard: [0, 1, 2, 3]
     steps:
+      # fetch-depth: 0 — тесты slice-drift резолвят slice.commit через git
+      # history; в поверхностном checkout (depth=1) ссылка не разрешается.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
       - name: Install test stack
         run: |
-          python -m pip install -e ".[ci]" pytest-shard "pytest-timeout>=2.3"
+          python -m pip install -e ".[ci]" "pytest-timeout>=2.3"
       - name: Run shard (xdist + worksteal)
         run: |
           python -m pytest tests/ \
@@ -94,7 +98,7 @@ jobs:
           cache: pip
       - name: Install test stack
         run: |
-          python -m pip install -e ".[ci]" pytest-shard "pytest-timeout>=2.3"
+          python -m pip install -e ".[ci]" "pytest-timeout>=2.3"
       - name: Run full suite
         run: |
           python -m pytest tests/ -q \

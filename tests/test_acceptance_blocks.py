@@ -443,3 +443,39 @@ def test_repository_manifest_has_no_missing_evidence():
     manifest = contract.load_manifest(MANIFEST)
     assert contract.missing_evidence(manifest, REPO_ROOT) == []
     assert manifest.claimed_counts()["total"] == 32
+
+
+def test_artifact_keeps_claim_and_observation_counts_apart():
+    """The manifest count and the probe count are different metrics, not drift.
+
+    A probe reports ``partial``/``unavailable`` where it cannot reproduce a
+    claim in this tree, so its distribution must never be compared with the
+    manifest's as if the difference were a contradiction.  The summary has to
+    label both populations explicitly.
+    """
+
+    payload = artifact.build_artifact(REPO_ROOT, MANIFEST)
+    claimed = payload["manifest_counts"]
+    observed = payload["counts"]
+
+    assert claimed["total"] == 32
+    assert observed["total"] == 32
+    assert (
+        claimed["verified"]
+        + claimed["partial"]
+        + claimed["not_started"]
+        + claimed["blocked"]
+        == 32
+    )
+    assert sum(observed[key] for key in observed if key != "total") == 32
+    assert set(claimed) == {"verified", "partial", "not_started", "blocked", "total"}
+
+    summary = artifact.summarise_artifact(payload)
+    assert "манифест (утверждение)" in summary
+    assert "пробы #510 (наблюдение в этом дереве)" in summary
+
+
+def test_artifact_without_manifest_reports_no_claims(tmp_path):
+    payload = artifact.build_artifact(REPO_ROOT, tmp_path / "absent.json")
+    assert payload["manifest_counts"] == {}
+    assert "манифест (утверждение): недоступен" in artifact.summarise_artifact(payload)

@@ -165,3 +165,22 @@ def test_strict_promotes_unresolvable_git_refs_to_blocking(
     assert any("slice.commit" in reason for reason in blocking)
     assert any("slice.branch" in reason for reason in blocking)
     assert advisory == []
+
+
+def test_manifest_slice_version_matches_tree_version():
+    """The slice must name the version this tree actually carries.
+
+    The commit may trail HEAD by design, but the version may not: a slice
+    header advertising a version the tree does not have makes the gate report a
+    blocking mismatch on a clean checkout.
+    """
+
+    root = Path(__file__).resolve().parents[1]
+    manifest = sync.load_manifest(root / "docs/replay-acceptance.json")
+    slice_block = manifest["slice"]
+    assert slice_block["version"] == sync.tree_version(root)
+    assert slice_block["branch"] == "main"
+    blocking, _advisory = sync.slice_drift(
+        manifest, root, strict=True, git_state=("main", slice_block["commit"])
+    )
+    assert blocking == []
