@@ -3,8 +3,8 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "f61a47f",
-    "version": "1.102.2",
+    "commit": "dcdbcdb",
+    "version": "1.103.0",
     "checked": "2026-11-23"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
@@ -142,15 +142,18 @@
     {
       "id": "B8",
       "block": "B",
-      "title": "Process-kill at selected ext4 staged-writer fault boundaries",
-      "status": "partial",
+      "title": "Process-kill на каждой фазе записи JBD2-транзакции в ring",
+      "status": "verified",
       "evidence": [
+        "mountfile/jbd2_ring_writer.py",
+        "mountfile/jbd2_checkpoint.py",
         "mountfile/native_write.py",
-        "tests/test_ext4_writer_fault_coverage.py",
-        "tests/test_native_journal_writers.py"
+        "tests/test_jbd2_ring_phase_kill.py",
+        "tests/test_jbd2_checkpoint_fault_points.py",
+        "tests/test_ext4_writer_fault_coverage.py"
       ],
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет",
-      "note": "SIGKILL проверен на объявленных staged-writer boundaries; это не каждая JBD2 transaction/metadata phase и не power-loss proof."
+      "reproduced": "2026-11-23: новая реализация mountfile/jbd2_ring_writer.py применяет проверенный JBD2RingPlan и выдаёт по одной границе на семейство записей (descriptor/data/revoke/commit + ring head + flush); tests/test_jbd2_ring_phase_kill.py — 19 passed, включая параметризованный kill на каждой из 10 объявленных границ и инвариант «нет commit-записи до commit-done». Ранее: tests/test_jbd2_checkpoint_fault_points.py (8 тестов).",
+      "note": "Kill проверен на каждой объявленной фазе ring-записи и на фазах checkpoint-executor'а; атомарность на уровне power-loss (disk cache) по-прежнему не заявляется, IO и durability принадлежат вызывающему."
     },
     {
       "id": "B9",
