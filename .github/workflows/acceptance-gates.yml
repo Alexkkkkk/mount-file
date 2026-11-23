@@ -27,7 +27,7 @@ jobs:
           cache: pip
 
       - name: Install gate dependencies
-        run: python -m pip install --upgrade pip pytest hypothesis
+        run: python -m pip install --upgrade pip pytest hypothesis filelock
 
       - name: Check replay acceptance manifest
         run: python scripts/replay_acceptance_status.py --check
