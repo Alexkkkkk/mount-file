@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "tracker": 510,
+  "purpose": "Для каждого пункта #510, который не verified, зафиксирован пробел: почему свойство нельзя заявить сегодня, что именно его закроет и какое issue за это отвечает. Файл проверяется scripts/replay_acceptance_gaps.py --check в обе стороны: молчаливый partial и устаревшая запись о закрытом пункте одинаково ломают гейт.",
+  "gaps": [
+    {
+      "id": "B8",
+      "status": "partial",
+      "blocker": "SIGKILL доказан на объявленных границах staged-writer'а (copy, payload, gate, write, read-back, identity, publish), но не на каждой JBD2-фазе (descriptor/data/commit/checkpoint) и не на уровне power-loss.",
+      "closes_when": "Появятся kill-точки на каждой JBD2-фазе, эти точки прогоняются в CI, и для каждой доказано «оригинал или завершённая транзакция».",
+      "owner_issue": 385,
+      "evidence": [
+        "mountfile/native_write.py",
+        "tests/test_ext4_writer_fault_coverage.py",
+        "tests/test_native_journal_writers.py"
+      ]
+    },
+    {
+      "id": "C3",
+      "status": "partial",
+      "blocker": "Redo/undo применяется к данным записи $MFT и к нерезидентному $BITMAP через byte-handler, но allocation-sensitive операции исключены из allowlist, а независимого volume-level checker'а метаданных нет.",
+      "closes_when": "После replay $MFT и $BITMAP сравниваются побайтово с эталоном независимым чекером, и allocation-sensitive операции проходят тот же оракул.",
+      "owner_issue": 386,
+      "evidence": [
+        "mountfile/ntfs_replay.py",
+        "mountfile/ntfs_replay_executor.py",
+        "tests/test_ntfs_bitmap_handler.py"
+      ]
+    },
+    {
+      "id": "C4",
+      "status": "blocked",
+      "blocker": "Отказ по проекту: парсер ограничен профилем без $ATTRIBUTE_LIST, том с этим атрибутом получает NtfsReplayError до первой записи (mountfile/ntfs_replay.py).",
+      "closes_when": "Решение по проекту пересмотрено: появляется разбор $ATTRIBUTE_LIST и тест, доказывающий replay на томе с ним — либо пункт остаётся закрытым по проекту с явной отметкой, что это не дефект.",
+      "owner_issue": 386,
+      "evidence": [
+        "mountfile/ntfs_replay.py"
+      ]
+    },
+    {
+      "id": "C5",
+      "status": "partial",
+      "blocker": "Bounded reuse записи $MFT встроен в боевой путь (gate_mft_record_reuse перед InitializeFileRecordSegment), но расширение $MFT за текущий stream, index surgery и независимая Windows-проверка не поддержаны.",
+      "closes_when": "$MFTMirr сверяется независимым чекером на реальном томе, и тест покрывает аллокацию новой записи за пределами текущего stream.",
+      "owner_issue": 386,
+      "evidence": [
+        "mountfile/ntfs_mft_allocation.py",
+        "tests/test_ntfs_mft_allocation.py",
+        "tests/test_ntfs_mft_reuse_after_undo.py"
+      ]
+    },
+    {
+      "id": "C6",
+      "status": "partial",
+      "blocker": "Фикстуры синтетические: реальных Windows crash-captures и эталона, восстановленного chkdsk, нет; ntfsfix -n остаётся вспомогательной проверкой, а не авторитетным оракулом.",
+      "closes_when": "Появляется хотя бы один Windows-crash capture, replay на нём сравнивается побайтово ($MFT/$BITMAP) с образом после chkdsk /f, и сравнение зелёное.",
+      "owner_issue": 386,
+      "evidence": [
+        "tests/ntfs_crash_fixture.py",
+        "tests/test_ntfs_crash_oracle_matrix.py",
+        "tests/ntfs_oracle.py",
+        "scripts/windows_ntfs_acceptance.ps1"
+      ]
+    },
+    {
+      "id": "D1",
+      "status": "partial",
+      "blocker": "Матрица failure injection покрывает 20 объявленных клеток трёх семейств (ext4.write_file, ext4.create_file, ntfs.write_file); операции, которых gated writers не предоставляют (rename, unlink, truncate, setattr, mkdir, ntfs.create_file), объявлены отсутствующими.",
+      "closes_when": "Для каждой новой поддержанной операции появляется своя матрица фаз, и ни одна заявленная операция не остаётся без клеток отказа.",
+      "owner_issue": 387,
+      "evidence": [
+        "tests/test_native_operation_matrix.py",
+        "tests/test_ext4_write_phase_injection.py",
+        "tests/test_ntfs_write_phase_injection.py",
+        "tests/test_ntfs_native_write_phase_injection.py"
+      ]
+    },
+    {
+      "id": "D3",
+      "status": "partial",
+      "blocker": "Сохранение SHA-256 источника доказано для 20 объявленных клеток и для SIGKILL на девяти границах, но не для всех клеток profile × operation × phase за пределами двух native writers.",
+      "closes_when": "Матрица хэшей строится из runtime-инструмента для всех профилей, и каждая клетка несёт наблюдаемое значение sha256 до/после.",
+      "owner_issue": 387,
+      "evidence": [
+        "mountfile/native_write.py",
+        "tests/test_hash_preservation_matrix.py",
+        "tests/test_writer_fault_injection_acceptance.py"
+      ]
+    },
+    {
+      "id": "D5",
+      "status": "partial",
+      "blocker": "Независимый чекер с read-back покрывает выбранные пути ext4 (e2fsck -fn) и staged read-back NTFS через ntfscat, но авторитетного NTFS-чекер'а и покрытия каждой поддержанной операции нет.",
+      "closes_when": "Каждая поддержанная операция после записи проходит независимую проверку и read-back, и отказ чекера блокирует публикацию.",
+      "owner_issue": 387,
+      "evidence": [
+        "tests/_independent_checkers.py",
+        "tests/test_checker_acceptance.py",
+        "tests/test_ntfs_transactional_readback.py",
+        "mountfile/ntfs_native_writer.py"
+      ]
+    },
+    {
+      "id": "D6",
+      "status": "partial",
+      "blocker": "Все 28 клеток profile × state имеют конкретные pytest-селекторы, но клетка зелёная только тогда, когда её узел реально выполнился в scheduled-прогоне; требование #387 о последовательных scheduled-прогонах с артефактами не выполнено.",
+      "closes_when": "Два последовательных scheduled-прогона публикуют артефакт с зелёными 28 клетками, и артефакт приложен к issue.",
+      "owner_issue": 387,
+      "evidence": [
+        ".github/workflows/replay-nightly.yml",
+        "scripts/failure_matrix_artifact.py",
+        "scripts/replay_nightly_evidence.py"
+      ]
+    },
+    {
+      "id": "E1",
+      "status": "partial",
+      "blocker": "Windows-раннеры и typed-вердикты (unavailable vs pass) есть, но macOS read-only adapter contract отдаётся как not_collected/blocked, а Windows checker inventory недоступен — паритет платформ не заявляется.",
+      "closes_when": "macOS-контракт собирается на macOS-раннере, и агрегат по main содержит Linux, Windows и macOS без not_collected по объявленным клеткам.",
+      "owner_issue": 389,
+      "evidence": [
+        "scripts/native_read_evidence.py",
+        "scripts/cross_platform_evidence.py",
+        ".github/workflows/ci.yml"
+      ]
+    }
+  ]
+}
