@@ -3,9 +3,9 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "113c4fc",
-    "version": "1.102.1",
-    "checked": "2026-11-22"
+    "commit": "1ffec04",
+    "version": "1.102.2",
+    "checked": "2026-11-23"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -372,7 +372,7 @@
         "tests/test_failure_matrix_artifact.py",
         "tests/test_writer_fault_injection_acceptance.py"
       ],
-      "note": "Streak evidence is emitted as replay-nightly-streak.json. Of the 28 profile x state cells, 3 have no selector at all and are therefore unreachable by construction, not merely unrun: fat12.cancellation, fat16.short_write, fat16.cancellation (tests/test_fat1216_writer.py covers short_write for both FAT widths, but no cancellation case exists for either, and the artifact has no fat16 short_write mapping). The other cells are green only when their mapped node runs in a scheduled job.",
+      "note": "Streak evidence is emitted as replay-nightly-streak.json. All 28 profile x state cells now have concrete test selectors: tests/test_fat1216_writer.py parametrizes short_write, cancellation and process_kill over both FAT widths, and scripts/failure_matrix_artifact.py maps fat12/fat16 short_write and cancellation, so the earlier \"3 cells unreachable by construction\" statement is obsolete. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
       "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
     },
     {
