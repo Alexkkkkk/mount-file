@@ -324,6 +324,14 @@ def test_ci_full_tier_and_status_gate_cover_issue_595_contract():
     assert "git push" not in status_sync
     assert "git commit" not in status_sync
 
+    # E2 (#510), strict-slice gate: PR-side verify pins the slice header to
+    # the PR tree (version is blocking, gitless unpacking keeps existence
+    # advisory by design), and main pushes additionally run the strict gate,
+    # where unresolvable slice branch/commit become blocking failures.
+    assert "scripts/replay_slice_sync.py" in status_sync
+    assert "--check --strict" in status_sync
+    assert "if: github.event_name != 'pull_request_target'" in status_sync
+
 
 def test_workflow_quality_validation_is_integrity_checked():
     text = workflow("quality.yml")

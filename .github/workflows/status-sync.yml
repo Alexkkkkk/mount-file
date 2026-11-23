@@ -60,6 +60,14 @@ jobs:
             --repo-root /tmp/mountfile-pr \
             --output-dir /tmp/mountfile-status
           git rev-parse FETCH_HEAD > /tmp/mountfile-head-sha
+          # Срез трекера #510 обязан описывать дерево самого PR: версия —
+          # блокирующая, а существование ветки/коммита в gitless-распаковке
+          # остаётся advisory по дизайну скрипта (strict-гейт существования
+          # для PR гоняет acceptance-gates.yml на checkout с fetch-depth: 0).
+          python scripts/replay_slice_sync.py \
+            --manifest /tmp/mountfile-pr/docs/replay-acceptance.json \
+            --root /tmp/mountfile-pr \
+            --check
 
       - name: Generate status on trusted default branch
         if: github.event_name != 'pull_request_target'
@@ -81,6 +89,15 @@ jobs:
           python scripts/verify_generated_status.py \
             --expected-dir /tmp/mountfile-status \
             --committed-dir /tmp/mountfile-committed
+
+      - name: Strict tracker slice gate
+        # Только для push в main: срез описывает основную ветку, и checkout
+        # выше сделан с fetch-depth: 0, поэтому --strict может разрешать
+        # заявленные ветку/коммит и рвать гейт на фантомные ссылки.
+        if: github.event_name != 'pull_request_target'
+        run: |
+          set -euo pipefail
+          python scripts/replay_slice_sync.py --check --strict
 
       - name: Report stale generated README block
         if: github.event_name == 'pull_request_target'
