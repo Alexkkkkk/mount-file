@@ -44,7 +44,7 @@ jobs:
       - name: Install reproducible formatters and test dependencies
         uses: ./.github/actions/setup-python-env
         with:
-          extra-pip: 'ruff==0.4.10 black==24.4.2 isort==5.13.2'
+          extra-pip: 'ruff==0.17.6 black==26.10.1 isort==9.0.2'
       - name: Format imports then code without semantic rewrites
         run: |
           isort mountfile tests main.py
