@@ -158,7 +158,11 @@ def classify_parity(
         return NOT_COMPUTED
     if unattributed:
         return UNKNOWN
-    stray = [key for key, differs in differences.items() if differs and key not in COMPARABLE_STREAMS]
+    stray = [
+        key
+        for key, differs in differences.items()
+        if differs and key not in COMPARABLE_STREAMS
+    ]
     if stray:
         return UNKNOWN
     return DIVERGED if any(differences.values()) else PASS

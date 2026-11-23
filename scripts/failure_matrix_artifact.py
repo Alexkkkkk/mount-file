@@ -667,13 +667,16 @@ def main() -> int:
         # available checker: on a host without chkdsk the row would otherwise
         # stop at ``unavailable`` and never exercise the unknown branch.
         forced_state = (
-            "available" if args.inject_unknown and args.c6_checker_state == "auto"
+            "available"
+            if args.inject_unknown and args.c6_checker_state == "auto"
             else args.c6_checker_state
         )
         c6_only = checker_row.build_row(
             checker_state=forced_state,
             differences={"mft": True} if args.inject_unknown else {"mft": False},
-            unattributed=("mft:resident_attribute_flags",) if args.inject_unknown else (),
+            unattributed=(
+                ("mft:resident_attribute_flags",) if args.inject_unknown else ()
+            ),
             captured_at=os.environ.get("MOUNTFILE_CAPTURED_AT", "unavailable"),
         )
         print(
