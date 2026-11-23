@@ -3,8 +3,8 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "1ffec04",
-    "version": "1.102.2",
+    "commit": "dcdbcdb",
+    "version": "1.103.0",
     "checked": "2026-11-23"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
