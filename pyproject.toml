@@ -84,7 +84,9 @@ ci = [
     "regex>=2024.0.0",
 ]
 images = [
-    "Pillow>=13.0.0",
+    # Pillow 13 dropped Python 3.10; keep a resolvable floor on 3.10.
+    "Pillow>=13.0.0; python_version >= '3.11'",
+    "Pillow>=12.3.0; python_version < '3.11'",
 ]
 api = [
     "fastapi>=0.115,<1.0",
