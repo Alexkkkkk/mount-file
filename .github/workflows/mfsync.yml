@@ -37,7 +37,8 @@ jobs:
         uses: ./.github/actions/setup-python-env
         with:
           install-test-stack: 'false'
-          extra-pip: 'pytest pytest-timeout'
+          # filelock и hypothesis импортируются tests/conftest.py на уровне модуля
+          extra-pip: 'pytest pytest-timeout filelock hypothesis'
       - name: Sync report
         run: python tools/mfsync.py status
       - name: Secret scan

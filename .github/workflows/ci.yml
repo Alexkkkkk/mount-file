@@ -520,7 +520,9 @@ jobs:
           cache: pip
 
       - name: Install deterministic test dependencies
-        run: python -m pip install pytest pytest-timeout hypothesis 'pydantic>=2.0'
+        # filelock нужен tests/conftest.py (импорт на уровне модуля) —
+        # без него сбор падает до старта самих тестов.
+        run: python -m pip install pytest pytest-timeout hypothesis filelock 'pydantic>=2.0'
 
       - name: Run AI safety and structured-output contracts
         run: >-
