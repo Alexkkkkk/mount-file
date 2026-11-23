@@ -21,6 +21,7 @@ These tests pin the three things that make the gates real:
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import json
 import subprocess
@@ -242,7 +243,16 @@ def test_manifest_slice_describes_main_and_cites_the_d3_matrix() -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     header = payload["slice"]
     assert header["branch"] == "main", header
-    assert header["checked"] == "2026-11-22"
+    # The header date moves with every verified resync, so this pins the
+    # *contract* - a real ISO-8601 day, no older than the gate floor - instead
+    # of one literal date.  A hardcoded day turned every legitimate resync red
+    # on every matrix leg, which is the failure mode the strict gate exists to
+    # prevent.
+    try:
+        checked = dt.date.fromisoformat(header["checked"])
+    except ValueError:
+        pytest.fail(f"slice.checked is not an ISO-8601 date: {header['checked']!r}")
+    assert checked >= dt.date(2026, 11, 20), header
 
     items = {item["id"]: item for item in payload["items"]}
     assert "tests/test_hash_preservation_matrix.py" in items["D3"]["evidence"]
