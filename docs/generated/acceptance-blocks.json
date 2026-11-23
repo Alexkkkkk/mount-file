@@ -1,10 +1,18 @@
 {
   "schema": "mountfile.acceptance-blocks/v1",
-  "generated": "2026-11-21T14:48:24Z",
+  "generated": "2026-11-23T04:47:28Z",
   "declared_checks": 32,
   "counts": {
-    "verified": 15,
+    "verified": 14,
+    "unavailable": 1,
     "partial": 16,
+    "blocked": 1,
+    "total": 32
+  },
+  "manifest_counts": {
+    "verified": 22,
+    "partial": 9,
+    "not_started": 0,
     "blocked": 1,
     "total": 32
   },
@@ -69,13 +77,9 @@
       "block": "A",
       "title": "Release contains the safe code",
       "tier": "behaviour",
-      "status": "verified",
-      "detail": "release tag v1.100.1 is an ancestor of HEAD 84d85e6",
-      "payload": {
-        "tag": "v1.100.1",
-        "head": "84d85e6",
-        "tag_is_ancestor": true
-      }
+      "status": "unavailable",
+      "detail": "no release tag reachable from HEAD",
+      "payload": {}
     },
     {
       "id": "A3",
@@ -363,13 +367,14 @@
       "title": "JUnit-backed failure-state artifact",
       "tier": "structure",
       "status": "partial",
-      "detail": "artifact round-trip passes; CI validation wiring declared in 36 workflow(s); scheduled acceptance remains unproven",
+      "detail": "artifact round-trip passes; CI validation wiring declared in 37 workflow(s); scheduled acceptance remains unproven",
       "payload": {
         "workflows": [
           "acceptance-gates.yml",
           "auto-label.yml",
           "auto-merge.yml",
           "autofix.yml",
+          "b8-log-writes.yml",
           "branch-hygiene.yml",
           "chatops.yml",
           "ci-guardian.yml",
@@ -434,7 +439,7 @@
       "title": "CI gate on README/CLI/runtime drift",
       "tier": "structure",
       "status": "partial",
-      "detail": "scripts/product_status_contract.py present; gate wiring declared in 10 script(s)",
+      "detail": "scripts/product_status_contract.py present; gate wiring declared in 12 script(s)",
       "payload": {}
     },
     {
