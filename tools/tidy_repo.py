@@ -59,13 +59,11 @@ if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
 
 
 def banner() -> None:
-    print(
-        f"""{C.CYAN}{C.BOLD}
+    print(f"""{C.CYAN}{C.BOLD}
   ┌──────────────────────────────────────────────────┐
   │   tidy_repo.py  ·  mount-file  ·  v3 · auto     │
   └──────────────────────────────────────────────────┘
-{C.RESET}"""
-    )
+{C.RESET}""")
 
 
 def hr(t: str = "") -> None:
@@ -588,8 +586,7 @@ def a_pyproject(ctx: Ctx) -> None:
     ]
     deps = [gui, *extra]
     deps_toml = "\n".join(f'    "{d}",' for d in deps)
-    content = textwrap.dedent(
-        f"""\
+    content = textwrap.dedent(f"""\
         [build-system]
         requires = ["setuptools>=68", "wheel"]
         build-backend = "setuptools.build_meta"
@@ -636,8 +633,7 @@ def a_pyproject(ctx: Ctx) -> None:
         [tool.pytest.ini_options]
         testpaths = ["tests"]
         addopts = "-ra --strict-markers"
-        """
-    )
+        """)
     write(ctx, ctx.root / "pyproject.toml", content)
 
 
@@ -647,8 +643,7 @@ def a_precommit(ctx: Ctx) -> None:
     write(
         ctx,
         ctx.root / ".pre-commit-config.yaml",
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
         repos:
           - repo: https://github.com/astral-sh/ruff-pre-commit
             rev: v0.4.10
@@ -671,8 +666,7 @@ def a_precommit(ctx: Ctx) -> None:
               - id: check-toml
               - id: check-merge-conflict
               - id: mixed-line-ending
-        """
-        ),
+        """),
     )
 
 
@@ -682,39 +676,33 @@ def a_docs(ctx: Ctx) -> None:
     write(
         ctx,
         ctx.root / "CONTRIBUTING.md",
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
         # Contributing
 
         1. Форк → ветка `feat/my-feature`.
         2. `pip install -e ".[dev]"` + `pre-commit install`.
         3. Тесты в `tests/`, коммиты в [Conventional Commits](https://www.conventionalcommits.org/).
         4. PR.
-        """
-        ),
+        """),
     )
     write(
         ctx,
         ctx.root / "SECURITY.md",
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
         # Security Policy
 
         Пожалуйста, **не открывайте публичный issue**. Пишите на `security@example.com`.
         Ответ — в течение 72 часов.
-        """
-        ),
+        """),
     )
     write(
         ctx,
         ctx.root / "CODE_OF_CONDUCT.md",
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
         # Code of Conduct
 
         Мы придерживаемся [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
-        """
-        ),
+        """),
     )
 
 
@@ -780,8 +768,7 @@ def a_ci(ctx: Ctx) -> None:
     write(
         ctx,
         ctx.root / ".github/workflows/ci.yml",
-        textwrap.dedent(
-            f"""\
+        textwrap.dedent(f"""\
         name: CI
         on:
           push: {{ branches: [main, master] }}
@@ -801,14 +788,12 @@ def a_ci(ctx: Ctx) -> None:
               - uses: codecov/codecov-action@v4
                 if: always()
                 with: {{ files: coverage.xml, fail_ci_if_error: false }}
-        """
-        ),
+        """),
     )
     write(
         ctx,
         ctx.root / ".github/workflows/release.yml",
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
         name: Release
         on: { push: { tags: ["v*"] } }
         permissions: { contents: write }
@@ -839,16 +824,14 @@ def a_ci(ctx: Ctx) -> None:
                 with:
                   files: artifacts/**/*
                   generate_release_notes: true
-        """
-        ),
+        """),
     )
 
 
 @action("gitignore", "Дополнить .gitignore")
 def a_gitignore(ctx: Ctx) -> None:
     hr("8. .gitignore")
-    extra = textwrap.dedent(
-        """\
+    extra = textwrap.dedent("""\
 
         # tidy_repo
         .tidy_backup_*/
@@ -862,8 +845,7 @@ def a_gitignore(ctx: Ctx) -> None:
         *.egg-info/
         build/
         dist/
-        """
-    )
+        """)
     p = ctx.root / ".gitignore"
     if p.exists():
         cur = p.read_text(encoding="utf-8")

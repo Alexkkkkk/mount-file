@@ -5,6 +5,7 @@ The report is intentionally a capability/availability inventory, not a parity
 verdict. Real-image tests remain authoritative for a specific fixture and
 operation; missing tools are reported as unavailable rather than passing.
 """
+
 from __future__ import annotations
 
 import argparse

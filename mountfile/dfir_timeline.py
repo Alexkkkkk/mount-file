@@ -9,6 +9,7 @@ records in :mod:`mountfile.dfir_timestomp`, and event-like mappings/objects
 on those records.  In particular, an ``evidence_path`` is an identifier, not
 a path that this module opens, parses, or changes.
 """
+
 from __future__ import annotations
 
 import csv

@@ -386,8 +386,7 @@ class UnallocatedIndexer:
         return digest.hexdigest()
 
     def _create_schema(self) -> None:
-        self._connection.executescript(
-            """
+        self._connection.executescript("""
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -411,8 +410,7 @@ class UnallocatedIndexer:
                 bits BLOB NOT NULL
             );
             CREATE INDEX IF NOT EXISTS occurrences_offset_idx ON occurrences(offset, length);
-            """
-        )
+            """)
 
     def _metadata_int(self, key: str) -> Optional[int]:
         row = self._connection.execute(

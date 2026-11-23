@@ -40,8 +40,7 @@ class Journal:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA synchronous=FULL")
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS journal (
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS journal (
                    tx_id TEXT PRIMARY KEY,
                    op TEXT NOT NULL,
                    path TEXT NOT NULL,
@@ -54,8 +53,7 @@ class Journal:
                    committed INTEGER NOT NULL DEFAULT 0,
                    status TEXT NOT NULL DEFAULT 'pending',
                    record_hash TEXT
-               )"""
-        )
+               )""")
         self._migrate()
         self._current: Optional[str] = None
         self._last_hash = self._get_last_hash()

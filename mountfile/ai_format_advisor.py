@@ -547,7 +547,7 @@ class HypothesisEngine:
 
     @staticmethod
     def _coerce_fingerprint(
-        value: Union[FileFingerprint, Mapping[str, Any]]
+        value: Union[FileFingerprint, Mapping[str, Any]],
     ) -> FileFingerprint:
         if isinstance(value, FileFingerprint):
             return value

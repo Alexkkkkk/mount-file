@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build a portable, content-addressed native read-path evidence report."""
+
 from __future__ import annotations
 
 import argparse

@@ -1123,8 +1123,7 @@ class UpdateDialog(QDialog):
 # --------------------------------------------------------------- демо-режим
 def _demo():  # pragma: no cover - ручной просмотр
     app = QApplication.instance() or QApplication([])
-    changelog = dedent_markdown(
-        """
+    changelog = dedent_markdown("""
         ### 🚀 Новые возможности
         * **Поддержка exFAT** — чтение и запись.
         * **Ускоренный автопоиск** — работает на 30% быстрее.
@@ -1132,8 +1131,7 @@ def _demo():  # pragma: no cover - ручной просмотр
         ### 🐛 Исправления
         * Исправлено чтение LBA на дампах больше 32 ГБ.
         * Исправлен краш при открытии пустого образа.
-        """
-    )
+        """)
     dialog = UpdateDialog(
         "1.26.0",
         "1.27.0",

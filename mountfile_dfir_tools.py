@@ -607,7 +607,7 @@ def cmd_selftest(args):
         a = Path(td) / "a.bin"
         a.write_bytes(b"\0" * 4096)
         b = Path(td) / "b.bin"
-        b.write_bytes(b"\0" * 2048 + b"\xFF" * 2048)
+        b.write_bytes(b"\0" * 2048 + b"\xff" * 2048)
         differ = ImageDiffer(a, b)
         entries = differ.diff_regions(chunk=4096)
         assert len(entries) == 1, f"ожидали 1 diff, получили {len(entries)}"

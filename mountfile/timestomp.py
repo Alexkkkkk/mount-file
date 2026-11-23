@@ -24,6 +24,7 @@ epic are implemented, each producing its own reason string so an analyst can see
     NTFS stores 100 ns precision; a genuine modern write has non-zero
     sub-second bits, while many timestomping tools round them off.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

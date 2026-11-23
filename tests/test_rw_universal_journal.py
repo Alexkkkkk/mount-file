@@ -223,8 +223,7 @@ def test_legacy_journal_without_commit_state_is_not_guessed_as_pending(tmp_path)
     image.write_bytes(b"legacy image")
     db_path = image.with_suffix(image.suffix + ".rw-journal.sqlite")
     connection = sqlite3.connect(db_path)
-    connection.execute(
-        """CREATE TABLE journal (
+    connection.execute("""CREATE TABLE journal (
                tx_id TEXT PRIMARY KEY,
                op TEXT NOT NULL,
                path TEXT NOT NULL,
@@ -232,8 +231,7 @@ def test_legacy_journal_without_commit_state_is_not_guessed_as_pending(tmp_path)
                sha256 TEXT,
                prev_hash TEXT NOT NULL,
                created_at REAL NOT NULL
-           )"""
-    )
+           )""")
     connection.execute(
         "INSERT INTO journal(tx_id,op,path,prev_hash,created_at) VALUES(?,?,?,?,?)",
         ("old-tx", "write_file", "/evidence.bin", "0" * 64, 1.0),
@@ -263,8 +261,7 @@ def test_legacy_pending_snapshot_remains_recoverable_after_migration(tmp_path):
     backup.write_bytes(snapshot)
 
     connection = sqlite3.connect(db_path)
-    connection.execute(
-        """CREATE TABLE journal (
+    connection.execute("""CREATE TABLE journal (
                tx_id TEXT PRIMARY KEY,
                op TEXT NOT NULL,
                path TEXT NOT NULL,
@@ -275,8 +272,7 @@ def test_legacy_pending_snapshot_remains_recoverable_after_migration(tmp_path):
                offset INTEGER,
                length INTEGER,
                committed INTEGER DEFAULT 0
-           )"""
-    )
+           )""")
     connection.execute(
         "INSERT INTO journal VALUES (?,?,?,?,?,?,?,?,?,?)",
         (

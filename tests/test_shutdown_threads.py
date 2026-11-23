@@ -38,8 +38,7 @@ needs_qt = pytest.mark.skipif(not HAVE_QT, reason="нет установленн
 
 #: Окно создаётся, закрывается и уничтожается, пока проверка обновлений
 #: «висит» на недоступном адресе. Скрипт обязан напечатать OK и выйти с 0.
-CHILD = textwrap.dedent(
-    """
+CHILD = textwrap.dedent("""
     import gc, os, sys, time
     sys.path.insert(0, os.getcwd())
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -61,8 +60,7 @@ CHILD = textwrap.dedent(
     assert elapsed < 1.0, "закрытие окна ждало поток обновления: %.2f c" % elapsed
     assert _ORPHAN_THREADS, "поток обновления не сохранён — Qt его уничтожит"
     print("OK")
-    """
-)
+    """)
 
 
 @needs_qt

@@ -91,7 +91,7 @@ def test_hit_test_distinguishes_hex_ascii_and_nibbles(app):
 
 def test_mouse_click_preserves_low_hex_nibble(app):
     view = HexView()
-    view.setData(b"\xAB")
+    view.setData(b"\xab")
     _, x_hex, _ = view._columns()
     point = QtCore.QPointF(x_hex + view._char_w, view._line_h // 2)
     event_type = (
@@ -105,7 +105,7 @@ def test_mouse_click_preserves_low_hex_nibble(app):
     assert view._hex_nibble == 1
     view.keyPressEvent(_KeyEvent(ord("4"), text="4"))
 
-    assert view.data() == b"\xA4"
+    assert view.data() == b"\xa4"
 
 
 def test_ascii_and_hex_modes_edit_bytes(app):
@@ -119,7 +119,7 @@ def test_ascii_and_hex_modes_edit_bytes(app):
     view.goto(1)
     view.keyPressEvent(_KeyEvent(ord("B"), text="B"))
     view.keyPressEvent(_KeyEvent(ord("C"), text="C"))
-    assert view.data() == b"A\xBC"
+    assert view.data() == b"A\xbc"
 
 
 def test_control_shortcuts_use_key_codes_and_cut_requires_selection(app):

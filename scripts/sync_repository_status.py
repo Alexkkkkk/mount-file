@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Generate the repository's canonical machine-readable status artifacts."""
+
 from __future__ import annotations
 
 import argparse

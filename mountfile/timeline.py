@@ -21,6 +21,7 @@ Example::
 
     python -m mountfile timeline-build dump.img -o timeline.db --csv timeline.csv
 """
+
 from __future__ import annotations
 
 import csv

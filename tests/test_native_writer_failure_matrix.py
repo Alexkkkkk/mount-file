@@ -6,6 +6,7 @@ or synthetic images.  The assertions are limited to the public safety contract:
 selected extents may change on success, adjacent partition sentinels must not,
 and failed/cancelled writes must not publish a replacement.
 """
+
 from __future__ import annotations
 
 import subprocess

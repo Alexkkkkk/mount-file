@@ -8,6 +8,7 @@ modified, checked again, fsynced, and atomically replaced.  Any unavailable
 helper, unsafe image state, unsupported offset, invalid path, or non-zero
 verification result fails closed.
 """
+
 from __future__ import annotations
 
 import contextlib
