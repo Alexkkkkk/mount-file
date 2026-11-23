@@ -1,0 +1,102 @@
+name: test-pipeline
+
+# Единый тестовый конвейер: шардированный параллельный прогон на PR,
+# canary случайного порядка для доказательства изоляции, ночной полный прогон.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-pipeline-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python }}, shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12"]
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install test stack
+        run: |
+          python -m pip install -e ".[ci]" pytest-shard "pytest-timeout>=2.3"
+      - name: Run shard (xdist + worksteal)
+        run: |
+          python -m pytest tests/ \
+            --shard-id=${{ matrix.shard }} --num-shards=4 \
+            -n auto --dist worksteal \
+            --timeout=120 --timeout-method=thread \
+            -m "not slow" \
+            --junitxml=junit-shard-${{ matrix.shard }}.xml
+      - name: Upload shard report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: junit-shard-${{ matrix.shard }}
+          path: junit-shard-*.xml
+
+  order-canary:
+    # Доказательство изоляции: если тесты падают в случайном порядке —
+    # сначала чиним зависимость, только потом включаем -n auto.
+    name: order-dependence canary (seed ${{ matrix.seed }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ["1", "2", "3"]
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test stack
+        run: |
+          python -m pip install -e ".[ci]" "pytest-timeout>=2.3"
+      - name: Run suite with fixed random seed
+        run: |
+          python -m pytest tests/ -q \
+            -p no:xdist \
+            --randomly-seed=${{ matrix.seed }} \
+            --timeout=120 --timeout-method=thread \
+            -m "not slow"
+
+  nightly-full:
+    name: nightly full suite (incl. slow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: github.event_name == 'schedule'
+    needs: [tests]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test stack
+        run: |
+          python -m pip install -e ".[ci]" pytest-shard "pytest-timeout>=2.3"
+      - name: Run full suite
+        run: |
+          python -m pytest tests/ -q \
+            -n auto --dist worksteal \
+            --timeout=600 --timeout-method=thread
