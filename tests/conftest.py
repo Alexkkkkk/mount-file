@@ -7,8 +7,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Hypothesis profiles: быстрый профиль для локального цикла, насыщенный —
 # для CI/ночного прогона. Активный профиль выбирается переменной
 # HYPOTHESIS_PROFILE (по умолчанию "dev" — 25 примеров на свойство).
-import os
-
 import pytest
 from filelock import FileLock
 from hypothesis import settings
