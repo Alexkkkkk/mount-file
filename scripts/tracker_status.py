@@ -11,6 +11,7 @@ that a generator cannot know.
 
     python scripts/tracker_status.py                     # human report
     python scripts/tracker_status.py --markdown          # ready-to-paste block
+    python scripts/tracker_status.py --markdown --write docs/issue-510-status.md
     python scripts/tracker_status.py --json              # machine output
     python scripts/tracker_status.py --check             # exit 1 on drift
     python scripts/tracker_status.py --markdown \\
@@ -240,6 +241,11 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--markdown", action="store_true", help="print the issue block")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument(
+        "--write",
+        metavar="FILE",
+        help="записать markdown-блок в файл (канонический текст для трекера)",
+    )
+    parser.add_argument(
         "--similarity",
         metavar="FILE",
         help="previous comment text; exit 3 when the new block repeats it",
@@ -281,6 +287,13 @@ def main(argv: List[str] | None = None) -> int:
             f"similarity to {previous}: {ratio:.3f} (limit {args.threshold:.2f})",
             file=sys.stderr,
         )
+
+    if args.write:
+        target = Path(args.write)
+        if not target.is_absolute():
+            target = repo_root / target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(markdown, encoding="utf-8")
 
     if args.json:
         print(

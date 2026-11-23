@@ -17,6 +17,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from mountfile.acceptance import contract as _contract
 from mountfile.acceptance.blocks import BLOCK_CHECKS, run_all
 from mountfile.acceptance.checkers import probe_checkers, summarise
 
@@ -68,6 +69,25 @@ def generated_timestamp(root: str | Path) -> str:
     )
 
 
+def manifest_counts(manifest_path: str | Path | None) -> dict:
+    """Counts the manifest *claims*, or ``{}`` when there is no manifest.
+
+    ``counts`` in the payload describes what the probes observed in this tree;
+    this function describes what the tracker asserts.  They are different
+    metrics over the same 32 ids -- a probe reports ``partial``/``unavailable``
+    where it cannot independently reproduce a claim -- so the artifact keeps
+    them in separate keys.  Subtracting one from the other is meaningless and
+    must not be presented as drift.
+    """
+
+    if manifest_path is None:
+        return {}
+    path = Path(manifest_path)
+    if not path.is_file():
+        return {}
+    return dict(_contract.load_manifest(path).claimed_counts())
+
+
 def build_artifact(root: str | Path, manifest_path: str | Path | None = None) -> dict:
     """Run every probe and return the combined artifact payload."""
 
@@ -75,6 +95,11 @@ def build_artifact(root: str | Path, manifest_path: str | Path | None = None) ->
     if manifest_path is None:
         candidate = repo / "docs/replay-acceptance.json"
         manifest_path = candidate if candidate.is_file() else None
+    elif not Path(manifest_path).is_file():
+        # An explicit path that does not exist is "no claims to compare",
+        # not a malformed manifest: the probes still run and report what they
+        # observed, and the payload says the claim set is unavailable.
+        manifest_path = None
     result = run_all(repo, manifest_path)
     checkers = probe_checkers()
     return {
@@ -82,6 +107,7 @@ def build_artifact(root: str | Path, manifest_path: str | Path | None = None) ->
         "generated": generated_timestamp(repo),
         "declared_checks": len(BLOCK_CHECKS),
         "counts": result["counts"],
+        "manifest_counts": manifest_counts(manifest_path),
         "drift": result["drift"],
         "checkers": {name: outcome.as_dict() for name, outcome in checkers.items()},
         "checker_counts": summarise(checkers),
@@ -115,9 +141,15 @@ def summarise_artifact(payload: dict) -> str:
     """Render a compact human summary of ``payload``."""
 
     counts = payload.get("counts") or {}
+    claimed = payload.get("manifest_counts") or {}
     drift = payload.get("drift") or []
     lines = [
-        "блоки #510: {}".format(
+        "манифест (утверждение): {}".format(
+            ", ".join(f"{key} {claimed[key]}" for key in sorted(claimed))
+            if claimed
+            else "недоступен"
+        ),
+        "пробы #510 (наблюдение в этом дереве): {}".format(
             ", ".join(f"{key} {counts[key]}" for key in sorted(counts))
         ),
         "чекеры: {}".format(
