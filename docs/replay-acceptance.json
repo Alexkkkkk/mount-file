@@ -187,7 +187,7 @@
         "tests/test_ntfs_acceptance_independent_checker.py"
       ],
       "note": "путь по умолчанию fail-closed закреплён тестом: NtfsNativeWriter() без аргументов = recover=\"refuse\" + require_flag, dirty-образ → typed NtfsProfileUnsupported без записи и без карантина; recover=\"copy\" → карантин с сохранением источника байт-в-байт",
-      "reproduced": "2026-11-15: tests/test_ntfs_acceptance_independent_checker.py — 9 passed (test_default_writer_is_fail_closed_and_refuses_dirty_image, test_recover_copy_quarantines_dirty_image_and_preserves_source; Python 3.12.3, mkntfs/ntfscp 2022.10.3)"
+      "reproduced": "2026-11-23: python -m pytest -q tests/test_ntfs_acceptance_independent_checker.py -> 4 passed (test_default_writer_is_fail_closed_and_refuses_dirty_image, test_recover_copy_quarantines_dirty_image_and_preserves_source and the two companion cases; Python 3.12.3, mkntfs/ntfscp/ntfscat present). The earlier \"9 passed\" note counted a wider NTFS set, not this module."
     },
     {
       "id": "C2",
@@ -199,7 +199,7 @@
         "tests/test_ntfs_logfile_parser.py",
         "tests/test_ntfs_logfile_draft_golden.py"
       ],
-      "reproduced": "2026-11-16: python -m pytest -q tests/test_ntfs_logfile_parser.py tests/test_ntfs_logfile_draft_golden.py → 40 passed (Python 3.12.3, Linux sandbox)",
+      "reproduced": "2026-11-23: python -m pytest -q tests/test_ntfs_logfile_parser.py tests/test_ntfs_logfile_draft_golden.py -> 42 passed (Python 3.12.3). The earlier \"40 passed\" figure predates the added cases and no longer matches the tree.",
       "note": "утверждение об отсутствии парсера устарело"
     },
     {
