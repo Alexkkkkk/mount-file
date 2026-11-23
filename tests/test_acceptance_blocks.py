@@ -460,7 +460,13 @@ def test_artifact_keeps_claim_and_observation_counts_apart():
 
     assert claimed["total"] == 32
     assert observed["total"] == 32
-    assert claimed["verified"] + claimed["partial"] + claimed["not_started"] + claimed["blocked"] == 32
+    assert (
+        claimed["verified"]
+        + claimed["partial"]
+        + claimed["not_started"]
+        + claimed["blocked"]
+        == 32
+    )
     assert sum(observed[key] for key in observed if key != "total") == 32
     assert set(claimed) == {"verified", "partial", "not_started", "blocked", "total"}
 
