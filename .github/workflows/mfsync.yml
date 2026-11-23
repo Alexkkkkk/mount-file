@@ -38,7 +38,7 @@ jobs:
         with:
           install-test-stack: 'false'
           # filelock и hypothesis импортируются tests/conftest.py на уровне модуля
-          extra-pip: 'pytest pytest-timeout filelock hypothesis'
+          extra-pip: 'pytest pytest-timeout filelock>=4.2.1 hypothesis'
       - name: Sync report
         run: python tools/mfsync.py status
       - name: Secret scan
