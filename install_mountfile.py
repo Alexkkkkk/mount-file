@@ -49,7 +49,7 @@ IS_MAC = SYSTEM == "Darwin"
 # Native readers do not require libtsk. Legacy fallback is a separate explicit
 # opt-in even for full installs; a missing pytsk3 wheel must not prevent the
 # native application from being installed on Windows.
-BASE_DEPS = ["PyQt6>=6.11.0"]
+BASE_DEPS = ["PyQt6>=6.12.1"]
 RUNTIME_EXTRAS = ("api", "ai", "dfir")
 
 # Qt runtime libraries are needed for PyQt6 on a stock Debian/Ubuntu desktop.

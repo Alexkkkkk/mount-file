@@ -32,7 +32,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        python -m pip install --upgrade pip pytest pytest-cov pytest-timeout hypothesis 'filelock>=4.2.1' setuptools wheel 'PyQt6>=6.11.0'
+        python -m pip install --upgrade pip pytest pytest-cov pytest-timeout hypothesis 'filelock>=4.3' setuptools wheel 'PyQt6>=6.12.1'
         python -m pip install 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0' 'pydantic>=2.0'
 
     - name: Install extra pip packages

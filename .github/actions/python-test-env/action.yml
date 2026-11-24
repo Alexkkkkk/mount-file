@@ -107,7 +107,7 @@ runs:
         else
           VENV_PY="$PWD/.venv/bin/python"
         fi
-        uv pip install --python "$VENV_PY" pytest pytest-cov pytest-timeout pytest-xdist hypothesis setuptools wheel 'PyQt6>=6.11.0'
+        uv pip install --python "$VENV_PY" pytest pytest-cov pytest-timeout pytest-xdist hypothesis setuptools wheel 'PyQt6>=6.12.1'
         uv pip install --python "$VENV_PY" 'fastapi>=0.115,<1.0' 'uvicorn>=0.30,<1.0' 'httpx>=0.27,<1.0' 'regex>=2024.0.0' 'pydantic>=2.0'
 
     - name: Install the project requirements with uv
