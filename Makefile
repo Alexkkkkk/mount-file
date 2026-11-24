@@ -147,6 +147,14 @@ fmt-check:
 
 # The #510 status block is generated, never typed: counts, evidence links and
 # the slice line all come from docs/replay-acceptance.json.
+# Aggregated readiness report: joins docs/generated artifacts into one list of
+# typed blockers per profile. Advisory only - promotes no status claim.
+blockers:
+	$(PY) scripts/blocker_report.py --repo-root .
+
+blockers-check:
+	$(PY) scripts/blocker_report.py --repo-root . --format json --check >/dev/null
+
 tracker-status:
 	$(PY) scripts/tracker_status.py --markdown
 
