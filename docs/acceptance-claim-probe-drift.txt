@@ -1,0 +1,27 @@
+# Known claim-vs-probe divergence for tracker #510.
+#
+# Read by `python scripts/acceptance_reconcile.py --check`.
+# Each entry is `<item id>  # <why the claim cannot be proven stronger today>`.
+#
+# Why a second file instead of docs/acceptance-known-drift.txt: that file
+# waives *count* drift between the probe artifact and the manifest counters
+# (`scripts/acceptance_blocks.py --check`), and it must stay empty while the
+# counters agree - which they do.  This file waives a per-id *category*
+# mismatch, and the two sets of ids are not interchangeable.  Mixing them
+# would make one gate's waiver silently satisfy the other's.
+#
+# Every id below is a `structure`-tier probe: it can prove that the file
+# exists, never that the property holds (BlockCheck.run in
+# mountfile/acceptance/blocks.py).  A `structure` probe therefore cannot
+# return `verified` on its own, so a manifest `verified` for these ids is
+# consistent with the probe's `partial` - but only with a written reason here.
+# Anything not listed is a real contradiction and fails the gate.
+
+B4   # structure-проба: revoke-обработка присутствует, поведение не исполняется
+B7   # structure-проба: checkpointing-код на месте, цикл writer'а не запускается
+B8   # structure-проба: локальное покрытие process-kill есть, серия scheduled-ранов не доказана
+B10  # structure-проба: e2fsck найден в PATH, per-op прогон не выполняется
+C2   # structure-проба: структуры $LogFile на месте, поведение парсера не исполняется
+C8   # structure-проба: граница адаптера присутствует, вызов не переисполняется
+D2   # structure-проба: модули fault-coverage на месте, серия nightly не доказана
+E2   # structure-проба: скрипт контракта на месте, обвязка гейта не исполняется

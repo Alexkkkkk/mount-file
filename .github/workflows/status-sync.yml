@@ -90,6 +90,19 @@ jobs:
             --expected-dir /tmp/mountfile-status \
             --committed-dir /tmp/mountfile-committed
 
+      - name: Reconcile manifest claims against the probes
+        # Оба существующих гейта сверяют утверждение само с собой (#510):
+        # replay_acceptance_status проверяет манифест по дереву,
+        # acceptance_blocks -- артефакт проб по счётчикам манифеста.
+        # Этот шаг сводит их по каждому id, поэтому "23 verified" в манифесте
+        # при "15 verified" в пробах больше не проходит молча.
+        # Baseline docs/acceptance-known-drift.txt разделяет реальное
+        # противоречие и известное расхождение категории (structure-проба
+        # не может сама выдать verified).
+        run: |
+          set -euo pipefail
+          python scripts/acceptance_reconcile.py --check
+
       - name: Strict tracker slice gate
         # Только для push в main: срез описывает основную ветку, и checkout
         # выше сделан с fetch-depth: 0, поэтому --strict может разрешать
