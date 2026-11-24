@@ -13,7 +13,11 @@ import os
 import struct
 from dataclasses import dataclass, replace
 
-from mountfile.image_source import BoundedImageSource, FileImageSource, ImageSourceError
+from mountfile.image_source import (
+    BoundedImageSource,
+    ImageSourceError,
+    open_image_source,
+)
 
 _BOOT_SECTOR_SIZE = 512
 _NTFS_OEM_ID = b"NTFS    "
@@ -177,7 +181,9 @@ def probe_ntfs_boot_sector(
     if volume_size < _BOOT_SECTOR_SIZE:
         raise NtfsProbeError("selected volume is smaller than an NTFS boot sector")
     try:
-        with FileImageSource(image_path) as source:
+        # Metadata probes re-read the same boot sectors; the shared bounded
+        # read-through cache keeps that off the disk without changing bounds.
+        with open_image_source(image_path) as source:
             if offset > source.size or volume_size > source.size - offset:
                 raise NtfsProbeError("selected volume extent exceeds image bounds")
             volume = BoundedImageSource(source, offset, volume_size)

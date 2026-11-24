@@ -1806,6 +1806,30 @@ def build_parser():
     return p
 
 
+def _emit_refusal_json(args, exc):
+    """Emit one machine-readable refusal line when explicitly opted in.
+
+    Automation needs to tell *why* a command refused (unsupported profile vs.
+    corrupt metadata vs. out-of-bounds) without parsing English prose.  This is
+    opt-in via ``MOUNTFILE_CLI_JSON_ERRORS=1`` so the default stderr text, which
+    scripts and users already match on, stays byte-for-byte unchanged.
+    """
+    if os.environ.get("MOUNTFILE_CLI_JSON_ERRORS", "").strip() != "1":
+        return
+    code = getattr(exc, "code", None)
+    if code is None:
+        return
+    payload = {
+        "command": getattr(args, "command", None),
+        "code": getattr(code, "value", str(code)),
+        "message": str(exc),
+    }
+    category = getattr(exc, "category", None)
+    if category is not None:
+        payload["category"] = getattr(category, "value", str(category))
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     started = time.perf_counter()
@@ -1815,6 +1839,7 @@ def main(argv=None):
             exit_code = args.func(args)
         except _READ_ERRORS as e:
             print("error: %s" % e, file=sys.stderr)
+            _emit_refusal_json(args, e)
             exit_code = ERROR
         except KeyboardInterrupt:
             # Ctrl+C is a normal way to abort a long scan: exit cleanly instead of

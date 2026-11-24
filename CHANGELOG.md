@@ -6,6 +6,24 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Bounded read-through image cache:** `mountfile.image_source` gained
+  `CachedImageSource` and `open_image_source()` — a fixed-size, LRU,
+  byte-budgeted cache in front of the existing read-only source.  Metadata-heavy
+  NTFS browsing and boot-sector probes stop re-reading the same blocks from
+  disk; every cached byte still comes from an exact bounds-checked read, the
+  cache streams long reads straight through, and `MOUNTFILE_IMAGE_CACHE_MB`
+  (default 8, `0` disables) tunes the budget.  `cache_bytes=0`,
+  `FileImageSource` and `BoundedImageSource` keep their exact old behaviour.
+
+- **Image fingerprint:** `FileImageSource.fingerprint()` / `.unchanged()`
+  record device/inode/size/mtime at open time and re-stat the same descriptor,
+  so a long analysis can flag an image that was truncated or rewritten
+  underneath it.  This is a tamper signal, not a lock and not a content hash.
+
+- **Opt-in machine-readable CLI refusals:** `MOUNTFILE_CLI_JSON_ERRORS=1` adds
+  one JSON line (`command`, `code`, `category`, `message`) on stderr for coded
+  refusals.  Default output is unchanged, so existing scripts keep working.
+
 - **Experimental native write guard:** ext4 and NTFS now have transactional,
   external-tool writer adapters behind `MOUNTFILE_ENABLE_NATIVE_WRITE=1`.
   They write only to a verified sibling copy and atomically replace the source

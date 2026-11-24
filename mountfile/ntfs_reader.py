@@ -19,6 +19,7 @@ from mountfile.image_source import (
     FileImageSource,
     ImageSource,
     ImageSourceError,
+    open_image_source,
 )
 from mountfile.ntfs_mft import (
     NtfsFileRecordHeader,
@@ -1170,7 +1171,7 @@ def probe_ntfs_metadata(
         source = (
             source_factory()
             if source_factory is not None
-            else FileImageSource(image_path)
+            else open_image_source(image_path)
         )
         with source:
             volume = BoundedImageSource(source, offset, volume_size)
@@ -1387,7 +1388,7 @@ class NativeNtfsMetadataImage(ReadOnlyVFSStatMixin):
         source = (
             source_factory()
             if source_factory is not None
-            else FileImageSource(self.image_path)
+            else open_image_source(self.image_path)
         )
         try:
             volume = BoundedImageSource(
