@@ -19,6 +19,25 @@ fails when a claim is stronger than the evidence behind it.
     python scripts/acceptance_reconcile.py --check    # exit 1 on a contradiction
     python scripts/acceptance_reconcile.py --json     # machine output
 
+Three outcomes are kept apart on purpose:
+
+``contradiction``
+    a probe ran and observed less than the manifest claims (``partial``,
+    ``not_exercised``, ``blocked``).  Fails the gate.
+``inconclusive``
+    the probe could not look at all - ``unavailable``.  Reported, never
+    treated as a false claim: on the Windows and minimal-Linux runners
+    ``B2``/``D5`` have no ``mkfs.ext4``/``e2fsck`` and a shallow clone has no
+    release tag for ``A2``, so "probe absent" says nothing about the claim.
+    A probe that ran and observed something weaker is a contradiction; a probe
+    that could not run is not.
+``unprobed``
+    a claimed id the probes never returned at all.  Fails the gate.
+
+A probe that *crashed* (``BlockCheck.run`` catches the exception and reports
+``unavailable`` with a ``probe error:`` detail) is neither: it is a defect in
+the probe, so it exits ``2`` instead of passing quietly.
+
 Category mismatch, not a false claim: every probe in the ``structure`` tier
 can only prove that a file exists, never that the property holds (see
 ``BlockCheck.run`` in ``mountfile/acceptance/blocks.py``), so ``partial`` is the
@@ -30,10 +49,15 @@ counters agree.  Rules, identical to the other gate: a listed id must be a
 structure probe, an id that stops drifting fails as stale, and anything
 unlisted is a real contradiction.
 
+A waiver goes stale only when the probe *looked* and stopped drifting: if the
+tool it needs is missing on this machine the id becomes ``inconclusive``, not
+stale, so the same tree does not pass on one runner and fail on another for a
+reason that has nothing to do with the manifest.
+
     python scripts/acceptance_reconcile.py --baseline docs/acceptance-claim-probe-drift.txt
 
 Exit codes: ``0`` no contradiction, ``1`` contradiction or stale baseline
-entry, ``2`` the manifest or the probes could not be read.
+entry, ``2`` the manifest or the probes could not be read, or a probe crashed.
 """
 
 from __future__ import annotations
@@ -41,9 +65,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -51,6 +75,14 @@ if str(REPO_ROOT) not in sys.path:
 
 MANIFEST_PATH = Path("docs/replay-acceptance.json")
 BASELINE_PATH = Path("docs/acceptance-claim-probe-drift.txt")
+
+#: The probes' typed word for "this environment cannot look": a missing tool,
+#: a missing release tag.  It is an absence of observation, not an observation
+#: of absence, so it can never make a claim false.
+NO_OBSERVATION = "unavailable"
+
+#: ``BlockCheck.run`` prefixes the detail of a probe that raised with this.
+PROBE_ERROR_PREFIX = "probe error:"
 
 #: Ordered strength of the statuses used by the manifest and by the probes.
 #: ``not_exercised`` is the probe's word for "the code exists, nothing was run",
@@ -67,6 +99,7 @@ STRENGTH: dict[str, int] = {
 #: Statuses a claim is allowed to use.
 CLAIM_STATUSES = ("verified", "partial", "not_started", "blocked")
 
+EXIT_CONTRADICTION = 1
 EXIT_CONFIG_ERROR = 2
 
 
@@ -74,39 +107,88 @@ class ReconcileError(RuntimeError):
     """The manifest or the probe artifact cannot be read."""
 
 
+class Observation(NamedTuple):
+    """What one probe reported, kept with the detail that explains it."""
+
+    status: str
+    detail: str = ""
+    tier: str = ""
+
+    @property
+    def looked(self) -> bool:
+        """True when the probe actually observed something."""
+        return self.status != NO_OBSERVATION
+
+    @property
+    def crashed(self) -> bool:
+        """True when ``BlockCheck.run`` swallowed an exception instead."""
+        return self.detail.startswith(PROBE_ERROR_PREFIX)
+
+
 def strength(status: str) -> int:
     """Return the comparable strength of a status, -1 when unknown."""
     return STRENGTH.get(status, -1)
 
 
+def _status_of(value: str | Observation) -> str:
+    return value.status if isinstance(value, Observation) else str(value)
+
+
+def _detail_of(value: str | Observation) -> str:
+    return value.detail if isinstance(value, Observation) else ""
+
+
 def reconcile(
-    claims: dict[str, str], observed: dict[str, str]
-) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]], list[str]]:
+    claims: Mapping[str, str], observed: Mapping[str, str | Observation]
+) -> tuple[
+    list[tuple[str, str, str]],
+    list[tuple[str, str, str]],
+    list[str],
+    list[tuple[str, str, str]],
+]:
     """Join the two views per id.
 
-    Returns ``(contradictions, understated, unprobed)``:
+    Returns ``(contradictions, understated, unprobed, inconclusive)``:
 
-    * ``contradictions`` - the claim is stronger than the probe observed;
+    * ``contradictions`` - the probe looked and observed less than the claim;
     * ``understated``    - the probe is stronger than the claim, which is a
       stale manifest rather than a false claim;
-    * ``unprobed``       - a claimed id the probes never returned.
+    * ``unprobed``       - a claimed id the probes never returned;
+    * ``inconclusive``   - the probe could not look (``unavailable``), so the
+      claim is neither confirmed nor contradicted here.
     """
     contradictions: list[tuple[str, str, str]] = []
     understated: list[tuple[str, str, str]] = []
     unprobed: list[str] = []
+    inconclusive: list[tuple[str, str, str]] = []
 
     for ident in sorted(claims, key=_item_sort_key):
         claim = claims[ident]
         if ident not in observed:
             unprobed.append(ident)
             continue
-        probe = observed[ident]
-        if strength(claim) > strength(probe):
-            contradictions.append((ident, claim, probe))
-        elif strength(claim) < strength(probe):
+        probe = _status_of(observed[ident])
+        if strength(probe) > strength(claim):
             understated.append((ident, claim, probe))
+        elif strength(claim) > strength(probe):
+            if strength(probe) < 0 or probe == NO_OBSERVATION:
+                inconclusive.append((ident, claim, probe))
+            else:
+                contradictions.append((ident, claim, probe))
 
-    return contradictions, understated, unprobed
+    return contradictions, understated, unprobed, inconclusive
+
+
+def crashed_probes(observed: Mapping[str, str | Observation]) -> list[str]:
+    """Ids whose probe raised instead of reporting a state."""
+    return sorted(
+        (
+            ident
+            for ident, value in observed.items()
+            if isinstance(value, Observation) and value.crashed
+        ),
+        key=_item_sort_key,
+    )
 
 
 def load_baseline(path: Path) -> dict[str, str]:
@@ -147,8 +229,8 @@ def load_claims(manifest_path: Path) -> dict[str, str]:
     return claims
 
 
-def load_observed(root: Path, manifest_path: Path) -> dict[str, str]:
-    """Run the probes and return ``{id: observed status}``."""
+def load_observations(root: Path, manifest_path: Path) -> dict[str, Observation]:
+    """Run the probes once and return ``{id: Observation}``."""
     try:
         from mountfile.acceptance.blocks import run_all
     except Exception as exc:  # noqa: BLE001
@@ -157,12 +239,24 @@ def load_observed(root: Path, manifest_path: Path) -> dict[str, str]:
         result = run_all(root, manifest_path if manifest_path.is_file() else None)
     except Exception as exc:  # noqa: BLE001
         raise ReconcileError(f"пробы упали: {exc}") from exc
-    observed: dict[str, str] = {}
+    observations: dict[str, Observation] = {}
     for row in result.get("items") or []:
         ident = row.get("id")
         if ident:
-            observed[str(ident)] = str(row.get("status") or "")
-    return observed
+            observations[str(ident)] = Observation(
+                status=str(row.get("status") or ""),
+                detail=str(row.get("detail") or ""),
+                tier=str(row.get("tier") or ""),
+            )
+    return observations
+
+
+def load_observed(root: Path, manifest_path: Path) -> dict[str, str]:
+    """Return ``{id: observed status}`` - the status view of the same probes."""
+    return {
+        ident: observation.status
+        for ident, observation in load_observations(root, manifest_path).items()
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,28 +294,37 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         claims = load_claims(manifest_path)
-        observed = load_observed(root, manifest_path)
+        observations = load_observations(root, manifest_path)
     except ReconcileError as exc:
         print(f"ошибка конфигурации: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 
-    contradictions, understated, unprobed = reconcile(claims, observed)
-
-    known: list[tuple[str, str, str]] = []
-    novel = list(contradictions)
-    stale: list[str] = []
-    if baseline is not None:
-        known = [c for c in contradictions if c[0] in baseline]
-        novel = [c for c in contradictions if c[0] not in baseline]
-        drifted = {c[0] for c in contradictions}
-        stale = sorted(
-            (ident for ident in baseline if ident not in drifted), key=_item_sort_key
+    crashed = crashed_probes(observations)
+    if crashed:
+        print(
+            "проба упала вместо того, чтобы сообщить состояние: " + ", ".join(crashed),
+            file=sys.stderr,
         )
+        for ident in crashed:
+            print(f"  {ident}: {observations[ident].detail}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    contradictions, understated, unprobed, inconclusive = reconcile(
+        claims, observations
+    )
+
+    known = [c for c in contradictions if c[0] in baseline]
+    novel = [c for c in contradictions if c[0] not in baseline]
+    # A probe that could not look leaves its waiver neither confirmed nor
+    # stale: only an actual observation may retire a baseline entry.
+    drifted = {c[0] for c in contradictions}
+    drifted |= {i[0] for i in inconclusive}
+    stale = sorted((i for i in baseline if i not in drifted), key=_item_sort_key)
 
     payload = {
-        "schema": "mountfile.acceptance-reconcile/v1",
+        "schema": "mountfile.acceptance-reconcile/v2",
         "claimed": len(claims),
-        "observed": len(observed),
+        "observed": sum(1 for o in observations.values() if o.looked),
         "contradictions": [{"id": i, "claim": c, "probe": p} for i, c, p in novel],
         "known_category_mismatch": [
             {"id": i, "claim": c, "probe": p, "reason": baseline[i]}
@@ -229,13 +332,25 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "stale_baseline": stale,
         "understated": [{"id": i, "claim": c, "probe": p} for i, c, p in understated],
+        "inconclusive": [
+            {
+                "id": i,
+                "claim": c,
+                "probe": p,
+                "detail": _detail_of(observations.get(i, "")),
+            }
+            for i, c, p in inconclusive
+        ],
         "unprobed": unprobed,
     }
 
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print(f"утверждений: {len(claims)} | наблюдений: {len(observed)}")
+        print(
+            f"утверждений: {len(claims)} | наблюдений: "
+            f"{payload['observed']} | проба не смогла исполниться: {len(inconclusive)}"
+        )
         for ident, claim, probe in novel:
             print(f"утверждение сильнее пробы: {ident}: {claim} > {probe}")
         for ident, claim, probe in known:
@@ -247,13 +362,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"устаревшая запись baseline: {ident} больше не расходится")
         for ident, claim, probe in understated:
             print(f"устаревшее утверждение:    {ident}: {claim} < {probe}")
+        for ident, claim, probe in inconclusive:
+            print(
+                f"не проверено в этом окружении: {ident}: {claim} > {probe} "
+                f"({_detail_of(observations.get(ident, ''))})"
+            )
         for ident in unprobed:
             print(f"без пробы:                 {ident}")
         if not novel and not unprobed and not stale:
             print("утверждения не сильнее доказательств")
 
     if args.check and (novel or unprobed or stale):
-        return 1
+        return EXIT_CONTRADICTION
     return 0
 
 
