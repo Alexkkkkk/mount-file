@@ -191,6 +191,29 @@ def crashed_probes(observed: Mapping[str, str | Observation]) -> list[str]:
     )
 
 
+def stale_baseline(
+    baseline: Mapping[str, str],
+    contradictions: Iterable[tuple[str, str, str]],
+    inconclusive: Iterable[tuple[str, str, str]] = (),
+) -> list[str]:
+    """Baseline entries whose id no longer drifts.
+
+    A waiver is retired only when a probe *looked* and stopped drifting.  An
+    id whose probe could not look (``inconclusive``) keeps its waiver, so the
+    same tree does not fail on a runner that happens to lack ``e2fsck`` for a
+    reason that has nothing to do with the manifest.
+
+    This is the only definition of "stale" in the gate: the CLI and the
+    contract tests both call it, so the two can never disagree about which
+    waivers have expired.
+    """
+    drifted = {entry[0] for entry in contradictions}
+    drifted |= {entry[0] for entry in inconclusive}
+    return sorted(
+        (ident for ident in baseline if ident not in drifted), key=_item_sort_key
+    )
+
+
 def load_baseline(path: Path) -> dict[str, str]:
     """Read ``<item id>  # <reason>`` lines - the same format as the gap gate."""
     from scripts.acceptance_blocks import load_baseline as _load
@@ -317,9 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     novel = [c for c in contradictions if c[0] not in baseline]
     # A probe that could not look leaves its waiver neither confirmed nor
     # stale: only an actual observation may retire a baseline entry.
-    drifted = {c[0] for c in contradictions}
-    drifted |= {i[0] for i in inconclusive}
-    stale = sorted((i for i in baseline if i not in drifted), key=_item_sort_key)
+    stale = stale_baseline(baseline, contradictions, inconclusive)
 
     payload = {
         "schema": "mountfile.acceptance-reconcile/v2",

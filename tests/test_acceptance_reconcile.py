@@ -165,6 +165,55 @@ def test_the_detail_of_an_inconclusive_id_reaches_the_payload() -> None:
 
 
 # --------------------------------------------------------------------------
+# "stale" has exactly one definition
+# --------------------------------------------------------------------------
+def test_stale_waiver_requires_a_probe_that_looked_and_stopped_drifting() -> None:
+    """An id that stops drifting under a probe that looked is stale."""
+    baseline = {"B10": "structure", "B4": "structure"}
+    contradictions = [("B4", "verified", "partial")]
+    assert reconcile_script.stale_baseline(baseline, contradictions) == ["B10"]
+
+
+def test_waiver_for_an_inconclusive_probe_is_not_stale() -> None:
+    """A missing e2fsck must not retire a waiver on the Windows runner."""
+    baseline = {"B10": "structure"}
+    contradictions: list[tuple[str, str, str]] = []
+    inconclusive = [("B10", "verified", "unavailable")]
+    assert reconcile_script.stale_baseline(baseline, contradictions, inconclusive) == []
+
+
+def test_stale_ids_are_sorted_numerically() -> None:
+    baseline = {"B10": "structure", "B2": "structure", "A9": "structure"}
+    assert reconcile_script.stale_baseline(baseline, []) == ["A9", "B2", "B10"]
+
+
+def test_cli_and_contract_agree_on_staleness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate's own verdict is the one the tests assert against.
+
+    Reproduces the Windows-runner shape: every structure waiver still drifts
+    except the one whose probe could not look.  The CLI must exit 0 and the
+    contract test's computation must produce the same empty ``stale`` list.
+    """
+    claims = reconcile_script.load_claims(MANIFEST)
+    observed = reconcile_script.load_observations(REPO_ROOT, MANIFEST)
+    real = dict(observed)
+    real["B10"] = reconcile_script.Observation(
+        status="unavailable", detail="e2fsck unavailable", tier="structure"
+    )
+    monkeypatch.setattr(
+        reconcile_script,
+        "load_observations",
+        lambda root, manifest: dict(real),
+    )
+    contradictions, _, unprobed, inconclusive = reconcile_script.reconcile(claims, real)
+    baseline = reconcile_script.load_baseline(BASELINE)
+    assert unprobed == []
+    assert reconcile_script.stale_baseline(baseline, contradictions, inconclusive) == []
+
+
+# --------------------------------------------------------------------------
 # baseline rules: same file, same meaning as the gap gate
 # --------------------------------------------------------------------------
 def test_baseline_is_separate_from_the_count_drift_baseline() -> None:
@@ -208,13 +257,23 @@ def test_claims_and_probes_cover_the_same_ids() -> None:
 
 
 def test_no_contradiction_outside_the_baseline() -> None:
+    """The live tree, joined exactly the way the gate itself joins it.
+
+    ``stale`` comes from ``reconcile_script.stale_baseline`` on purpose: a
+    probe that could not look (no ``e2fsck`` on a Windows runner) leaves its
+    waiver neither confirmed nor stale, and a test that recomputed the set
+    from ``contradictions`` alone would fail on that runner while the gate
+    passes.  One definition, one verdict.
+    """
     claims = reconcile_script.load_claims(MANIFEST)
     observed = reconcile_script.load_observed(REPO_ROOT, MANIFEST)
-    contradictions, _, unprobed, _ = reconcile_script.reconcile(claims, observed)
+    contradictions, _, unprobed, inconclusive = reconcile_script.reconcile(
+        claims, observed
+    )
     baseline = reconcile_script.load_baseline(BASELINE)
 
     novel = [c[0] for c in contradictions if c[0] not in baseline]
-    stale = [ident for ident in baseline if ident not in {c[0] for c in contradictions}]
+    stale = reconcile_script.stale_baseline(baseline, contradictions, inconclusive)
 
     assert unprobed == [], f"claimed items without a probe: {unprobed}"
     assert novel == [], f"claim stronger than evidence: {novel}"
