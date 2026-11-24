@@ -233,3 +233,58 @@ def test_new_acceptance_item_dry_run_is_side_effect_free(tmp_path):
 )
 def test_slugify(raw, expected):
     assert new_acceptance_item.slugify(raw) == expected
+
+
+def test_issue_state_drift_fires_for_closed_issue_with_open_items():
+    """Audit #510, defect 1: closed/completed issue with open manifest items."""
+    manifest = {
+        "items": [
+            {"id": "C3", "block": "C", "status": "partial"},
+            {"id": "B1", "block": "B", "status": "verified"},
+            {"id": "C4", "block": "C", "status": "blocked"},
+        ]
+    }
+    drift = tracker_status.issue_state_drift(
+        {"state": "closed", "state_reason": "completed"},
+        manifest,
+        "Alexkkkkk/mount-file",
+        510,
+    )
+    assert len(drift) == 1
+    assert "closed" in drift[0]
+    assert "C3" in drift[0]
+    assert "B1" not in drift[0]
+    assert "C4" not in drift[0]
+
+
+def test_issue_state_drift_silent_for_open_issue_or_finished_manifest():
+    manifest = {
+        "items": [
+            {"id": "A1", "block": "A", "status": "verified"},
+            {"id": "C4", "block": "C", "status": "blocked"},
+        ]
+    }
+    assert (
+        tracker_status.issue_state_drift(
+            {"state": "open", "state_reason": ""}, manifest, "r", 1
+        )
+        == []
+    )
+    # closed but nothing open in the manifest -> no drift
+    assert (
+        tracker_status.issue_state_drift(
+            {"state": "closed", "state_reason": "completed"}, manifest, "r", 1
+        )
+        == []
+    )
+    # lookup impossible -> never counted as healthy *or* broken here
+    assert tracker_status.issue_state_drift(None, manifest, "r", 1) == []
+
+
+def test_fetch_issue_state_without_token_is_none(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    assert (
+        tracker_status.fetch_issue_state("Alexkkkkk/mount-file", 510, token=None)
+        is None
+    )

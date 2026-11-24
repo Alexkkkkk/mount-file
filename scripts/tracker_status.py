@@ -21,6 +21,13 @@ that a generator cannot know.
 comment on the issue (saved as a text/markdown file) and the script refuses to
 hand back a block that repeats it.
 
+With ``--check`` the script also asks the GitHub API for the tracker issue's
+current state (audit #510, defect 1: the issue sat ``closed``/``completed``
+while the manifest still had open items, and ``drift: none`` kept saying
+everything was fine). The drift fires when the issue is closed but the manifest
+declares items that are not ``verified``/``blocked``. A missing token or a
+failed API call is reported and skipped, never silently treated as healthy.
+
 Exit codes: ``0`` ok, ``1`` drift (``--check``), ``2`` manifest is malformed,
 ``3`` near-duplicate of the comparison file.
 """
@@ -30,11 +37,14 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import re
 import subprocess
 import sys
+import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 MANIFEST_PATH = Path("docs/replay-acceptance.json")
 
@@ -60,11 +70,84 @@ BLOCK_TITLES = {
 SIMILARITY_LIMIT = 0.90
 
 
+#: The tracker issue whose *state* ``--check`` audits (audit #510, defect 1).
+TRACKER_ISSUE = 510
+
+
+def fetch_issue_state(
+    repo: str, issue: int, token: str | None = None
+) -> dict[str, str] | None:
+    """Return ``{"state": ..., "state_reason": ...}`` for the tracker issue.
+
+    Returns ``None`` when the lookup is impossible (no token, no network, no
+    API access). Callers must treat ``None`` as "cannot judge", not as
+    "everything is fine": the whole point of the check is that a closed
+    tracker must not masquerade as a finished checklist.
+    """
+
+    env_token = token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not env_token:
+        return None
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/issues/{issue}",
+        headers={
+            "Authorization": f"Bearer {env_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "mountfile-tracker-status",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "state": str(payload.get("state", "")),
+        "state_reason": str(payload.get("state_reason") or ""),
+    }
+
+
+def issue_state_drift(
+    issue: dict[str, str] | None,
+    manifest: dict[str, Any],
+    repo: str,
+    issue_number: int,
+) -> list[str]:
+    """Audit #510, defect 1: closed issue vs open manifest items.
+
+    ``None`` (lookup impossible) and an already-open issue produce no drift
+    here -- the manifest-to-tree drift is ``collect_drift``'s job.
+    """
+
+    if issue is None:
+        return []
+    state = issue.get("state", "")
+    if state != "closed":
+        return []
+    open_items = [
+        str(item.get("id"))
+        for item in manifest["items"]
+        if isinstance(item, dict) and item.get("status") not in ("verified", "blocked")
+    ]
+    if not open_items:
+        return []
+    return [
+        f"issue #{issue_number} ({repo}) is closed "
+        f"(state_reason={issue.get('state_reason') or 'n/a'}) while the "
+        f"manifest still declares open items: {', '.join(open_items)} -- "
+        f"reopen it or lower the items first (audit #510, defect 1)"
+    ]
+
+
 class ManifestError(RuntimeError):
     """The manifest itself is malformed (not merely out of date)."""
 
 
-def load_manifest(path: Path) -> Dict[str, Any]:
+def load_manifest(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ManifestError(f"{path} is missing")
     try:
@@ -76,7 +159,7 @@ def load_manifest(path: Path) -> Dict[str, Any]:
     return data
 
 
-def git_slice(repo_root: Path, branch: str = "main") -> Dict[str, str]:
+def git_slice(repo_root: Path, branch: str = "main") -> dict[str, str]:
     """Current HEAD, so the block never cites a stale commit."""
 
     def run(*args: str) -> str:
@@ -101,11 +184,11 @@ def git_slice(repo_root: Path, branch: str = "main") -> Dict[str, str]:
     return {"branch": branch, "commit": sha, "subject": subject, "ahead": ahead}
 
 
-def collect_drift(manifest: Dict[str, Any], repo_root: Path) -> List[str]:
+def collect_drift(manifest: dict[str, Any], repo_root: Path) -> list[str]:
     """Every mismatch a tree can prove: missing evidence, bad status, no id."""
 
-    problems: List[str] = []
-    seen: Dict[str, int] = {}
+    problems: list[str] = []
+    seen: dict[str, int] = {}
     for index, item in enumerate(manifest["items"]):
         if not isinstance(item, dict):
             problems.append(f"item #{index} is not an object")
@@ -136,7 +219,7 @@ def collect_drift(manifest: Dict[str, Any], repo_root: Path) -> List[str]:
     return problems
 
 
-def counts_by_status(manifest: Dict[str, Any]) -> Dict[str, int]:
+def counts_by_status(manifest: dict[str, Any]) -> dict[str, int]:
     counts = {status: 0 for status in STATUS_GLYPH}
     for item in manifest["items"]:
         status = item.get("status") if isinstance(item, dict) else None
@@ -147,9 +230,9 @@ def counts_by_status(manifest: Dict[str, Any]) -> Dict[str, int]:
 
 
 def render_markdown(
-    manifest: Dict[str, Any],
+    manifest: dict[str, Any],
     drift: Iterable[str],
-    slice_info: Dict[str, str],
+    slice_info: dict[str, str],
 ) -> str:
     counts = counts_by_status(manifest)
     declared = manifest.get("slice", {}) or {}
@@ -157,7 +240,7 @@ def render_markdown(
     version = declared.get("version", "?")
     checked = declared.get("checked", "?")
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append("## Сводка трекера — сгенерировано `scripts/tracker_status.py`")
     lines.append("")
     lines.append(
@@ -184,7 +267,7 @@ def render_markdown(
     )
     lines.append("")
 
-    by_block: Dict[str, List[Dict[str, Any]]] = {}
+    by_block: dict[str, list[dict[str, Any]]] = {}
     for item in manifest["items"]:
         if isinstance(item, dict):
             by_block.setdefault(str(item.get("block", "?")), []).append(item)
@@ -231,7 +314,7 @@ def similarity(left: str, right: str) -> float:
     return difflib.SequenceMatcher(None, normalize(left), normalize(right)).ratio()
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--manifest", default=str(MANIFEST_PATH))
     parser.add_argument("--repo-root", default=".")
@@ -256,6 +339,22 @@ def main(argv: List[str] | None = None) -> int:
         default=SIMILARITY_LIMIT,
         help=f"similarity limit for --similarity (default {SIMILARITY_LIMIT})",
     )
+    parser.add_argument(
+        "--repo",
+        default="Alexkkkkk/mount-file",
+        help="GitHub repository of the tracker issue",
+    )
+    parser.add_argument(
+        "--issue",
+        type=int,
+        default=TRACKER_ISSUE,
+        help="tracker issue number whose state --check audits",
+    )
+    parser.add_argument(
+        "--skip-issue-state",
+        action="store_true",
+        help="skip the GitHub issue-state audit (offline runs, tests)",
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
@@ -266,6 +365,10 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     drift = collect_drift(manifest, repo_root)
+    issue_state: dict[str, str] | None = None
+    if args.check and not args.skip_issue_state:
+        issue_state = fetch_issue_state(args.repo, args.issue)
+    drift = drift + issue_state_drift(issue_state, manifest, args.repo, args.issue)
     slice_info = git_slice(repo_root)
     markdown = render_markdown(manifest, drift, slice_info)
     counts = counts_by_status(manifest)
@@ -321,6 +424,15 @@ def main(argv: List[str] | None = None) -> int:
             f"⬜ {counts['not_started']}  🚫 {counts['blocked']}  "
             f"/ {counts['total']}"
         )
+        if issue_state is None and args.check and not args.skip_issue_state:
+            print(
+                "issue:    unknown (no GITHUB_TOKEN/GH_TOKEN or API unreachable) "
+                "-- state audit skipped, NOT counted as healthy"
+            )
+        elif issue_state is not None:
+            print(
+                f"issue:    state={issue_state['state']} reason={issue_state['state_reason'] or 'n/a'}"
+            )
         if drift:
             print(f"drift:    {len(drift)}")
             for problem in drift:
