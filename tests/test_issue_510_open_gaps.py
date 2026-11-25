@@ -169,8 +169,8 @@ def test_allocation_bitmap_and_index_surgery_stay_outside_the_allowlist(op):
     """These ops stay refused until an independent checker backs them (C3)."""
 
     assert op not in SUPPORTED_OPERATIONS, (
-        "0x%02x entered SUPPORTED_OPERATIONS: the C3 gap statement in "
-        "docs/replay-acceptance.json must be revised before merge" % op
+        f"0x{op:02x} entered SUPPORTED_OPERATIONS: the C3 gap statement in "
+        "docs/replay-acceptance.json must be revised before merge"
     )
 
 
@@ -196,13 +196,12 @@ def test_ntfs_replay_fault_points_cover_the_documented_boundaries():
 
 
 # ---------------------------------------------------------------------------
-# D6 — every profile x state cell keeps a concrete test selector
+# D6 — legacy write_file profile x state cells keep concrete selectors
 # ---------------------------------------------------------------------------
 
 
 def test_every_profile_state_cell_has_at_least_one_mapped_case():
-    """A cell without a selector cannot run in a scheduled job, so it would
-    silently stay grey; D6 requires all cells to be machine-addressable."""
+    """The FAT12/16 write_file rows stay machine-addressable in the artifact."""
 
     assert {"fat12", "fat16"} <= set(failure_matrix_artifact.TESTS)
     for profile in ("fat12", "fat16"):

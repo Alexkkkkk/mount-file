@@ -46,6 +46,7 @@ from tests.ntfs_crash_fixture import (
     add_structural_attribute_list,
     corrupt_mft_mirror,
     make_crash_fixture,
+    mark_record_as_extension,
     mark_volume_dirty,
 )
 
@@ -265,6 +266,26 @@ def test_attribute_list_is_refused_before_any_mutation(
         native_ntfs_recover(str(image))
 
     assert _sha256(image) == before
+    assert "mutation:start" not in fault_events
+
+
+@needs_ntfs
+def test_extension_mft_record_is_refused_before_any_mutation(tmp_path, monkeypatch):
+    fixture = make_crash_fixture(tmp_path)
+    mark_record_as_extension(fixture.image, fixture.record_number)
+    before = _sha256(fixture.image)
+    fault_events = []
+    monkeypatch.setattr(
+        ntfs_replay_module, "_fault", lambda event: fault_events.append(event)
+    )
+
+    with pytest.raises(
+        NtfsReplayError,
+        match=r"is an extension record.*ownership is unsupported",
+    ):
+        native_ntfs_recover(str(fixture.image))
+
+    assert _sha256(fixture.image) == before
     assert "mutation:start" not in fault_events
 
 

@@ -49,7 +49,7 @@ The repository contains a bounded `$LogFile` parser and replay path. `recover="n
 
 ## Failure-matrix evidence
 
-The artifact generator now reads pytest JUnit XML and maps exact test node IDs to profile/state cells. A passing test is recorded separately from checker evidence. The artifact's `acceptance` is always `not_claimed`; a missing or skipped node is typed as `not_proven` or `unavailable`, not green. The status `passed` means only that the mapped pytest case passed.
+The artifact generator reads pytest JUnit XML and maps exact test node IDs to profile × operation × failure-state cells. It now emits 32 cells: the seven existing `write_file` profiles plus a separate `ext4.create_file` operation. Only the `ext4.create_file` injected-exception cell currently has a dedicated selector; its short-write, process-kill and cancellation cells remain `not_proven` rather than inheriting evidence from `write_file`. A passing test is recorded separately from checker evidence. The artifact's `acceptance` is always `not_claimed`; a missing or skipped node is typed as `not_proven` or `unavailable`, not green. The status `passed` means only that the mapped pytest case passed.
 
 The scheduled failure workflow includes FAT12/16, FAT32, ext2, exFAT, ext4/JBD2, and synthetic NTFS cases. As checked on 2026-11-17, GitHub reports no runs for this workflow with event `schedule`; the available run is a manual `workflow_dispatch`. Therefore the requirement for two consecutive scheduled runs with valid artifacts remains unproven.
 

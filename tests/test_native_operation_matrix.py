@@ -14,7 +14,7 @@ Declared operations (from the runtime, not from ambition)::
                           data_write, post_verify, identity_verify, publish
     ext4.create_file   -> copy, delegate, post_verify, identity_verify, publish
     ntfs.write_file    -> copy, payload_stage, log_gate_pre, ntfs_write,
-                          log_gate_post, identity_verify, publish
+                          log_gate_post, read_back, identity_verify, publish
 
 `ntfs` exposes only ``write_file``; there is no native create/delete/rename on
 that writer, so a cell for them would be a cell that can never be reached. The
@@ -66,6 +66,7 @@ OPERATION_PHASES: dict[str, tuple[str, ...]] = {
         "log_gate_pre",
         "ntfs_write",
         "log_gate_post",
+        "read_back",
         "identity_verify",
         "publish",
     ),
@@ -131,9 +132,12 @@ def _make_ext4(tmp_path: Path) -> Path:
 
 def test_declared_operations_match_the_runtime():
     """The contract must describe the writers that exist, and no more."""
+    from tests.test_ntfs_write_phase_injection import DECLARED_STEPS
+
     assert hasattr(Ext4NativeWriter, "write_file")
     assert hasattr(Ext4NativeWriter, "create_file")
     assert hasattr(NtfsTransactionalWriter, "write_file")
+    assert OPERATION_PHASES["ntfs.write_file"] == DECLARED_STEPS
     for operation, phases in OPERATION_PHASES.items():
         assert phases, operation
         assert len(set(phases)) == len(phases), operation
@@ -253,10 +257,10 @@ def test_ntfs_single_operation_surface_is_declared():
             f"{name} now exists on NtfsTransactionalWriter -- add its phase "
             "matrix to OPERATION_PHASES instead of leaving a hole"
         )
-    assert len(OPERATION_PHASES["ntfs.write_file"]) == 7
+    assert len(OPERATION_PHASES["ntfs.write_file"]) == 8
 
 
 def test_operation_matrix_totals_are_reported():
     """A readable cell count, so 'covered' is a number other than a promise."""
     total = sum(len(phases) for phases in OPERATION_PHASES.values())
-    assert total == 20, total
+    assert total == 21, total
