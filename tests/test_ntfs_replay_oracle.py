@@ -36,6 +36,7 @@ def test_replay_matches_external_ntfsfix_oracle(tmp_path, scenario):
     # independent executor runs: divergence of a single byte is a bug.
     assert result["mft_record_bytes_equal"] is True, result["ntfsfix_output"]
     assert result["bitmap_bytes_equal"] is True, result["ntfsfix_output"]
+    assert result["target_content_consistent"] is True, result["ntfsfix_output"]
     if scenario != "mft-mirr-corrupt":
         # For every non-mirror scenario the replayed volume must be reported
         # clean by the external checker.  The mirror scenario may legitimately

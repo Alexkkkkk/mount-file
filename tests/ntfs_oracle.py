@@ -46,6 +46,7 @@ class DirtyFixture:
     record_size: int
     old_data: bytes
     new_data: bytes
+    active: bool = False
 
 
 def _sha256(path: Path) -> str:
@@ -88,6 +89,7 @@ def build_dirty_fixture(root: Path, scenario: str) -> DirtyFixture:
             record_size=1024,
             old_data=payload.read_bytes(),
             new_data=payload.read_bytes(),
+            active=False,
         )
     fixture = make_crash_fixture(
         work,
@@ -103,6 +105,7 @@ def build_dirty_fixture(root: Path, scenario: str) -> DirtyFixture:
         record_size=fixture.record_size,
         old_data=fixture.old_data,
         new_data=fixture.new_data,
+        active=bool(options.get("active")),
     )
 
 
@@ -178,7 +181,8 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
             ["ntfscat", str(ours), "/target"], capture_output=True, check=False
         )
         if written.returncode == 0:
-            content_correct = written.stdout.startswith(fixture.new_data[:4])
+            expected = fixture.old_data if fixture.active else fixture.new_data
+            content_correct = written.stdout.startswith(expected[:4])
     except OSError:
         content_correct = None
 
@@ -197,7 +201,14 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         **_source_integrity(fixture.image, source_hash_before),
         "replay_mutated_copy": _sha256(ours) != source_hash_before,
         "verdict": (
-            "pass" if (mft_bytes_equal and bitmap_equal and clean) else "divergence"
+            "pass"
+            if (
+                mft_bytes_equal
+                and bitmap_equal
+                and clean
+                and content_correct is not False
+            )
+            else "divergence"
         ),
     }
 
