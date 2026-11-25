@@ -15,7 +15,6 @@ weakening any generated artifact.
 from __future__ import annotations
 
 import re
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -25,8 +24,16 @@ _ROW = re.compile(r"^\|\s*Версия пакета\s*\|\s*`(?P<version>[^`]+)`"
 
 
 def _pyproject_version() -> str:
-    with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
-        return tomllib.load(handle)["project"]["version"]
+    # tomllib is stdlib only from 3.11 while this project supports 3.10, so the
+    # single scalar we need is read structurally instead of with a full TOML parser.
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(
+        r'^\[project\]\s*$.*?^version\s*=\s*"([^"]+)"',
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, "pyproject.toml must declare [project].version"
+    return match.group(1)
 
 
 def _init_version() -> str:
