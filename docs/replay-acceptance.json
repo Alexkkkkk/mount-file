@@ -258,7 +258,7 @@
         "scripts/ntfs_oracle_evidence.py"
       ],
       "note": "Оракул ntfsfix + побайтовое сравнение добавлены (#595). На 2026-11-22 у ntfs-windows-acceptance.yml 4 подряд успешных scheduled-ранов на main (последний 2026-11-21), при этом 4 из 5 ручных workflow_dispatch завершились провалом 2026-11-20 -- расписание зелёное, ручной запуск нет. Побайтовый replay-parity против chkdsk по-прежнему не заявляется: Windows checker inventory недоступен, реальных crash-captures нет.",
-      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 6 synthetic scenarios with mkntfs/ntfscp/ntfsfix/ntfscat: 6 pass, 0 divergence, 0 unavailable; each scenario matched $MFT and $Bitmap bytes across independent executor copies, ntfsfix -n passed, source remained untouched, and target read-back matched commit/active semantics. C6 remains partial because the authoritative Windows chkdsk oracle and real Windows crash captures are unavailable."
+      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 6 synthetic scenarios: 6 pass, 0 divergence, 0 unavailable; each checks exact full /target read-back, source-image integrity, raw $MFT/$Bitmap equality across separate executor copies, and ntfsfix -n as a secondary diagnostic. A separate Windows acceptance run on 2026-11-18 exercised abrupt child-process termination, chkdsk /f and post-repair /scan. C6 remains partial because the available evidence does not establish native replay parity against the authoritative Windows checker for these synthetic fixtures."
     },
     {
       "id": "C7",
@@ -359,7 +359,7 @@
         "tests/test_writer_fault_coverage.py"
       ],
       "note": "Ext4 selected paths use e2fsck -fn plus read-back. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
-      "reproduced": "2026-11-25: the six-scenario NTFS external-checker run passed ntfsfix -n, raw $MFT/$Bitmap comparisons, source-integrity checks, and target read-back on disposable copies. ntfsfix remains secondary only; no authoritative Windows checker or every-operation coverage is claimed."
+      "reproduced": "2026-11-25: focused checker/read-back suite (176 passed) exercised ext4 e2fsck-backed paths and NTFS staged read-back contracts. ntfsfix remains secondary only; no authoritative Windows checker or every-operation coverage is claimed."
     },
     {
       "id": "D6",
