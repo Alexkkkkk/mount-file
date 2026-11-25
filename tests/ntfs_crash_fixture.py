@@ -24,7 +24,7 @@ from mountfile.ntfs_logfile import (
     NTFS_RESTART,
     read_logfile_stream,
 )
-from mountfile.ntfs_mft import NtfsRecordError, parse_ntfs_file_record_header
+from mountfile.ntfs_mft import NtfsRecordError
 from mountfile.ntfs_reader import (
     NtfsMetadataError,
     parse_ntfs_attribute_stream,
@@ -144,11 +144,11 @@ def _open_table(record_reference: int, lsn: int) -> bytes:
     return _table(0x28, bytes(entry))
 
 
-def _dirty_table(lsn: int, lcn: int) -> bytes:
+def _dirty_table(lsn: int, lcn: int, *, vcn: int = 0) -> bytes:
     # struct DIR_PAGE_ENTRY is 0x20 bytes plus one u64 per cluster-per-page.
     entry = bytearray(0x20 + 8 * 8)
     struct.pack_into("<III", entry, 4, 0, PAGE, 1)
-    struct.pack_into("<QQ", entry, 0x10, 0, lsn)
+    struct.pack_into("<QQ", entry, 0x10, vcn, lsn)
     struct.pack_into("<Q", entry, 0x20, lcn)
     return _table(0x20 + 8 * 8, bytes(entry))
 
@@ -239,7 +239,11 @@ def _read_run_data(
 
 
 def make_crash_fixture(
-    tmp_path: Path, *, active: bool = False, nonresident: bool = False
+    tmp_path: Path,
+    *,
+    active: bool = False,
+    nonresident: bool = False,
+    nonresident_update_offset: int = 0,
 ) -> CrashFixture:
     image = tmp_path / "crash.img"
     with open(image, "wb") as handle:
@@ -302,15 +306,37 @@ def make_crash_fixture(
                 0,
                 data_attribute.data_size,
             )
-            new_data = b"NEW!" + old_data[4:]
-            target_vcn = 0
-            cluster_off = 0
-            record_off = 0
-            update_lcns = (data_attribute.runs[0].lcn,)
+            update_end = nonresident_update_offset + NONRESIDENT_LOG_PATCH_SIZE
+            if nonresident_update_offset < 0 or update_end > len(old_data):
+                raise RuntimeError("nonresident fixture update exceeds the stream")
+            update_old_data = old_data[nonresident_update_offset:update_end]
+            update_new_data = b"NEW!" + update_old_data[4:]
+            new_data = (
+                old_data[:nonresident_update_offset]
+                + update_new_data
+                + old_data[update_end:]
+            )
+            target_vcn, within_cluster = divmod(
+                nonresident_update_offset, boot.cluster_size
+            )
+            cluster_off, record_off = divmod(within_cluster, SECTOR)
+            update_run = next(
+                (
+                    run
+                    for run in data_attribute.runs
+                    if run.vcn <= target_vcn < run.vcn + run.length
+                ),
+                None,
+            )
+            if update_run is None or update_run.lcn is None:
+                raise RuntimeError("nonresident fixture update has no allocated run")
+            update_lcns = (update_run.lcn + target_vcn - update_run.vcn,)
             update_op = 0x08
         else:
             old_data = bytes(data_attribute.resident_value or b"")
             new_data = b"NEW!" + old_data[4:]
+            update_old_data = old_data
+            update_new_data = new_data
             target_vcn = 0
             cluster_off = (record_number * boot.file_record_size) // SECTOR
             record_off = attribute_offset
@@ -376,7 +402,7 @@ def make_crash_fixture(
             _log_body(
                 0x1F,
                 0,
-                _dirty_table(0, dirty_lcn),
+                _dirty_table(target_vcn, dirty_lcn),
                 b"",
                 target_attr=0,
                 lcns=(),
@@ -446,7 +472,7 @@ def make_crash_fixture(
             _log_body(
                 0x1F,
                 0,
-                _dirty_table(update_lsn, dirty_lcn),
+                _dirty_table(update_lsn, dirty_lcn, vcn=target_vcn),
                 b"",
                 target_attr=0,
                 lcns=(),
@@ -462,10 +488,8 @@ def make_crash_fixture(
             _log_body(
                 update_op,
                 update_op,
-                # Keep the fixture's full logical contents for read-back
-                # expectations, but log only the partial nonresident patch.
-                new_data[:NONRESIDENT_LOG_PATCH_SIZE] if nonresident else new_data,
-                old_data[:NONRESIDENT_LOG_PATCH_SIZE] if nonresident else old_data,
+                update_new_data,
+                update_old_data,
                 target_attr=0,
                 lcns=update_lcns,
                 record_off=record_off,
@@ -519,6 +543,89 @@ def make_crash_fixture(
         restart_lsn=restart_lsn,
         update_lsn=update_lsn,
     )
+
+
+def add_structural_attribute_list(image: Path, record_number: int) -> None:
+    """Insert a bounded self-referencing-list descriptor for refusal tests.
+
+    The single list entry is structurally valid but intentionally incomplete;
+    production replay must refuse it rather than treating parser opt-in as
+    extension-record resolution.
+    """
+
+    profile = probe_ntfs_metadata(str(image), volume_size=os.path.getsize(image))
+    mft_data = [
+        attribute
+        for attribute in profile.attributes
+        if attribute.type_code == 0x80 and not attribute.name
+    ][0]
+    with open(image, "r+b") as handle:
+        mft = _Mft(handle, profile.boot, mft_data, base_offset=0)
+        header = mft.read_record(record_number)
+        attributes = parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
+        if any(attribute.type_code == 0x20 for attribute in attributes):
+            raise RuntimeError("fixture record already has an ATTRIBUTE_LIST")
+        if not attributes or header.next_attribute_id >= 0xFFFF:
+            raise RuntimeError("fixture record cannot accept an ATTRIBUTE_LIST")
+
+        referenced = attributes[0]
+        list_entry = bytearray(32)
+        struct.pack_into(
+            "<IHBBqQH",
+            list_entry,
+            0,
+            referenced.type_code,
+            len(list_entry),
+            0,
+            0,
+            referenced.lowest_vcn or 0,
+            record_number | (header.sequence_number << 48),
+            referenced.attribute_id,
+        )
+        attribute = bytearray(24 + len(list_entry))
+        struct.pack_into(
+            "<IIBBHHH",
+            attribute,
+            0,
+            0x20,
+            len(attribute),
+            0,
+            0,
+            0,
+            0,
+            header.next_attribute_id,
+        )
+        struct.pack_into("<IHH", attribute, 16, len(list_entry), 24, 0)
+        attribute[24:] = list_entry
+
+        position = header.first_attribute_offset
+        while position + 8 <= header.bytes_in_use:
+            type_code = struct.unpack_from("<I", header.fixed_record, position)[0]
+            if type_code == 0xFFFFFFFF or type_code > 0x20:
+                break
+            length = struct.unpack_from("<I", header.fixed_record, position + 4)[0]
+            if length < 24 or position + length > header.bytes_in_use:
+                raise RuntimeError("fixture record has invalid attribute bounds")
+            position += length
+
+        new_bytes_in_use = header.bytes_in_use + len(attribute)
+        if new_bytes_in_use > header.bytes_allocated:
+            raise RuntimeError("fixture record has no room for ATTRIBUTE_LIST")
+        fixed = bytearray(header.fixed_record)
+        fixed[position + len(attribute) : new_bytes_in_use] = fixed[
+            position : header.bytes_in_use
+        ]
+        fixed[position : position + len(attribute)] = attribute
+        struct.pack_into("<I", fixed, 0x18, new_bytes_in_use)
+        struct.pack_into("<H", fixed, 0x28, header.next_attribute_id + 1)
+        mft.write_record(record_number, bytes(fixed))
+
+        verified = mft.read_record(record_number)
+        parse_ntfs_attribute_stream(
+            verified,
+            allow_attribute_list=True,
+            allow_end_marker_padding=True,
+        )
 
 
 def mark_volume_dirty(image: Path) -> None:

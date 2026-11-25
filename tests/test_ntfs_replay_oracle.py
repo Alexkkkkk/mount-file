@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
-"""External-oracle acceptance for the NTFS replay executor (issue #530 P1).
+"""Synthetic-fixture acceptance checks for the NTFS replay executor (#530 P1).
 
 Every cataloged dirty fixture is replayed by the production executor and
-then checked against the external ``ntfsfix`` oracle and byte-level
-comparisons of the recovered ``$MFT`` / ``$Bitmap`` streams. These tests
-require the ntfs-3g tools and run in the Linux integration and nightly
-legs; elsewhere they skip - a skip is never reported as a pass.
+then checked with exact target read-back, ``ntfsfix -n`` as a secondary
+consistency checker, and byte comparisons between two runs of that executor.
+This is not an independent replay oracle or a cross-platform parity claim.
+These tests require ntfs-3g tools and run in Linux integration/nightly legs;
+elsewhere they skip - a skip is never reported as a pass.
 """
 
 import shutil

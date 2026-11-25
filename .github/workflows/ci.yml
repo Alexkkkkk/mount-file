@@ -173,6 +173,22 @@ jobs:
             --junitxml test-results.xml \
             --validate failure-matrix.json
 
+      - name: Emit Linux NTFS replay evidence
+        if: always() && runner.os == 'Linux' && matrix.python == '3.12'
+        run: >-
+          python scripts/ntfs_oracle_evidence.py
+          --repo-root .
+          --json-out ntfs-oracle-evidence.json
+
+      - name: Upload Linux NTFS replay evidence
+        if: always() && runner.os == 'Linux' && matrix.python == '3.12'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ntfs-replay-evidence-linux-${{ github.sha }}
+          path: ntfs-oracle-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload native read fixture evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
