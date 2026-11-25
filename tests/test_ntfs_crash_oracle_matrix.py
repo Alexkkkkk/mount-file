@@ -15,9 +15,10 @@ For each scenario, the test checks that:
 3. ``ntfsfix -n`` accepts the recovered image (exit 0) as secondary evidence;
 4. the volume dirty flag is cleared.
 
-Scenarios: committed resident update, committed nonresident update, an active
-(unfinished) transaction that must be undone, the combined active+nonresident
-case, and a dirty-bit-only volume whose ``$LogFile`` was never written.
+Scenarios include committed resident and nonresident updates, an active
+(unfinished) transaction that must be undone, a nonresident update crossing a
+cluster boundary in both redo and undo, and a dirty-bit-only volume whose
+``$LogFile`` was never written.
 """
 
 from __future__ import annotations
@@ -46,6 +47,8 @@ SCENARIOS = (
     "committed-nonresident",
     "active-transaction",
     "active-nonresident",
+    "committed-cross-cluster",
+    "active-cross-cluster",
     "dirty-bit-only",
 )
 
@@ -101,6 +104,15 @@ def _make_scenario(tmp_path: Path, scenario: str) -> tuple[Path, bytes]:
         "committed-nonresident": {"nonresident": True},
         "active-transaction": {"active": True},
         "active-nonresident": {"active": True, "nonresident": True},
+        "committed-cross-cluster": {
+            "nonresident": True,
+            "nonresident_update_offset": 4096 - 32,
+        },
+        "active-cross-cluster": {
+            "active": True,
+            "nonresident": True,
+            "nonresident_update_offset": 4096 - 32,
+        },
     }[scenario]
     fixture = make_crash_fixture(tmp_path, **kwargs)
     expected = fixture.old_data if scenario.startswith("active-") else fixture.new_data
@@ -141,9 +153,10 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
     assert result.changed is True, f"{scenario}: replay reported no change"
     assert result.volume_flags_after == 0, f"{scenario}: dirty flag survived"
     actual_data = _ntfscat(image)
-    assert (
-        actual_data[: len(expected_data)] == expected_data
-    ), f"{scenario}: replayed target data differs from its redo/undo expectation"
+    assert actual_data == expected_data, (
+        f"{scenario}: replayed full target stream differs from its "
+        "redo/undo expectation"
+    )
 
     # 3. ntfsfix -n is a secondary check, not an authoritative oracle.
     recovered = _ntfsfix_no(image)
@@ -157,7 +170,11 @@ def test_ntfs_crash_oracle_matrix(tmp_path, scenario):
 
     # 5. Replay is a repair, not a rewrite: an immediate second pass is a noop
     #    and keeps the auxiliary ntfsfix check green.
+    after_first_replay = _sha256(image)
     second = native_ntfs_recover(str(image))
     assert _ntfsfix_no(image).returncode == 0
-    assert second.redo_applied in (0, result.redo_applied)
+    assert second.changed is False
+    assert second.redo_applied == 0
+    assert second.undo_applied == 0
+    assert _sha256(image) == after_first_replay
     assert _volume_dirty_flag(image) & 0x0001 == 0

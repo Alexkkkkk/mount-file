@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+import mountfile.ntfs_replay as ntfs_replay_module
 from mountfile.ntfs_logfile import NtfsLogFileError, analyze_image, read_logfile_stream
 from mountfile.ntfs_mft import parse_ntfs_file_record_header
 from mountfile.ntfs_native_writer import (
@@ -42,6 +43,7 @@ from mountfile.ntfs_replay import (
     plan_ntfs_replay,
 )
 from tests.ntfs_crash_fixture import (
+    add_structural_attribute_list,
     corrupt_mft_mirror,
     make_crash_fixture,
     mark_volume_dirty,
@@ -231,6 +233,39 @@ def test_unsupported_operations_are_refused_before_writing(tmp_path, operation):
     with pytest.raises(NtfsReplayError, match="unsupported NTFS replay operations"):
         native_ntfs_recover(str(fixture.image))
     assert _sha256(fixture.image) == before
+
+
+@needs_ntfs
+@pytest.mark.parametrize(
+    ("fixture_kind", "record_target"),
+    [
+        ("dirty-volume", 3),
+        ("replay-target", None),
+        ("never-written-volume", 3),
+    ],
+)
+def test_attribute_list_is_refused_before_any_mutation(
+    tmp_path, monkeypatch, fixture_kind, record_target
+):
+    if fixture_kind == "never-written-volume":
+        image = _make_clean_ntfs(tmp_path)
+    else:
+        fixture = make_crash_fixture(tmp_path)
+        image = fixture.image
+        if record_target is None:
+            record_target = fixture.record_number
+    add_structural_attribute_list(image, record_target)
+    before = _sha256(image)
+    fault_events = []
+    monkeypatch.setattr(
+        ntfs_replay_module, "_fault", lambda event: fault_events.append(event)
+    )
+
+    with pytest.raises(NtfsReplayError, match=r"uses \$ATTRIBUTE_LIST"):
+        native_ntfs_recover(str(image))
+
+    assert _sha256(image) == before
+    assert "mutation:start" not in fault_events
 
 
 @needs_ntfs

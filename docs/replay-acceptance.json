@@ -224,9 +224,10 @@
       "title": "$ATTRIBUTE_LIST",
       "status": "blocked",
       "evidence": [
-        "mountfile/ntfs_replay.py"
+        "mountfile/ntfs_replay.py",
+        "tests/test_ntfs_replay.py"
       ],
-      "note": "отказ по проекту: NtfsReplayError при ATTR_ATTRIBUTE_LIST (строка 1168)"
+      "note": "Поддержка разрешения extension records, владельца атрибутов и read-back остаётся заблокирована. До мутации executor теперь fail-closed отказывает при $ATTRIBUTE_LIST в $Volume и в записях, затрагиваемых redo/undo; тесты проверяют сохранение SHA-256 входного образа, включая never-written $LogFile. Это не является положительной поддержкой $ATTRIBUTE_LIST."
     },
     {
       "id": "C5",
@@ -248,6 +249,7 @@
       "evidence": [
         "tests/ntfs_crash_fixture.py",
         "tests/test_ntfs_replay.py",
+        "tests/test_ntfs_crash_oracle_matrix.py",
         "tests/test_ntfs_writer_fault_coverage.py",
         "tests/test_ntfs_acceptance_independent_checker.py",
         "scripts/windows_ntfs_acceptance.ps1",
@@ -257,8 +259,8 @@
         "tests/test_ntfs_replay_oracle.py",
         "scripts/ntfs_oracle_evidence.py"
       ],
-      "note": "Оракул ntfsfix + побайтовое сравнение добавлены (#595). На 2026-11-22 у ntfs-windows-acceptance.yml 4 подряд успешных scheduled-ранов на main (последний 2026-11-21), при этом 4 из 5 ручных workflow_dispatch завершились провалом 2026-11-20 -- расписание зелёное, ручной запуск нет. Побайтовый replay-parity против chkdsk по-прежнему не заявляется: Windows checker inventory недоступен, реальных crash-captures нет.",
-      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 6 synthetic scenarios: 6 pass, 0 divergence, 0 unavailable; each checks exact full /target read-back, source-image integrity, raw $MFT/$Bitmap equality across separate executor copies, and ntfsfix -n as a secondary diagnostic. A separate Windows acceptance run on 2026-11-18 exercised abrupt child-process termination, chkdsk /f and post-repair /scan. C6 remains partial because the available evidence does not establish native replay parity against the authoritative Windows checker for these synthetic fixtures."
+      "note": "Linux synthetic-fixture checks use ntfsfix -n only as a secondary consistency checker and compare byte read-back plus outputs from two runs of the same executor; they are not an independent replay oracle. Windows VHDX/chkdsk acceptance remains separate evidence. No Windows-generated NTFS crash captures or native replay-parity against chkdsk are claimed.",
+      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 8 synthetic scenarios: 8 pass, 0 divergence, 0 unavailable. Added committed-redo and active-transaction-undo cases for a partial nonresident $DATA update crossing a 4 KiB cluster boundary; matrix tests require exact full-stream ntfscat read-back and an unchanged image hash on the second recovery pass. MFT/$Bitmap bytes are compared across separate copies replayed by the same executor, with ntfsfix -n as secondary evidence only. Dedicated Windows chkdsk acceptance is a separate workflow. C6 remains partial: these synthetic fixtures do not prove independent replay parity or replace native crash captures."
     },
     {
       "id": "C7",

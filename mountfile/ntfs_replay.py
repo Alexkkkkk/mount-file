@@ -1223,7 +1223,10 @@ def _clear_volume_dirty(mft: _Mft) -> tuple[int, int]:
     """Clear ``VOLUME_FLAG_DIRTY`` in ``$Volume`` and return (before, after)."""
 
     header = mft.read_record(MFT_RECORD_VOLUME)
-    attributes = parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
+    try:
+        attributes = parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
+    except NtfsMetadataError as exc:
+        raise NtfsReplayError(f"$Volume attributes are invalid: {exc}") from exc
     if any(attribute.type_code == ATTR_ATTRIBUTE_LIST for attribute in attributes):
         raise NtfsReplayError("$Volume uses $ATTRIBUTE_LIST; replay refuses it")
     matches = [
@@ -1328,6 +1331,82 @@ def _find_mft_data(profile) -> NtfsAttributeSummary:
     raise NtfsReplayError("$MFT has no bounded unnamed nonresident DATA stream")
 
 
+def _preflight_attribute_records(
+    image_path: str,
+    profile,
+    offset: int,
+    record_numbers: set[int],
+) -> None:
+    """Validate all touched FILE records before the first replay write.
+
+    Attribute-list parsing is intentionally not enabled here: the executor does
+    not yet retain extension-record ownership for write and read-back checks.
+    """
+
+    mft_data = _find_mft_data(profile)
+    records = set(record_numbers)
+    records.add(MFT_RECORD_VOLUME)
+    try:
+        with open(image_path, "rb") as handle:
+            mft = _Mft(handle, profile.boot, mft_data, base_offset=offset)
+            for record_number in sorted(records):
+                if record_number < 0 or record_number >= mft.record_count:
+                    raise NtfsReplayError(
+                        f"replay preflight target MFT record {record_number} "
+                        "is outside the existing $MFT DATA stream"
+                    )
+                header = mft.read_record(record_number)
+                try:
+                    parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
+                except NtfsMetadataError as exc:
+                    if "ATTRIBUTE_LIST" in str(exc):
+                        raise NtfsReplayError(
+                            f"MFT record {record_number} uses $ATTRIBUTE_LIST; "
+                            "extension-record resolution is unsupported and "
+                            f"replay refuses it before mutation: {exc}"
+                        ) from exc
+                    raise NtfsReplayError(
+                        f"MFT record {record_number} failed replay preflight: {exc}"
+                    ) from exc
+    except OSError as exc:
+        raise NtfsReplayError(
+            f"cannot read MFT during replay preflight: {exc}"
+        ) from exc
+
+
+def _planned_mft_targets(
+    tables: NtfsRestartTables,
+    plan: NtfsReplayPlan,
+    *,
+    cluster_size: int,
+    record_size: int,
+    record_count: int,
+) -> set[int]:
+    """Return every MFT record an accepted redo or undo may inspect or touch."""
+
+    targets: set[int] = set()
+    operations = [(record, record.redo_op) for record in plan.redo]
+    operations.extend((record, record.undo_op) for record in plan.undo)
+    for record, operation in operations:
+        entry = _open_attribute_entry(tables, record)
+        targets.add(entry.record_number)
+        if operation not in MFT_OPERATIONS:
+            continue
+        vbo = (record.target_vcn * cluster_size) + (record.cluster_off * SECTOR_SIZE)
+        if vbo < 0 or vbo % record_size:
+            raise NtfsReplayError(
+                f"log record 0x{record.lsn:x} targets an unaligned MFT record"
+            )
+        record_number = vbo // record_size
+        if record_number >= record_count:
+            raise NtfsReplayError(
+                f"log record 0x{record.lsn:x} targets MFT record {record_number}, "
+                "outside the existing $MFT DATA stream"
+            )
+        targets.add(record_number)
+    return targets
+
+
 def _repair_volume_markers(
     image_path: str, profile, offset: int
 ) -> tuple[int, int, bool]:
@@ -1363,6 +1442,10 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
         )
     except NtfsMetadataError as exc:
         raise NtfsReplayError(f"cannot inspect NTFS metadata: {exc}") from exc
+    # The marker-repair path also writes $Volume and $MFTMirr. Refuse an
+    # unresolved list on $Volume before taking any mutation path, including a
+    # clean or never-written $LogFile.
+    _preflight_attribute_records(image_path, profile, offset, set())
     try:
         stream, cluster_size, logfile = read_logfile_stream(
             image_path, offset=offset, validate_mirror=False
@@ -1435,6 +1518,14 @@ def native_ntfs_recover(image_path: str, offset: int = 0) -> NtfsReplayResult:
             + ", ".join(f"0x{op:02x}" for op in sorted(unsupported))
         )
     mft_data = _find_mft_data(profile)
+    target_records = _planned_mft_targets(
+        tables,
+        plan,
+        cluster_size=cluster_size,
+        record_size=profile.boot.file_record_size,
+        record_count=mft_data.data_size // profile.boot.file_record_size,
+    )
+    _preflight_attribute_records(image_path, profile, offset, target_records)
     redo_applied = 0
     undo_applied = 0
     records_written = 0

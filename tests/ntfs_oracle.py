@@ -2,13 +2,12 @@
 """Catalog of dirty NTFS crash fixtures with an external-oracle harness.
 
 Issue #530 (P1) / #595 requires at least five distinct dirty-fixture
-scenarios, a replay run of the production executor on each of them, and an
-independent oracle that is not our own parser.  The oracle here is the
-external ``ntfsfix`` tool plus byte-level comparison of the recovered
-``$MFT`` and ``$Bitmap`` streams between two independent executor runs.
-``chkdsk`` remains the authoritative Windows oracle; it is unavailable on
-Linux runners, which the evidence artifact reports honestly instead of
-claiming parity.
+scenarios and a replay run of the production executor on each of them. The
+Linux checks here combine exact ``ntfscat`` read-back, ``ntfsfix -n`` as a
+secondary consistency checker, and byte comparisons between two runs of the
+same executor. These checks are not an independent replay oracle and do not
+establish Windows/macOS parity. ``chkdsk`` remains the authoritative Windows
+checker; Linux evidence reports it as unavailable rather than claiming parity.
 """
 
 from __future__ import annotations
@@ -31,6 +30,16 @@ SCENARIOS: dict[str, dict[str, object]] = {
     "nonresident-commit": {"nonresident": True},
     # commit without checkpoint on a nonresident stream (compound)
     "nonresident-active": {"active": True, "nonresident": True},
+    # A partial nonresident update spans adjacent clusters; cover redo and undo.
+    "nonresident-cross-cluster-commit": {
+        "nonresident": True,
+        "nonresident_update_offset": 4096 - 32,
+    },
+    "nonresident-cross-cluster-active": {
+        "active": True,
+        "nonresident": True,
+        "nonresident_update_offset": 4096 - 32,
+    },
     # the volume dirty flag was set without a $LogFile flush
     "volume-dirty-no-log": {"dirty_only": True},
     # $MFTMirr record 0 destroyed on top of a committed update
@@ -95,6 +104,7 @@ def build_dirty_fixture(root: Path, scenario: str) -> DirtyFixture:
         work,
         active=bool(options.get("active")),
         nonresident=bool(options.get("nonresident")),
+        nonresident_update_offset=int(options.get("nonresident_update_offset", 0)),
     )
     if options.get("corrupt_mirror"):
         corrupt_mft_mirror(fixture.image)
