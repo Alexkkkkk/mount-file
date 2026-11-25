@@ -32,7 +32,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pytest pytest-timeout hypothesis
+          # tests/conftest.py imports FileLock at collection time; this workflow
+          # installs a focused test stack instead of the project's dev extra.
+          python -m pip install pytest pytest-timeout hypothesis 'filelock>=4.3'
       - name: Run failure-injection and process-kill matrix
         run: |
           python -m pytest \

@@ -53,7 +53,7 @@
     {
       "id": "D1",
       "status": "partial",
-      "blocker": "Матрица failure injection покрывает 20 объявленных клеток трёх семейств (ext4.write_file, ext4.create_file, ntfs.write_file); операции, которых gated writers не предоставляют (rename, unlink, truncate, setattr, mkdir, ntfs.create_file), объявлены отсутствующими.",
+      "blocker": "Native operation-phase matrix объявляет 21 фазу по трём семействам (ext4.write_file: 8, ext4.create_file: 5, ntfs.write_file: 8). D1 probe exercises only the publication primitive, not all writer phases; операции, которых gated writers не предоставляют (rename, unlink, truncate, setattr, mkdir, ntfs.create_file), объявлены отсутствующими.",
       "closes_when": "Для каждой новой поддержанной операции появляется своя матрица фаз, и ни одна заявленная операция не остаётся без клеток отказа.",
       "owner_issue": 387,
       "evidence": [
@@ -66,7 +66,7 @@
     {
       "id": "D3",
       "status": "partial",
-      "blocker": "Сохранение SHA-256 источника доказано для 20 объявленных клеток, для SIGKILL на девяти staged-writer границах и для каждой фазы ring-записи JBD2-транзакции (новый jbd2:*-seam), но не для всех клеток profile × operation × phase за пределами двух native writers.",
+      "blocker": "Сохранение SHA-256 источника заявлено в тестах для 21 объявленной native operation-phase клетки, для SIGKILL на девяти staged-writer границах и для каждой фазы ring-записи JBD2-транзакции (новый jbd2:*-seam), но D3 probe здесь exercises only the publication primitive; полная runtime profile × operation × phase матрица не доказана.",
       "closes_when": "Матрица хэшей строится из runtime-инструмента для всех профилей, и каждая клетка несёт наблюдаемое значение sha256 до/после.",
       "owner_issue": 387,
       "evidence": [
@@ -92,8 +92,8 @@
     {
       "id": "D6",
       "status": "partial",
-      "blocker": "Все 28 клеток profile × state имеют конкретные pytest-селекторы, но клетка зелёная только тогда, когда её узел реально выполнился в scheduled-прогоне; требование #387 о последовательных scheduled-прогонах с артефактами не выполнено.",
-      "closes_when": "Два последовательных scheduled-прогона публикуют артефакт с зелёными 28 клетками, и артефакт приложен к issue.",
+      "blocker": "failure_matrix_artifact.py emits 32 profile × operation × state cells. Cells without dedicated operation-specific selectors remain not_proven; in particular ext4.create_file currently has only an injected-exception selector. Green test execution requires the selected node to run, and the required consecutive scheduled artifacts are absent.",
+      "closes_when": "Каждая из 32 клеток имеет точный selector и две последовательных scheduled-прогона публикуют валидированные артефакты с зелёными применимыми клетками; артефакты приложены к issue.",
       "owner_issue": 387,
       "evidence": [
         ".github/workflows/replay-nightly.yml",

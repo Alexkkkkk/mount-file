@@ -1,8 +1,8 @@
 ## Сводка трекера — сгенерировано `scripts/tracker_status.py`
 
-Срез манифеста: `45c6e59` (v1.103.2), сверка `2026-11-25`. HEAD: `45c6e59` — Merge remote-tracking branch 'origin/main' into pr-662.
+Срез манифеста: `f7d834f` (v1.103.2), сверка `2026-11-25`. HEAD: `f7d834f` — fix(#510): harden extension-record preflight and matrix coverage (#664).
 
-⚠️ Ветка опережает `origin/main` на 8 коммит(ов): манифест может отставать.
+⚠️ Ветка опережает `origin/main` на 0 коммит(ов): манифест может отставать.
 
 ✅ 23 · ⚠️ 8 · ⬜ 0 · 🚫 1 · всего 32
 
@@ -39,9 +39,9 @@
 | C1 | Честный fail-closed по умолчанию | ✅ | `mountfile/ntfs_replay_executor.py`, `mountfile/ntfs_native_writer.py`, `tests/test_ntfs_acceptance_independent_checker.py` |
 | C2 | Парсер $LogFile | ✅ | `mountfile/ntfs_logfile.py`, `tests/test_ntfs_logfile_parser.py`, `tests/test_ntfs_logfile_draft_golden.py` |
 | C3 | Применение redo/undo к $MFT, $BITMAP, индексам | ⚠️ | `mountfile/ntfs_replay.py`, `mountfile/ntfs_replay_executor.py`, `tests/test_ntfs_bitmap_handler.py` |
-| C4 | $ATTRIBUTE_LIST | 🚫 | `mountfile/ntfs_replay.py` |
+| C4 | $ATTRIBUTE_LIST | 🚫 | `mountfile/ntfs_replay.py`, `tests/test_ntfs_replay.py` |
 | C5 | Safe MFT record allocation/reuse и $MFTMirr | ⚠️ | `mountfile/ntfs_mft_allocation.py`, `tests/test_ntfs_mft_allocation.py` |
-| C6 | Synthetic NTFS crash fixtures with auxiliary ntfsfix -n checks | ⚠️ | `tests/ntfs_crash_fixture.py`, `tests/test_ntfs_replay.py`, `tests/test_ntfs_writer_fault_coverage.py`, `tests/test_ntfs_acceptance_independent_checker.py`, `scripts/windows_ntfs_acceptance.ps1`, `.github/workflows/ntfs-windows-acceptance.yml`, `tests/test_windows_ntfs_acceptance_contract.py`, `tests/ntfs_oracle.py`, `tests/test_ntfs_replay_oracle.py`, `scripts/ntfs_oracle_evidence.py` |
+| C6 | Synthetic NTFS crash fixtures with auxiliary ntfsfix -n checks | ⚠️ | `tests/ntfs_crash_fixture.py`, `tests/test_ntfs_replay.py`, `tests/test_ntfs_crash_oracle_matrix.py`, `tests/test_ntfs_writer_fault_coverage.py`, `tests/test_ntfs_acceptance_independent_checker.py`, `scripts/windows_ntfs_acceptance.ps1`, `.github/workflows/ntfs-windows-acceptance.yml`, `tests/test_windows_ntfs_acceptance_contract.py`, `tests/ntfs_oracle.py`, `tests/test_ntfs_replay_oracle.py`, `scripts/ntfs_oracle_evidence.py` |
 | C7 | Quarantine при недоказанном replay | ✅ | `mountfile/ntfs_native_writer.py` |
 | C8 | MIT-совместимая граница с внешним dfir_ntfs | ✅ | `mountfile/experimental/dfir_ntfs_adapter.py` |
 
@@ -54,7 +54,7 @@
 | D3 | Hash preservation on mapped refusal and failure cases | ⚠️ | `mountfile/native_write.py`, `mountfile/ntfs_native_writer.py`, `tests/test_jbd2_malformed_journal_refusal.py`, `tests/test_ntfs_native_write_phase_injection.py`, `tests/test_ntfs_write_phase_injection.py`, `tests/test_ntfs_writer_fault_coverage.py`, `tests/test_writer_fault_injection_acceptance.py`, `tests/test_hash_preservation_matrix.py` |
 | D4 | Source identity / concurrent modification | ✅ | `mountfile/native_write.py`, `tests/test_ntfs_acceptance_independent_checker.py`, `tests/test_ext2_native.py` |
 | D5 | Independent checker + read-back после каждой поддержанной операции | ⚠️ | `tests/_independent_checkers.py`, `tests/test_checker_acceptance.py`, `mountfile/ntfs_native_writer.py`, `mountfile/native_write.py`, `tests/test_ntfs_transactional_readback.py`, `tests/test_native_journal_writers.py`, `tests/test_writer_fault_coverage.py` |
-| D6 | JUnit-backed profile × operation × failure-state artifact | ⚠️ | `.github/workflows/ci.yml`, `.github/workflows/failure-matrix.yml`, `.github/workflows/replay-nightly.yml`, `scripts/failure_matrix_artifact.py`, `scripts/replay_nightly_evidence.py`, `tests/test_failure_matrix_artifact.py`, `tests/test_writer_fault_injection_acceptance.py` |
+| D6 | JUnit-backed profile × operation × failure-state artifact | ⚠️ | `.github/workflows/ci.yml`, `.github/workflows/failure-matrix.yml`, `.github/workflows/replay-nightly.yml`, `scripts/failure_matrix_artifact.py`, `scripts/replay_nightly_evidence.py`, `tests/test_failure_matrix_artifact.py`, `tests/test_native_operation_matrix.py`, `tests/test_writer_fault_injection_acceptance.py` |
 | D7 | Unsupported-ячейки как typed refusals, а не скрытые skip | ✅ | `scripts/capability_conformance.py`, `tests/test_capability_conformance.py`, `tests/test_vfs_refusal_routing.py`, `tests/test_fat_capability_identity.py` |
 
 ### E. Паритет, платформы, статус
