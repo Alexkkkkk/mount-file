@@ -3,7 +3,7 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "59e9677",
+    "commit": "c852eda",
     "version": "1.103.2",
     "checked": "2026-11-25"
   },
@@ -295,7 +295,7 @@
         "tests/test_writer_fault_injection_acceptance.py"
       ],
       "note": "Per-step matrices now cover three operation families, not only write_file: ext4.write_file (8 phases), ext4.create_file (5), ntfs.write_file (7) -- 20 declared cells in tests/test_native_operation_matrix.py, run 2026-11-22: 9 passed. Operations the gated writers do not expose (ext4/ntfs rename, unlink, truncate, setattr, mkdir; ntfs create_file) are declared as absent rather than given unreachable cells, and a test fails if such a method ever appears without a matrix. JBD2 sub-phases stay covered by the checkpoint-executor boundaries (#578). Remaining: no cells exist for a native create/delete/rename path that does not exist.",
-      "reproduced": "2026-11-21: python -m pytest -q tests/test_writer_fault_injection_acceptance.py -> 40 passed (2 profiles x 2 refusal kinds x 9 declared boundaries + 4 retry cases); scripts/failure_matrix_artifact.py maps ext4 and ntfs injected_exception/cancellation cells."
+      "reproduced": "2026-11-25: focused native/failure suite (176 passed) plus ext4/NTFS process-kill coverage (60 passed); mapped ext4/NTFS short_write, injected_exception, process_kill and cancellation selectors were checked against JUnit XML. Unsupported operation families remain absent by design."
     },
     {
       "id": "D2",
@@ -329,7 +329,7 @@
         "tests/test_hash_preservation_matrix.py"
       ],
       "note": "Hash preservation is asserted per cell for the 20 declared operation x phase cells (three families: ext4.write_file, ext4.create_file, ntfs.write_file) plus SIGKILL across the 9 declared boundaries. It is still not demonstrated for every profile x operation x phase cell outside the two native writers, so D3 stays partial.",
-      "reproduced": "2026-11-21: tests/test_writer_fault_injection_acceptance.py -> 40 passed; SHA-256 of the source image unchanged for all 8 pre-publish boundaries on both profiles."
+      "reproduced": "2026-11-25: focused native/failure suite (176 passed) plus process-kill coverage (60 passed); hash-preservation and refusal/read-back assertions passed for the mapped ext4/NTFS native-writer cases. Full profile × operation × phase coverage remains unproven."
     },
     {
       "id": "D4",
@@ -359,7 +359,7 @@
         "tests/test_writer_fault_coverage.py"
       ],
       "note": "Ext4 selected paths use e2fsck -fn plus read-back. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "reproduced": "2026-11-25: focused checker/read-back suite (176 passed) exercised ext4 e2fsck-backed paths and NTFS staged read-back contracts. ntfsfix remains secondary only; no authoritative Windows checker or every-operation coverage is claimed."
     },
     {
       "id": "D6",
@@ -376,7 +376,7 @@
         "tests/test_writer_fault_injection_acceptance.py"
       ],
       "note": "Streak evidence is emitted as replay-nightly-streak.json. All 28 profile x state cells now have concrete test selectors: tests/test_fat1216_writer.py parametrizes short_write, cancellation and process_kill over both FAT widths, and scripts/failure_matrix_artifact.py maps fat12/fat16 short_write and cancellation, so the earlier \"3 cells unreachable by construction\" statement is obsolete. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "reproduced": "2026-11-25: failure_matrix_artifact.py consumed fresh JUnit XML from the focused suite; 6 mapped cells passed, 1 was partial until process-kill coverage was included, and the remaining unavailable-profile cells stayed not_proven. The artifact acceptance verdict remains not_claimed."
     },
     {
       "id": "D7",

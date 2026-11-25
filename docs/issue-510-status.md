@@ -1,10 +1,10 @@
 ## Сводка трекера — сгенерировано `scripts/tracker_status.py`
 
-Срез манифеста: `f61a47f` (v1.102.2), сверка `2026-11-23`. HEAD: `f61a47f` — feat(acceptance): строка C6-чекер-матрицы + контрактные тесты 1–9 (#632).
+Срез манифеста: `5a3c48c` (v1.103.2), сверка `2026-11-25`. HEAD: `5a3c48c` — Merge remote-tracking branch 'origin/main' into fix/issue-510-evidence-completion.
 
-⚠️ Ветка опережает `origin/main` на 0 коммит(ов): манифест может отставать.
+⚠️ Ветка опережает `origin/main` на 3 коммит(ов): манифест может отставать.
 
-✅ 22 · ⚠️ 9 · ⬜ 0 · 🚫 1 · всего 32
+✅ 23 · ⚠️ 8 · ⬜ 0 · 🚫 1 · всего 32
 
 > ✅ код и доказательство · ⚠️ код есть, независимое доказательство не воспроизведено · ⬜ не начато · 🚫 ждёт мержа или отказ по проекту
 
@@ -28,7 +28,7 @@
 | B5 | Sequence wrap / rollover | ✅ | `tests/test_ext3_jbd2_sequence_rollover.py`, `tests/test_jbd2_checkpoint.py` |
 | B6 | Transaction checksums (JBD2 csum) end-to-end | ✅ | `tests/test_jbd2_csum_replay.py`, `tests/test_ext4_jbd2_csum.py` |
 | B7 | Checkpointing внутри writer-цикла | ✅ | `mountfile/ext4_native_writer.py`, `mountfile/jbd2_checkpoint.py` |
-| B8 | Process-kill at selected ext4 staged-writer fault boundaries | ⚠️ | `mountfile/native_write.py`, `tests/test_ext4_writer_fault_coverage.py`, `tests/test_native_journal_writers.py` |
+| B8 | Process-kill на каждой фазе записи JBD2-транзакции в ring | ✅ | `mountfile/jbd2_ring_writer.py`, `mountfile/jbd2_checkpoint.py`, `mountfile/native_write.py`, `tests/test_jbd2_ring_phase_kill.py`, `tests/test_jbd2_checkpoint_fault_points.py`, `tests/test_ext4_writer_fault_coverage.py` |
 | B9 | Прерванный commit и malformed-journal | ✅ | `tests/test_jbd2_interrupted_commit.py`, `tests/test_jbd2_malformed_journal_refusal.py` |
 | B10 | e2fsck -f -n после каждой операции writer'а | ✅ | `mountfile/ext4_native_writer.py`, `tests/test_checker_acceptance.py` |
 
