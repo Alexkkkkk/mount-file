@@ -184,3 +184,47 @@ def test_manifest_slice_version_matches_tree_version():
         manifest, root, strict=True, git_state=("main", slice_block["commit"])
     )
     assert blocking == []
+
+
+def test_write_can_pin_branch_and_commit_instead_of_the_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A release branch is cut from main, so ``--write`` must not name itself.
+
+    The gate asserts ``slice.branch == "main"`` on every branch and resolves
+    ``slice.commit`` in a full checkout.  Writing HEAD naively recorded
+    ``automation/release-*`` and a commit that disappears when the release PR
+    is squash-merged, so the release branch could never satisfy its own gate.
+    """
+
+    root = _tree(tmp_path, "1.103.2")
+    manifest = _manifest(root, version="1.103.1", commit="5f44022")
+
+    argv = [
+        "--root",
+        str(root),
+        "--manifest",
+        str(manifest),
+        "--write",
+        "--branch",
+        "main",
+        "--commit",
+        "2304e21",
+        "--checked",
+        "2026-11-25",
+    ]
+    assert sync.main(argv) == 0
+
+    header = _read(manifest)["slice"]
+    assert header["branch"] == "main"
+    assert header["commit"] == "2304e21"
+    assert header["version"] == "1.103.2"
+
+    # ``tmp_path`` is not a git checkout, so resolve the pinned refs through
+    # the same monkeypatch seam the strict-mode test uses.
+    monkeypatch.setattr(sync, "_git_ok", lambda *_args: True)
+    monkeypatch.setattr(sync, "git_branches", lambda _root: ["main"])
+    blocking, advisory = sync.slice_drift(
+        _read(manifest), root, strict=True, git_state=("main", "2304e21")
+    )
+    assert blocking == []

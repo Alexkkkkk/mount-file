@@ -77,6 +77,11 @@ def test_release_calculation_is_gated_on_trusted_main_ci():
     assert "CI-Gate" in text
     assert '"$SHA" != "$TESTED_SHA"' in text
     assert 'scripts/stamp_version.py "$TAG" --check' in text
+    # A bump must regenerate every file that quotes the version, otherwise the
+    # release PR reddens test_replay_slice_sync and the strict slice gate.
+    assert "python scripts/generate_readme.py" in text
+    assert "scripts/replay_slice_sync.py --write --branch main" in text
+    assert "docs/replay-acceptance.json" in text
     assert "git push --force" not in text
 
 
