@@ -48,6 +48,7 @@ jobs:
             tests/test_ext2_native.py::test_native_ext2_rejects_concurrent_change_before_commit \
             tests/test_ntfs_writer_fault_coverage.py \
             tests/test_ext4_writer_fault_coverage.py \
+            tests/test_native_operation_matrix.py \
             tests/test_writer_fault_injection_acceptance.py \
             tests/test_ntfs_crash_oracle_matrix.py \
             tests/test_ntfs_replay.py \

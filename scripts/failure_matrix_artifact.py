@@ -380,14 +380,39 @@ CHECKERS: dict[str, dict[str, Any]] = {
 }
 
 PROFILE_OPERATIONS = {
-    "fat12": "write_file",
-    "fat16": "write_file",
-    "fat32": "write_file",
-    "ext2": "write_file",
-    "exfat": "write_file",
-    "ext4": "write_file",
-    "ntfs": "write_file",
+    "fat12": ("write_file",),
+    "fat16": ("write_file",),
+    "fat32": ("write_file",),
+    "ext2": ("write_file",),
+    "exfat": ("write_file",),
+    "ext4": ("write_file", "create_file"),
+    "ntfs": ("write_file",),
 }
+
+# Operation-specific selectors must never inherit another operation's cases.
+# The create_file phase test checks the SHA-256 and staging cleanup on every
+# declared injected-exception point; the other failure states remain not proven
+# until their own create_file-specific test selectors are declared.
+OPERATION_TESTS: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {
+    "ext4": {
+        "create_file": {
+            "injected_exception": [
+                _case(
+                    "test_native_operation_matrix",
+                    "test_ext4_create_file_phase_failure_preserves_the_image",
+                )
+            ],
+        },
+    },
+}
+
+
+def _operation_selectors(
+    profile: str, operation: str, state: str
+) -> list[dict[str, Any]]:
+    if operation == "write_file":
+        return TESTS.get(profile, {}).get(state, [])
+    return OPERATION_TESTS.get(profile, {}).get(operation, {}).get(state, [])
 
 
 def _collect_seams(repo_root: Path) -> list[str]:
@@ -483,9 +508,7 @@ def _matches(case: dict[str, str], selector: dict[str, Any]) -> bool:
     node_id = case["node_id"]
     if not all(fragment in node_id for fragment in selector.get("include", [])):
         return False
-    if any(fragment in node_id for fragment in selector.get("exclude", [])):
-        return False
-    return True
+    return not any(fragment in node_id for fragment in selector.get("exclude", []))
 
 
 def _evaluate(
@@ -502,7 +525,9 @@ def _evaluate(
     ]
     matched = [case for group in matched_by_selector for case in group]
     missing = [
-        selector for selector, group in zip(selectors, matched_by_selector) if not group
+        selector
+        for selector, group in zip(selectors, matched_by_selector, strict=True)
+        if not group
     ]
     evidence = sorted({case["node_id"] for case in matched})
     statuses = [case["status"] for case in matched]
@@ -525,23 +550,24 @@ def build_report(root: Path, junitxml: Path | None = None) -> dict[str, Any]:
     cases, junit_summary = _load_junit(junitxml)
     junit_status = junit_summary["status"] if junit_summary else "not_run"
     cells: list[dict[str, Any]] = []
-    for profile, operation in PROFILE_OPERATIONS.items():
-        for state in STATES:
-            selectors = TESTS.get(profile, {}).get(state, [])
-            execution = _evaluate(selectors, cases, junit_status)
-            cells.append(
-                {
-                    "profile": profile,
-                    "operation": operation,
-                    "state": state,
-                    "test_status": execution["status"],
-                    "test_evidence": execution["evidence"],
-                    "expected_test_selectors": selectors,
-                    "missing_test_selectors": execution["missing_selectors"],
-                    "checker_status": "not_claimed_per_cell",
-                    "acceptance_status": "not_accepted",
-                }
-            )
+    for profile, operations in PROFILE_OPERATIONS.items():
+        for operation in operations:
+            for state in STATES:
+                selectors = _operation_selectors(profile, operation, state)
+                execution = _evaluate(selectors, cases, junit_status)
+                cells.append(
+                    {
+                        "profile": profile,
+                        "operation": operation,
+                        "state": state,
+                        "test_status": execution["status"],
+                        "test_evidence": execution["evidence"],
+                        "expected_test_selectors": selectors,
+                        "missing_test_selectors": execution["missing_selectors"],
+                        "checker_status": "not_claimed_per_cell",
+                        "acceptance_status": "not_accepted",
+                    }
+                )
     checker_evidence: list[dict[str, Any]] = []
     for profile, spec in CHECKERS.items():
         result = _evaluate(spec["tests"], cases, junit_status)
@@ -609,9 +635,12 @@ def validate_report(
     blockers: list[str] = []
     if report.get("schema") != SCHEMA:
         blockers.append("schema")
-    if not isinstance(report.get("cells"), list) or len(report["cells"]) != len(
-        PROFILE_OPERATIONS
-    ) * len(STATES):
+    expected_cell_count = sum(
+        len(operations) for operations in PROFILE_OPERATIONS.values()
+    ) * len(STATES)
+    if not isinstance(report.get("cells"), list) or len(report["cells"]) != (
+        expected_cell_count
+    ):
         blockers.append("cells")
     try:
         expected = build_report(root, junitxml)

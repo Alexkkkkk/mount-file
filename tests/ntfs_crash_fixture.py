@@ -628,6 +628,28 @@ def add_structural_attribute_list(image: Path, record_number: int) -> None:
         )
 
 
+def mark_record_as_extension(
+    image: Path, record_number: int, *, base_record_number: int = 0
+) -> None:
+    """Set a valid nonzero base-file reference for extension-record refusal tests."""
+    if record_number == base_record_number:
+        raise ValueError("extension record cannot be its own base record")
+    profile = probe_ntfs_metadata(str(image), volume_size=os.path.getsize(image))
+    mft_data = [
+        attribute
+        for attribute in profile.attributes
+        if attribute.type_code == 0x80 and not attribute.name
+    ][0]
+    with open(image, "r+b") as handle:
+        mft = _Mft(handle, profile.boot, mft_data, base_offset=0)
+        base = mft.read_record(base_record_number)
+        extension = mft.read_record(record_number)
+        fixed = bytearray(extension.fixed_record)
+        reference = base_record_number | (base.sequence_number << 48)
+        struct.pack_into("<Q", fixed, 0x20, reference)
+        mft.write_record(record_number, bytes(fixed))
+
+
 def mark_volume_dirty(image: Path) -> None:
     """Set VOLUME_FLAG_DIRTY on a clean image without writing a $LogFile."""
 

@@ -8,11 +8,13 @@ from mountfile.ntfs_replay import NTFS_REPLAY_WRITE_FAULT_POINTS
 from scripts.failure_matrix_artifact import SCHEMA, build_report, validate_report
 
 
-def _cell(report, profile, state):
+def _cell(report, profile, state, operation="write_file"):
     return next(
         cell
         for cell in report["cells"]
-        if cell["profile"] == profile and cell["state"] == state
+        if cell["profile"] == profile
+        and cell["operation"] == operation
+        and cell["state"] == state
     )
 
 
@@ -49,11 +51,39 @@ def test_empty_evidence_files_do_not_create_coverage(tmp_path):
     assert report["verdict"] == "execution_recorded"
     assert report["acceptance"] == "not_claimed"
     assert report["production_ready"] is False
-    assert len(report["cells"]) == 28  # 7 profiles x 4 failure states
+    assert len(report["cells"]) == 32  # 8 profile-operation pairs x 4 states
     assert report["test_status_counts"]["passed"] == 0
     assert all(cell["test_status"] == "not_proven" for cell in report["cells"])
     assert all(cell["acceptance_status"] == "not_accepted" for cell in report["cells"])
     assert validate_report(report, tmp_path, junit)["verdict"] == "pass"
+
+
+def test_operation_specific_ext4_create_file_evidence_does_not_leak_from_write_file(
+    tmp_path,
+):
+    junit = _junit(
+        tmp_path / "create-file.xml",
+        [
+            (
+                "tests.test_native_operation_matrix",
+                "test_ext4_create_file_phase_failure_preserves_the_image[copy]",
+                "passed",
+            ),
+        ],
+    )
+
+    report = build_report(tmp_path, junit)
+
+    create = _cell(report, "ext4", "injected_exception", "create_file")
+    assert create["test_status"] == "passed"
+    assert create["test_evidence"] == [
+        "tests.test_native_operation_matrix::"
+        "test_ext4_create_file_phase_failure_preserves_the_image[copy]"
+    ]
+    assert _cell(report, "ext4", "short_write", "create_file")["test_status"] == (
+        "not_proven"
+    )
+    assert _cell(report, "ext4", "injected_exception")["test_status"] == ("not_proven")
 
 
 def test_only_matching_passed_node_ids_are_recorded(tmp_path):

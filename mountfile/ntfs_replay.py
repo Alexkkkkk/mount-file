@@ -1356,6 +1356,13 @@ def _preflight_attribute_records(
                         "is outside the existing $MFT DATA stream"
                     )
                 header = mft.read_record(record_number)
+                if header.base_file_reference:
+                    raise NtfsReplayError(
+                        f"MFT record {record_number} is an extension record "
+                        f"(base reference 0x{header.base_file_reference:016x}); "
+                        "extension-record ownership is unsupported and replay "
+                        "refuses it before mutation"
+                    )
                 try:
                     parse_ntfs_attribute_stream(header, allow_end_marker_padding=True)
                 except NtfsMetadataError as exc:

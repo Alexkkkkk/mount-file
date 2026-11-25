@@ -375,10 +375,11 @@
         "scripts/failure_matrix_artifact.py",
         "scripts/replay_nightly_evidence.py",
         "tests/test_failure_matrix_artifact.py",
+        "tests/test_native_operation_matrix.py",
         "tests/test_writer_fault_injection_acceptance.py"
       ],
-      "note": "Streak evidence is emitted as replay-nightly-streak.json. All 28 profile x state cells now have concrete test selectors: tests/test_fat1216_writer.py parametrizes short_write, cancellation and process_kill over both FAT widths, and scripts/failure_matrix_artifact.py maps fat12/fat16 short_write and cancellation, so the earlier \"3 cells unreachable by construction\" statement is obsolete. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
-      "reproduced": "2026-11-25: failure_matrix_artifact.py consumed fresh JUnit XML from the focused suite; 6 mapped cells passed, 1 was partial until process-kill coverage was included, and the remaining unavailable-profile cells stayed not_proven. The artifact acceptance verdict remains not_claimed."
+      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. The ext4.create_file injected-exception cell has its own selector; short_write, process_kill and cancellation remain not_proven until operation-specific tests are added. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
+      "reproduced": "2026-11-25: local focused JUnit run passed 191 D1/D3/D5/D6 and NTFS regression tests; the 32-cell artifact recomputed and validated against its JUnit source. ext4.create_file injected_exception was passed; its other three states remained not_proven. Synthetic NTFS oracle was pass, but Windows chkdsk parity and scheduled-run streak remain unavailable. The artifact acceptance verdict remains not_claimed."
     },
     {
       "id": "D7",
