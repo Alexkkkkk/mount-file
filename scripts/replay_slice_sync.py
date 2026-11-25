@@ -16,6 +16,7 @@ This script makes the header testable::
     python scripts/replay_slice_sync.py             # human report
     python scripts/replay_slice_sync.py --check     # exit 1 on a stale slice
     python scripts/replay_slice_sync.py --write     # rewrite the slice header
+    python scripts/replay_slice_sync.py --write --branch main   # pin the branch
     python scripts/replay_slice_sync.py --json      # machine output
 
 Scope stays deliberately narrow: item statuses are owned by
@@ -268,6 +269,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     mode.add_argument("--check", action="store_true", help="exit 1, если срез устарел")
     mode.add_argument("--write", action="store_true", help="переписать секцию slice")
     parser.add_argument(
+        "--branch",
+        default=None,
+        help=(
+            "ветка, которую должен называть срез при --write "
+            "(по умолчанию - ветка текущего checkout)"
+        ),
+    )
+    parser.add_argument(
+        "--commit",
+        default=None,
+        help=(
+            "коммит, который должен называть срез при --write "
+            "(по умолчанию - HEAD; в релизном PR передаётся merge-base с main, "
+            "потому что HEAD релизной ветки исчезает при слиянии)"
+        ),
+    )
+    parser.add_argument(
         "--checked", default=None, help="дата сверки для --write (YYYY-MM-DD)"
     )
     parser.add_argument(
@@ -288,7 +306,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not isinstance(manifest.get("slice"), dict):
             raise SliceError(f"в манифесте нет секции slice: {manifest_path}")
         if args.write:
-            manifest = sync_slice(manifest, root, checked=args.checked)
+            # ``--branch`` pins the branch the header names.  A release branch
+            # is cut from main, so the automation must keep the header pointing
+            # at main: the gate test asserts slice.branch == "main" on every
+            # branch, and the slice documents the tree main carries.
+            git_state = None
+            if args.branch or args.commit:
+                current_branch, current_commit = git_slice(root)
+                git_state = (
+                    args.branch or current_branch,
+                    args.commit or current_commit,
+                )
+            manifest = sync_slice(
+                manifest, root, checked=args.checked, git_state=git_state
+            )
             dump_manifest(manifest, manifest_path)
         blocking, advisory = slice_drift(manifest, root, strict=args.strict)
     except SliceError as exc:

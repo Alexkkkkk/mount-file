@@ -125,11 +125,23 @@ jobs:
             echo "Release branch $BRANCH exists; leaving it unchanged."
           else
             python scripts/stamp_version.py "$TAG"
+            # A version bump is not only two files. README.md embeds the
+            # package version in its generated status block and the #510
+            # tracker slice in docs/replay-acceptance.json names the tree
+            # version, so a bump that leaves them behind turns every release
+            # PR red on tests/test_replay_slice_sync.py and the strict slice
+            # gate. Regenerate both from the stamped tree instead of editing
+            # them by hand.
+            python scripts/generate_readme.py
+            python scripts/replay_slice_sync.py --write --branch main \
+              --commit "$(git rev-parse --short=7 origin/main)"
+            python scripts/replay_slice_sync.py --check --strict
             python tools/mfsync.py check --strict
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git switch -c "$BRANCH"
-            git add mountfile/__init__.py pyproject.toml
+            git add mountfile/__init__.py pyproject.toml README.md \
+              docs/replay-acceptance.json
             git commit -m "chore(release): synchronize $VERSION"
             # Token comes from the runner environment, never from a URL.
             git -c http.https://github.com/.extraheader= -c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' push -u origin "$BRANCH"
