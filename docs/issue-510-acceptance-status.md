@@ -2,24 +2,25 @@
 
 # Fresh evidence run: 2026-11-25
 
-The current tree is `main@c852eda` (`v1.103.2`). The focused acceptance suite was
-run in the sandbox with Python 3.12.3 and the locked development environment:
+The current tree is `fix/issue-510-evidence-completion@5a3c48c`, merged with
+`origin/main@47068b6` (`v1.103.2`). The focused native/checker acceptance suite
+was run in the sandbox with Python 3.12.3 and the locked development environment:
 
 ```text
-324 passed, 228 skipped in 27.83s
+176 passed in 17.26s
 ```
 
-The checker-backed subset was then rerun after installing `ntfs-3g`,
-`dosfstools`, and `exfatprogs`:
+The dedicated ext4/NTFS process-kill coverage was also run:
 
 ```text
-142 passed, 144 skipped in 35.74s
+60 passed in 15.44s
 ```
 
-The skips are preserved as evidence boundaries, not converted to passes: 132
-acceptance cells are `not_proven`, 6 are `blocked`, and 6 are
-`not_applicable`. No authoritative Windows/macOS parity oracle was available in
-this Linux sandbox. The repository gates also pass:
+The fresh JUnit-backed failure-matrix artifact records six mapped cells as
+passed; profile/state cells not present in this focused run remain
+`not_proven`, and the artifact acceptance verdict remains `not_claimed`.
+No authoritative Windows/macOS parity oracle was available in this Linux
+sandbox. The repository gates also pass:
 `replay_acceptance_status.py --check`, `tracker_status.py --check`, and
 `replay_slice_sync.py --strict`.
 
