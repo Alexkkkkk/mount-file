@@ -37,6 +37,7 @@ SECTOR = 512
 PAGE = 4096
 FIRST_PAGE = 0x22 * PAGE
 MFT_RECORD_SIZE = 1024  # mkntfs default; checked against boot.file_record_size
+NONRESIDENT_LOG_PATCH_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -294,7 +295,13 @@ def make_crash_fixture(
                 raise RuntimeError(
                     "fixture requested nonresident but $DATA is resident"
                 )
-            old_data = _read_run_data(handle, data_attribute, boot.cluster_size, 0, 64)
+            old_data = _read_run_data(
+                handle,
+                data_attribute,
+                boot.cluster_size,
+                0,
+                data_attribute.data_size,
+            )
             new_data = b"NEW!" + old_data[4:]
             target_vcn = 0
             cluster_off = 0
@@ -455,8 +462,10 @@ def make_crash_fixture(
             _log_body(
                 update_op,
                 update_op,
-                new_data,
-                old_data,
+                # Keep the fixture's full logical contents for read-back
+                # expectations, but log only the partial nonresident patch.
+                new_data[:NONRESIDENT_LOG_PATCH_SIZE] if nonresident else new_data,
+                old_data[:NONRESIDENT_LOG_PATCH_SIZE] if nonresident else old_data,
                 target_attr=0,
                 lcns=update_lcns,
                 record_off=record_off,

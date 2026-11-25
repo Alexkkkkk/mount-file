@@ -6,7 +6,10 @@ from mountfile import optional_backends
 def test_inventory_exposes_existing_ext4_binding_without_claiming_ntfs_replay():
     report = optional_backends.inventory()
 
-    assert report["libext2fs"].capability == "native-ext4-write-gated"
+    if report["libext2fs"].available:
+        assert report["libext2fs"].capability == "native-ext4-write-gated"
+    else:
+        assert report["libext2fs"].capability == "unavailable"
     assert report["pyfsntfs"].capability in {
         "read-only-independent-checker-candidate",
         "unavailable",
@@ -26,6 +29,16 @@ def test_missing_optional_modules_are_typed_as_unavailable(monkeypatch):
     assert status.available is False
     assert status.capability == "unavailable"
     assert "not installed" in status.detail
+
+
+def test_missing_libext2fs_is_typed_as_unavailable(monkeypatch):
+    monkeypatch.setattr(optional_backends.ctypes.util, "find_library", lambda _: None)
+
+    status = optional_backends.inventory()["libext2fs"]
+
+    assert status.available is False
+    assert status.capability == "unavailable"
+    assert "install" in status.detail
 
 
 def test_inventory_is_json_serializable():

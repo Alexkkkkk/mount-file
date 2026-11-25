@@ -46,6 +46,7 @@ class DirtyFixture:
     record_size: int
     old_data: bytes
     new_data: bytes
+    active: bool = False
 
 
 def _sha256(path: Path) -> str:
@@ -88,6 +89,7 @@ def build_dirty_fixture(root: Path, scenario: str) -> DirtyFixture:
             record_size=1024,
             old_data=payload.read_bytes(),
             new_data=payload.read_bytes(),
+            active=False,
         )
     fixture = make_crash_fixture(
         work,
@@ -103,6 +105,7 @@ def build_dirty_fixture(root: Path, scenario: str) -> DirtyFixture:
         record_size=fixture.record_size,
         old_data=fixture.old_data,
         new_data=fixture.new_data,
+        active=bool(options.get("active")),
     )
 
 
@@ -145,6 +148,33 @@ def _source_integrity(image: Path, source_hash_before: str) -> dict[str, object]
     }
 
 
+def _target_content_consistent(
+    actual: bytes | None, expected: bytes, *, returncode: int = 0
+) -> bool | None:
+    """Return exact read-back equality, or ``None`` when reading failed."""
+    if actual is None or returncode != 0:
+        return None
+    return actual == expected
+
+
+def _oracle_verdict(
+    *,
+    mft_bytes_equal: bool,
+    bitmap_equal: bool,
+    clean: bool,
+    content_correct: bool | None,
+    source_untouched: bool,
+) -> str:
+    """Fail closed unless every required byte-level check was established."""
+    if not source_untouched:
+        return "divergence"
+    if content_correct is None:
+        return "unavailable"
+    if mft_bytes_equal and bitmap_equal and clean and content_correct:
+        return "pass"
+    return "divergence"
+
+
 def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
     """Replay the fixture twice independently and compare with the oracle.
 
@@ -177,10 +207,21 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         written = subprocess.run(
             ["ntfscat", str(ours), "/target"], capture_output=True, check=False
         )
-        if written.returncode == 0:
-            content_correct = written.stdout.startswith(fixture.new_data[:4])
+        expected = fixture.old_data if fixture.active else fixture.new_data
+        content_correct = _target_content_consistent(
+            written.stdout, expected, returncode=written.returncode
+        )
     except OSError:
         content_correct = None
+
+    source_integrity = _source_integrity(fixture.image, source_hash_before)
+    verdict = _oracle_verdict(
+        mft_bytes_equal=mft_bytes_equal,
+        bitmap_equal=bitmap_equal,
+        clean=clean,
+        content_correct=content_correct,
+        source_untouched=source_integrity["source_untouched"] is True,
+    )
 
     return {
         "scenario": fixture.scenario,
@@ -194,11 +235,9 @@ def run_oracle(fixture: DirtyFixture, work: Path) -> dict[str, object]:
         # executor call and compared afterwards.  A previous revision
         # short-circuited this comparison with a constant-true expression,
         # a tautology that could never report tampering.
-        **_source_integrity(fixture.image, source_hash_before),
+        **source_integrity,
         "replay_mutated_copy": _sha256(ours) != source_hash_before,
-        "verdict": (
-            "pass" if (mft_bytes_equal and bitmap_equal and clean) else "divergence"
-        ),
+        "verdict": verdict,
     }
 
 

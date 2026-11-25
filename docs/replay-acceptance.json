@@ -258,7 +258,7 @@
         "scripts/ntfs_oracle_evidence.py"
       ],
       "note": "Оракул ntfsfix + побайтовое сравнение добавлены (#595). На 2026-11-22 у ntfs-windows-acceptance.yml 4 подряд успешных scheduled-ранов на main (последний 2026-11-21), при этом 4 из 5 ручных workflow_dispatch завершились провалом 2026-11-20 -- расписание зелёное, ручной запуск нет. Побайтовый replay-parity против chkdsk по-прежнему не заявляется: Windows checker inventory недоступен, реальных crash-captures нет.",
-      "reproduced": "2026-11-18: Windows run 44232313344 on windows-latest passed the abrupt child-process kill fixture, raw crash snapshot, chkdsk /f repair, raw repaired snapshot, exact $MFT/$BITMAP comparator, clean post-repair /scan and unchanged sentinel SHA-256. The focused contract/nightly-evidence tests passed locally. C6 remains partial only for the still-unimplemented native replay-parity oracle."
+      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 6 synthetic scenarios: 6 pass, 0 divergence, 0 unavailable; each checks exact full /target read-back, source-image integrity, raw $MFT/$Bitmap equality across separate executor copies, and ntfsfix -n as a secondary diagnostic. A separate Windows acceptance run on 2026-11-18 exercised abrupt child-process termination, chkdsk /f and post-repair /scan. C6 remains partial because the available evidence does not establish native replay parity against the authoritative Windows checker for these synthetic fixtures."
     },
     {
       "id": "C7",

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -17,12 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
     """Build/install a wheel without index access and exercise its real CLI."""
-    # --no-build-isolation builds in this interpreter, so a venv created without
-    # setuptools (Python 3.12 does not install it by default) cannot build.
     pytest.importorskip(
         "setuptools",
-        reason="setuptools is required for an offline --no-build-isolation wheel",
+        reason="setuptools is required for the offline wheel smoke test",
     )
+    pip_available = importlib.util.find_spec("pip") is not None
+    uv = shutil.which("uv")
+    if not pip_available and uv is None:
+        pytest.skip("neither pip nor uv is available for the offline wheel smoke test")
     source = tmp_path / "source"
     source.mkdir()
     shutil.copy2(ROOT / "pyproject.toml", source / "pyproject.toml")
@@ -40,7 +43,7 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
 
     wheels = tmp_path / "wheels"
     wheels.mkdir()
-    build = subprocess.run(
+    build_command = (
         [
             sys.executable,
             "-m",
@@ -52,7 +55,21 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
             "--wheel-dir",
             str(wheels),
             ".",
-        ],
+        ]
+        if pip_available
+        else [
+            uv,
+            "build",
+            "--wheel",
+            "--no-index",
+            "--no-build-isolation",
+            "--out-dir",
+            str(wheels),
+            ".",
+        ]
+    )
+    build = subprocess.run(
+        build_command,
         cwd=source,
         capture_output=True,
         text=True,
@@ -90,7 +107,7 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
         )
 
     target = tmp_path / "installed"
-    install = subprocess.run(
+    install_command = (
         [
             sys.executable,
             "-m",
@@ -101,7 +118,21 @@ def test_wheel_exposes_supported_entrypoint_and_windows_resource(tmp_path):
             "--target",
             str(target),
             str(wheel_path),
-        ],
+        ]
+        if pip_available
+        else [
+            uv,
+            "pip",
+            "install",
+            "--no-index",
+            "--no-deps",
+            "--target",
+            str(target),
+            str(wheel_path),
+        ]
+    )
+    install = subprocess.run(
+        install_command,
         cwd=tmp_path,
         capture_output=True,
         text=True,
