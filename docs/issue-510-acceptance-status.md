@@ -1,5 +1,33 @@
 # Issue #510 acceptance status
 
+# Fresh evidence run: 2026-11-25
+
+The current tree is `main@c852eda` (`v1.103.2`). The focused acceptance suite was
+run in the sandbox with Python 3.12.3 and the locked development environment:
+
+```text
+324 passed, 228 skipped in 27.83s
+```
+
+The checker-backed subset was then rerun after installing `ntfs-3g`,
+`dosfstools`, and `exfatprogs`:
+
+```text
+142 passed, 144 skipped in 35.74s
+```
+
+The skips are preserved as evidence boundaries, not converted to passes: 132
+acceptance cells are `not_proven`, 6 are `blocked`, and 6 are
+`not_applicable`. No authoritative Windows/macOS parity oracle was available in
+this Linux sandbox. The repository gates also pass:
+`replay_acceptance_status.py --check`, `tracker_status.py --check`, and
+`replay_slice_sync.py --strict`.
+
+The tracker is intentionally open again because the manifest still contains
+eight `partial` items (`C3`, `C5`, `C6`, `D1`, `D3`, `D5`, `D6`, `E1`) and one
+project-blocked item (`C4`). Product-facing ext4/NTFS write support remains
+unclaimed until those independent evidence gaps are closed.
+
 # Historical status snapshot: 2026-11-17
 
 This follow-up started from `main@9769bab`. The full local suite on code head `57b3c77` completed with **2763 passed, 99 skipped** in 225.59s; the focused writer/checker/failure suite reported **97 passed, 3 skipped**. Skips were for optional/platform tools unavailable in the sandbox. Earlier per-subsystem counts below are historical unless explicitly tied to this run. This document distinguishes code/tests from external acceptance evidence. Nothing here declares ext4 or NTFS product writes supported.
