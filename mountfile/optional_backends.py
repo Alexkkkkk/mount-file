@@ -72,15 +72,19 @@ def inventory() -> dict[str, BackendStatus]:
     replay implementation.  The inventory therefore never reports them as a
     product ``write/replay`` backend.
     """
+    libext2fs_path = ctypes.util.find_library("ext2fs")
+    libext2fs_available = libext2fs_path is not None
     return {
         "libext2fs": BackendStatus(
             name="libext2fs",
             kind="shared-library",
-            available=ctypes.util.find_library("ext2fs") is not None,
-            capability="native-ext4-write-gated",
+            available=libext2fs_available,
+            capability=(
+                "native-ext4-write-gated" if libext2fs_available else "unavailable"
+            ),
             detail=(
-                "used by mountfile.ext4_native_writer through ctypes"
-                if ctypes.util.find_library("ext2fs")
+                f"{libext2fs_path}: used by mountfile.ext4_native_writer through ctypes"
+                if libext2fs_available
                 else "install the e2fsprogs libext2fs runtime"
             ),
             license="LGPL-2.1-or-later",

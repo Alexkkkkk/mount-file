@@ -23,6 +23,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 SCHEMA = "mountfile.ntfs-oracle-evidence/v1"
 
 
+def _aggregate_verdict(scenarios: list[dict[str, object]]) -> str:
+    """Pass only when at least five scenarios ran and every one passed."""
+    if any(scenario["verdict"] == "divergence" for scenario in scenarios):
+        return "blocked"
+    if len(scenarios) >= 5 and all(
+        scenario["verdict"] == "pass" for scenario in scenarios
+    ):
+        return "pass"
+    return "unavailable"
+
+
 def build_evidence(root: Path) -> dict[str, object]:
     tools_present = all(
         shutil.which(tool) for tool in ("mkntfs", "ntfscp", "ntfsfix", "ntfscat")
@@ -76,11 +87,7 @@ def build_evidence(root: Path) -> dict[str, object]:
         "unavailable_scenarios": unavailable,
         "skipped_cells": 0,
         "scenarios": scenarios,
-        "verdict": (
-            "pass"
-            if passed >= 5 and diverged == 0
-            else ("blocked" if diverged else "unavailable")
-        ),
+        "verdict": _aggregate_verdict(scenarios),
     }
 
 
