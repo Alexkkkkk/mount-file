@@ -1,8 +1,8 @@
 ## Сводка трекера — сгенерировано `scripts/tracker_status.py`
 
-Срез манифеста: `5a3c48c` (v1.103.2), сверка `2026-11-25`. HEAD: `5a3c48c` — Merge remote-tracking branch 'origin/main' into fix/issue-510-evidence-completion.
+Срез манифеста: `45c6e59` (v1.103.2), сверка `2026-11-25`. HEAD: `45c6e59` — Merge remote-tracking branch 'origin/main' into pr-662.
 
-⚠️ Ветка опережает `origin/main` на 3 коммит(ов): манифест может отставать.
+⚠️ Ветка опережает `origin/main` на 8 коммит(ов): манифест может отставать.
 
 ✅ 23 · ⚠️ 8 · ⬜ 0 · 🚫 1 · всего 32
 
