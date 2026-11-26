@@ -3,9 +3,9 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "c852eda",
+    "commit": "adfacfb96b9e7b1245a3de7151794970fbe20280",
     "version": "1.103.2",
-    "checked": "2026-11-25"
+    "checked": "2026-11-26"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -238,7 +238,7 @@
         "mountfile/ntfs_mft_allocation.py",
         "tests/test_ntfs_mft_allocation.py"
       ],
-      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
+      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
       "reproduced": "2026-11-21 (PR feat/issue-510-c5-wiring): pytest tests/test_ntfs_mft_wiring.py tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft.py tests/test_ntfs_replay_executor.py tests/test_ntfs_logfile_parser.py tests/test_ntfs_writer_fault_coverage.py — зелёный прогон; scripts/replay_acceptance_status.py --check — расхождений нет"
     },
     {
@@ -296,7 +296,7 @@
         "tests/test_ntfs_write_phase_injection.py",
         "tests/test_writer_fault_injection_acceptance.py"
       ],
-      "note": "Per-step matrices now cover three operation families, not only write_file: ext4.write_file (8 phases), ext4.create_file (5), ntfs.write_file (7) -- 20 declared cells in tests/test_native_operation_matrix.py, run 2026-11-22: 9 passed. Operations the gated writers do not expose (ext4/ntfs rename, unlink, truncate, setattr, mkdir; ntfs create_file) are declared as absent rather than given unreachable cells, and a test fails if such a method ever appears without a matrix. JBD2 sub-phases stay covered by the checkpoint-executor boundaries (#578). Remaining: no cells exist for a native create/delete/rename path that does not exist.",
+      "note": "Per-step matrices cover three operation families, not only write_file: ext4.write_file (8 phases), ext4.create_file (5), ntfs.write_file (8) -- 21 declared phase cells in tests/test_native_operation_matrix.py. A Linux failure-matrix run previously recorded 9 passed for its selected coverage; this is not complete platform or scheduled-run evidence. Operations the gated writers do not expose (ext4/ntfs rename, unlink, truncate, setattr, mkdir; ntfs create_file) are declared as absent rather than given unreachable cells, and a test fails if such a method ever appears without a matrix. JBD2 sub-phases stay covered by the checkpoint-executor boundaries (#578). Remaining: no cells exist for a native create/delete/rename path that does not exist.",
       "reproduced": "2026-11-25: focused native/failure suite (176 passed) plus ext4/NTFS process-kill coverage (60 passed); mapped ext4/NTFS short_write, injected_exception, process_kill and cancellation selectors were checked against JUnit XML. Unsupported operation families remain absent by design."
     },
     {
@@ -330,7 +330,7 @@
         "tests/test_writer_fault_injection_acceptance.py",
         "tests/test_hash_preservation_matrix.py"
       ],
-      "note": "Hash preservation is asserted per cell for the 20 declared operation x phase cells (three families: ext4.write_file, ext4.create_file, ntfs.write_file) plus SIGKILL across the 9 declared boundaries. It is still not demonstrated for every profile x operation x phase cell outside the two native writers, so D3 stays partial.",
+      "note": "Hash preservation is asserted per cell for the 21 declared operation x phase cells (three families: ext4.write_file, ext4.create_file, ntfs.write_file) plus SIGKILL across the 9 declared boundaries. It is still not demonstrated for every profile x operation x phase cell outside the two native writers, so D3 stays partial.",
       "reproduced": "2026-11-25: focused native/failure suite (176 passed) plus process-kill coverage (60 passed); hash-preservation and refusal/read-back assertions passed for the mapped ext4/NTFS native-writer cases. Full profile × operation × phase coverage remains unproven."
     },
     {

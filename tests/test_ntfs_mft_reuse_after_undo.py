@@ -31,7 +31,6 @@ import struct
 
 import pytest
 
-import mountfile.ntfs_replay_executor as replay_executor
 from mountfile.ntfs_logfile import NtfsLogFileAnalysis, ReplayStep, ReplayTarget
 from mountfile.ntfs_mft_allocation import (
     MftAllocationCandidate,
@@ -129,6 +128,7 @@ def _publish(image, payload: bytes, free: bytes, mirror: bytes) -> None:
         str(image),
         _analysis(_allocation_step(payload)),
         _resolver,
+        verify=lambda _staged: True,  # synthetic fixture; not independent checker evidence
         mft_candidate_provider=lambda step: candidate,
     )
 

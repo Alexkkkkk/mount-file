@@ -155,6 +155,9 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then
+            python scripts/windows_checker_inventory.py --out windows-checker-inventory.json
+          fi
           python scripts/platform_benchmark_provenance.py --junitxml test-results.xml --json-out platform-benchmark-provenance.json
           python scripts/platform_benchmark_provenance.py --validate platform-benchmark-provenance.json --json-out platform-benchmark-provenance-validation.json
           python scripts/native_read_evidence.py \
@@ -212,6 +215,7 @@ jobs:
             benchmark-provenance.json
             checker-matrix.json
             failure-matrix.json
+            windows-checker-inventory.json
           if-no-files-found: ignore
           retention-days: 14
 

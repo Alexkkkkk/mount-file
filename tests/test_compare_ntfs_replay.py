@@ -32,8 +32,19 @@ def _no_restart_replay():
     }
 
 
-def test_all_streams_identical_is_a_pass():
-    assert replay_comparison_status(_no_restart_replay(), _streams()) == "pass"
+def test_no_restart_page_is_not_applicable_even_when_all_streams_match():
+    assert replay_comparison_status(_no_restart_replay(), _streams()) == (
+        "not_applicable"
+    )
+
+
+def test_replay_with_records_and_identical_streams_is_a_pass():
+    replay = _no_restart_replay()
+    replay["clean_restart_pages"] = 1
+    replay["records_written"] = 1
+    replay["redo_applied"] = 1
+    replay["notes"] = ["replayed one committed record"]
+    assert replay_comparison_status(replay, _streams()) == "pass"
 
 
 def test_no_restart_page_log_is_typed_not_applicable_not_mismatch():

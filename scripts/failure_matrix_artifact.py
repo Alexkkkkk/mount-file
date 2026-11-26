@@ -162,13 +162,15 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
         "short_write": [
             _case(
                 "test_native_writer_failure_matrix",
-                "test_fat32_short_write_and_cancellation_restore_selected_extent",
+                "test_fat32_staged_failure_preserves_full_image_hash",
+                include=("[short_write]",),
             )
         ],
         "injected_exception": [
             _case(
                 "test_native_writer_failure_matrix",
-                "test_fat32_injected_exception_and_external_suffix_change_are_bounded",
+                "test_fat32_staged_failure_preserves_full_image_hash",
+                include=("[injected_exception]",),
             )
         ],
         "process_kill": [
@@ -180,7 +182,8 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
         "cancellation": [
             _case(
                 "test_native_writer_failure_matrix",
-                "test_fat32_short_write_and_cancellation_restore_selected_extent",
+                "test_fat32_staged_failure_preserves_full_image_hash",
+                include=("[cancellation]",),
             )
         ],
     },

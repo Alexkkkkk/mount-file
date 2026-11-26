@@ -83,10 +83,10 @@ def replay_comparison_status(
     replay: dict[str, object], streams: dict[str, dict[str, object]]
 ) -> str:
     """Classify the comparison without ever masking a real parity bug."""
-    if all(item["byte_identical"] for item in streams.values()):
-        return "pass"
     if _replay_fabricated_nothing(replay):
         return "not_applicable"
+    if all(item["byte_identical"] for item in streams.values()):
+        return "pass"
     return "mismatch"
 
 

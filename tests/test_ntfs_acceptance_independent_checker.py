@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
-"""Issue #510 acceptance legs that need an independent checker or a refusal proof.
+"""Issue #510 acceptance legs that need a checker or a refusal proof.
 
-C6: the replayed crash fixture must pass an *independent* checker (``ntfsfix
--n`` from ntfs-3g) — the production gate (``probe_ntfs_log``) alone is not an
-oracle, it shares code with the replay it validates.
+C6: ``ntfsfix -n`` is a secondary consistency check, not an independent
+checker or parity oracle. The production gate (``probe_ntfs_log``) shares code
+with the replay it validates and cannot independently verify replay correctness.
 
 D3/D4: a source image modified concurrently while a staged write is in
 flight must be refused with the original bytes preserved byte-for-byte.
@@ -49,8 +49,8 @@ def _sha256(path: Path) -> str:
     shutil.which("ntfsfix") is None,
     reason="ntfsfix (ntfs-3g) is unavailable",
 )
-def test_replayed_crash_volume_passes_independent_ntfsfix_checker(tmp_path):
-    """C6: the dirty fixture fails ntfsfix; the replayed volume passes it.
+def test_replayed_crash_volume_passes_secondary_ntfsfix_check(tmp_path):
+    """C6: the dirty fixture fails ntfsfix; the replayed volume passes its secondary check.
 
     ``-n`` keeps the check read-only: ntfsfix must never be the thing that
     repairs the volume inside an acceptance test.

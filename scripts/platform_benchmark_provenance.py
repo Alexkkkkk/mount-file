@@ -32,6 +32,7 @@ GENERATED_WORKTREE_ARTIFACTS = {
     "platform-benchmark-provenance.json",
     "test-results.xml",
     "windows-installer-evidence.json",
+    "windows-checker-inventory.json",
 }
 
 

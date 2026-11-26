@@ -9,6 +9,7 @@ and failed/cancelled writes must not publish a replacement.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -22,8 +23,17 @@ from mountfile.exfat_reader import NativeExfatImage
 from mountfile.exfat_writer import ExfatWriteError, NativeExfatWriter
 from mountfile.ext2_native import NativeExt2ImageWriter
 from mountfile.fat32 import Fat32, Fat32Error
+from mountfile.universal_fs_rw import Fat32RW
 
 PAYLOADS = (b"", b"native-matrix-" * 3, bytes(range(64)))
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class _ShortWriteFile:
@@ -109,6 +119,53 @@ def test_fat32_injected_exception_and_external_suffix_change_are_bounded(
     final_suffix = image.read_bytes()[offset + size :]
     assert final_suffix.startswith(changed)
     assert final_suffix[len(changed) :] == suffix[len(changed) :]
+
+
+@pytest.mark.parametrize(
+    ("failure_state", "exception_type"),
+    [
+        ("short_write", OSError),
+        ("injected_exception", OSError),
+        ("cancellation", KeyboardInterrupt),
+    ],
+)
+def test_fat32_staged_failure_preserves_full_image_hash(
+    tmp_path, monkeypatch, failure_state, exception_type
+):
+    image, offset, size, _prefix, _suffix = _fat_image_with_sentinels(tmp_path)
+    before = _sha256(image)
+    real_write_at = Fat32RW._write_at
+    injected = False
+
+    def fail_staged_cluster_write(writer, position, data):
+        nonlocal injected
+        if (
+            not injected
+            and writer._in_staged_mutation
+            and len(data) == writer.cluster_size
+            and any(data)
+        ):
+            injected = True
+            with writer.image.open("r+b") as stream:
+                stream.seek(writer.offset + position)
+                payload = data[:-1] if failure_state == "short_write" else data
+                assert stream.write(payload) == len(payload)
+            if failure_state == "cancellation":
+                raise KeyboardInterrupt()
+            if failure_state == "short_write":
+                raise OSError("short write while writing staged FAT data")
+            raise OSError("injected staged FAT data failure")
+        return real_write_at(writer, position, data)
+
+    monkeypatch.setattr(Fat32RW, "_write_at", fail_staged_cluster_write)
+    writer = Fat32RW(image, offset=offset, volume_size=size)
+    with pytest.raises(exception_type):
+        writer.write_file("/failed.bin", b"staged failure payload")
+
+    assert injected
+    assert _sha256(image) == before
+    assert not list(tmp_path.glob(f".{image.name}.*.mountfile-stage"))
+    assert not list(tmp_path.glob(f".{image.name}.*.mountfile-rollback"))
 
 
 def test_fat32_process_kill_before_atomic_replace_never_publishes(tmp_path):

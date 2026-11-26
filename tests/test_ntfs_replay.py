@@ -31,11 +31,19 @@ from mountfile.ntfs_native_writer import (
 )
 from mountfile.ntfs_reader import probe_ntfs_metadata
 from mountfile.ntfs_replay import (
+    OP_ADD_INDEX_ENTRY_ALLOCATION,
     OP_ADD_INDEX_ENTRY_ROOT,
     OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
     OP_DEALLOCATE_FILE_RECORD,
+    OP_DELETE_INDEX_ENTRY_ALLOCATION,
+    OP_DELETE_INDEX_ENTRY_ROOT,
     OP_INITIALIZE_FILE_RECORD,
     OP_SET_BITS_IN_NONRESIDENT_BITMAP,
+    OP_SET_INDEX_ENTRY_VCN_ALLOCATION,
+    OP_SET_INDEX_ENTRY_VCN_ROOT,
+    OP_UPDATE_RELATIVE_DATA_IN_INDEX,
+    OP_UPDATE_RELATIVE_DATA_IN_INDEX2,
+    OP_WRITE_END_OF_INDEX_BUFFER,
     SUPPORTED_OPERATIONS,
     NtfsReplayError,
     native_ntfs_recover,
@@ -195,6 +203,15 @@ def test_native_replay_sigkill_matrix_reaches_each_declared_phase(
 def test_mft_allocation_and_bitmap_operations_are_not_allowlisted():
     assert (
         not {
+            OP_ADD_INDEX_ENTRY_ROOT,
+            OP_ADD_INDEX_ENTRY_ALLOCATION,
+            OP_DELETE_INDEX_ENTRY_ROOT,
+            OP_DELETE_INDEX_ENTRY_ALLOCATION,
+            OP_WRITE_END_OF_INDEX_BUFFER,
+            OP_SET_INDEX_ENTRY_VCN_ROOT,
+            OP_SET_INDEX_ENTRY_VCN_ALLOCATION,
+            OP_UPDATE_RELATIVE_DATA_IN_INDEX,
+            OP_UPDATE_RELATIVE_DATA_IN_INDEX2,
             OP_INITIALIZE_FILE_RECORD,
             OP_DEALLOCATE_FILE_RECORD,
             OP_SET_BITS_IN_NONRESIDENT_BITMAP,

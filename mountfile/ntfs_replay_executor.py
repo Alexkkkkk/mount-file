@@ -398,7 +398,9 @@ def _replay_mft_allocation(
         ("executor:allocation:mirror:start", "executor:allocation:mirror:done"),
         ("executor:allocation:bitmap:start", "executor:allocation:bitmap:done"),
     )
-    for (offset, payload), (start_phase, done_phase) in zip(writes, write_phases):
+    for (offset, payload), (start_phase, done_phase) in zip(
+        writes, write_phases, strict=True
+    ):
         _fault(start_phase)
         stream.seek(offset)
         if stream.write(payload) != len(payload):
@@ -435,8 +437,14 @@ def _replay_staged(
     analysis: NtfsLogFileAnalysis,
     resolver: ReplayResolver,
     mft_candidate_provider: MftCandidateProvider | None = None,
+    *,
+    verifier_available: bool = False,
 ) -> tuple[OverlayProvenance, ...]:
     targets, allocations = _resolve_targets(analysis, resolver, mft_candidate_provider)
+    if allocations and not verifier_available:
+        raise NtfsReplayResolutionError(
+            "MFT allocation publication requires an independent staged-image verifier"
+        )
     _fault("executor:preflight:done")
     _fault("mutation:start")
     if allocations:
@@ -463,7 +471,7 @@ def publish_ntfs_replay(
     analysis: NtfsLogFileAnalysis,
     resolver: ReplayResolver,
     *,
-    verify: Callable[[str], None] | None = None,
+    verify: Callable[[str], bool] | None = None,
     mft_candidate_provider: MftCandidateProvider | None = None,
 ) -> NtfsReplayPublication:
     """Replay a validated analysis on a disposable copy and atomically publish it.
@@ -471,8 +479,11 @@ def publish_ntfs_replay(
     ``resolver`` is mandatory. No implicit MFT arithmetic is performed. When
     ``mft_candidate_provider`` is supplied, each candidate is validated
     against both its USA-restored mirror and the log reference before the
-    staged image is modified. ``verify`` should independently validate the
-    staged NTFS metadata before publish.
+    staged image is modified. ``verify`` must independently validate the staged
+    NTFS metadata and return the literal ``True`` before publish. A missing,
+    false, or implicit-None result refuses publication; this API cannot establish
+    checker independence on its own, so callers must supply a genuinely
+    independent verifier.
     """
     source = os.path.abspath(os.fspath(image_path))
     try:
@@ -484,11 +495,18 @@ def publish_ntfs_replay(
     try:
         with open(temporary, "r+b", buffering=0) as stream:
             provenance = _replay_staged(
-                stream, analysis, resolver, mft_candidate_provider
+                stream,
+                analysis,
+                resolver,
+                mft_candidate_provider,
+                verifier_available=callable(verify),
             )
             if verify is not None:
                 _fault("executor:verify:start")
-                verify(temporary)
+                if verify(temporary) is not True:
+                    raise NtfsReplayResolutionError(
+                        "staged-image verifier did not explicitly approve replay"
+                    )
                 _fault("executor:verify:done")
             _fsync_path(temporary)
         _require_source_unchanged(source_path, before)
