@@ -379,6 +379,11 @@ jobs:
           test "${#slice[@]}" -gt 0
           python -m pytest -v --timeout=600 --timeout-method=thread "${slice[@]}"
 
+      - name: Independent NTFS metadata/replay parity evidence (#510 C3/C5/C6)
+        run: |
+          python -m pytest tests/test_ntfs_metadata_parity.py -v \
+            --junitxml=ntfs-metadata-parity.xml
+
       - name: Emit external-checker capability matrix
         run: python scripts/checker_matrix.py --json-out checker-matrix.json
 
