@@ -128,7 +128,7 @@ def _publish(image, payload: bytes, free: bytes, mirror: bytes) -> None:
         str(image),
         _analysis(_allocation_step(payload)),
         _resolver,
-        verify=lambda _staged: None,  # synthetic fixture; not independent checker evidence
+        verify=lambda _staged: True,  # synthetic fixture; not independent checker evidence
         mft_candidate_provider=lambda step: candidate,
     )
 

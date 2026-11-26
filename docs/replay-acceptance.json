@@ -3,9 +3,9 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "f7d834f",
+    "commit": "adfacfb96b9e7b1245a3de7151794970fbe20280",
     "version": "1.103.2",
-    "checked": "2026-11-25"
+    "checked": "2026-11-26"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -238,7 +238,7 @@
         "mountfile/ntfs_mft_allocation.py",
         "tests/test_ntfs_mft_allocation.py"
       ],
-      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor now refuses a validated MFT allocation unless a staged-image verifier callback is supplied; unit tests use an explicit synthetic stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
+      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
       "reproduced": "2026-11-21 (PR feat/issue-510-c5-wiring): pytest tests/test_ntfs_mft_wiring.py tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft.py tests/test_ntfs_replay_executor.py tests/test_ntfs_logfile_parser.py tests/test_ntfs_writer_fault_coverage.py — зелёный прогон; scripts/replay_acceptance_status.py --check — расхождений нет"
     },
     {

@@ -173,7 +173,7 @@ def test_mft_candidate_gate_validates_mirror_before_publication(tmp_path) -> Non
         str(image),
         _analysis(_step()),
         lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, step.length),
-        verify=lambda _staged: None,
+        verify=lambda _staged: True,
         mft_candidate_provider=lambda _step: (
             _raw_mft_record(7),
             _raw_mft_record(7),
@@ -195,7 +195,7 @@ def test_mft_candidate_mirror_mismatch_is_refused_before_source_change(tmp_path)
             lambda step: ReplayTarget(
                 step.target_attr, step.target_vcn, 2, step.length
             ),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: (
                 _raw_mft_record(7),
                 _raw_mft_record(8),
@@ -280,7 +280,7 @@ def test_executor_phase_hooks_cover_preflight_verify_and_source_identity(
             str(image),
             _analysis(_step()),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
-            verify=lambda staged: None,
+            verify=lambda staged: True,
         )
     finally:
         native_write.fault_hook_installed(previous)
@@ -310,7 +310,7 @@ def test_allocation_fault_boundaries_are_emitted_in_write_order(tmp_path):
             str(image),
             _analysis(_allocation_step(initialized)),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
     finally:
@@ -355,6 +355,54 @@ def test_mft_allocation_publication_requires_independent_verifier(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == ["image.bin"]
 
 
+@pytest.mark.parametrize("verification_result", [None, False, 1, "pass"])
+def test_mft_allocation_refuses_verifier_without_explicit_true(
+    tmp_path, verification_result
+):
+    image = tmp_path / "image.bin"
+    free = _raw_mft_record(7)
+    mirror = _raw_mft_record(7)
+    initialized = _raw_mft_record(8, in_use=True)
+    image.write_bytes(free + b"\x00" * 488 + mirror + b"\x00" * 512)
+    before = image.read_bytes()
+    candidate = MftAllocationCandidate(
+        free, mirror, (8 << 48) | 42, 42, 0, 1000, 1512, bytes(16), 42
+    )
+
+    with pytest.raises(
+        NtfsReplayResolutionError, match="did not explicitly approve replay"
+    ):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_allocation_step(initialized)),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
+            verify=lambda _staged: verification_result,
+            mft_candidate_provider=lambda _step: candidate,
+        )
+
+    assert image.read_bytes() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["image.bin"]
+
+
+def test_generic_replay_refuses_verifier_that_does_not_approve(tmp_path):
+    image = tmp_path / "image.bin"
+    image.write_bytes(b"abcdef")
+    before = image.read_bytes()
+
+    with pytest.raises(
+        NtfsReplayResolutionError, match="did not explicitly approve replay"
+    ):
+        publish_ntfs_replay(
+            str(image),
+            _analysis(_step()),
+            lambda step: ReplayTarget(step.target_attr, step.target_vcn, 2, 3),
+            verify=lambda _staged: False,
+        )
+
+    assert image.read_bytes() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["image.bin"]
+
+
 @pytest.mark.parametrize("phase", NTFS_ALLOCATION_FAULT_POINTS)
 def test_allocation_phase_failure_preserves_source_and_cleans_stage(tmp_path, phase):
     image = tmp_path / "image.bin"
@@ -381,7 +429,7 @@ def test_allocation_phase_failure_preserves_source_and_cleans_stage(tmp_path, ph
                 str(image),
                 _analysis(_allocation_step(initialized)),
                 lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-                verify=lambda _staged: None,
+                verify=lambda _staged: True,
                 mft_candidate_provider=lambda _step: candidate,
             )
     finally:
@@ -424,7 +472,7 @@ publish_ntfs_replay(
     image,
     _analysis(_allocation_step(initialized)),
     lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-    verify=lambda _staged: None,
+    verify=lambda _staged: True,
     mft_candidate_provider=lambda _step: candidate,
 )
 """
@@ -479,7 +527,7 @@ def test_allocation_refuses_mismatched_mirror_record_size(tmp_path):
             str(image),
             _analysis(_allocation_step(_raw_mft_record(8, in_use=True))),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
 
@@ -509,7 +557,7 @@ def test_bounded_mft_allocation_updates_record_and_mirror_on_stage(
         str(image),
         _analysis(_allocation_step(bytes(initialized))),
         lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-        verify=lambda _staged: None,
+        verify=lambda _staged: True,
         mft_candidate_provider=lambda _step: candidate,
     )
 
@@ -541,7 +589,7 @@ def test_bounded_mft_allocation_refuses_changed_candidate_source(tmp_path) -> No
             str(image),
             _analysis(_allocation_step(initialized)),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
     assert image.read_bytes() == before
@@ -564,7 +612,7 @@ def test_bounded_mft_allocation_refuses_allocated_bitmap_bit(tmp_path) -> None:
             str(image),
             _analysis(_allocation_step(initialized)),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
 
@@ -584,7 +632,7 @@ def test_bounded_mft_allocation_refuses_bitmap_range_out_of_bounds(tmp_path) -> 
             str(image),
             _analysis(_allocation_step(initialized)),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
 
@@ -603,7 +651,7 @@ def test_bounded_mft_allocation_refuses_overlapping_metadata_extents(tmp_path) -
             str(image),
             _analysis(_allocation_step(initialized)),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
     assert image.read_bytes() == free + b"\x00" * 512
@@ -631,7 +679,7 @@ def test_bounded_mft_allocation_publish_failure_leaves_source_unchanged(
             str(image),
             _analysis(_allocation_step(initialized)),
             lambda step: ReplayTarget(step.target_attr, step.target_vcn, 0, 512),
-            verify=lambda _staged: None,
+            verify=lambda _staged: True,
             mft_candidate_provider=lambda _step: candidate,
         )
     assert image.read_bytes() == before
