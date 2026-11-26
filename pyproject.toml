@@ -18,7 +18,7 @@ dependencies = [
     "PyQt6>=6.12.1",
 ]
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Alexkkkkk" }]
 keywords = ["forensics", "dfir", "disk-image", "nand", "emmc", "fat32", "qt"]
@@ -28,7 +28,6 @@ classifiers = [
     "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -50,23 +49,19 @@ legacy-tsk = [
 dev = [
     # Этажи подняты до фактических версий в uv.lock и в CI
     # (quality.yml: ruff==0.17.6, black==26.10.1, isort==9.0.2; pytest 9.2.0 —
-    # весь suite на нём зелёный). hypothesis оставлен >=6: uv.lock сам
-    # разрешает 6.168.5 для Python 3.10 и 6.170.15 для >=3.11 по маркерам.
+    # весь suite на нём зелёный).
     "pytest>=9",
     "pytest-cov>=7.1",
     "pytest-timeout>=2.4",
     "pytest-xdist>=3.8",
-    "pytest-randomly>=5.1; python_version >= '3.11'",
-    "pytest-randomly>=3.15; python_version < '3.11'",
-    "filelock>=4.3; python_version >= '3.11'",
-    "filelock>=3.13; python_version < '3.11'",
+    "pytest-randomly>=5.1",
+    "filelock>=4.3",
     "hypothesis>=6",
     "pydantic>=2.14",
     "ruff>=0.17",
     "black>=26.10",
     "isort>=9.0",
-    "pre-commit>=4.7; python_version >= '3.11'",
-    "pre-commit>=3.0; python_version < '3.11'",
+    "pre-commit>=4.7",
     "pyinstaller>=6.22.3",
 ]
 ci = [
@@ -81,38 +76,31 @@ ci = [
     "pytest-cov>=7.1",
     "pytest-timeout>=2.4",
     "pytest-xdist>=3.8",
-    "pytest-randomly>=5.1; python_version >= '3.11'",
-    "pytest-randomly>=3.15; python_version < '3.11'",
-    "filelock>=4.3; python_version >= '3.11'",
-    "filelock>=3.13; python_version < '3.11'",
+    "pytest-randomly>=5.1",
+    "filelock>=4.3",
     "pytest-shard>=0.1.2",
     "hypothesis>=6",
     "setuptools",
     "wheel",
     "pydantic>=2.14",
-    "fastapi>=0.165,<1.0; python_version >= '3.11'",
-    "fastapi>=0.115,<0.165; python_version < '3.11'",
+    "fastapi>=0.165,<1.0",
     "uvicorn>=0.54,<1.0",
     "httpx>=0.28,<1.0",
-    "regex>=2026.11.23; python_version >= '3.11'",
-    "regex>=2024.0.0; python_version < '3.11'",
+    "regex>=2026.11.23",
 ]
 images = [
-    # Pillow 13 dropped Python 3.10 (its floor is >=3.11), while this project
-    # still supports 3.10, so the newest line is pinned per interpreter.
-    "Pillow>=13.0.0; python_version >= '3.11'",
-    "Pillow>=12.3.0; python_version < '3.11'",
+    # Pillow 13 requires Python >=3.11; since the project floor is 3.11 now,
+    # the interpreter fork is gone and only the patched line remains.
+    "Pillow>=13.0.0",
 ]
 api = [
-    "fastapi>=0.165,<1.0; python_version >= '3.11'",
-    "fastapi>=0.115,<0.165; python_version < '3.11'",
+    "fastapi>=0.165,<1.0",
     "uvicorn>=0.54,<1.0",
     "httpx>=0.28,<1.0",
 ]
 dfir = [
-    "python-dateutil>=4.0.0; python_version >= '3.11'",
-    "python-dateutil>=2.8.2; python_version < '3.11'",
-    "yara-python>=4.5.0; platform_system!='Windows' or python_version>='3.10'",
+    "python-dateutil>=4.0.0",
+    "yara-python>=4.5.0; platform_system!='Windows'",
 ]
 forensics = [
     # LGPL read-only NTFS oracle candidate; it never enables product writes.
@@ -122,8 +110,7 @@ ai = [
     "mcp[cli]>=2.3.0",
     "pydantic>=2.14",
     "openai>=3.58.0",
-    "regex>=2026.11.23; python_version >= '3.11'",
-    "regex>=2024.0.0; python_version < '3.11'",
+    "regex>=2026.11.23",
 ]
 rw = [
     "pytsk3>=20260715",   # legacy RO fallback через MountFileBridge
@@ -166,7 +153,7 @@ mountfile = ["data/*.bin", "data/*.png", "data/*.ico", "data/*.icns", "data/*.ps
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
@@ -174,9 +161,9 @@ extend-select = ["S110", "S112"]
 ignore = ["E501", "E402"]
 
 [tool.mypy]
-# Broadest supported interpreter, so mypy never accepts 3.11+-only syntax the
-# package must still avoid on the 3.10 floor.
-python_version = "3.10"
+# Broadest supported interpreter, so mypy never accepts 3.12+-only syntax the
+# package must still avoid on the 3.11 floor.
+python_version = "3.11"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -226,7 +213,7 @@ mode = "update"
 
 [tool.black]
 # Совпадает с rev в .pre-commit-config.yaml и с версией в CI.
-target-version = ["py310", "py311", "py312"]
+target-version = ["py311", "py312"]
 
 [tool.isort]
 # black-профиль исключает конфликт двух форматтеров (isort vs black):

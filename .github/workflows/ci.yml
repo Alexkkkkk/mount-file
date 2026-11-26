@@ -28,9 +28,8 @@ jobs:
   # would leave its context pending forever.
   #
   # macOS is the most expensive runner in the matrix (~10x the per-minute cost
-  # of Linux) and only leg 3.12 adds coverage on top of 3.10 -- 3.11 on macOS
-  # duplicated 3.11 on Linux without exercising anything new, so the full tier
-  # runs 3.10 + 3.12 on macOS instead of all three versions.
+  # of Linux); a single 3.12 leg covers the platform without duplicating the
+  # Linux 3.11/3.12 coverage.
   setup-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -40,9 +39,9 @@ jobs:
       - id: set
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
-            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40,"coverage":true},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40,"coverage":false}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40,"coverage":true},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40,"coverage":false}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.10","check_name":"test (3.10)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40,"coverage":true},{"os":"windows-latest","python":"3.10","check_name":"Tests (windows-latest, py3.10)","timeout":40,"coverage":false},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40,"coverage":false},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40,"coverage":false},{"os":"macos-latest","python":"3.10","check_name":"Tests (macos-latest, py3.10)","timeout":75,"coverage":false},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75,"coverage":false}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"os":"ubuntu-latest","python":"3.11","check_name":"test (3.11)","timeout":40,"coverage":false},{"os":"ubuntu-latest","python":"3.12","check_name":"test (3.12)","timeout":40,"coverage":true},{"os":"windows-latest","python":"3.11","check_name":"Tests (windows-latest, py3.11)","timeout":40,"coverage":false},{"os":"windows-latest","python":"3.12","check_name":"Tests (windows-latest, py3.12)","timeout":40,"coverage":false},{"os":"macos-latest","python":"3.12","check_name":"Tests (macos-latest, py3.12)","timeout":75,"coverage":false}]}' >> "$GITHUB_OUTPUT"
           fi
 
   tests:

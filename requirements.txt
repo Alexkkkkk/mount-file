@@ -3,31 +3,28 @@
 # Licensed under the MIT License - see the LICENSE file for details.
 
 # Full-featured environment for Windows 10/11, Linux, and macOS.
+# Python floor is 3.11 (pyproject requires-python), so interpreter forks are gone.
 PyQt6>=6.12.1
 # pytsk3 is an OPTIONAL legacy fallback, matching the `legacy-tsk` extra in
 # pyproject.toml: native readers/writers work without libtsk installed.
 # Install it explicitly with `pip install "mountfile[legacy-tsk]"`.
-# pytsk3>=20260715 ; python_version >= '3.10'
+# pytsk3>=20260715
 
 # mountfile_ai.py (AI Deep Integration branch)
 mcp[cli]>=2.3.0
 pydantic>=2.14
 openai>=3.58.0
-regex>=2026.11.23; python_version >= '3.11'
-regex>=2024.0.0; python_version < '3.11'
+regex>=2026.11.23
 
 # Optional authenticated REST API and its test client
-fastapi>=0.165,<1.0; python_version >= '3.11'
-fastapi>=0.115,<0.165; python_version < '3.11'
+fastapi>=0.165,<1.0
 uvicorn>=0.54,<1.0
 httpx>=0.28,<1.0
 
 # DFIR helpers
-python-dateutil>=4.0.0; python_version >= '3.11'
-python-dateutil>=2.8.2; python_version < '3.11'
-yara-python>=4.5.0 ; platform_system != 'Windows' or python_version >= '3.10'
+python-dateutil>=4.0.0
+yara-python>=4.5.0 ; platform_system != 'Windows'
 
 # tests/conftest.py imports FileLock to serialize fixture access; the
 # failure-matrix workflow installs this file directly (issue #510).
-filelock>=4.3 ; python_version >= '3.11'
-filelock>=3.13 ; python_version < '3.11'
+filelock>=4.3

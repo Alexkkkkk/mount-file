@@ -94,8 +94,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: windows-py310
-            python: '3.10'
+          - label: windows-py311
+            python: '3.11'
             spec: requirements.txt
             qt: PyQt6
             name: MountFile
