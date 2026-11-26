@@ -213,10 +213,13 @@
       "evidence": [
         "mountfile/ntfs_replay.py",
         "mountfile/ntfs_replay_executor.py",
-        "tests/test_ntfs_bitmap_handler.py"
+        "tests/test_ntfs_replay.py",
+        "tests/test_ntfs_replay_oracle.py",
+        "tests/test_ntfs_bitmap_handler.py",
+        "tests/test_ntfs_mft_reuse_after_undo.py"
       ],
       "note": "Nonresident bitmap byte handler has unit coverage for misaligned ranges, neighbor preservation and bounds refusal. Bitmap/MFT allocation operations remain excluded from the replay allowlist; no independent volume-level metadata checker is claimed. C3 remains partial.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "reproduced": "2026-11-26: after installing ntfs-3g, the focused NTFS replay, oracle, bitmap and MFT/MFTMirr suite passed 70 tests. The eight synthetic image scenarios also passed 8/8 with exact ntfscat read-back and ntfsfix -n secondary checks. This remains local Linux evidence, not independent Windows parity; C3 remains partial."
     },
     {
       "id": "C4",
@@ -260,7 +263,7 @@
         "scripts/ntfs_oracle_evidence.py"
       ],
       "note": "Linux synthetic-fixture checks use ntfsfix -n only as a secondary consistency checker and compare byte read-back plus outputs from two runs of the same executor; they are not an independent replay oracle. Windows VHDX/chkdsk acceptance remains separate evidence. No Windows-generated NTFS crash captures or native replay-parity against chkdsk are claimed.",
-      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 8 synthetic scenarios: 8 pass, 0 divergence, 0 unavailable. Added committed-redo and active-transaction-undo cases for a partial nonresident $DATA update crossing a 4 KiB cluster boundary; matrix tests require exact full-stream ntfscat read-back and an unchanged image hash on the second recovery pass. MFT/$Bitmap bytes are compared across separate copies replayed by the same executor, with ntfsfix -n as secondary evidence only. Dedicated Windows chkdsk acceptance is a separate workflow. C6 remains partial: these synthetic fixtures do not prove independent replay parity or replace native crash captures."
+      "reproduced": "2026-11-26: scripts/ntfs_oracle_evidence.py ran all 8 synthetic scenarios after installing ntfs-3g: 8 pass, 0 divergence, 0 unavailable. Exact target read-back via ntfscat and ntfsfix -n secondary checks passed. Same-executor byte comparisons are not an independent replay oracle, and Windows chkdsk acceptance remains separate evidence; C6 remains partial."
     },
     {
       "id": "C7",

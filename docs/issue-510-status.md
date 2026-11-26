@@ -1,8 +1,8 @@
 ## Сводка трекера — сгенерировано `scripts/tracker_status.py`
 
-Срез манифеста: `c39eca2` (v1.103.2), сверка `2026-11-26`. HEAD: `c39eca2` — docs(#510): refresh acceptance status.
+Срез манифеста: `c352517` (v1.103.2), сверка `2026-11-26`. HEAD: `c352517` — docs(#510): record published status head.
 
-⚠️ Ветка опережает `origin/main` на 5 коммит(ов): манифест может отставать.
+⚠️ Ветка опережает `origin/main` на 6 коммит(ов): манифест может отставать.
 
 ✅ 23 · ⚠️ 8 · ⬜ 0 · 🚫 1 · всего 32
 
@@ -38,7 +38,7 @@
 |---|---|---|---|
 | C1 | Честный fail-closed по умолчанию | ✅ | `mountfile/ntfs_replay_executor.py`, `mountfile/ntfs_native_writer.py`, `tests/test_ntfs_acceptance_independent_checker.py` |
 | C2 | Парсер $LogFile | ✅ | `mountfile/ntfs_logfile.py`, `tests/test_ntfs_logfile_parser.py`, `tests/test_ntfs_logfile_draft_golden.py` |
-| C3 | Применение redo/undo к $MFT, $BITMAP, индексам | ⚠️ | `mountfile/ntfs_replay.py`, `mountfile/ntfs_replay_executor.py`, `tests/test_ntfs_bitmap_handler.py` |
+| C3 | Применение redo/undo к $MFT, $BITMAP, индексам | ⚠️ | `mountfile/ntfs_replay.py`, `mountfile/ntfs_replay_executor.py`, `tests/test_ntfs_replay.py`, `tests/test_ntfs_replay_oracle.py`, `tests/test_ntfs_bitmap_handler.py`, `tests/test_ntfs_mft_reuse_after_undo.py` |
 | C4 | $ATTRIBUTE_LIST | 🚫 | `mountfile/ntfs_replay.py`, `tests/test_ntfs_replay.py` |
 | C5 | Safe MFT record allocation/reuse и $MFTMirr | ⚠️ | `mountfile/ntfs_mft_allocation.py`, `tests/test_ntfs_mft_allocation.py` |
 | C6 | Synthetic NTFS crash fixtures with auxiliary ntfsfix -n checks | ⚠️ | `tests/ntfs_crash_fixture.py`, `tests/test_ntfs_replay.py`, `tests/test_ntfs_crash_oracle_matrix.py`, `tests/test_ntfs_writer_fault_coverage.py`, `tests/test_ntfs_acceptance_independent_checker.py`, `scripts/windows_ntfs_acceptance.ps1`, `.github/workflows/ntfs-windows-acceptance.yml`, `tests/test_windows_ntfs_acceptance_contract.py`, `tests/ntfs_oracle.py`, `tests/test_ntfs_replay_oracle.py`, `scripts/ntfs_oracle_evidence.py` |
