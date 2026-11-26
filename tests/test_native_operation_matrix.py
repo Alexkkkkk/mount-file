@@ -30,15 +30,22 @@ Each family also has a control cell proving the matrix is not vacuous.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import mountfile.ext4_native_writer as ext4_module
 import mountfile.native_write as native_write
-from mountfile.ext4_native_writer import Ext4NativeWriter, libext2fs_available
+from mountfile.ext4_native_writer import (
+    Ext4NativeWriter,
+    Ext4ProfileUnsupported,
+    libext2fs_available,
+)
 from mountfile.native_write import ENABLE_ENV, NativeWriteError, NtfsTransactionalWriter
 
 #: operation -> declared phase list, in runtime order.
@@ -248,6 +255,119 @@ def test_ext4_create_file_phase_failure_preserves_the_image(
     assert (
         _staged(tmp_path, known) == []
     ), f"failure at {phase!r} leaked staged files: {_staged(tmp_path, known)}"
+
+
+@needs_ext
+def test_ext4_create_file_short_write_refuses_publication(tmp_path, monkeypatch):
+    """A truncated staged payload must fail read-back before publication."""
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_ext4(tmp_path)
+    before = _sha256(image)
+    real_payload_file = native_write._payload_file
+
+    def truncated_payload(data, directory):
+        payload = real_payload_file(data, directory)
+        Path(payload).write_bytes(Path(payload).read_bytes()[:1])
+        return payload
+
+    monkeypatch.setattr(native_write, "_payload_file", truncated_payload)
+    with pytest.raises(Ext4ProfileUnsupported, match="staged read-back mismatch"):
+        Ext4NativeWriter().create_file(str(image), "created.txt", b"complete payload")
+    assert _sha256(image) == before
+    assert _staged(tmp_path, {"ext4.img", "seed.bin"}) == []
+
+
+@needs_ext
+def test_ext4_create_file_cancellation_preserves_source_and_cleans_stage(
+    tmp_path, monkeypatch
+):
+    """A cancellation at the copy boundary cannot publish or leak a stage."""
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_ext4(tmp_path)
+    before = _sha256(image)
+
+    class Cancelled(BaseException):
+        pass
+
+    def cancel_at_copy_done(name):
+        if name == "copy:done":
+            raise Cancelled("cancelled create_file")
+
+    native_write.fault_hook_installed(cancel_at_copy_done)
+    try:
+        with pytest.raises(Cancelled):
+            Ext4NativeWriter().create_file(str(image), "created.txt", b"payload")
+    finally:
+        native_write.fault_hook_installed(None)
+    assert _sha256(image) == before
+    assert _staged(tmp_path, {"ext4.img", "seed.bin"}) == []
+
+
+@needs_ext
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL process-kill is POSIX-only")
+@pytest.mark.parametrize(
+    "point",
+    (
+        "copy:start",
+        "copy:done",
+        "helper:start",
+        "helper:done",
+        "publish:start",
+        "publish:done",
+    ),
+)
+def test_ext4_create_file_process_kill_preserves_source_until_publish(
+    tmp_path, monkeypatch, point
+):
+    """A SIGKILL at every create_file boundary leaves original or complete data."""
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_ext4(tmp_path)
+    before = _sha256(image)
+    child = r"""
+import os
+import signal
+import sys
+
+from mountfile.native_write import fault_hook_installed
+
+target = sys.argv[1]
+seen = {}
+
+def kill_at(name):
+    seen[name] = seen.get(name, 0) + 1
+    # create_file delegates the mutation to Ext4TransactionalWriter, so the
+    # staged copy has an inner publish and the outer guarded writer has a
+    # second publish.  Target the outer publish, not the delegate's replace.
+    wanted = 2 if name.startswith("publish:") else 1
+    if name == target and seen[name] == wanted:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+fault_hook_installed(kill_at)
+from mountfile.ext4_native_writer import Ext4NativeWriter
+Ext4NativeWriter().create_file(sys.argv[2], "created.txt", b"complete create")
+"""
+    environment = os.environ.copy()
+    environment[ENABLE_ENV] = "1"
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run(
+        [sys.executable, "-c", child, point, str(image)],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == -signal.SIGKILL, (point, result.stdout, result.stderr)
+    if point == "publish:done":
+        read = subprocess.run(
+            ["debugfs", "-R", "cat /created.txt", str(image)],
+            capture_output=True,
+            check=False,
+        )
+        assert read.returncode == 0
+        assert read.stdout == b"complete create"
+    else:
+        assert _sha256(image) == before
 
 
 def test_ntfs_single_operation_surface_is_declared():
