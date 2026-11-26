@@ -6,6 +6,8 @@ file only tracks the releases themselves.
 
 ## Unreleased
 
+- **Breaking — 2.0.0:** Python 3.10 support is dropped; the minimum runtime is now Python 3.11. Package version is synchronized to `2.0.0` in `pyproject.toml` and `mountfile/__init__.py`. This major bump also closes all 60 open Dependabot alerts (pillow → 13, filelock → 4.3.1).
+
 - **Bounded read-through image cache:** `mountfile.image_source` gained
   `CachedImageSource` and `open_image_source()` — a fixed-size, LRU,
   byte-budgeted cache in front of the existing read-only source.  Metadata-heavy
