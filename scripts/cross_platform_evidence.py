@@ -38,7 +38,7 @@ def aggregate(root: Path) -> dict[str, object]:
     reports = _load_reports(root)
     blockers: list[str] = []
     by_platform: dict[str, dict[str, object]] = {}
-    seen_legs: set[str] = set()
+    seen_platforms: set[str] = set()
     for path, report in reports:
         runner = report.get("runner", {})
         platform_name = runner.get("platform")
@@ -49,12 +49,10 @@ def aggregate(root: Path) -> dict[str, object]:
         if platform_name not in EXPECTED_PLATFORMS:
             blockers.append(f"unexpected_platform:{platform_name}")
             continue
-        python_version = str(runner.get("python", "unknown"))
-        leg = f"{platform_name}:{python_version}"
-        if leg in seen_legs:
+        if platform_name in seen_platforms:
             blockers.append(f"duplicate_platform:{platform_name}")
             continue
-        seen_legs.add(leg)
+        seen_platforms.add(platform_name)
         gate = report.get("gate", {})
         summary = report.get("summary", {})
         status = gate.get("verdict")

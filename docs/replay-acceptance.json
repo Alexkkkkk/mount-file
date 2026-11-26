@@ -3,7 +3,7 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "120e30a",
+    "commit": "ff217c1",
     "version": "2.0.0",
     "checked": "2026-11-26"
   },
@@ -236,10 +236,11 @@
       "status": "partial",
       "evidence": [
         "mountfile/ntfs_mft_allocation.py",
-        "tests/test_ntfs_mft_allocation.py"
+        "tests/test_ntfs_mft_allocation.py",
+        "tests/test_ntfs_mft_wiring.py"
       ],
-      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
-      "reproduced": "2026-11-21 (PR feat/issue-510-c5-wiring): pytest tests/test_ntfs_mft_wiring.py tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft.py tests/test_ntfs_replay_executor.py tests/test_ntfs_logfile_parser.py tests/test_ntfs_writer_fault_coverage.py — зелёный прогон; scripts/replay_acceptance_status.py --check — расхождений нет"
+      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. Zeroed or structurally unreadable pre-images now receive typed refusal rather than bypassing the mirror gate. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
+      "reproduced": "2026-11-26: tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft_wiring.py tests/test_ntfs_replay.py — 48 passed, including typed refusal for zeroed and malformed-USA MFT pre-images; no Windows/chkdsk or independent volume-level replay parity is claimed. Earlier, 2026-11-21 (PR feat/issue-510-c5-wiring): tests for NTFS MFT wiring/allocation/replay executor/log parser/writer fault coverage passed; scripts/replay_acceptance_status.py --check reported no drift."
     },
     {
       "id": "C6",
@@ -378,8 +379,8 @@
         "tests/test_native_operation_matrix.py",
         "tests/test_writer_fault_injection_acceptance.py"
       ],
-      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. The ext4.create_file injected-exception cell has its own selector; short_write, process_kill and cancellation remain not_proven until operation-specific tests are added. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
-      "reproduced": "2026-11-25: local focused JUnit run passed 191 D1/D3/D5/D6 and NTFS regression tests; the 32-cell artifact recomputed and validated against its JUnit source. ext4.create_file injected_exception was passed; its other three states remained not_proven. Synthetic NTFS oracle was pass, but Windows chkdsk parity and scheduled-run streak remain unavailable. The artifact acceptance verdict remains not_claimed."
+      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. The ext4.create_file injected-exception and cancellation cells have operation-specific selectors; short_write and process_kill remain not_proven until operation-specific tests are added. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. Local test execution does not substitute for the required scheduled evidence; acceptance stays not_claimed.",
+      "reproduced": "2026-11-26: ext4.create_file cancellation test ran and passed; focused JUnit subset passed 15 tests. The 32-cell artifact mapped only ext4.create_file/cancellation to passed for that JUnit input, and --validate returned pass; artifact acceptance remains not_claimed. Earlier 2026-11-25 local focused JUnit run passed 191 D1/D3/D5/D6 and NTFS regression tests. ext4.create_file injected_exception was passed; short_write and process_kill remain not_proven. Synthetic NTFS oracle was pass, but Windows chkdsk parity and scheduled-run streak remain unavailable."
     },
     {
       "id": "D7",

@@ -405,6 +405,12 @@ OPERATION_TESTS: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {
                     "test_ext4_create_file_phase_failure_preserves_the_image",
                 )
             ],
+            "cancellation": [
+                _case(
+                    "test_native_operation_matrix",
+                    "test_ext4_create_file_cancellation_preserves_the_image",
+                )
+            ],
         },
     },
 }

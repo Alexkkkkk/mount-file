@@ -224,6 +224,21 @@ def test_quality_is_a_lint_gate_and_ci_owns_test_execution():
     assert "needs.test.result" not in text
 
 
+def test_scheduled_failure_matrix_covers_phase_and_mft_regressions():
+    text = workflow("failure-matrix.yml")
+    assert "cron: '0 1 * * *'" in text
+    for test_file in (
+        "tests/test_ext4_write_phase_injection.py",
+        "tests/test_ntfs_native_write_phase_injection.py",
+        "tests/test_ntfs_write_phase_injection.py",
+        "tests/test_ntfs_mft_allocation.py",
+        "tests/test_ntfs_mft_wiring.py",
+    ):
+        assert test_file in text
+    assert "--junitxml=failure-matrix.xml" in text
+    assert "--validate failure-matrix.json" in text
+
+
 def test_status_sync_validates_instead_of_rewriting_the_pull_request_head():
     """A write-back commit carrying "[skip ci]" left the PR head without checks."""
     text = workflow("status-sync.yml")

@@ -250,6 +250,33 @@ def test_ext4_create_file_phase_failure_preserves_the_image(
     ), f"failure at {phase!r} leaked staged files: {_staged(tmp_path, known)}"
 
 
+class CreateFileCancelled(BaseException):
+    """A cancellation at the delegated create step must unwind the staged copy."""
+
+
+@needs_ext
+def test_ext4_create_file_cancellation_preserves_the_image(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_ext4(tmp_path)
+    before = _sha256(image)
+    reached: list[str] = []
+    known = {"ext4.img", "seed.bin"}
+
+    class Delegate:
+        def create_file(self, *args, **kwargs):
+            reached.append("delegate")
+            raise CreateFileCancelled("cancelled at delegate")
+
+    monkeypatch.setattr(native_write, "Ext4TransactionalWriter", Delegate)
+
+    with pytest.raises(CreateFileCancelled, match="cancelled at delegate"):
+        Ext4NativeWriter().create_file(str(image), "created.txt", b"payload\n")
+
+    assert reached == ["delegate"]
+    assert _sha256(image) == before, "cancellation mutated the caller's image"
+    assert _staged(tmp_path, known) == [], "cancellation leaked a staged image"
+
+
 def test_ntfs_single_operation_surface_is_declared():
     """NTFS exposes one operation; the matrix says so instead of padding cells."""
     for name in UNSUPPORTED_OPERATIONS["ntfs"]:

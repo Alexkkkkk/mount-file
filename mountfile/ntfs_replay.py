@@ -1286,16 +1286,17 @@ def gate_mft_record_reuse(
     A free (not-in-use) candidate must be backed by a byte-identical
     ``$MFTMirr`` copy and carry a sequence that continues the pre-image
     (mod 2**16) before the executor may initialize it.  Zeroed or unreadable
-    pre-images and re-initialization of a live record keep their existing
-    behavior; records outside the mirrored window are refused outright.
+    pre-images are refused because they cannot prove that the slot is free;
+    re-initialization of a valid live record keeps its existing behavior.
+    Records outside the mirrored window are refused outright.
     Every refusal happens before a single byte is written.
     """
     try:
         current = parse_ntfs_file_record_header(raw_before, require_in_use=False)
-    except NtfsRecordError:
-        # A zeroed or structurally unreadable pre-image has no mirror contract
-        # to check; the payload itself stays fully validated by the caller.
-        return
+    except NtfsRecordError as exc:
+        raise NtfsReplayError(
+            f"MFT record {record_number} pre-image is invalid; reuse refused: {exc}"
+        ) from exc
     if current.in_use:
         # Overwriting a live record is re-initialization, not allocation.
         return
