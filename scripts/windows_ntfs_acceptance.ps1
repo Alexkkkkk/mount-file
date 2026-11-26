@@ -117,19 +117,28 @@ try {
     if ($scanBeforeCode -ne 0) { throw "clean NTFS VHDX failed chkdsk /scan" }
 
     $childScript = Join-Path $OutputDirectory "abrupt-writer.ps1"
+    $crashPayload = Join-Path $drive "crash-payload.bin"
+    $childLog = Join-Path $OutputDirectory "abrupt-writer.log"
     @'
+param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$LogPath
+)
 $ErrorActionPreference = "Stop"
-$path = Join-Path $env:MOUNTFILE_CRASH_DRIVE "crash-payload.bin"
-for ($i = 0; $i -lt 10000; $i++) {
-    Add-Content -LiteralPath $path -Value ("crash-line-{0}-{1}" -f $i, (Get-Date).Ticks)
-    if (($i % 100) -eq 0) { Start-Sleep -Milliseconds 1 }
+try {
+    for ($i = 0; $i -lt 10000; $i++) {
+        Add-Content -LiteralPath $Path -Value ("crash-line-{0}-{1}" -f $i, (Get-Date).Ticks)
+        if (($i % 100) -eq 0) { Start-Sleep -Milliseconds 1 }
+    }
+} catch {
+    $_ | Out-File -LiteralPath $LogPath -Encoding UTF8
+    exit 1
 }
 '@ | Set-Content -LiteralPath $childScript -Encoding UTF8
-    $env:MOUNTFILE_CRASH_DRIVE = $drive
     $writer = Start-Process -FilePath "powershell.exe" -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScript
-    ) -PassThru
-    $crashPayload = Join-Path $drive "crash-payload.bin"
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScript,
+        "-Path", $crashPayload, "-LogPath", $childLog
+    ) -WorkingDirectory $OutputDirectory -PassThru
     $deadline = (Get-Date).AddSeconds(10)
     while (-not (Test-Path $crashPayload) -and (Get-Date) -lt $deadline) {
         if ($writer.HasExited) { break }
@@ -137,7 +146,10 @@ for ($i = 0; $i -lt 10000; $i++) {
     }
     if (-not (Test-Path $crashPayload)) {
         $childOutput = if ($writer.HasExited) { $writer.ExitCode } else { "running" }
-        throw "abrupt writer did not create payload before termination (state=$childOutput)"
+        $childLogText = if (Test-Path $childLog) {
+            Get-Content -LiteralPath $childLog -Raw
+        } else { "<no child log>" }
+        throw "abrupt writer did not create payload before termination (state=$childOutput; log=$childLogText)"
     }
     Stop-Process -Id $writer.Id -Force
     $writer.WaitForExit()
