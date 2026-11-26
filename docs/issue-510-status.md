@@ -1,8 +1,8 @@
 ## Сводка трекера — сгенерировано `scripts/tracker_status.py`
 
-Срез манифеста: `3798409` (v1.103.2), сверка `2026-11-26`. HEAD: `3798409` — fix(#510): gate MFT replay on staged verifier.
+Срез манифеста: `c3bc327` (v1.103.2), сверка `2026-11-26`. HEAD: `c3bc327` — chore(security): drop stale Pillow allow-ghsas suppressions (#672).
 
-⚠️ Ветка опережает `origin/main` на 1 коммит(ов): манифест может отставать.
+⚠️ Ветка опережает `origin/main` на 0 коммит(ов): манифест может отставать.
 
 ✅ 23 · ⚠️ 8 · ⬜ 0 · 🚫 1 · всего 32
 
