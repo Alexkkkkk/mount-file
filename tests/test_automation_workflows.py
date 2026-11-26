@@ -303,7 +303,7 @@ def test_ci_preserves_protected_main_status_contexts_without_duplicate_test_runs
     ci = workflow("ci.yml")
     # The required contexts are emitted by the setup-matrix JSON (fast tier on
     # PRs/merge-group, full 3x3 on main pushes) rather than a static YAML matrix.
-    for context in ("test (3.10)", "test (3.11)", "test (3.12)"):
+    for context in ("test (3.11)", "test (3.12)"):
         assert f'"check_name":"{context}"' in ci
     assert "name: Tests (ubuntu-latest, py3.12)" in ci
     assert "name: gui smoke test (offscreen)" in ci
@@ -322,7 +322,6 @@ def test_ci_full_tier_and_status_gate_cover_issue_595_contract():
 
     # The expensive macOS evidence is intentionally a main-push/full-tier
     # concern, while PRs retain the Linux+Windows fast tier.
-    assert '"os":"macos-latest","python":"3.10"' in ci
     assert '"os":"macos-latest","python":"3.12"' in ci
     assert "MOUNTFILE_EXPECTED_PLATFORMS" in ci
     assert "'linux,windows,macos'" in ci

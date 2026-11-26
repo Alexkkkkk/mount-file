@@ -4,6 +4,5 @@
 -e .[api,ai,dfir,dev,legacy-tsk,fuzz,images]
 -r requirements-docs.txt
 # Optional test/contributor tooling not required by the application runtime.
-pre-commit>=3.0
-Pillow>=13.0.0 ; python_version >= '3.11'
-Pillow>=12.3.0 ; python_version < '3.11'
+pre-commit>=4.7
+Pillow>=13.0.0
