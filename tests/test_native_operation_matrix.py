@@ -323,7 +323,7 @@ def test_ext4_create_file_process_kill_preserves_source_until_publish(
     monkeypatch.setenv(ENABLE_ENV, "1")
     image = _make_ext4(tmp_path)
     before = _sha256(image)
-    child = r'''
+    child = r"""
 import os
 import signal
 import sys
@@ -345,7 +345,7 @@ def kill_at(name):
 fault_hook_installed(kill_at)
 from mountfile.ext4_native_writer import Ext4NativeWriter
 Ext4NativeWriter().create_file(sys.argv[2], "created.txt", b"complete create")
-'''
+"""
     environment = os.environ.copy()
     environment[ENABLE_ENV] = "1"
     environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
