@@ -3,9 +3,9 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "c852eda",
-    "version": "1.103.2",
-    "checked": "2026-11-25"
+    "commit": "adfacfb",
+    "version": "1.104.0",
+    "checked": "2026-11-26"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
