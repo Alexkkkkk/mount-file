@@ -379,8 +379,8 @@
         "tests/test_native_operation_matrix.py",
         "tests/test_writer_fault_injection_acceptance.py"
       ],
-      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. The ext4.create_file injected-exception and short_write cells have operation-specific selectors; process_kill and cancellation remain not_proven until operation-specific tests are added. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
-      "reproduced": "2026-11-26: local focused operation/checker/read-back run passed (69 passed, 10 optional NTFS skips); the 32-cell artifact mapping includes ext4.create_file injected_exception and short_write selectors. Process-kill/cancellation operation-specific cells, Windows chkdsk parity and scheduled-run streak remain unavailable. The artifact acceptance verdict remains not_claimed."
+      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. All four ext4.create_file states have operation-specific selectors; nested transactional publish is counted explicitly for process-kill. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
+      "reproduced": "2026-11-26: local operation/checker/read-back run passed (93 passed, 10 optional NTFS skips); the 32-cell artifact mapping now has ext4.create_file selectors for injected_exception, short_write, process_kill and cancellation. Windows chkdsk parity and scheduled-run streak remain unavailable. The artifact acceptance verdict remains not_claimed."
     },
     {
       "id": "D7",

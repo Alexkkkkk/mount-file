@@ -74,6 +74,16 @@ def test_operation_specific_ext4_create_file_evidence_does_not_leak_from_write_f
                 "test_ext4_create_file_short_write_refuses_publication",
                 "passed",
             ),
+            (
+                "tests.test_native_operation_matrix",
+                "test_ext4_create_file_process_kill_preserves_source_until_publish[copy:start]",
+                "passed",
+            ),
+            (
+                "tests.test_native_operation_matrix",
+                "test_ext4_create_file_cancellation_preserves_source_and_cleans_stage",
+                "passed",
+            ),
         ],
     )
 
@@ -91,6 +101,12 @@ def test_operation_specific_ext4_create_file_evidence_does_not_leak_from_write_f
         "tests.test_native_operation_matrix::"
         "test_ext4_create_file_short_write_refuses_publication"
     ]
+    assert _cell(report, "ext4", "process_kill", "create_file")["test_status"] == (
+        "passed"
+    )
+    assert _cell(report, "ext4", "cancellation", "create_file")["test_status"] == (
+        "passed"
+    )
     assert _cell(report, "ext4", "injected_exception")["test_status"] == ("not_proven")
 
 
