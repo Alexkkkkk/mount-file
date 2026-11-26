@@ -1,8 +1,8 @@
 ## Сводка трекера — сгенерировано `scripts/tracker_status.py`
 
-Срез манифеста: `c3bc327` (v1.103.2), сверка `2026-11-26`. HEAD: `c3bc327` — chore(security): drop stale Pillow allow-ghsas suppressions (#672).
+Срез манифеста: `ce3b504` (v1.103.2), сверка `2026-11-26`. HEAD: `ce3b504` — fix(#510): sync acceptance slice with main.
 
-⚠️ Ветка опережает `origin/main` на 0 коммит(ов): манифест может отставать.
+⚠️ Ветка опережает `origin/main` на 1 коммит(ов): манифест может отставать.
 
 ✅ 23 · ⚠️ 8 · ⬜ 0 · 🚫 1 · всего 32
 
@@ -53,7 +53,7 @@
 | D2 | Process-kill at selected staged-writer boundaries | ✅ | `tests/test_ext4_writer_fault_coverage.py`, `tests/test_ntfs_writer_fault_coverage.py`, `tests/test_native_journal_writers.py`, `.github/workflows/replay-nightly.yml`, `scripts/replay_nightly_evidence.py`, `tests/test_replay_nightly_evidence.py` |
 | D3 | Hash preservation on mapped refusal and failure cases | ⚠️ | `mountfile/native_write.py`, `mountfile/ntfs_native_writer.py`, `tests/test_jbd2_malformed_journal_refusal.py`, `tests/test_ntfs_native_write_phase_injection.py`, `tests/test_ntfs_write_phase_injection.py`, `tests/test_ntfs_writer_fault_coverage.py`, `tests/test_writer_fault_injection_acceptance.py`, `tests/test_hash_preservation_matrix.py` |
 | D4 | Source identity / concurrent modification | ✅ | `mountfile/native_write.py`, `tests/test_ntfs_acceptance_independent_checker.py`, `tests/test_ext2_native.py` |
-| D5 | Independent checker + read-back после каждой поддержанной операции | ⚠️ | `tests/_independent_checkers.py`, `tests/test_checker_acceptance.py`, `mountfile/ntfs_native_writer.py`, `mountfile/native_write.py`, `tests/test_ntfs_transactional_readback.py`, `tests/test_native_journal_writers.py`, `tests/test_writer_fault_coverage.py` |
+| D5 | Independent checker + read-back после каждой поддержанной операции | ⚠️ | `tests/_independent_checkers.py`, `tests/test_checker_acceptance.py`, `mountfile/ntfs_native_writer.py`, `mountfile/native_write.py`, `tests/test_ntfs_transactional_readback.py`, `tests/test_native_journal_writers.py`, `tests/test_writer_fault_coverage.py`, `tests/test_native_operation_matrix.py` |
 | D6 | JUnit-backed profile × operation × failure-state artifact | ⚠️ | `.github/workflows/ci.yml`, `.github/workflows/failure-matrix.yml`, `.github/workflows/replay-nightly.yml`, `scripts/failure_matrix_artifact.py`, `scripts/replay_nightly_evidence.py`, `tests/test_failure_matrix_artifact.py`, `tests/test_native_operation_matrix.py`, `tests/test_writer_fault_injection_acceptance.py` |
 | D7 | Unsupported-ячейки как typed refusals, а не скрытые skip | ✅ | `scripts/capability_conformance.py`, `tests/test_capability_conformance.py`, `tests/test_vfs_refusal_routing.py`, `tests/test_fat_capability_identity.py` |
 

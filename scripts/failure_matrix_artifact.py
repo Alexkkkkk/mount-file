@@ -394,8 +394,9 @@ PROFILE_OPERATIONS = {
 
 # Operation-specific selectors must never inherit another operation's cases.
 # The create_file phase test checks the SHA-256 and staging cleanup on every
-# declared injected-exception point; the other failure states remain not proven
-# until their own create_file-specific test selectors are declared.
+# declared injected-exception point. Its short-write selector exercises the
+# staged payload truncation path and stays operation-specific so evidence
+# cannot leak from ext4.write_file.
 OPERATION_TESTS: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {
     "ext4": {
         "create_file": {
@@ -403,6 +404,12 @@ OPERATION_TESTS: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {
                 _case(
                     "test_native_operation_matrix",
                     "test_ext4_create_file_phase_failure_preserves_the_image",
+                )
+            ],
+            "short_write": [
+                _case(
+                    "test_native_operation_matrix",
+                    "test_ext4_create_file_short_write_refuses_publication",
                 )
             ],
         },

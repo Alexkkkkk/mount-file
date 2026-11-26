@@ -69,6 +69,11 @@ def test_operation_specific_ext4_create_file_evidence_does_not_leak_from_write_f
                 "test_ext4_create_file_phase_failure_preserves_the_image[copy]",
                 "passed",
             ),
+            (
+                "tests.test_native_operation_matrix",
+                "test_ext4_create_file_short_write_refuses_publication",
+                "passed",
+            ),
         ],
     )
 
@@ -80,9 +85,12 @@ def test_operation_specific_ext4_create_file_evidence_does_not_leak_from_write_f
         "tests.test_native_operation_matrix::"
         "test_ext4_create_file_phase_failure_preserves_the_image[copy]"
     ]
-    assert _cell(report, "ext4", "short_write", "create_file")["test_status"] == (
-        "not_proven"
-    )
+    create_short = _cell(report, "ext4", "short_write", "create_file")
+    assert create_short["test_status"] == "passed"
+    assert create_short["test_evidence"] == [
+        "tests.test_native_operation_matrix::"
+        "test_ext4_create_file_short_write_refuses_publication"
+    ]
     assert _cell(report, "ext4", "injected_exception")["test_status"] == ("not_proven")
 
 

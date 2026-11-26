@@ -38,7 +38,11 @@ import pytest
 
 import mountfile.ext4_native_writer as ext4_module
 import mountfile.native_write as native_write
-from mountfile.ext4_native_writer import Ext4NativeWriter, libext2fs_available
+from mountfile.ext4_native_writer import (
+    Ext4NativeWriter,
+    Ext4ProfileUnsupported,
+    libext2fs_available,
+)
 from mountfile.native_write import ENABLE_ENV, NativeWriteError, NtfsTransactionalWriter
 
 #: operation -> declared phase list, in runtime order.
@@ -248,6 +252,26 @@ def test_ext4_create_file_phase_failure_preserves_the_image(
     assert (
         _staged(tmp_path, known) == []
     ), f"failure at {phase!r} leaked staged files: {_staged(tmp_path, known)}"
+
+
+@needs_ext
+def test_ext4_create_file_short_write_refuses_publication(tmp_path, monkeypatch):
+    """A truncated staged payload must fail read-back before publication."""
+    monkeypatch.setenv(ENABLE_ENV, "1")
+    image = _make_ext4(tmp_path)
+    before = _sha256(image)
+    real_payload_file = native_write._payload_file
+
+    def truncated_payload(data, directory):
+        payload = real_payload_file(data, directory)
+        Path(payload).write_bytes(Path(payload).read_bytes()[:1])
+        return payload
+
+    monkeypatch.setattr(native_write, "_payload_file", truncated_payload)
+    with pytest.raises(Ext4ProfileUnsupported, match="staged read-back mismatch"):
+        Ext4NativeWriter().create_file(str(image), "created.txt", b"complete payload")
+    assert _sha256(image) == before
+    assert _staged(tmp_path, {"ext4.img", "seed.bin"}) == []
 
 
 def test_ntfs_single_operation_surface_is_declared():
