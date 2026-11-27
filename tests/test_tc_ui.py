@@ -25,6 +25,9 @@ from types import SimpleNamespace
 
 import pytest
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 def _qt_bindings_available():
     try:

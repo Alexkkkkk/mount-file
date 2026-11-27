@@ -8,6 +8,7 @@ Run:  python -m pytest tests/test_rt809.py -v
 """
 
 import os
+import shutil
 import sys
 import tempfile
 
@@ -63,6 +64,9 @@ class TestDetect:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
 
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_mtk_encrypted(self):
         path = os.path.join(self.tmp, "mtk.bin")
         make_encrypted_dump(path, "MTK")
@@ -91,6 +95,9 @@ class TestDetect:
 class TestDecode:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_mtk_roundtrip(self):
         path = os.path.join(self.tmp, "mtk.bin")
@@ -176,6 +183,9 @@ class TestUdev:
         with open(path, "wb") as f:
             f.write(text.encode("latin-1"))
         return path
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_parse_windows_eol(self):
         parts = parse_udev(self._udev())
@@ -340,6 +350,9 @@ class TestFormatPartsTable:
 
     def setup_method(self):
         self.tmp = tempfile.mkdtemp(prefix="rt809_table_")
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_header_and_rows(self):
         parts = [Part("preloader", 0, 0x4000), Part("lk", 0x4000, 0x8000)]

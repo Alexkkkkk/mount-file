@@ -25,6 +25,9 @@ qt_compat = pytest.importorskip(
 from mountfile.mainwindow import ImageModel, MainWindow
 from mountfile.qt_compat import MB_Yes, QApplication, QMessageBox, QModelIndex
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(autouse=True)
 def disable_startup_updates(monkeypatch):

@@ -8,6 +8,7 @@ Run:  python -m pytest tests/test_partition.py -v
 """
 
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -61,6 +62,9 @@ def _ebr(logical=None, nxt=None):
 class TestExtendedMBR:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_single_logical_volume(self):
         path = _blank_image(self.tmp)
@@ -141,6 +145,9 @@ class TestGptRobustness:
         struct.pack_into("<Q", ent, 40, 2048 + 99999)
         ent[56 : 56 + len(name) * 2] = name.encode("utf-16-le")
         _put_sector(path, 2, bytes(ent))
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_plausible_gpt(self):
         path = _blank_image(self.tmp)

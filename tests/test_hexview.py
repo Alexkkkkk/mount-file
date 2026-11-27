@@ -16,6 +16,9 @@ pytest.importorskip("mountfile.qt_compat", exc_type=ImportError)
 from mountfile.hexview import HexView
 from mountfile.qt_compat import QT6, CtrlModifier, QApplication, Qt, QtCore, QtGui
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():

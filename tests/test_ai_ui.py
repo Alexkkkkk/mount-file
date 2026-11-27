@@ -35,6 +35,9 @@ from mountfile.ai import AiResult  # noqa: E402
 from mountfile.qt_compat import QApplication, QMenu, QToolBar  # noqa: E402
 from mountfile.tc_window import AiDialog, MainWindow  # noqa: E402
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 class FakeProvider:
     """A two-file image: README.TXT plus one binary blob."""

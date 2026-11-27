@@ -41,6 +41,9 @@ pytest.importorskip(
 from mountfile import update_dialog as ud  # noqa: E402
 from mountfile.qt_compat import QApplication  # noqa: E402
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():
