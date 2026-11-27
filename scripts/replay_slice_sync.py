@@ -87,6 +87,11 @@ def _git(root: Path, *args: str) -> str | None:
     return value or None
 
 
+def _is_shallow(root: Path) -> bool:
+    """True when the checkout is a shallow clone (partial object store)."""
+    return _git(root, "rev-parse", "--is-shallow-repository") == "true"
+
+
 def _git_ok(root: Path, *args: str) -> bool:
     """True when git exits 0, for commands whose success prints nothing."""
     try:
@@ -201,7 +206,17 @@ def slice_drift(
     if claimed_commit and not _git_ok(
         root, "cat-file", "-e", f"{claimed_commit}^{{commit}}"
     ):
-        _record(f"slice.commit = {claimed_commit!r} в этом checkout не разрешается")
+        if _is_shallow(root):
+            # Shallow-ness is a property of the checkout, not of the manifest:
+            # a partial clone cannot resolve old commits even when they are
+            # real and reachable on the remote. Downgrade to advisory so a
+            # shallow CI checkout does not turn a green gate red.
+            advisory.append(
+                f"slice.commit = {claimed_commit!r} не разрешается "
+                "в shallow-checkout: объект недоступен локально, дрейф не подтверждён"
+            )
+        else:
+            _record(f"slice.commit = {claimed_commit!r} в этом checkout не разрешается")
 
     claimed_branch = slice_block.get("branch")
     if claimed_branch:

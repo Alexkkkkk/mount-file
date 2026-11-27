@@ -19,13 +19,23 @@ settings.load_profile(_settings_profile)
 
 
 @pytest.fixture(scope="session")
-def shared_probe_cache(tmp_path_factory, worker_id):
+def shared_probe_cache(tmp_path_factory, request):
     """Дорогой ресурс, собираемый ровно один раз на весь прогон.
 
     Под pytest-xdist каждый воркер имеет свой session-контекст, поэтому
     голый scope="session" выполняет фикстуру N_workers раз. Файловая
     блокировка гарантирует: первый воркер строит, остальные переиспользуют.
+
+    ``worker_id`` предоставляется плагином pytest-xdist: когда плагин не
+    установлен (часть окружений, например nightly Windows), фикстура не
+    существует и запрос её напрямую роняет сбор сERROR. Поэтому пробуем
+    получить его через getfixturevalue и считаем прогон сериальным, если
+    плагина нет.
     """
+    try:
+        worker_id = request.getfixturevalue("worker_id")
+    except pytest.FixtureLookupError:
+        worker_id = "master"
     if worker_id == "master":
         return {"built_once": True, "by": "serial"}
 
