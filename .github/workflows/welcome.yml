@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/first-interaction@v1
+      - uses: actions/first-interaction@fb2402657b4a28582200150d0a145671d0e50597 # v1.2.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           issue-message: |
@@ -31,6 +31,6 @@ jobs:
             файловую систему и точную команду/шаги — без самих образов и пользовательских данных.
           pr-message: |
             🎉 Спасибо за ваш первый PR в **Mount File**!
-            - CI прогонит тесты на Linux / Windows / macOS (Python 3.10–3.12)
+            - CI прогонит тесты на Linux / Windows / macOS (Python 3.11–3.12)
             - Прочитайте [.github/copilot-instructions.md](https://github.com/Alexkkkkk/mount-file/blob/main/.github/copilot-instructions.md):
               для путей чтения/записи действуют fail-closed правила
