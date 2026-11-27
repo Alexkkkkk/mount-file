@@ -1,5 +1,6 @@
 """Behavioral checks for capability-driven GUI write controls."""
 
+import pytest
 from types import SimpleNamespace
 
 from mountfile.capabilities import get_native_capability_status
