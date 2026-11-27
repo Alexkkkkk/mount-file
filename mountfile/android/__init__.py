@@ -601,9 +601,7 @@ def parse_boot_image_header(
     )
 
 
-def detect_boot_image(
-    data: bytes | bytearray | memoryview, offset: int = 0
-) -> bool:
+def detect_boot_image(data: bytes | bytearray | memoryview, offset: int = 0) -> bool:
     """Return whether ``data`` contains a supported, structurally valid boot header."""
 
     try:

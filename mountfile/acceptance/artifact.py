@@ -64,9 +64,7 @@ def generated_timestamp(root: str | Path) -> str:
             epoch = int(result.stdout.strip()) if result.returncode == 0 else 0
         except (OSError, ValueError, subprocess.SubprocessError):
             epoch = 0
-    return dt.datetime.fromtimestamp(epoch, dt.UTC).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    return dt.datetime.fromtimestamp(epoch, dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def manifest_counts(manifest_path: str | Path | None) -> dict:

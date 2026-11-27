@@ -173,9 +173,7 @@ def _normalise_backend_name(name: str) -> str:
     value = _BACKEND_ALIASES.get(value, value)
     if value not in _BACKENDS and value != "auto":
         choices = ", ".join(sorted(_BACKENDS))
-        raise ValueError(
-            f"unknown registry backend {name!r}; choose auto, {choices}"
-        )
+        raise ValueError(f"unknown registry backend {name!r}; choose auto, {choices}")
     return value
 
 

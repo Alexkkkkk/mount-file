@@ -112,9 +112,7 @@ def create_evidence_manifest(
         raise EvidenceManifestError(f"cannot open source read-only: {exc}") from exc
 
     started_at = (
-        datetime.now(UTC)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
+        datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
     )
     try:
         before = os.fstat(source_fd)
@@ -141,9 +139,7 @@ def create_evidence_manifest(
         )
 
     completed_at = (
-        datetime.now(UTC)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
+        datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
     )
     result: dict[str, Any] = {
         "schema": "mountfile.evidence-manifest/v1",

@@ -157,14 +157,10 @@ def _timestamp_seconds(value: TimestampValue, *, field: str) -> float:
         # Naive datetimes have no timezone claim in the input.  Treating them as
         # UTC here keeps analysis deterministic instead of consulting the host
         # machine's local timezone.
-        candidate = (
-            value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-        )
+        candidate = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         seconds = candidate.timestamp()
     elif isinstance(value, date):
-        seconds = datetime(
-            value.year, value.month, value.day, tzinfo=UTC
-        ).timestamp()
+        seconds = datetime(value.year, value.month, value.day, tzinfo=UTC).timestamp()
     elif isinstance(value, Real):
         seconds = float(value)
     else:

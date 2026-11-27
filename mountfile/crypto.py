@@ -449,9 +449,7 @@ def _image_argument(image: Source) -> str:
     raise TypeError("adapter operations require a filesystem image path")
 
 
-def _secret_input(
-    value: str | bytes | None, *, line: bool = True
-) -> bytes | None:
+def _secret_input(value: str | bytes | None, *, line: bool = True) -> bytes | None:
     if value is None:
         return None
     if isinstance(value, str):

@@ -153,9 +153,7 @@ class LiveDiff:
             raise LiveDiffError("image not found: %s" % path)
         return snapshot_from_fs(open_tsk_fs(path), hash_files=self.hash_files)
 
-    def take(
-        self, image_path: os.PathLike | str
-    ) -> dict[str, tuple[str | None, int]]:
+    def take(self, image_path: os.PathLike | str) -> dict[str, tuple[str | None, int]]:
         """Take and store the baseline snapshot."""
 
         self._snapshot = self.snapshot(image_path)

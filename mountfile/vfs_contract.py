@@ -101,9 +101,7 @@ class VFS(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def write(
-        self, path: str, data: BinaryIO | bytes, offset: int = 0
-    ) -> VFSResult:
+    def write(self, path: str, data: BinaryIO | bytes, offset: int = 0) -> VFSResult:
         raise NotImplementedError
 
     @abstractmethod

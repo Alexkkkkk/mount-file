@@ -440,9 +440,7 @@ class KnowledgeBase:
     def __contains__(self, key: object) -> bool:
         return key in self._specs
 
-    def get(
-        self, key: str, default: FormatSpec | None = None
-    ) -> FormatSpec | None:
+    def get(self, key: str, default: FormatSpec | None = None) -> FormatSpec | None:
         return self._specs.get(key, default)
 
     def values(self):

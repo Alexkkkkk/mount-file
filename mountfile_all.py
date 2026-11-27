@@ -329,9 +329,9 @@ def demo_api(img: str, dump: str, udev: str, *, allow_write: bool = False) -> No
 
     # --- 4.4. RT809H: decode_dump() + split_by_udev() ---
     try:
+        from mountfile.rt809 import decode_dump  # noqa: WPS433
         from mountfile.rt809 import (
             Rt809Error,
-            decode_dump,  # noqa: WPS433
             detect,
             split_by_udev,
         )

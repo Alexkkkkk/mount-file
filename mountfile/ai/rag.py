@@ -485,9 +485,7 @@ class DocumentationRetriever:
             # escape from a user-facing documentation search either.
             return None
 
-    def retrieve(
-        self, query: str, top_k: int | None = None
-    ) -> list[RetrievedSnippet]:
+    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedSnippet]:
         """Return ranked evidence with positive lexical or semantic scores."""
 
         if not isinstance(query, str):

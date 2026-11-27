@@ -417,9 +417,7 @@ class PluginRegistry:
             return False
         return True
 
-    def open(
-        self, image: Any, metadata: Mapping[str, Any] | None = None
-    ) -> OpenEvent:
+    def open(self, image: Any, metadata: Mapping[str, Any] | None = None) -> OpenEvent:
         """Start a session and call every registered ``on_open`` hook."""
 
         if self._active:
@@ -444,9 +442,7 @@ class PluginRegistry:
 
         return self.open(image, metadata)
 
-    def file(
-        self, file: Any, metadata: Mapping[str, Any] | None = None
-    ) -> FileEvent:
+    def file(self, file: Any, metadata: Mapping[str, Any] | None = None) -> FileEvent:
         """Call ``on_file`` hooks with an immutable file snapshot."""
 
         if not self._active:

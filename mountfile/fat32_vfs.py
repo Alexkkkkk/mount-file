@@ -59,9 +59,7 @@ class Fat32VFS(VFS):
         except Fat32Error as exc:
             return VFSResult.fail(ErrorCode.NOT_FOUND, str(exc))
 
-    def write(
-        self, path: str, data: BinaryIO | bytes, offset: int = 0
-    ) -> VFSResult:
+    def write(self, path: str, data: BinaryIO | bytes, offset: int = 0) -> VFSResult:
         if offset:
             return VFSResult.fail(
                 ErrorCode.OPERATION_NOT_SUPPORTED,

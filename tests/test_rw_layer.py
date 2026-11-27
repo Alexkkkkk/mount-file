@@ -28,10 +28,10 @@ from test_fat32 import make_fat32_image  # noqa: E402
 
 from mountfile.fat32 import Fat32  # noqa: E402
 from mountfile.rw.universal import Journal  # noqa: E402
+from mountfile_rw_complete import Fat32Adapter  # noqa: E402
 from mountfile_rw_complete import (
     CrashRecovery,
     DryRunFat32,
-    Fat32Adapter,  # noqa: E402
     VerificationEngine,
     create_rw_full,
     mcp_handle,
