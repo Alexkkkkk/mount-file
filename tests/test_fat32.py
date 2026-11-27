@@ -8,6 +8,7 @@ Run:  python -m pytest tests/ -v
 """
 
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -153,6 +154,7 @@ class TestFat32:
         self.fs = Fat32(self.fh)
 
     def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
         self.fh.close()
 
     def _free(self):
@@ -316,6 +318,9 @@ def test_fat32_rejects_physically_truncated_volume(tmp_path):
 class TestPartitions:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_mbr(self):
         path = os.path.join(self.tmp, "mbr.img")

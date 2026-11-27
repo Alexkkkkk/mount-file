@@ -31,6 +31,9 @@ from mountfile.ai_format_advisor_v2 import (
 )
 from mountfile.qt_compat import QApplication, QEvent  # noqa: E402
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 def test_fingerprint_of_a_text_file(tmp_path):
     p = tmp_path / "note.txt"

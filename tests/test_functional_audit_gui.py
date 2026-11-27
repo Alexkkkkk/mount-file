@@ -15,6 +15,9 @@ from test_gui_end_to_end import build_disk
 from mountfile import mainwindow, tc_style, tc_window, text_editor
 from mountfile.qt_compat import MB_No, MB_Yes, QApplication, QEvent, QMessageBox
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():

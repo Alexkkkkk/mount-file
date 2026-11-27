@@ -26,6 +26,9 @@ sys.path.insert(0, ROOT)
 
 import pytest  # noqa: E402
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 try:  # pragma: no cover - зависит от окружения
     import mountfile.qt_compat as _qt_compat  # noqa: F401
 

@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from scripts.windows_checker_inventory import SCHEMA, build_inventory
 
 
@@ -11,7 +13,9 @@ def test_inventory_on_non_windows_host_is_typed_unavailable():
     # This suite runs in CI on Linux; a Windows-host run is covered by the
     # dedicated Windows acceptance workflow, not here.
     if inventory["host"] == "Windows":
-        return
+        pytest.skip(
+            "Windows-host inventory is covered by the Windows acceptance workflow"
+        )
     assert inventory["schema"] == SCHEMA
     assert inventory["status"] == "unavailable"
     assert inventory["reason"] == "no checker binary found on this host"

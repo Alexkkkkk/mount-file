@@ -23,6 +23,9 @@ import pytest  # noqa: E402
 from mountfile import text_editor  # noqa: E402
 from tests.qt_env import needs_qt  # noqa: E402
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 class FakeProvider:
     """Минимальный провайдер образа: только ``read_file``."""
