@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from .timeline import iter_file_entries
 
@@ -44,10 +45,10 @@ class DiffEntry:
 
     path: str
     status: str
-    before_sha: Optional[str] = None
-    after_sha: Optional[str] = None
-    before_size: Optional[int] = None
-    after_size: Optional[int] = None
+    before_sha: str | None = None
+    after_sha: str | None = None
+    before_size: int | None = None
+    after_size: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in STATUSES:
@@ -64,7 +65,7 @@ class DiffEntry:
         }
 
 
-def _digest(entry: Any, size: int) -> Optional[str]:
+def _digest(entry: Any, size: int) -> str | None:
     try:
         data = entry.read_random(0, size)
     except Exception:  # pragma: no cover - unreadable file
@@ -76,10 +77,10 @@ def _digest(entry: Any, size: int) -> Optional[str]:
 
 def snapshot_from_fs(
     fs: Any, *, hash_files: bool = True
-) -> dict[str, tuple[Optional[str], int]]:
+) -> dict[str, tuple[str | None, int]]:
     """Return ``{path: (sha256|None, size)}`` for every file in ``fs``."""
 
-    snapshot: dict[str, tuple[Optional[str], int]] = {}
+    snapshot: dict[str, tuple[str | None, int]] = {}
     for path, entry in iter_file_entries(fs):
         size = int(getattr(entry.info.meta, "size", 0) or 0)
         snapshot[path] = (_digest(entry, size) if hash_files else None, size)
@@ -87,8 +88,8 @@ def snapshot_from_fs(
 
 
 def diff_snapshots(
-    before: dict[str, tuple[Optional[str], int]],
-    after: dict[str, tuple[Optional[str], int]],
+    before: dict[str, tuple[str | None, int]],
+    after: dict[str, tuple[str | None, int]],
 ) -> list[DiffEntry]:
     """Compare two :func:`snapshot_from_fs` results."""
 
@@ -134,7 +135,7 @@ class LiveDiff:
 
     def __init__(self, *, hash_files: bool = True) -> None:
         self.hash_files = hash_files
-        self._snapshot: Optional[dict[str, tuple[Optional[str], int]]] = None
+        self._snapshot: dict[str, tuple[str | None, int]] | None = None
 
     @property
     def has_snapshot(self) -> bool:
@@ -142,7 +143,7 @@ class LiveDiff:
 
     def snapshot(
         self, image_path: os.PathLike | str
-    ) -> dict[str, tuple[Optional[str], int]]:
+    ) -> dict[str, tuple[str | None, int]]:
         """Take a snapshot without storing it."""
 
         from .timeline import open_tsk_fs
@@ -154,7 +155,7 @@ class LiveDiff:
 
     def take(
         self, image_path: os.PathLike | str
-    ) -> dict[str, tuple[Optional[str], int]]:
+    ) -> dict[str, tuple[str | None, int]]:
         """Take and store the baseline snapshot."""
 
         self._snapshot = self.snapshot(image_path)
@@ -164,7 +165,7 @@ class LiveDiff:
         self,
         image_path: os.PathLike | str,
         *,
-        baseline: Optional[dict[str, tuple[Optional[str], int]]] = None,
+        baseline: dict[str, tuple[str | None, int]] | None = None,
     ) -> list[DiffEntry]:
         """Compare the current image against the stored (or supplied) baseline."""
 

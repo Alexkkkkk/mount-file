@@ -14,8 +14,9 @@ from __future__ import annotations
 import operator
 import shutil
 import struct
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, Optional, Sequence, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 __all__ = [
     "ANDROID_BOOT_MAGIC",
@@ -84,7 +85,7 @@ _EXTERNAL_TOOL_CANDIDATES = {
         "payload_dumper.py",
     ),
 }
-ExternalToolMap = Dict[str, Optional[str]]
+ExternalToolMap = dict[str, str | None]
 
 
 class AndroidFormatError(ValueError):
@@ -203,20 +204,20 @@ class BootImageHeader:
     ramdisk_size: int
     os_version: int
     page_size: int
-    kernel_addr: Optional[int]
-    ramdisk_addr: Optional[int]
-    second_size: Optional[int]
-    second_addr: Optional[int]
-    tags_addr: Optional[int]
+    kernel_addr: int | None
+    ramdisk_addr: int | None
+    second_size: int | None
+    second_addr: int | None
+    tags_addr: int | None
     name: str
     cmdline: str
-    id_words: Tuple[int, ...]
-    recovery_dtbo_size: Optional[int]
-    recovery_dtbo_offset: Optional[int]
-    dtb_size: Optional[int]
-    dtb_addr: Optional[int]
-    signature_size: Optional[int]
-    reserved: Tuple[int, ...]
+    id_words: tuple[int, ...]
+    recovery_dtbo_size: int | None
+    recovery_dtbo_offset: int | None
+    dtb_size: int | None
+    dtb_addr: int | None
+    signature_size: int | None
+    reserved: tuple[int, ...]
     _name_bytes: bytes = field(default=b"", repr=False, compare=False)
     _cmdline_bytes: bytes = field(default=b"", repr=False, compare=False)
 
@@ -239,7 +240,7 @@ class BootImageHeader:
         return struct.pack("<8I", *self.id_words) if self.id_words else b""
 
 
-def _as_bytes(data: Union[bytes, bytearray, memoryview]) -> bytes:
+def _as_bytes(data: bytes | bytearray | memoryview) -> bytes:
     """Return a stable byte string, rejecting objects with surprising I/O."""
 
     if not isinstance(data, (bytes, bytearray, memoryview)):
@@ -271,7 +272,7 @@ def _require(data: bytes, offset: int, length: int, what: str) -> None:
         )
 
 
-def parse_sparse_header(data: Union[bytes, bytearray, memoryview]) -> SparseImageHeader:
+def parse_sparse_header(data: bytes | bytearray | memoryview) -> SparseImageHeader:
     """Parse and validate an Android sparse image file header.
 
     This function validates only the file header.  Call
@@ -319,8 +320,8 @@ def parse_sparse_header(data: Union[bytes, bytearray, memoryview]) -> SparseImag
 
 
 def iter_sparse_chunks(
-    data: Union[bytes, bytearray, memoryview],
-    header: Optional[SparseImageHeader] = None,
+    data: bytes | bytearray | memoryview,
+    header: SparseImageHeader | None = None,
 ) -> Iterator[SparseChunk]:
     """Yield validated sparse chunks without reading beyond ``data``.
 
@@ -426,7 +427,7 @@ def iter_sparse_chunks(
 
 
 def parse_sparse_image(
-    data: Union[bytes, bytearray, memoryview],
+    data: bytes | bytearray | memoryview,
 ) -> SparseImageHeader:
     """Validate the sparse header and all chunks, returning header metadata."""
 
@@ -436,7 +437,7 @@ def parse_sparse_image(
     return header
 
 
-def detect_sparse_image(data: Union[bytes, bytearray, memoryview]) -> bool:
+def detect_sparse_image(data: bytes | bytearray | memoryview) -> bool:
     """Return whether ``data`` starts with a supported, structurally valid header."""
 
     try:
@@ -462,7 +463,7 @@ def _legacy_page_size(page_size: int) -> None:
 
 
 def parse_boot_image_header(
-    data: Union[bytes, bytearray, memoryview], offset: int = 0
+    data: bytes | bytearray | memoryview, offset: int = 0
 ) -> BootImageHeader:
     """Parse Android boot image header metadata for versions 0 through 4.
 
@@ -601,7 +602,7 @@ def parse_boot_image_header(
 
 
 def detect_boot_image(
-    data: Union[bytes, bytearray, memoryview], offset: int = 0
+    data: bytes | bytearray | memoryview, offset: int = 0
 ) -> bool:
     """Return whether ``data`` contains a supported, structurally valid boot header."""
 
@@ -616,7 +617,7 @@ is_boot_image = detect_boot_image
 
 
 def discover_external_tools(
-    names: Optional[Sequence[str]] = None,
+    names: Sequence[str] | None = None,
 ) -> ExternalToolMap:
     """Find optional Android tools on ``PATH`` without executing them.
 

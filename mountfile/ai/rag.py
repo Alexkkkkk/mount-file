@@ -29,18 +29,11 @@ import ast
 import math
 import re
 from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
 )
 
 _TOKEN_RE = re.compile(r"(?u)\b[\w]+\b")
@@ -65,7 +58,7 @@ class Citation:
     end_line: int
 
     @property
-    def lines(self) -> Tuple[int, int]:
+    def lines(self) -> tuple[int, int]:
         """Return the inclusive one-based line range."""
 
         return self.start_line, self.end_line
@@ -161,7 +154,7 @@ class RetrievedSnippet:
     def citation(self) -> str:
         return self.chunk.citation
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a serialization-safe representation for UI/API callers."""
 
         return {
@@ -187,7 +180,7 @@ class _IndexedChunk:
     length: int
 
 
-def _tokens(text: str) -> List[str]:
+def _tokens(text: str) -> list[str]:
     return [match.group(0).casefold() for match in _TOKEN_RE.finditer(text)]
 
 
@@ -209,7 +202,7 @@ def _safe_child(root: Path, path: Path, suffix: str) -> bool:
     return resolved.is_file() and resolved.suffix.casefold() == suffix.casefold()
 
 
-def _read_text(path: Path, max_file_bytes: int) -> Optional[str]:
+def _read_text(path: Path, max_file_bytes: int) -> str | None:
     """Read a bounded UTF-8 text file, returning ``None`` on unsafe input."""
 
     try:
@@ -226,7 +219,7 @@ def _make_chunk(
     start_line: int,
     end_line: int,
     text: str,
-) -> Optional[DocumentationChunk]:
+) -> DocumentationChunk | None:
     cleaned = text.strip()
     if not cleaned:
         return None
@@ -248,7 +241,7 @@ def _markdown_chunks(source: str, text: str) -> Iterable[DocumentationChunk]:
 
     section = "Document"
     start = 1
-    buffer: List[str] = []
+    buffer: list[str] = []
     for line_number, line in enumerate(lines, start=1):
         heading = _HEADING_RE.match(line)
         if heading:
@@ -268,7 +261,7 @@ def _markdown_chunks(source: str, text: str) -> Iterable[DocumentationChunk]:
         yield final
 
 
-def _docstring_expression(node: ast.AST) -> Optional[ast.AST]:
+def _docstring_expression(node: ast.AST) -> ast.AST | None:
     body = getattr(node, "body", ())
     if not body:
         return None
@@ -283,14 +276,14 @@ def _docstring_expression(node: ast.AST) -> Optional[ast.AST]:
     return None
 
 
-def _walk_documented_nodes(tree: ast.Module) -> Iterable[Tuple[str, ast.AST]]:
+def _walk_documented_nodes(tree: ast.Module) -> Iterable[tuple[str, ast.AST]]:
     """Yield module/class/function nodes with their qualified section names."""
 
     yield "module", tree
 
     def visit(
         body: Iterable[ast.stmt], parent: str = ""
-    ) -> Iterable[Tuple[str, ast.AST]]:
+    ) -> Iterable[tuple[str, ast.AST]]:
         for node in body:
             if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 qualified = "%s.%s" % (parent, node.name) if parent else node.name
@@ -357,9 +350,9 @@ class DocumentationRetriever:
 
     def __init__(
         self,
-        root: Optional[Path] = None,
+        root: Path | None = None,
         *,
-        embedding_backend: Optional[Any] = None,
+        embedding_backend: Any | None = None,
         top_k: int = _DEFAULT_TOP_K,
         max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES,
         k1: float = _DEFAULT_K1,
@@ -376,23 +369,23 @@ class DocumentationRetriever:
         self.max_file_bytes = int(max_file_bytes)
         self.k1 = float(k1)
         self.b = float(b)
-        self.root: Optional[Path] = None
-        self.chunks: Tuple[DocumentationChunk, ...] = ()
+        self.root: Path | None = None
+        self.chunks: tuple[DocumentationChunk, ...] = ()
         self.documents = self.chunks
-        self._indexed: Tuple[_IndexedChunk, ...] = ()
+        self._indexed: tuple[_IndexedChunk, ...] = ()
         self._document_frequency: Counter[str] = Counter()
         self._average_length = 0.0
         if root is not None:
             self.build(root)
 
-    def build(self, root: Path) -> "DocumentationRetriever":
+    def build(self, root: Path) -> DocumentationRetriever:
         """(Re)build the index and return ``self`` for convenient setup."""
 
         selected_root = Path(root).expanduser().resolve()
         if not selected_root.is_dir():
             raise ValueError("documentation root must be a directory")
 
-        chunks: List[DocumentationChunk] = []
+        chunks: list[DocumentationChunk] = []
         approved_markdown = [
             selected_root / "README.md",
             selected_root / "CHANGELOG.md",
@@ -412,7 +405,7 @@ class DocumentationRetriever:
                     _markdown_chunks(_relative_source(selected_root, path), text)
                 )
 
-        python_paths: List[Path] = []
+        python_paths: list[Path] = []
         try:
             candidates = list(selected_root.rglob("*.py"))
         except (OSError, ValueError):
@@ -452,11 +445,11 @@ class DocumentationRetriever:
     # Common spelling for callers that treat indexing as an action.
     index = build
 
-    def _bm25_scores(self, query_tokens: Sequence[str]) -> List[float]:
+    def _bm25_scores(self, query_tokens: Sequence[str]) -> list[float]:
         if not self._indexed or not query_tokens:
             return [0.0] * len(self._indexed)
         count = len(self._indexed)
-        scores: List[float] = []
+        scores: list[float] = []
         unique_query_tokens = set(query_tokens)
         for item in self._indexed:
             score = 0.0
@@ -476,7 +469,7 @@ class DocumentationRetriever:
             scores.append(score)
         return scores
 
-    def _embedding_scores(self, query: str) -> Optional[List[float]]:
+    def _embedding_scores(self, query: str) -> list[float] | None:
         backend = self.embedding_backend
         if backend is None or not self._indexed:
             return None
@@ -493,8 +486,8 @@ class DocumentationRetriever:
             return None
 
     def retrieve(
-        self, query: str, top_k: Optional[int] = None
-    ) -> List[RetrievedSnippet]:
+        self, query: str, top_k: int | None = None
+    ) -> list[RetrievedSnippet]:
         """Return ranked evidence with positive lexical or semantic scores."""
 
         if not isinstance(query, str):
@@ -528,7 +521,7 @@ class DocumentationRetriever:
     # Search is a convenient alias and keeps the class friendly to simple UIs.
     search = retrieve
 
-    def answer(self, query: str, top_k: Optional[int] = None) -> str:
+    def answer(self, query: str, top_k: int | None = None) -> str:
         """Return cited snippets, or an explicit no-evidence response."""
 
         snippets = self.retrieve(query, top_k=top_k)
@@ -555,7 +548,7 @@ DocumentationIndex = DocumentationRetriever
 def build_documentation_index(
     root: Path,
     *,
-    embedding_backend: Optional[Any] = None,
+    embedding_backend: Any | None = None,
     top_k: int = _DEFAULT_TOP_K,
     max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES,
 ) -> DocumentationRetriever:
@@ -574,8 +567,8 @@ def retrieve_documentation(
     root: Path,
     *,
     top_k: int = _DEFAULT_TOP_K,
-    embedding_backend: Optional[Any] = None,
-) -> List[RetrievedSnippet]:
+    embedding_backend: Any | None = None,
+) -> list[RetrievedSnippet]:
     """One-shot helper for callers that do not need to retain an index."""
 
     return DocumentationRetriever(
@@ -590,7 +583,7 @@ def answer_documentation(
     root: Path,
     *,
     top_k: int = _DEFAULT_TOP_K,
-    embedding_backend: Optional[Any] = None,
+    embedding_backend: Any | None = None,
 ) -> str:
     """One-shot cited answer helper."""
 

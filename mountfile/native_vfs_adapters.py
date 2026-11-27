@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import BinaryIO, List, Optional, Union
+from typing import BinaryIO
 
 from mountfile.ext3_reader import NativeExt3Image, NativeExt4Image
 from mountfile.ntfs_reader import NativeNtfsMetadataImage
@@ -23,13 +23,13 @@ class _ReadOnlyNativeVFS(VFS):
     provider_class = None  # type: ignore[assignment]
 
     def __init__(
-        self, image_path: str, offset: int = 0, volume_size: Optional[int] = None
+        self, image_path: str, offset: int = 0, volume_size: int | None = None
     ):
         self.provider = self.provider_class(
             image_path, offset=offset, volume_size=volume_size
         )
 
-    def supported_operations(self) -> List[Operation]:
+    def supported_operations(self) -> list[Operation]:
         return [Operation.LIST, Operation.STAT, Operation.READ]
 
     def _write_refusal(self) -> VFSResult:
@@ -63,7 +63,7 @@ class _ReadOnlyNativeVFS(VFS):
 
     # -- unsupported ----------------------------------------------------
     def write(
-        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+        self, path: str, data: BinaryIO | bytes, offset: int = 0
     ) -> VFSResult:
         return self._write_refusal()
 

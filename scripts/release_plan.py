@@ -22,7 +22,7 @@ import pathlib
 import re
 import subprocess
 import sys
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
 
 STABLE_TAG_RE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 PACKAGE_VERSION_RE = re.compile(
@@ -45,7 +45,7 @@ IGNORED_SUBJECT_RE = re.compile(
 RELEASE_COMMIT_RE = re.compile(r"^chore\(release\)(?:!)?:", re.IGNORECASE)
 
 BUMP_PRIORITY = {"none": 0, "patch": 1, "minor": 2, "major": 3}
-VersionTuple = Tuple[int, int, int]
+VersionTuple = tuple[int, int, int]
 
 
 class PlanError(Exception):
@@ -76,7 +76,7 @@ def _run_git(repository: pathlib.Path, arguments: Sequence[str]) -> str:
     return completed.stdout
 
 
-def _parse_stable_tag(tag: str) -> Optional[VersionTuple]:
+def _parse_stable_tag(tag: str) -> VersionTuple | None:
     match = STABLE_TAG_RE.fullmatch(tag)
     if match is None:
         return None
@@ -85,7 +85,7 @@ def _parse_stable_tag(tag: str) -> Optional[VersionTuple]:
 
 def _previous_tag(
     repository: pathlib.Path,
-) -> Tuple[Optional[str], Optional[VersionTuple]]:
+) -> tuple[str | None, VersionTuple | None]:
     """Return the greatest stable SemVer tag that is an ancestor of HEAD."""
     tags = _run_git(repository, ["tag", "--merged", "HEAD"]).splitlines()
     candidates = []
@@ -100,8 +100,8 @@ def _previous_tag(
 
 
 def _commits_since(
-    repository: pathlib.Path, previous_tag: Optional[str]
-) -> Iterable[Tuple[str, str]]:
+    repository: pathlib.Path, previous_tag: str | None
+) -> Iterable[tuple[str, str]]:
     revision_range = "%s..HEAD" % previous_tag if previous_tag else "HEAD"
     # NUL/record-separator delimiters cannot occur in Git commit subject/body
     # text, unlike ordinary newlines used by BREAKING CHANGE footers.
@@ -136,7 +136,7 @@ def _commit_bump(subject: str, body: str) -> str:
     return "none"
 
 
-def _detected_bump(repository: pathlib.Path, previous_tag: Optional[str]) -> str:
+def _detected_bump(repository: pathlib.Path, previous_tag: str | None) -> str:
     bump = "none"
     for subject, body in _commits_since(repository, previous_tag):
         candidate = _commit_bump(subject, body)
@@ -147,8 +147,8 @@ def _detected_bump(repository: pathlib.Path, previous_tag: Optional[str]) -> str
 
 def _pending_release_bump(
     repository: pathlib.Path,
-    previous_tag: Optional[str],
-    previous_version: Optional[VersionTuple],
+    previous_tag: str | None,
+    previous_version: VersionTuple | None,
     package_version: str,
     project_version: str,
 ) -> str:
@@ -233,7 +233,7 @@ def _version_from_project(path: pathlib.Path) -> str:
     return found[0]
 
 
-def _parse_version(value: str) -> Optional[VersionTuple]:
+def _parse_version(value: str) -> VersionTuple | None:
     match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value)
     if match is None:
         return None
@@ -251,7 +251,7 @@ def _increment(version: VersionTuple, bump: str) -> VersionTuple:
     raise PlanError("cannot increment an unknown bump: %s" % bump)
 
 
-def make_plan(repository: pathlib.Path, force_patch: bool = False) -> Dict[str, object]:
+def make_plan(repository: pathlib.Path, force_patch: bool = False) -> dict[str, object]:
     """Build a JSON-serialisable release plan for a local Git repository."""
     repository = repository.resolve()
     if not repository.is_dir():
@@ -318,7 +318,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = _argument_parser()
     args = parser.parse_args(None if argv is None else list(argv)[1:])
     try:

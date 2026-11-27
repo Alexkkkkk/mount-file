@@ -23,7 +23,7 @@ the taxonomy and its invariants first.
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 REPLAY_RELEVANT = "replay_relevant"
 CHECKER_LIFECYCLE = "checker_lifecycle"

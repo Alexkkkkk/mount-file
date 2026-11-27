@@ -13,8 +13,8 @@ import argparse
 import logging
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
 
 # Размер блока для чтения (8 МиБ — хороший баланс для больших образов)
 CHUNK_SIZE = 8 * 1024 * 1024
@@ -44,7 +44,7 @@ def _compile_pattern(pattern: str, use_regex: bool, unicode_mode: bool) -> re.Pa
 
 def _iter_chunks(
     file_path: Path, overlap: int = OVERLAP
-) -> Iterator[Tuple[int, bytes]]:
+) -> Iterator[tuple[int, bytes]]:
     """Генерирует блоки байтов с перекрытием."""
     with open(file_path, "rb") as f:
         offset = 0
@@ -65,7 +65,7 @@ def search_content(
     pattern: str,
     use_regex: bool = False,
     unicode_mode: bool = False,
-    max_results: Optional[int] = None,
+    max_results: int | None = None,
 ) -> Iterator[dict]:
     """
     Ищет pattern в raw-образе.

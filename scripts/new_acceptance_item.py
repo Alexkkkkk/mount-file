@@ -31,7 +31,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 MANIFEST_PATH = Path("docs/replay-acceptance.json")
 
@@ -80,7 +80,7 @@ def slugify(value: str) -> str:
     return slug or "item"
 
 
-def load_manifest(path: Path) -> Dict[str, Any]:
+def load_manifest(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise Refused(f"{path} is missing")
     try:
@@ -92,8 +92,8 @@ def load_manifest(path: Path) -> Dict[str, Any]:
     return data
 
 
-def validate(manifest: Dict[str, Any], repo_root: Path) -> List[str]:
-    problems: List[str] = []
+def validate(manifest: dict[str, Any], repo_root: Path) -> list[str]:
+    problems: list[str] = []
     for item in manifest["items"]:
         if not isinstance(item, dict):
             problems.append("an item is not an object")
@@ -116,7 +116,7 @@ def validate(manifest: Dict[str, Any], repo_root: Path) -> List[str]:
     return problems
 
 
-def build_item(args: argparse.Namespace, repo_root: Path) -> Dict[str, Any]:
+def build_item(args: argparse.Namespace, repo_root: Path) -> dict[str, Any]:
     item_id = args.id.strip()
     if not re.fullmatch(r"[A-Z]\d{1,3}", item_id):
         raise Refused(
@@ -148,7 +148,7 @@ def build_item(args: argparse.Namespace, repo_root: Path) -> Dict[str, Any]:
     }
 
 
-def write_test(path: Path, item: Dict[str, Any], issue: int) -> None:
+def write_test(path: Path, item: dict[str, Any], issue: int) -> None:
     if path.exists():
         raise Refused(f"{path} already exists")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +164,7 @@ def write_test(path: Path, item: Dict[str, Any], issue: int) -> None:
     )
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--manifest", default=str(MANIFEST_PATH))
     parser.add_argument("--repo-root", default=".")

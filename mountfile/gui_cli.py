@@ -9,7 +9,6 @@ import contextlib
 import io
 import threading
 import traceback
-from typing import Optional
 
 from . import cli
 from .qt_compat import (
@@ -150,7 +149,7 @@ class CommandCenterDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Центр команд Mount File")
         self.resize(900, 700)
-        self.worker: Optional[CLIWorker] = None
+        self.worker: CLIWorker | None = None
         root = QVBoxLayout(self)
         root.addWidget(
             QLabel("Все команды пакетного CLI — без запуска командной оболочки.")

@@ -29,6 +29,7 @@ import importlib.util
 import inspect
 import os
 import sys
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
@@ -36,12 +37,8 @@ from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import (
     Any,
-    Callable,
     Dict,
-    Iterable,
-    Iterator,
     List,
-    Mapping,
     Optional,
     Tuple,
 )
@@ -123,8 +120,8 @@ class ReadOnlyImage:
     __slots__ = ("_data", "_path", "_size")
 
     def __init__(self, source: Any = None) -> None:
-        data: Optional[bytes] = None
-        path: Optional[str] = None
+        data: bytes | None = None
+        path: str | None = None
         if isinstance(source, (bytes, bytearray, memoryview)):
             data = bytes(source)
         elif isinstance(source, (str, os.PathLike)):
@@ -144,7 +141,7 @@ class ReadOnlyImage:
         object.__setattr__(self, "_data", data)
         object.__setattr__(self, "_path", path)
         if data is not None:
-            size: Optional[int] = len(data)
+            size: int | None = len(data)
         elif path is not None:
             try:
                 size = os.path.getsize(path)
@@ -158,11 +155,11 @@ class ReadOnlyImage:
         raise AttributeError("ReadOnlyImage is immutable")
 
     @property
-    def path(self) -> Optional[str]:
+    def path(self) -> str | None:
         return self._path
 
     @property
-    def size(self) -> Optional[int]:
+    def size(self) -> int | None:
         return self._size
 
     def read(self, offset: int = 0, length: int = -1) -> bytes:
@@ -187,14 +184,14 @@ class OpenEvent:
     """Immutable information made available to ``on_open``."""
 
     image: ReadOnlyImage
-    path: Optional[str]
-    size: Optional[int]
+    path: str | None
+    size: int | None
     metadata: Mapping[str, Any]
 
     @classmethod
     def from_value(
-        cls, value: Any, metadata: Optional[Mapping[str, Any]] = None
-    ) -> "OpenEvent":
+        cls, value: Any, metadata: Mapping[str, Any] | None = None
+    ) -> OpenEvent:
         if isinstance(value, cls):
             if not metadata:
                 return value
@@ -203,7 +200,7 @@ class OpenEvent:
             return cls(value.image, value.path, value.size, _freeze(merged))
 
         source = value
-        supplied: Dict[str, Any] = {}
+        supplied: dict[str, Any] = {}
         if isinstance(value, Mapping):
             source = value.get("image", value.get("path", value))
             raw_metadata = value.get("metadata")
@@ -227,28 +224,28 @@ class OpenEvent:
 class FileEvent:
     """Immutable file metadata and an optional immutable content snapshot."""
 
-    path: Optional[str]
-    size: Optional[int]
-    offset: Optional[int]
-    data: Optional[bytes]
+    path: str | None
+    size: int | None
+    offset: int | None
+    data: bytes | None
     metadata: Mapping[str, Any]
 
     @property
-    def content(self) -> Optional[bytes]:
+    def content(self) -> bytes | None:
         """Alias for adapters that use ``content`` rather than ``data``."""
 
         return self.data
 
     @property
-    def name(self) -> Optional[str]:
+    def name(self) -> str | None:
         """The file name/path supplied by the caller."""
 
         return self.path
 
     @classmethod
     def from_value(
-        cls, value: Any, metadata: Optional[Mapping[str, Any]] = None
-    ) -> "FileEvent":
+        cls, value: Any, metadata: Mapping[str, Any] | None = None
+    ) -> FileEvent:
         if isinstance(value, cls):
             if not metadata:
                 return value
@@ -259,11 +256,11 @@ class FileEvent:
             )
 
         source = value
-        supplied: Dict[str, Any] = {}
-        path: Optional[str] = None
-        size: Optional[int] = None
-        offset: Optional[int] = None
-        data: Optional[bytes] = None
+        supplied: dict[str, Any] = {}
+        path: str | None = None
+        size: int | None = None
+        offset: int | None = None
+        data: bytes | None = None
         if isinstance(value, Mapping):
             source = value.get("data", value.get("content"))
             path_value = value.get("path", value.get("name", value.get("filename")))
@@ -322,15 +319,15 @@ class PluginRegistry:
     HOOKS = ("on_open", "on_file", "on_close")
 
     def __init__(
-        self, plugins: Optional[Iterable[Any]] = None, *, discover: bool = False
+        self, plugins: Iterable[Any] | None = None, *, discover: bool = False
     ) -> None:
-        self._states: List[_PluginState] = []
-        self._errors: List[PluginFailure] = []
+        self._states: list[_PluginState] = []
+        self._errors: list[PluginFailure] = []
         self._active = False
         # Kept as a public compatibility view for callers of the original
         # prototype API.  Registration still goes through the stateful paths
         # below so failures can be associated with a plugin name.
-        self.hooks: Dict[str, List[Callable[..., Any]]] = {
+        self.hooks: dict[str, list[Callable[..., Any]]] = {
             hook: [] for hook in self.HOOKS
         }
         if plugins:
@@ -340,15 +337,15 @@ class PluginRegistry:
             self.discover(entry_points=True)
 
     @property
-    def plugins(self) -> Tuple[Any, ...]:
+    def plugins(self) -> tuple[Any, ...]:
         return tuple(state.plugin for state in self._states)
 
     @property
-    def plugin_names(self) -> Tuple[str, ...]:
+    def plugin_names(self) -> tuple[str, ...]:
         return tuple(state.name for state in self._states)
 
     @property
-    def errors(self) -> Tuple[PluginFailure, ...]:
+    def errors(self) -> tuple[PluginFailure, ...]:
         return tuple(self._errors)
 
     @property
@@ -358,10 +355,10 @@ class PluginRegistry:
     def register(
         self,
         plugin: Any,
-        hook: Optional[str] = None,
-        func: Optional[Callable[..., Any]] = None,
+        hook: str | None = None,
+        func: Callable[..., Any] | None = None,
         *,
-        name: Optional[str] = None,
+        name: str | None = None,
     ) -> Any:
         """Register one plugin; registration order is preserved exactly."""
 
@@ -408,7 +405,7 @@ class PluginRegistry:
             return plugin
         raise PluginRegistrationError("duplicate plugin name: %s" % plugin_name)
 
-    def try_register(self, plugin: Any, *, name: Optional[str] = None) -> bool:
+    def try_register(self, plugin: Any, *, name: str | None = None) -> bool:
         """Register a plugin and retain registration errors instead of raising."""
 
         try:
@@ -421,7 +418,7 @@ class PluginRegistry:
         return True
 
     def open(
-        self, image: Any, metadata: Optional[Mapping[str, Any]] = None
+        self, image: Any, metadata: Mapping[str, Any] | None = None
     ) -> OpenEvent:
         """Start a session and call every registered ``on_open`` hook."""
 
@@ -441,14 +438,14 @@ class PluginRegistry:
         return event
 
     def on_open(
-        self, image: Any, metadata: Optional[Mapping[str, Any]] = None
+        self, image: Any, metadata: Mapping[str, Any] | None = None
     ) -> OpenEvent:
         """Hook-shaped alias for :meth:`open`."""
 
         return self.open(image, metadata)
 
     def file(
-        self, file: Any, metadata: Optional[Mapping[str, Any]] = None
+        self, file: Any, metadata: Mapping[str, Any] | None = None
     ) -> FileEvent:
         """Call ``on_file`` hooks with an immutable file snapshot."""
 
@@ -467,7 +464,7 @@ class PluginRegistry:
         return event
 
     def on_file(
-        self, file: Any, metadata: Optional[Mapping[str, Any]] = None
+        self, file: Any, metadata: Mapping[str, Any] | None = None
     ) -> FileEvent:
         """Hook-shaped alias for :meth:`file`."""
 
@@ -497,7 +494,7 @@ class PluginRegistry:
 
         self.close()
 
-    def emit(self, hook: str, *args: Any, **kwargs: Any) -> List[Any]:
+    def emit(self, hook: str, *args: Any, **kwargs: Any) -> list[Any]:
         """Call one hook with isolated failures and return successful results.
 
         This preserves the original ``emit("on_file", path, data)`` API.  A
@@ -509,7 +506,7 @@ class PluginRegistry:
             raise ValueError("unknown hook: %s" % hook)
         safe_args = self._safe_emit_args(hook, args)
         safe_kwargs = {key: _freeze(value) for key, value in kwargs.items()}
-        results: List[Any] = []
+        results: list[Any] = []
         for state in self._states:
             if state.failed and hook != "on_close":
                 continue
@@ -522,18 +519,18 @@ class PluginRegistry:
                 self._isolate(state, hook, exc)
         return results
 
-    def trigger(self, hook: str, *args: Any, **kwargs: Any) -> List[Any]:
+    def trigger(self, hook: str, *args: Any, **kwargs: Any) -> list[Any]:
         """Alias for :meth:`emit` retained for the stage-toolkit prototype."""
 
         return self.emit(hook, *args, **kwargs)
 
-    def dispatch(self, hook: str, *args: Any, **kwargs: Any) -> List[Any]:
+    def dispatch(self, hook: str, *args: Any, **kwargs: Any) -> list[Any]:
         """Alias for :meth:`emit` for callers using dispatch terminology."""
 
         return self.emit(hook, *args, **kwargs)
 
     @staticmethod
-    def _safe_emit_args(hook: str, args: Tuple[Any, ...]) -> Tuple[Any, ...]:
+    def _safe_emit_args(hook: str, args: tuple[Any, ...]) -> tuple[Any, ...]:
         if hook == "on_file" and len(args) == 2:
             path, data = args
             if not isinstance(data, bytes):
@@ -562,8 +559,8 @@ class PluginRegistry:
         self,
         callback: Callable[..., Any],
         hook: str,
-        args: Tuple[Any, ...],
-        kwargs: Optional[Mapping[str, Any]] = None,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any] | None = None,
     ) -> Any:
         if hook == "on_file" and len(args) == 1 and isinstance(args[0], FileEvent):
             if self._accepts_two_positional(callback):
@@ -579,8 +576,8 @@ class PluginRegistry:
 
     @contextmanager
     def session(
-        self, image: Any, metadata: Optional[Mapping[str, Any]] = None
-    ) -> Iterator["PluginRegistry"]:
+        self, image: Any, metadata: Mapping[str, Any] | None = None
+    ) -> Iterator[PluginRegistry]:
         """Run a complete open/close lifecycle around a caller's loop."""
 
         self.open(image, metadata)
@@ -596,7 +593,7 @@ class PluginRegistry:
         *,
         entry_points: bool = False,
         group: str = DEFAULT_ENTRY_POINT_GROUP,
-    ) -> Tuple[str, ...]:
+    ) -> tuple[str, ...]:
         """Discover plugins in deterministic order.
 
         Discovery is never implicit.  Module names, files, and entry points are
@@ -658,7 +655,7 @@ class PluginRegistry:
         return len(self._states) - before
 
     @staticmethod
-    def _entry_points(group: str) -> List[Any]:
+    def _entry_points(group: str) -> list[Any]:
         discovered = importlib_metadata.entry_points()
         if hasattr(discovered, "select"):
             selected = list(discovered.select(group=group))

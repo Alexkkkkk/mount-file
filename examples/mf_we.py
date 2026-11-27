@@ -25,7 +25,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 # ---------------------------------------------------------------------------
 # 0. Типы и исключения
@@ -78,8 +78,8 @@ class JournalEntry:
     tx_id: str
     op: str
     path: str
-    backup_path: Optional[Path] = None
-    sha256: Optional[str] = None
+    backup_path: Path | None = None
+    sha256: str | None = None
     created_at: float = field(default_factory=time.time)
 
 
@@ -108,7 +108,7 @@ class TransactionManager:
                    created_at REAL NOT NULL
                )""")
         self._conn.commit()
-        self._current_tx: Optional[str] = None
+        self._current_tx: str | None = None
 
     def begin(self, op: str, path: str) -> str:
         tx_id = str(uuid.uuid4())
@@ -137,7 +137,7 @@ class TransactionManager:
     def commit(self) -> None:
         self._current_tx = None
 
-    def rollback(self, tx_id: Optional[str] = None) -> None:
+    def rollback(self, tx_id: str | None = None) -> None:
         """Откатывает текущую или указанную транзакцию по журналу."""
         tid = tx_id or self._current_tx
         if not tid:
@@ -222,7 +222,7 @@ class NtfsBackend(WriteEngine):
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
-        self._lib: Optional[ctypes.CDLL] = None
+        self._lib: ctypes.CDLL | None = None
         self._handle = None
 
     def open(self) -> None:
@@ -365,7 +365,7 @@ class Ext4Backend(WriteEngine):
 
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
-        self._lib: Optional[ctypes.CDLL] = None
+        self._lib: ctypes.CDLL | None = None
         self._handle = None
 
     def open(self) -> None:

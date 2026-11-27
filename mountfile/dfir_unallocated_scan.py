@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import operator
 import os
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
+from typing import Any
 
 _DEFAULT_CHUNK_SIZE = 1 << 20
 _MAX_CHUNK_SIZE = 16 << 20
@@ -301,7 +302,7 @@ def _coerce_signature(item: Any) -> FileSignature:
 
 
 def _normalise_signatures(
-    signatures: Optional[Iterable[Any]],
+    signatures: Iterable[Any] | None,
 ) -> tuple[FileSignature, ...]:
     if signatures is None:
         signatures = COMMON_SIGNATURES
@@ -328,10 +329,10 @@ def _normalise_signatures(
 class _ByteSource:
     """Read exact bounded slices from supported read-only source forms."""
 
-    def __init__(self, source: Any, image_size: Optional[int]) -> None:
+    def __init__(self, source: Any, image_size: int | None) -> None:
         self.source = source
-        self.path: Optional[os.PathLike[str] | str] = None
-        discovered: Optional[int]
+        self.path: os.PathLike[str] | str | None = None
+        discovered: int | None
 
         if isinstance(source, (str, bytes, os.PathLike)) and not isinstance(
             source, (bytearray, memoryview)
@@ -438,7 +439,7 @@ def _iter_hits(
     ranges: Sequence[ByteRange],
     signatures: Sequence[FileSignature],
     chunk_size: int,
-    max_hits: Optional[int],
+    max_hits: int | None,
 ) -> Iterator[SignatureHit]:
     if not ranges or not signatures or max_hits == 0:
         return
@@ -492,12 +493,12 @@ def scan_unallocated(
     image: Any,
     ranges: Any,
     *,
-    image_size: Optional[int] = None,
-    source_size: Optional[int] = None,
+    image_size: int | None = None,
+    source_size: int | None = None,
     chunk_size: int = _DEFAULT_CHUNK_SIZE,
-    read_size: Optional[int] = None,
-    signatures: Optional[Iterable[Any]] = None,
-    max_hits: Optional[int] = None,
+    read_size: int | None = None,
+    signatures: Iterable[Any] | None = None,
+    max_hits: int | None = None,
 ) -> Iterator[SignatureHit]:
     """Return a bounded iterator of signatures found in supplied ranges.
 
@@ -552,11 +553,11 @@ class UnallocatedScanner:
         self,
         image: Any,
         *,
-        image_size: Optional[int] = None,
-        source_size: Optional[int] = None,
+        image_size: int | None = None,
+        source_size: int | None = None,
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
-        read_size: Optional[int] = None,
-        signatures: Optional[Iterable[Any]] = None,
+        read_size: int | None = None,
+        signatures: Iterable[Any] | None = None,
     ) -> None:
         self.image = image
         self.image_size = image_size
@@ -568,7 +569,7 @@ class UnallocatedScanner:
         )
 
     def scan(
-        self, ranges: Any, *, max_hits: Optional[int] = None
+        self, ranges: Any, *, max_hits: int | None = None
     ) -> Iterator[SignatureHit]:
         """Scan one caller-supplied range collection."""
 

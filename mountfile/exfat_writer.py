@@ -51,7 +51,7 @@ _VOLUME_FLAG_CLEAR_TO_ZERO = 0x0008
 
 
 def _timestamp_parts():
-    now = _dt.datetime.now(_dt.timezone.utc)
+    now = _dt.datetime.now(_dt.UTC)
     date = ((now.year - 1980) << 9) | (now.month << 5) | now.day
     time = (now.hour << 11) | (now.minute << 5) | (now.second // 2)
     packed = (date << 16) | time

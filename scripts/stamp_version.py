@@ -21,7 +21,6 @@ import re
 import stat
 import sys
 import tempfile
-from typing import List, Tuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Keep TARGET as the historical public module constant used by callers/tests.
@@ -54,7 +53,7 @@ def _normalise_version(raw_version: str) -> str:
     return ".".join(match.groups())
 
 
-def _line_ending(line: str) -> Tuple[str, str]:
+def _line_ending(line: str) -> tuple[str, str]:
     if line.endswith("\r\n"):
         return line[:-2], "\r\n"
     if line.endswith("\n") or line.endswith("\r"):
@@ -63,8 +62,8 @@ def _line_ending(line: str) -> Tuple[str, str]:
 
 
 def _replace_one_line(
-    lines: List[str], indexes: List[int], pattern: re.Pattern, version: str, label: str
-) -> Tuple[str, str]:
+    lines: list[str], indexes: list[int], pattern: re.Pattern, version: str, label: str
+) -> tuple[str, str]:
     if len(indexes) != 1:
         raise StampError("expected exactly one %s, found %d" % (label, len(indexes)))
     index = indexes[0]
@@ -87,7 +86,7 @@ def _replace_one_line(
     return "".join(lines), old_version
 
 
-def _prepare_package(text: str, version: str) -> Tuple[str, str]:
+def _prepare_package(text: str, version: str) -> tuple[str, str]:
     lines = text.splitlines(keepends=True)
     indexes = []
     for index, line in enumerate(lines):
@@ -99,7 +98,7 @@ def _prepare_package(text: str, version: str) -> Tuple[str, str]:
     )
 
 
-def _project_table_range(lines: List[str]) -> Tuple[int, int]:
+def _project_table_range(lines: list[str]) -> tuple[int, int]:
     starts = []
     for index, line in enumerate(lines):
         content, _ = _line_ending(line)
@@ -118,7 +117,7 @@ def _project_table_range(lines: List[str]) -> Tuple[int, int]:
     return start, end
 
 
-def _prepare_project(text: str, version: str) -> Tuple[str, str]:
+def _prepare_project(text: str, version: str) -> tuple[str, str]:
     lines = text.splitlines(keepends=True)
     start, end = _project_table_range(lines)
     indexes = []

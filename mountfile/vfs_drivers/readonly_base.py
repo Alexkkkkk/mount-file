@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import BinaryIO, List, Optional, Union
+from typing import BinaryIO
 
 from mountfile.vfs_contract import VFS, ErrorCode, Operation, VFSResult
 
@@ -25,7 +25,7 @@ class ReadOnlyNativeVFS(VFS):
     provider_property = None  # type: ignore[assignment]
 
     def __init__(
-        self, image_path: str, offset: int = 0, volume_size: Optional[int] = None
+        self, image_path: str, offset: int = 0, volume_size: int | None = None
     ):
         self.image_path = image_path
         self.offset = int(offset)
@@ -61,7 +61,7 @@ class ReadOnlyNativeVFS(VFS):
             provider.close()
 
     # -- contract --------------------------------------------------------
-    def supported_operations(self) -> List[Operation]:
+    def supported_operations(self) -> list[Operation]:
         return [Operation.LIST, Operation.STAT, Operation.READ]
 
     def _write_refusal(self, code: str, message: str) -> VFSResult:
@@ -91,7 +91,7 @@ class ReadOnlyNativeVFS(VFS):
 
     # -- unsupported writes (overridden by concrete adapters) ------------
     def write(
-        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+        self, path: str, data: BinaryIO | bytes, offset: int = 0
     ) -> VFSResult:
         return self._write_refusal(
             "WRITE_NOT_SUPPORTED", "write is disabled for this profile"

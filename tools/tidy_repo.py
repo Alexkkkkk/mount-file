@@ -28,10 +28,11 @@ import tarfile
 import textwrap
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 # ─────────────────────────────────────────── ANSI
 
@@ -134,7 +135,7 @@ def git_clean() -> bool:
     return is_git() and git("status", "--porcelain") == ""
 
 
-def git_owner_repo() -> Optional[tuple[str, str]]:
+def git_owner_repo() -> tuple[str, str] | None:
     try:
         url = git("config", "--get", "remote.origin.url")
     except Exception:
@@ -164,7 +165,7 @@ class Ctx:
     report: list[dict] = field(default_factory=list)
     changes: list[dict] = field(default_factory=list)
     moved: dict[str, str] = field(default_factory=dict)
-    backup: Optional[Path] = None
+    backup: Path | None = None
     score_before: int = 0
     score_after: int = 0
     t0: float = field(default_factory=time.time)

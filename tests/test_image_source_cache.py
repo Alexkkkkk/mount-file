@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Property and safety tests for the bounded read-through image cache."""
 
-import os
 import random
 from concurrent.futures import ThreadPoolExecutor
 

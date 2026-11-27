@@ -8,8 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from scripts.macos_adapter_evidence import (
     REQUIRED_MACOS_ADAPTER_TESTS,
     build_macos_adapter_evidence,

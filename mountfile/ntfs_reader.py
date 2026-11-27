@@ -16,7 +16,6 @@ from dataclasses import dataclass, replace
 
 from mountfile.image_source import (
     BoundedImageSource,
-    FileImageSource,
     ImageSource,
     ImageSourceError,
     open_image_source,
@@ -1091,7 +1090,7 @@ def _format_ntfs_filetime(filetime: int) -> str:
         or not 0 <= filetime <= 0xFFFFFFFFFFFFFFFF
     ):
         raise NtfsMetadataError("NTFS FILETIME value is invalid")
-    epoch = _dt.datetime(1601, 1, 1, tzinfo=_dt.timezone.utc)
+    epoch = _dt.datetime(1601, 1, 1, tzinfo=_dt.UTC)
     microseconds = filetime // 10
     try:
         value = epoch + _dt.timedelta(microseconds=microseconds)

@@ -27,13 +27,14 @@ epic are implemented, each producing its own reason string so an analyst can see
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from .timeline import iter_file_entries
 
-UTC = timezone.utc
+UTC = UTC
 
 REASON_SI_LT_FN = "si_mtime_lt_fn_mtime"
 REASON_FUTURE = "future_timestamp"
@@ -64,7 +65,7 @@ class TimestompFinding:
         }
 
 
-def _seconds(value: Any) -> Optional[float]:
+def _seconds(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -89,10 +90,10 @@ def _field(record: Any, *names: str) -> Any:
 def analyse_timestamps(
     record: Any,
     *,
-    now: Optional[float] = None,
+    now: float | None = None,
     skew: float = DEFAULT_SKEW,
-    path: Optional[str] = None,
-) -> Optional[TimestompFinding]:
+    path: str | None = None,
+) -> TimestompFinding | None:
     """Apply every rule to one record; returns ``None`` when it looks clean.
 
     ``record`` may be a mapping or an object exposing any of ``path``,
@@ -152,7 +153,7 @@ def analyse_timestamps(
 def analyse_records(
     records: Iterable[Any],
     *,
-    now: Optional[float] = None,
+    now: float | None = None,
     skew: float = DEFAULT_SKEW,
 ) -> list[TimestompFinding]:
     """Apply the rules to many records."""
@@ -168,9 +169,9 @@ def analyse_records(
 def analyse_fs(
     fs: Any,
     *,
-    now: Optional[float] = None,
+    now: float | None = None,
     skew: float = DEFAULT_SKEW,
-    mft_pairs: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    mft_pairs: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[TimestompFinding]:
     """Apply the rules to every file of an open pytsk3 filesystem.
 

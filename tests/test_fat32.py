@@ -112,9 +112,8 @@ def test_rejects_non_mirrored_fat32_mode(tmp_path):
     struct.pack_into("<H", image, 40, 0x0080)
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="non-mirrored"):
-        with path.open("r+b") as handle:
-            Fat32(handle)
+    with pytest.raises(Fat32Error, match="non-mirrored"), path.open("r+b") as handle:
+        Fat32(handle)
 
 
 def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
@@ -127,9 +126,8 @@ def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
     image[second_fat + 8] ^= 0x01
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="mirrored FAT32 copies"):
-        with path.open("r+b") as handle:
-            Fat32(handle)
+    with pytest.raises(Fat32Error, match="mirrored FAT32 copies"), path.open("r+b") as handle:
+        Fat32(handle)
 
 
 def test_rejects_inconsistent_backup_boot_sector(tmp_path):
@@ -139,9 +137,8 @@ def test_rejects_inconsistent_backup_boot_sector(tmp_path):
     image[BACKUP_BOOT_SECTOR * BPS + 3] ^= 0x01
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="backup boot sector"):
-        with path.open("r+b") as handle:
-            Fat32(handle)
+    with pytest.raises(Fat32Error, match="backup boot sector"), path.open("r+b") as handle:
+        Fat32(handle)
 
 
 class TestFat32:

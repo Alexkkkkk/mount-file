@@ -26,9 +26,10 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional, Sequence
+from typing import Any
 
 from .dfir_yara import YaraUnavailableError
 from .timeline import iter_file_entries
@@ -52,8 +53,8 @@ class YaraHit:
     rule: str
     namespace: str = "default"
     tags: tuple[str, ...] = ()
-    path: Optional[str] = None
-    offset: Optional[int] = None
+    path: str | None = None
+    offset: int | None = None
     target: str = TARGET_FILES
     strings: tuple[Any, ...] = field(default_factory=tuple)
 
@@ -113,7 +114,7 @@ def load_rules(rules_path: os.PathLike | str) -> Any:
 
 
 def _normalise_match(
-    match: Any, *, path: Optional[str], offset: Optional[int], target: str
+    match: Any, *, path: str | None, offset: int | None, target: str
 ) -> YaraHit:
     namespace = getattr(match, "namespace", None) or "default"
     tags = tuple(getattr(match, "tags", ()) or ())
@@ -130,7 +131,7 @@ def _normalise_match(
 
 
 def match_blob(
-    rules: Any, data: bytes, *, path: Optional[str] = None, target: str = TARGET_FILES
+    rules: Any, data: bytes, *, path: str | None = None, target: str = TARGET_FILES
 ) -> list[YaraHit]:
     """Match a single in-memory blob."""
 
@@ -195,7 +196,7 @@ def _string_offsets(strings: Any) -> tuple[int, ...]:
 
 # ----------------------------------------------------------------------- scans
 def scan_files_from_fs(
-    fs: Any, rules: Any, *, max_file_size: Optional[int] = None
+    fs: Any, rules: Any, *, max_file_size: int | None = None
 ) -> list[YaraHit]:
     """Scan every regular file of an open filesystem, in memory."""
 
@@ -290,7 +291,7 @@ def scan_unallocated_from_fs(
     image_size: int,
     *,
     chunk: int = DEFAULT_CHUNK,
-    image_path: Optional[os.PathLike | str] = None,
+    image_path: os.PathLike | str | None = None,
 ) -> list[YaraHit]:
     """Scan complete unallocated extents without signature-length limits.
 
@@ -364,7 +365,7 @@ def scan_unallocated_from_fs(
     return hits
 
 
-def _read_region(fs: Any, image_path: Optional[str], offset: int, length: int) -> bytes:
+def _read_region(fs: Any, image_path: str | None, offset: int, length: int) -> bytes:
     reader = getattr(fs, "read_random", None)
     if callable(reader):  # pragma: no cover - not part of the public pytsk3 API
         try:
@@ -409,7 +410,7 @@ def _open_fs_with_path(path: Path) -> Any:
 
     fs = open_tsk_fs(path)
     try:
-        setattr(fs, "_image_path", str(path))
+        fs._image_path = str(path)
     except Exception as exc:  # pragma: no cover - read-only proxy objects
         logging.getLogger(__name__).debug("best-effort operation failed", exc_info=exc)
     return fs
@@ -421,7 +422,7 @@ def scan_image(
     *,
     targets: Sequence[str] = TARGETS,
     chunk: int = DEFAULT_CHUNK,
-    max_file_size: Optional[int] = None,
+    max_file_size: int | None = None,
 ) -> list[YaraHit]:
     """Compile ``rules_path`` and scan the requested targets of ``image_path``."""
 

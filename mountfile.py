@@ -48,9 +48,10 @@ import threading
 import time
 import traceback
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 # ============================================================================
 # METADATA
@@ -190,7 +191,7 @@ def install_excepthook() -> None:
         with contextlib.suppress(OSError):
             AtomicIO.write_text(
                 report,
-                f"{datetime.now(timezone.utc).isoformat()}\n"
+                f"{datetime.now(UTC).isoformat()}\n"
                 + "".join(traceback.format_exception(t, e, tb)),
             )
 
@@ -273,7 +274,7 @@ class SingleInstance:
 # ============================================================================
 # STATE (atomic, versioned, survives updates)
 # ============================================================================
-DEFAULT_STATE: Dict[str, Any] = {
+DEFAULT_STATE: dict[str, Any] = {
     "schema": SCHEMA_VERSION,
     "ui/theme": "system",
     "ui/autoupdate": True,
@@ -306,7 +307,7 @@ class State:
 
     def push(self, key: str, value: str, cap: int) -> None:
         with self._lock:
-            items: List[str] = list(self._data.get(key) or [])
+            items: list[str] = list(self._data.get(key) or [])
             if value in items:
                 items.remove(value)
             items.insert(0, value)
@@ -338,7 +339,7 @@ class State:
                 AtomicIO.write_json(Paths.state_file(), self._data)
 
     @staticmethod
-    def _migrate(raw: Dict[str, Any]) -> Dict[str, Any]:
+    def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
         data = {**DEFAULT_STATE, **raw}
         for k in ("session/recent_images", "session/favorite_dirs"):
             data[k] = [p for p in (data.get(k) or []) if isinstance(p, str)]
@@ -367,7 +368,7 @@ class MountBackend:
     def unmount(self, target: Path) -> None:
         raise NotImplementedError
 
-    def list_mounted(self) -> List[Dict[str, str]]:
+    def list_mounted(self) -> list[dict[str, str]]:
         return []
 
 
@@ -452,8 +453,8 @@ class LinuxBackend(MountBackend):
                 return
         raise MountError(f"Cannot unmount {target}.")
 
-    def list_mounted(self) -> List[Dict[str, str]]:
-        out: List[Dict[str, str]] = []
+    def list_mounted(self) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
         with contextlib.suppress(Exception):
             for line in Path("/proc/mounts").read_text().splitlines():
                 parts = line.split()
@@ -467,7 +468,7 @@ class LinuxBackend(MountBackend):
         return out
 
     @staticmethod
-    def _run(cmd: List[str]) -> str:
+    def _run(cmd: list[str]) -> str:
         try:
             r = subprocess.run(
                 cmd,
@@ -509,8 +510,8 @@ class MacBackend(MountBackend):
     def unmount(self, target: Path) -> None:
         LinuxBackend._run(["hdiutil", "detach", str(target.resolve())])
 
-    def list_mounted(self) -> List[Dict[str, str]]:
-        out: List[Dict[str, str]] = []
+    def list_mounted(self) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
         text = LinuxBackend._run(["hdiutil", "info", "-plist"])
         try:
             info = plistlib.loads(text.encode("utf-8"))
@@ -574,8 +575,8 @@ class WindowsBackend(MountBackend):
         )
         self._ps(ps, letter)
 
-    def list_mounted(self) -> List[Dict[str, str]]:
-        out: List[Dict[str, str]] = []
+    def list_mounted(self) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
         ps = (
             "$result = @(Get-CimInstance -Namespace root/Microsoft/Windows/Storage "
             "-ClassName MSFT_DiskImage -ErrorAction Stop | "
@@ -830,7 +831,7 @@ if HAS_QT:
     class CommandPalette(QDialog):
         """Ctrl+K palette: fuzzy-search all commands, Enter to run."""
 
-        def __init__(self, parent, commands: List[Tuple[str, Callable[[], None]]]):
+        def __init__(self, parent, commands: list[tuple[str, Callable[[], None]]]):
             super().__init__(parent)
             self.setWindowTitle("Command Palette")
             self.setModal(True)
@@ -851,7 +852,7 @@ if HAS_QT:
             self._populate(commands)
             QTimer.singleShot(0, self.input.setFocus)
 
-        def _populate(self, items: List[Tuple[str, Callable[[], None]]]) -> None:
+        def _populate(self, items: list[tuple[str, Callable[[], None]]]) -> None:
             self.list.clear()
             for name, cb in items:
                 it = QListWidgetItem(name)
@@ -897,9 +898,9 @@ if HAS_QT:
             self,
             backend: MountBackend,
             action: str,
-            image: Optional[Path] = None,
-            target: Optional[Path] = None,
-            parent: Optional[QObject] = None,
+            image: Path | None = None,
+            target: Path | None = None,
+            parent: QObject | None = None,
         ) -> None:
             super().__init__(parent)
             self._b = backend
@@ -929,9 +930,9 @@ if HAS_QT:
             super().__init__()
             self._state = state
             self._backend = backend
-            self._current_image: Optional[Path] = None
-            self._workers: List[QThread] = []
-            self._tray: Optional[QSystemTrayIcon] = None
+            self._current_image: Path | None = None
+            self._workers: list[QThread] = []
+            self._tray: QSystemTrayIcon | None = None
 
             self.setWindowTitle(f"{APP_DISPLAY} {APP_VERSION}")
             self.setMinimumSize(QSize(760, 460))
@@ -1136,7 +1137,7 @@ if HAS_QT:
 
         # ------------------------------------------------------ actions
         def open_palette(self) -> None:
-            cmds: List[Tuple[str, Callable[[], None]]] = [
+            cmds: list[tuple[str, Callable[[], None]]] = [
                 ("Open image…", self.open_image),
                 ("Mount current", self.mount_current),
                 ("Unmount selected", self._unmount_selected),

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib
 from types import MappingProxyType
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from mountfile.plugins import FileEvent, OpenEvent, PluginStatus
 
@@ -21,7 +21,7 @@ class TimelinePlugin:
     name = "timeline"
 
     def __init__(
-        self, *, require_pandas: bool = False, pandas_module: Optional[Any] = None
+        self, *, require_pandas: bool = False, pandas_module: Any | None = None
     ) -> None:
         self._pandas = pandas_module
         self._require_pandas = require_pandas
@@ -53,7 +53,7 @@ class TimelinePlugin:
         return PluginStatus(self.name, self.status, self.reason)
 
     @property
-    def events(self) -> Tuple[MappingProxyType, ...]:
+    def events(self) -> tuple[MappingProxyType, ...]:
         return tuple(MappingProxyType(dict(item)) for item in self._events)
 
     def on_open(self, event: OpenEvent) -> None:
@@ -61,13 +61,13 @@ class TimelinePlugin:
         self._events = []
         self._image_path = event.path
 
-    def on_file(self, event: FileEvent, data: Optional[bytes] = None) -> None:
+    def on_file(self, event: FileEvent, data: bytes | None = None) -> None:
         if not self.available:
             return
         if data is not None:
             event = {"path": event, "data": data}
         event = FileEvent.from_value(event)
-        record: Dict[str, Any] = {
+        record: dict[str, Any] = {
             "path": event.path,
             "size": event.size,
             "offset": event.offset,

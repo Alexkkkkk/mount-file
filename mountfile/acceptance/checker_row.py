@@ -19,8 +19,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Mapping, Sequence
-from typing import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 SCHEMA = "mountfile.c6-checker-row/v1"
 

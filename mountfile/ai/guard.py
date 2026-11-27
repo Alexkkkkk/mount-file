@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 #: How many bytes one scan inspects.
 MAX_SCAN_BYTES = 1 << 20
@@ -67,7 +66,7 @@ class GuardReport:
     score: int = 0
     bytes_scanned: int = 0
     truncated: bool = False
-    hits: Tuple[Hit, ...] = ()
+    hits: tuple[Hit, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -76,8 +75,8 @@ class GuardReport:
         return self.risk in ("none", "low")
 
     @property
-    def rules(self) -> Tuple[str, ...]:
-        seen: List[str] = []
+    def rules(self) -> tuple[str, ...]:
+        seen: list[str] = []
         for hit in self.hits:
             if hit.rule not in seen:
                 seen.append(hit.rule)
@@ -104,7 +103,7 @@ class GuardReport:
 # (rule id, severity, pattern).  Severity 3 means "this text is addressed to
 # the model", 2 means "this text tries to move data off the machine", 1 means
 # "worth mentioning" - a config file legitimately contains `password=`.
-_PATTERNS: Tuple[Tuple[str, int, "re.Pattern[str]"], ...] = (
+_PATTERNS: tuple[tuple[str, int, re.Pattern[str]], ...] = (
     (
         "instruction_override",
         3,
@@ -210,7 +209,7 @@ def scan(data: bytes, limit: int = MAX_SCAN_BYTES) -> GuardReport:
     text = blob.decode("utf-8", "replace")
     truncated = len(encoded) > len(blob)
 
-    hits: List[Hit] = []
+    hits: list[Hit] = []
     for rule, severity, pattern in _PATTERNS:
         for match in pattern.finditer(text):
             start = max(0, match.start() - 40)
@@ -249,7 +248,7 @@ def neutralize(text: str) -> str:
     return out
 
 
-def fence(name: str, body: str, note: Optional[str] = None) -> str:
+def fence(name: str, body: str, note: str | None = None) -> str:
     """Wrap rendered file content in explicit, non-forgeable data markers."""
 
     header = '%s name="%s"' % (FENCE_OPEN, neutralize(str(name or ""))[:200])

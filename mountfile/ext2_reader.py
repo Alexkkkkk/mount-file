@@ -818,7 +818,7 @@ class NativeExt2Image(ReadOnlyVFSStatMixin):
         elif seconds >= 0x80000000:
             seconds -= 1 << 32
         try:
-            value = _dt.datetime.fromtimestamp(seconds, _dt.timezone.utc)
+            value = _dt.datetime.fromtimestamp(seconds, _dt.UTC)
         except (OverflowError, OSError, ValueError) as exc:
             raise Ext2ReadError(
                 "ext inode timestamp is outside supported range"

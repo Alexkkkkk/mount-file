@@ -18,8 +18,8 @@ Fail-closed: любое нарушение layout/chain/bounds -> NtfsReplayErro
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
 
 SECTOR = 512
 RESTART_MAGIC = b"RSTR"

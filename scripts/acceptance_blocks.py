@@ -26,7 +26,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -35,10 +34,10 @@ if str(REPO_ROOT) not in sys.path:
 from mountfile.acceptance import artifact  # noqa: E402
 
 
-def load_baseline(path: Path) -> Dict[str, str]:
+def load_baseline(path: Path) -> dict[str, str]:
     """Read ``<item id>  # <reason>`` lines, ignoring blanks and comments."""
 
-    entries: Dict[str, str] = {}
+    entries: dict[str, str] = {}
     for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -54,12 +53,12 @@ def load_baseline(path: Path) -> Dict[str, str]:
 
 
 def split_drift(
-    drift: List[str], baseline: Dict[str, str]
-) -> Tuple[List[str], List[str], List[str]]:
+    drift: list[str], baseline: dict[str, str]
+) -> tuple[list[str], list[str], list[str]]:
     """Return ``(known, new, stale)`` drift entries for ``baseline``."""
 
-    known: List[str] = []
-    new: List[str] = []
+    known: list[str] = []
+    new: list[str] = []
     seen = set()
     for entry in drift:
         ident = entry.split(":", 1)[0].strip()

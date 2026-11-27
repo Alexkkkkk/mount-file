@@ -28,9 +28,9 @@ import json
 import operator
 import sys
 import tempfile
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterator, Optional
 
 # ===========================================================================
 # 0. Общие типы и исключения
@@ -70,7 +70,7 @@ class YaraMatch:
     tags: list[str]
     data_sha256: str
     path: str  # виртуальный путь внутри образа или "<unallocated>"
-    offset: Optional[int] = None  # для unallocated/slack
+    offset: int | None = None  # для unallocated/slack
 
 
 @dataclass
@@ -78,7 +78,7 @@ class RegionInfo:
     offset: int
     length: int
     kind: str  # "unallocated" | "slack" | "file"
-    owner: Optional[str] = None
+    owner: str | None = None
 
 
 # ===========================================================================
@@ -449,10 +449,10 @@ class SlackExtractor:
 class DiffEntry:
     path: str
     status: str  # "added" | "removed" | "modified" | "same"
-    before_sha: Optional[str] = None
-    after_sha: Optional[str] = None
-    before_size: Optional[int] = None
-    after_size: Optional[int] = None
+    before_sha: str | None = None
+    after_sha: str | None = None
+    before_size: int | None = None
+    after_size: int | None = None
 
 
 class ImageDiffer:

@@ -50,9 +50,10 @@ import shutil
 import struct
 import tempfile
 import uuid
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator, Optional
+from typing import Any
 
 from .universal_fs_rw import FSEntry, FSInfo, UniversalFSRW
 
@@ -158,7 +159,7 @@ class EngineJournal:
         # Refuse to extend a chain changed since this object was opened.
         self._prev = self._tail_hash()
         entry = JournalEntry(
-            ts=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            ts=_dt.datetime.now(_dt.UTC).isoformat(),
             image=str(self.image_path) if self.image_path is not None else None,
             tx=tx,
             op=op,
@@ -295,7 +296,7 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
     checks: list[dict] = []
     problems: list[str] = []
 
-    def check(name: str, ok: Optional[bool], detail: str) -> None:
+    def check(name: str, ok: bool | None, detail: str) -> None:
         checks.append({"name": name, "ok": ok, "detail": detail})
         if ok is False:
             problems.append("%s: %s" % (name, detail))
@@ -441,13 +442,13 @@ def damage_report(image: str | Path, offset: int = 0) -> dict:
 class Transaction:
     """A unit of change; rolls back on failure, commits on success."""
 
-    def __init__(self, engine: "WriteEngine", tx_id: str, label: str = ""):
+    def __init__(self, engine: WriteEngine, tx_id: str, label: str = ""):
         self.engine = engine
         self.id = tx_id
         self.label = label
         self.entries: list[JournalEntry] = []
         self.snapshot: Path | None = None
-        self.started = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        self.started = _dt.datetime.now(_dt.UTC).isoformat()
         self.finished: str | None = None
         self.status = "open"
 
@@ -472,7 +473,7 @@ class Transaction:
             "operations": [entry.op for entry in self.entries],
         }
 
-    def __enter__(self) -> "Transaction":
+    def __enter__(self) -> Transaction:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -587,7 +588,7 @@ class WriteEngine:
             )
         self._fs.close()
 
-    def __enter__(self) -> "WriteEngine":
+    def __enter__(self) -> WriteEngine:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -672,7 +673,7 @@ class WriteEngine:
             "snapshot": str(tx.snapshot) if tx.snapshot else None,
         }
         tx.status = "committed"
-        tx.finished = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        tx.finished = _dt.datetime.now(_dt.UTC).isoformat()
         self.journal.append(
             tx=tx.id, op="commit", path="/", status="committed", extra=result
         )
@@ -690,7 +691,7 @@ class WriteEngine:
         for entry in tx.entries:
             entry.status = "rolled_back"
         tx.status = "rolled_back"
-        tx.finished = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        tx.finished = _dt.datetime.now(_dt.UTC).isoformat()
         self.journal.append(
             tx=tx.id,
             op="rollback",
@@ -829,7 +830,7 @@ class WriteEngine:
             "journal": self.journal.verify_chain(),
         }
 
-    def _run_fs_check(self) -> Optional[bool]:
+    def _run_fs_check(self) -> bool | None:
         fs_type = fs_family((self.damage or {}).get("fs_type"))
         checker = (
             "fsck.fat" if fs_type == "fat" else "e2fsck" if fs_type == "ext" else None
@@ -1050,7 +1051,7 @@ class WriteEngine:
         }
 
 
-def _run(args: list[str]) -> Optional[tuple[int, str]]:
+def _run(args: list[str]) -> tuple[int, str] | None:
     import subprocess
 
     try:

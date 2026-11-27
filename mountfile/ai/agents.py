@@ -18,18 +18,11 @@ tool through ``executor``.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
     Any,
-    Callable,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
 )
 
 
@@ -47,10 +40,10 @@ class ToolCall:
 
     def __init__(
         self,
-        tool: Optional[str] = None,
-        args: Optional[Mapping[str, Any]] = None,
+        tool: str | None = None,
+        args: Mapping[str, Any] | None = None,
         *,
-        name: Optional[str] = None,
+        name: str | None = None,
     ) -> None:
         selected = tool if tool is not None else name
         if selected is None:
@@ -75,11 +68,11 @@ class ToolCall:
 class Plan:
     """Normalized planner output."""
 
-    steps: Tuple[ToolCall, ...]
+    steps: tuple[ToolCall, ...]
     hypothesis: str = ""
 
     @property
-    def tool_calls(self) -> Tuple[ToolCall, ...]:
+    def tool_calls(self) -> tuple[ToolCall, ...]:
         """A descriptive alias for ``steps``."""
 
         return self.steps
@@ -94,7 +87,7 @@ class ExecutionRecord:
     args: Mapping[str, Any]
     ok: bool
     result: Any = None
-    error: Optional[str] = None
+    error: str | None = None
 
     def __post_init__(self) -> None:
         if not self.execution_id:
@@ -134,24 +127,24 @@ class InvestigationResult:
 
     query: str
     plan: Plan
-    executions: List[ExecutionRecord]
-    accepted_claims: List[Claim]
-    rejected_claims: List[Claim]
+    executions: list[ExecutionRecord]
+    accepted_claims: list[Claim]
+    rejected_claims: list[Claim]
 
     @property
-    def execution_records(self) -> List[ExecutionRecord]:
+    def execution_records(self) -> list[ExecutionRecord]:
         """Descriptive alias for :attr:`executions`."""
 
         return self.executions
 
     @property
-    def accepted(self) -> List[Claim]:
+    def accepted(self) -> list[Claim]:
         """Descriptive alias for :attr:`accepted_claims`."""
 
         return self.accepted_claims
 
     @property
-    def rejected(self) -> List[Claim]:
+    def rejected(self) -> list[Claim]:
         """Descriptive alias for :attr:`rejected_claims`."""
 
         return self.rejected_claims
@@ -160,10 +153,10 @@ class InvestigationResult:
 # These aliases are deliberately small: dependency injection is the only
 # extension point.  Implementations may be functions, bound methods, or
 # callable objects.
-Planner = Callable[[str], Union[Plan, Iterable[Union[ToolCall, Mapping[str, Any]]]]]
+Planner = Callable[[str], Plan | Iterable[ToolCall | Mapping[str, Any]]]
 Executor = Callable[[ToolCall], Any]
-Analyst = Callable[..., Iterable[Union[Claim, Mapping[str, Any]]]]
-Skeptic = Callable[..., Union[bool, Iterable[Union[Claim, Mapping[str, Any]]]]]
+Analyst = Callable[..., Iterable[Claim | Mapping[str, Any]]]
+Skeptic = Callable[..., bool | Iterable[Claim | Mapping[str, Any]]]
 
 
 class InvestigationOrchestrator:
@@ -209,7 +202,7 @@ class InvestigationOrchestrator:
             raise TypeError("query must be a string")
 
         plan = _coerce_plan(self._planner(query))
-        executions: List[ExecutionRecord] = []
+        executions: list[ExecutionRecord] = []
         for number, call in enumerate(plan.steps, start=1):
             execution_id = "exec_%04d" % number
             try:
@@ -242,7 +235,7 @@ class InvestigationOrchestrator:
         # Evidence validation happens before the skeptic.  A skeptic can
         # weaken a supported claim, but it cannot whitelist fabricated or
         # failed evidence.
-        supported: List[Claim] = []
+        supported: list[Claim] = []
         for claim in candidates:
             record = execution_map.get(claim.execution_id)
             if record is not None and record.ok and claim.execution_id:
@@ -302,7 +295,7 @@ def _coerce_tool_call(raw: Any) -> ToolCall:
     raise TypeError("each planned step must be a ToolCall or mapping")
 
 
-def _coerce_claims(raw: Any) -> List[Claim]:
+def _coerce_claims(raw: Any) -> list[Claim]:
     if raw is None:
         return []
     if isinstance(raw, Mapping):
@@ -353,7 +346,7 @@ def _skeptic_filter(
     skeptic: Skeptic,
     candidates: Sequence[Claim],
     executions: Sequence[ExecutionRecord],
-) -> List[Claim]:
+) -> list[Claim]:
     if not candidates:
         return []
 
@@ -365,7 +358,7 @@ def _skeptic_filter(
         kept_keys = {_claim_key(claim) for claim in kept}
         return [claim for claim in candidates if _claim_key(claim) in kept_keys]
 
-    kept: List[Claim] = []
+    kept: list[Claim] = []
     for claim in candidates:
         decision = _call_with_supported_arity(skeptic, claim, executions)
         if isinstance(decision, Mapping):
@@ -404,7 +397,7 @@ def _uses_collection_form(skeptic: Skeptic) -> bool:
     return name in {"claims", "candidates", "proposals"}
 
 
-def _claim_key(claim: Claim) -> Tuple[str, str, str, float]:
+def _claim_key(claim: Claim) -> tuple[str, str, str, float]:
     return (claim.statement, claim.execution_id, claim.type, float(claim.confidence))
 
 
