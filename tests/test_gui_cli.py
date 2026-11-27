@@ -24,6 +24,9 @@ from mountfile.gui_cli import (
     _BoundedOutput,
 )
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():
@@ -31,7 +34,7 @@ def app():
 
 
 def test_ui_command_inventory_matches_every_package_cli_command():
-    assert CLI_COMMANDS == tuple(cli.COMMANDS)
+    assert tuple(cli.COMMANDS) == CLI_COMMANDS
     assert set(CLI_HELP) == set(cli.COMMANDS)
     assert all(CLI_HELP[command] for command in CLI_COMMANDS)
     assert set(IMAGE_WRITE_COMMANDS) == {"put", "mkdir", "mv", "ln", "rm"}

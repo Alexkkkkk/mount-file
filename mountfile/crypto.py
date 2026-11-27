@@ -20,9 +20,10 @@ import re
 import shutil
 import struct
 import subprocess
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, BinaryIO, Callable, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, BinaryIO, Union
 
 # Public markers are useful to callers building synthetic, read-only fixtures.
 LUKS_MAGIC = b"LUKS\xba\xbe"
@@ -81,9 +82,9 @@ class ContainerInfo:
     kind: str
     signature: str
     offset: int = 0
-    version: Optional[int] = None
-    encrypted: Optional[bool] = None
-    adapter: Optional[str] = None
+    version: int | None = None
+    encrypted: bool | None = None
+    adapter: str | None = None
 
     @property
     def format(self) -> str:
@@ -113,8 +114,8 @@ class AdapterStatus:
     name: str
     executable: str
     available: bool
-    path: Optional[str] = None
-    reason: Optional[str] = None
+    path: str | None = None
+    reason: str | None = None
 
     def __bool__(self) -> bool:
         return self.available
@@ -185,7 +186,7 @@ def read_header(source: Source, *, offset: int = 0, size: int = _HEADER_SIZE) ->
     return _source_bytes(source, offset, size)
 
 
-def _luks_version(header: bytes, start: int = 0) -> Optional[int]:
+def _luks_version(header: bytes, start: int = 0) -> int | None:
     version_at = start + 6
     if len(header) < version_at + 2:
         return None
@@ -325,7 +326,7 @@ class CryptoContainer:
     def info(self) -> ContainerInfo:
         return self.inspect()
 
-    def adapter_status(self) -> Optional[AdapterStatus]:
+    def adapter_status(self) -> AdapterStatus | None:
         adapter = self.info.adapter
         return check_adapter(adapter) if adapter else None
 
@@ -337,8 +338,8 @@ class CryptoContainer:
         self,
         name: str,
         *,
-        password: Optional[Union[str, bytes]] = None,
-        key_file: Optional[Union[str, os.PathLike]] = None,
+        password: str | bytes | None = None,
+        key_file: str | os.PathLike | None = None,
     ) -> str:
         """Explicitly ask ``cryptsetup`` to create a mapping; never mounts it."""
 
@@ -352,9 +353,9 @@ class CryptoContainer:
 
     def open_bitlocker(
         self,
-        mountpoint: Union[str, os.PathLike],
+        mountpoint: str | os.PathLike,
         *,
-        password: Optional[Union[str, bytes]] = None,
+        password: str | bytes | None = None,
     ) -> str:
         """Explicitly ask ``dislocker`` for its FUSE output; never mounts it."""
 
@@ -365,7 +366,7 @@ class CryptoContainer:
             password=password,
         )
 
-    def open_apfs(self, mountpoint: Union[str, os.PathLike]) -> str:
+    def open_apfs(self, mountpoint: str | os.PathLike) -> str:
         """Fail explicitly: APFS/FileVault decryption is not implemented here."""
 
         raise CryptoOperationError(
@@ -389,7 +390,7 @@ def _canonical_adapter(name: str) -> str:
 
 
 def check_adapter(
-    name: str, *, which: Optional[Callable[[str], Optional[str]]] = None
+    name: str, *, which: Callable[[str], str | None] | None = None
 ) -> AdapterStatus:
     """Check one adapter by name or container kind without executing it."""
 
@@ -409,16 +410,16 @@ def check_adapter(
 
 
 def check_adapters(
-    *, which: Optional[Callable[[str], Optional[str]]] = None
-) -> Dict[str, AdapterStatus]:
+    *, which: Callable[[str], str | None] | None = None
+) -> dict[str, AdapterStatus]:
     """Return explicit availability records for all supported adapters."""
 
     return {name: check_adapter(name, which=which) for name in ADAPTER_EXECUTABLES}
 
 
 def available_adapters(
-    *, which: Optional[Callable[[str], Optional[str]]] = None
-) -> Dict[str, bool]:
+    *, which: Callable[[str], str | None] | None = None
+) -> dict[str, bool]:
     """Return a compact ``executable -> available`` mapping."""
 
     return {
@@ -427,7 +428,7 @@ def available_adapters(
 
 
 def adapter_available(
-    name: str, *, which: Optional[Callable[[str], Optional[str]]] = None
+    name: str, *, which: Callable[[str], str | None] | None = None
 ) -> bool:
     """Return only the availability boolean for one explicit adapter."""
 
@@ -449,8 +450,8 @@ def _image_argument(image: Source) -> str:
 
 
 def _secret_input(
-    value: Optional[Union[str, bytes]], *, line: bool = True
-) -> Optional[bytes]:
+    value: str | bytes | None, *, line: bool = True
+) -> bytes | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -473,11 +474,11 @@ def _validate_mapper_name(name: str) -> str:
 
 
 def _run_private(
-    command: Sequence[str], *, secret: Optional[bytes], runner: Runner
+    command: Sequence[str], *, secret: bytes | None, runner: Runner
 ) -> Any:
     """Run an adapter with captured output and no secret in argv or errors."""
 
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "check": False,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
@@ -495,13 +496,13 @@ def _run_private(
 
 
 def unlock_luks(
-    image: Union[str, os.PathLike],
+    image: str | os.PathLike,
     name: str,
     *,
     offset: int = 0,
-    key_file: Optional[Union[str, os.PathLike]] = None,
-    password: Optional[Union[str, bytes]] = None,
-    runner: Optional[Runner] = None,
+    key_file: str | os.PathLike | None = None,
+    password: str | bytes | None = None,
+    runner: Runner | None = None,
 ) -> str:
     """Create a LUKS mapping with ``cryptsetup`` without mounting it.
 
@@ -534,12 +535,12 @@ def unlock_luks(
 
 
 def unlock_bitlocker(
-    image: Union[str, os.PathLike],
-    mountpoint: Union[str, os.PathLike],
+    image: str | os.PathLike,
+    mountpoint: str | os.PathLike,
     *,
     offset: int = 0,
-    password: Optional[Union[str, bytes]] = None,
-    runner: Optional[Runner] = None,
+    password: str | bytes | None = None,
+    runner: Runner | None = None,
 ) -> str:
     """Run ``dislocker`` in its explicit FUSE-output mode, without mounting.
 

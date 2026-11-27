@@ -50,9 +50,9 @@ def branch_age_days(
     committed = _parse_date(committed_at)
     if committed is None:
         return None
-    current = now or dt.datetime.now(dt.timezone.utc)
+    current = now or dt.datetime.now(dt.UTC)
     if committed.tzinfo is None:
-        committed = committed.replace(tzinfo=dt.timezone.utc)
+        committed = committed.replace(tzinfo=dt.UTC)
     return max(0, (current - committed).days)
 
 
@@ -178,7 +178,7 @@ def collect_report(
         "repository": repository,
         "default_branch": default_branch,
         "stale_days": stale_days,
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "generated_at": dt.datetime.now(dt.UTC).isoformat(),
         "policy": {
             "mutates_refs": False,
             "deletes_branches": False,

@@ -10,7 +10,6 @@ import time
 import uuid
 import warnings
 from pathlib import Path
-from typing import Optional
 
 
 class Journal:
@@ -55,7 +54,7 @@ class Journal:
                    record_hash TEXT
                )""")
         self._migrate()
-        self._current: Optional[str] = None
+        self._current: str | None = None
         self._last_hash = self._get_last_hash()
         legacy = self._conn.execute(
             "SELECT COUNT(*) FROM journal WHERE status LIKE 'legacy_%'"
@@ -102,16 +101,11 @@ class Journal:
                 )
         if not had_record_hash:
             self._conn.execute("ALTER TABLE journal ADD COLUMN record_hash TEXT")
-            if had_status:
+            if had_status or had_committed:
                 self._conn.execute(
                     "UPDATE journal SET status = CASE "
                     "WHEN committed=1 THEN 'legacy_committed' "
                     "ELSE 'legacy_pending' END"
-                )
-            elif had_committed:
-                self._conn.execute(
-                    "UPDATE journal SET status = CASE WHEN committed=1 "
-                    "THEN 'legacy_committed' ELSE 'legacy_pending' END"
                 )
         self._conn.commit()
 
@@ -120,10 +114,10 @@ class Journal:
         tx_id: str,
         op: str,
         path: str,
-        sha256: Optional[str],
+        sha256: str | None,
         prev_hash: str,
-        offset: Optional[int],
-        length: Optional[int],
+        offset: int | None,
+        length: int | None,
         created_at: float,
     ) -> str:
         record = {
@@ -357,7 +351,7 @@ class Journal:
         if tx_id == self._current:
             self._current = None
 
-    def rollback(self, tx_id: Optional[str] = None) -> bool:
+    def rollback(self, tx_id: str | None = None) -> bool:
         tid = tx_id or self._current
         if not tid:
             return False

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from io import StringIO
 from types import SimpleNamespace
 
@@ -40,9 +40,9 @@ def test_normalizes_existing_metadata_and_event_records_without_opening_paths():
         "read",
     ]
     assert normalized[-1].timestamp == datetime(
-        2024, 1, 1, 0, 59, 58, tzinfo=timezone.utc
+        2024, 1, 1, 0, 59, 58, tzinfo=UTC
     )
-    assert all(event.timestamp.tzinfo == timezone.utc for event in normalized)
+    assert all(event.timestamp.tzinfo == UTC for event in normalized)
     assert normalized[-1].source == "olma"
     assert normalized[-1].evidence_path == "/evidence/image.raw/report.txt"
     metadata_event = next(event for event in normalized if event.record_id == "inode-7")

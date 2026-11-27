@@ -19,8 +19,9 @@ from __future__ import annotations
 import contextlib
 import operator
 import os
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import BinaryIO, Iterator, Optional, Protocol, Sequence, Tuple, Union
+from typing import BinaryIO, Protocol, Union
 
 
 class NandError(ValueError):
@@ -181,7 +182,7 @@ def parse_nand_page(
     raw_page: object,
     geometry: NandGeometry,
     page_index: int = 0,
-    decoder: Optional[NandPageDecoder] = None,
+    decoder: NandPageDecoder | None = None,
 ) -> NandPage:
     """Split one *complete* raw page into data and OOB, optionally via a hook.
 
@@ -219,7 +220,7 @@ Source = Union[bytes, bytearray, memoryview, BinaryIO, os.PathLike]
 
 
 @contextlib.contextmanager
-def _open_source(source: Source) -> Iterator[Union[memoryview, BinaryIO]]:
+def _open_source(source: Source) -> Iterator[memoryview | BinaryIO]:
     if isinstance(source, (bytes, bytearray, memoryview)):
         yield memoryview(source)
         return
@@ -236,7 +237,7 @@ def _open_source(source: Source) -> Iterator[Union[memoryview, BinaryIO]]:
     yield source  # type: ignore[misc]
 
 
-def _source_length(source: Union[memoryview, BinaryIO]) -> int:
+def _source_length(source: memoryview | BinaryIO) -> int:
     if isinstance(source, memoryview):
         return len(source)
     tell = getattr(source, "tell", None)
@@ -254,7 +255,7 @@ def _source_length(source: Union[memoryview, BinaryIO]) -> int:
     return end
 
 
-def _read_at(source: Union[memoryview, BinaryIO], offset: int, size: int) -> bytes:
+def _read_at(source: memoryview | BinaryIO, offset: int, size: int) -> bytes:
     if offset < 0 or size < 0:
         raise NandBoundsError("negative read range")
     if isinstance(source, memoryview):
@@ -294,7 +295,7 @@ def read_nand_page(
     source: Source,
     geometry: NandGeometry,
     page_index: int,
-    decoder: Optional[NandPageDecoder] = None,
+    decoder: NandPageDecoder | None = None,
 ) -> NandPage:
     """Read one complete raw page from bytes, a path, or a seekable stream."""
     if not isinstance(geometry, NandGeometry):
@@ -313,8 +314,8 @@ def iter_nand_pages(
     source: Source,
     geometry: NandGeometry,
     start_page: int = 0,
-    page_count: Optional[int] = None,
-    decoder: Optional[NandPageDecoder] = None,
+    page_count: int | None = None,
+    decoder: NandPageDecoder | None = None,
 ) -> Iterator[NandPage]:
     """Yield complete pages after validating image and requested bounds.
 
@@ -370,7 +371,7 @@ class BlockStatus:
 
     block_index: int
     bad: bool
-    markers: Tuple[BadBlockMarker, ...]
+    markers: tuple[BadBlockMarker, ...]
 
     @property
     def is_bad(self) -> bool:
@@ -382,10 +383,10 @@ class BadBlockTable:
     """Immutable bad-block table with marker evidence, not a vendor BBT format."""
 
     geometry: NandGeometry
-    blocks: Tuple[BlockStatus, ...]
+    blocks: tuple[BlockStatus, ...]
 
     @property
-    def entries(self) -> Tuple[BlockStatus, ...]:
+    def entries(self) -> tuple[BlockStatus, ...]:
         """Alias for callers that use the term ``entries`` for BBT rows."""
         return self.blocks
 
@@ -394,11 +395,11 @@ class BadBlockTable:
         return len(self.blocks)
 
     @property
-    def bad_blocks(self) -> Tuple[int, ...]:
+    def bad_blocks(self) -> tuple[int, ...]:
         return tuple(status.block_index for status in self.blocks if status.bad)
 
     @property
-    def good_blocks(self) -> Tuple[int, ...]:
+    def good_blocks(self) -> tuple[int, ...]:
         return tuple(status.block_index for status in self.blocks if not status.bad)
 
     def is_bad(self, block_index: int) -> bool:
@@ -427,7 +428,7 @@ class BadBlockTable:
         return any(status.block_index == index for status in self.blocks)
 
 
-def _marker_pages(geometry: NandGeometry, pages: Sequence[int]) -> Tuple[int, ...]:
+def _marker_pages(geometry: NandGeometry, pages: Sequence[int]) -> tuple[int, ...]:
     try:
         result = tuple(_integer(page, "marker page") for page in pages)
     except TypeError as exc:
@@ -447,7 +448,7 @@ def scan_bad_block_markers(
     geometry: NandGeometry,
     *,
     start_block: int = 0,
-    block_count: Optional[int] = None,
+    block_count: int | None = None,
     marker_offset: int = 0,
     marker_length: int = 1,
     marker_pages: Sequence[int] = (0, 1),

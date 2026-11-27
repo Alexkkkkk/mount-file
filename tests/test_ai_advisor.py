@@ -21,8 +21,8 @@ pytest.importorskip(
     "mountfile.qt_compat", exc_type=ImportError, reason="no Qt bindings installed"
 )
 
-from mountfile.ai_format_advisor_v2 import Calibration  # noqa: E402
 from mountfile.ai_format_advisor_v2 import (
+    Calibration,  # noqa: E402
     FormatAdvisorDialog,
     GitHubReporter,
     HypothesisEngine,
@@ -30,6 +30,9 @@ from mountfile.ai_format_advisor_v2 import (
     build_fingerprint,
 )
 from mountfile.qt_compat import QApplication, QEvent  # noqa: E402
+
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
 
 
 def test_fingerprint_of_a_text_file(tmp_path):

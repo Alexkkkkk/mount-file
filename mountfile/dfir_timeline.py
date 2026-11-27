@@ -15,12 +15,13 @@ from __future__ import annotations
 import csv
 import math
 import os
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from numbers import Real
-from typing import IO, Any, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import IO, Any
 
-UTC = timezone.utc
+UTC = UTC
 CSV_FIELDS = ("timestamp", "event", "source", "evidence_path", "record_id")
 _MISSING = object()
 
@@ -39,7 +40,7 @@ class TimelineEvent(Mapping[str, Any]):
     event: str
     source: str = ""
     evidence_path: str = ""
-    record_id: Optional[str] = None
+    record_id: str | None = None
 
     _KEYS = CSV_FIELDS
 
@@ -103,11 +104,11 @@ TimelineRow = TimelineEvent
 
 
 def _value(
-    record: Any, names: Sequence[str], metadata: Optional[Mapping[str, Any]] = None
+    record: Any, names: Sequence[str], metadata: Mapping[str, Any] | None = None
 ) -> Any:
     """Read the first present field without mutating or opening the record."""
 
-    mappings: List[Mapping[str, Any]] = []
+    mappings: list[Mapping[str, Any]] = []
     if isinstance(record, Mapping):
         mappings.append(record)
     if metadata is not None:
@@ -139,7 +140,7 @@ def _value(
     return _MISSING
 
 
-def _metadata(record: Any) -> Optional[Mapping[str, Any]]:
+def _metadata(record: Any) -> Mapping[str, Any] | None:
     raw = _value(record, ("metadata", "meta"))
     return raw if isinstance(raw, Mapping) else None
 
@@ -211,11 +212,11 @@ def normalize_timestamp(value: Any) -> datetime:
 
 
 def _timestamp_values(
-    record: Any, metadata: Optional[Mapping[str, Any]]
-) -> List[Tuple[str, Any]]:
+    record: Any, metadata: Mapping[str, Any] | None
+) -> list[tuple[str, Any]]:
     """Extract one or more timestamp fields from metadata/event records."""
 
-    values: List[Tuple[str, Any]] = []
+    values: list[tuple[str, Any]] = []
     seen: set[str] = set()
 
     # A generic event timestamp wins its event name and is emitted once.
@@ -258,7 +259,7 @@ def _timestamp_values(
     return values
 
 
-def _coerce_events(record: Any) -> List[TimelineEvent]:
+def _coerce_events(record: Any) -> list[TimelineEvent]:
     if isinstance(record, TimelineEvent):
         # It is already immutable and normalized; returning it avoids changing
         # identity while normalization still sorts a fresh result list.
@@ -282,7 +283,7 @@ def _coerce_events(record: Any) -> List[TimelineEvent]:
     explicit_event = _text(event_value) if event_value is not _MISSING else ""
     record_id = None if record_id_value is _MISSING else _text(record_id_value)
 
-    result: List[TimelineEvent] = []
+    result: list[TimelineEvent] = []
     for label, value in _timestamp_values(record, metadata):
         # For a generic event, preserve the producer's explicit kind/action;
         # metadata fields use their stable canonical labels.
@@ -299,7 +300,7 @@ def _coerce_events(record: Any) -> List[TimelineEvent]:
     return result
 
 
-def normalize_timeline(records: Iterable[Any]) -> List[TimelineEvent]:
+def normalize_timeline(records: Iterable[Any]) -> list[TimelineEvent]:
     """Normalize and deterministically sort caller-supplied timeline records.
 
     Inputs may be mappings or objects from existing modules, including
@@ -309,7 +310,7 @@ def normalize_timeline(records: Iterable[Any]) -> List[TimelineEvent]:
     is opened, stat'ed, parsed, or modified.
     """
 
-    normalized: List[TimelineEvent] = []
+    normalized: list[TimelineEvent] = []
     if isinstance(records, (Mapping, TimelineEvent)):
         iterable: Iterable[Any] = (records,)
     else:
@@ -362,7 +363,7 @@ def _write_csv(events: Sequence[TimelineEvent], stream: IO[str]) -> None:
 
 
 def export_timeline_csv(
-    records: Iterable[Any], destination: Union[str, os.PathLike, IO[str]]
+    records: Iterable[Any], destination: str | os.PathLike | IO[str]
 ) -> int:
     """Write normalized events as safely quoted UTF-8 CSV and return row count.
 

@@ -29,12 +29,13 @@ import hashlib
 import logging
 import os
 import sqlite3
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional, Sequence
+from typing import Any
 
-UTC = timezone.utc
+UTC = UTC
 
 #: Metadata timestamps collected from the filesystem layer.
 EVENT_CREATED = "created"
@@ -75,7 +76,7 @@ class TimelineEvent:
     source: str
     path: str
     event: str
-    sha256: Optional[str] = None
+    sha256: str | None = None
 
     def __post_init__(self) -> None:
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
@@ -98,7 +99,7 @@ class TimelineEvent:
 
 
 # --------------------------------------------------------------------- helpers
-def _as_utc(seconds: Any, nanoseconds: Any = 0) -> Optional[datetime]:
+def _as_utc(seconds: Any, nanoseconds: Any = 0) -> datetime | None:
     """Convert a Sleuth Kit seconds/nanoseconds pair into an aware datetime."""
 
     if seconds is None:
@@ -138,7 +139,7 @@ def _entry_is_file(entry: Any) -> bool:
     return getattr(getattr(entry.info, "meta", None), "type", None) == 1
 
 
-def _hash_entry(entry: Any, hash_limit: Optional[int]) -> Optional[str]:
+def _hash_entry(entry: Any, hash_limit: int | None) -> str | None:
     size = int(getattr(entry.info.meta, "size", 0) or 0)
     if size < 0:
         return None
@@ -206,7 +207,7 @@ def collect_events_from_fs(
     fs: Any,
     *,
     source: str = "pytsk3",
-    hash_limit: Optional[int] = DEFAULT_HASH_LIMIT,
+    hash_limit: int | None = DEFAULT_HASH_LIMIT,
     events: Sequence[str] = EVENT_TYPES,
 ) -> Iterator[TimelineEvent]:
     """Yield one :class:`TimelineEvent` per timestamp found in ``fs``.
@@ -325,8 +326,8 @@ def write_csv(events: Iterable[TimelineEvent], csv_path: os.PathLike | str) -> i
 def build_timeline(
     image_path: os.PathLike | str,
     *,
-    db_path: Optional[os.PathLike | str] = None,
-    csv_path: Optional[os.PathLike | str] = None,
+    db_path: os.PathLike | str | None = None,
+    csv_path: os.PathLike | str | None = None,
     **kwargs: Any,
 ) -> tuple[int, list[TimelineEvent]]:
     """Collect a timeline and persist it to SQLite and/or CSV."""
@@ -340,7 +341,7 @@ def build_timeline(
 
 
 # ---------------------------------------------------------------------- queries
-def _parse_bound(value: Any) -> Optional[str]:
+def _parse_bound(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -363,7 +364,7 @@ def query_timeline(
     *,
     start: Any = None,
     end: Any = None,
-    event: Optional[str] = None,
+    event: str | None = None,
     limit: int = 1000,
 ) -> list[dict[str, Any]]:
     """Return events inside ``[start, end]`` -- the AI "what happened when" hook."""

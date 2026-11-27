@@ -18,15 +18,8 @@ from mountfile.ext2_reader import (
     _COMPAT_EXT_ATTR,
     _COMPAT_HAS_JOURNAL,
     _COMPAT_RESIZE_INODE,
-)
-from mountfile.ext2_reader import _EXT2_COMPR_FL as _EXT2_COMPR_FL
-from mountfile.ext2_reader import _EXT2_INDEX_FL
-from mountfile.ext2_reader import _EXT4_EA_INODE_FL as _EXT4_EA_INODE_FL
-from mountfile.ext2_reader import _EXT4_ENCRYPT_FL as _EXT4_ENCRYPT_FL
-from mountfile.ext2_reader import _EXT4_EXTENTS_FL
-from mountfile.ext2_reader import _EXT4_INLINE_DATA_FL as _EXT4_INLINE_DATA_FL
-from mountfile.ext2_reader import _EXT4_VERITY_FL as _EXT4_VERITY_FL
-from mountfile.ext2_reader import (
+    _EXT2_INDEX_FL,
+    _EXT4_EXTENTS_FL,
     _EXT_INODE_READ_FLAGS,
     _INCOMPAT_FILETYPE,
     _RO_COMPAT_LARGE_FILE,
@@ -37,6 +30,11 @@ from mountfile.ext2_reader import (
     _GroupDescriptor,
     _Inode,
 )
+from mountfile.ext2_reader import _EXT2_COMPR_FL as _EXT2_COMPR_FL
+from mountfile.ext2_reader import _EXT4_EA_INODE_FL as _EXT4_EA_INODE_FL
+from mountfile.ext2_reader import _EXT4_ENCRYPT_FL as _EXT4_ENCRYPT_FL
+from mountfile.ext2_reader import _EXT4_INLINE_DATA_FL as _EXT4_INLINE_DATA_FL
+from mountfile.ext2_reader import _EXT4_VERITY_FL as _EXT4_VERITY_FL
 from mountfile.ext_probe import (
     _COMPAT_FAST_COMMIT,
     _COMPAT_ORPHAN_FILE,

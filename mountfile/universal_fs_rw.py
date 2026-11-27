@@ -368,7 +368,7 @@ class WriteOperation:
 
     def __post_init__(self):
         if not self.ts:
-            self.ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            self.ts = _dt.datetime.now(_dt.UTC).isoformat()
 
 
 # =============================================================================

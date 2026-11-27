@@ -30,7 +30,6 @@ from pathlib import Path
 
 import pytest
 
-from mountfile.native_write import fault_hook_installed
 from mountfile.ntfs_reader import parse_ntfs_attribute_stream, probe_ntfs_metadata
 from mountfile.ntfs_replay import _attribute_offset, _Mft, native_ntfs_recover
 

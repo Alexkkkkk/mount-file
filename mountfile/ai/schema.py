@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 #: Longest model answer inspected for JSON.
 MAX_TEXT = 256 * 1024
@@ -42,7 +42,7 @@ _TYPE_CHECKS = {
 }
 
 
-def _balanced_at(text: str, start: int) -> Optional[str]:
+def _balanced_at(text: str, start: int) -> str | None:
     """Return the balanced ``{...}``/``[...]`` block starting at ``start``."""
 
     opener = text[start]
@@ -71,7 +71,7 @@ def _balanced_at(text: str, start: int) -> Optional[str]:
     return None
 
 
-def _first_balanced(text: str) -> Optional[str]:
+def _first_balanced(text: str) -> str | None:
     """Return the balanced block at the *first* bracket, or ``None``.
 
     Anchoring on the first bracket keeps a truncated answer from being mined
@@ -90,7 +90,7 @@ def extract_json(text: Any) -> Any:
     if not isinstance(text, str) or not text.strip():
         return None
     window = text[:MAX_TEXT]
-    candidates: List[str] = [match.group(1) for match in _FENCE.finditer(window)]
+    candidates: list[str] = [match.group(1) for match in _FENCE.finditer(window)]
     candidates.append(window)
     for candidate in candidates:
         candidate = candidate.strip()
@@ -110,10 +110,10 @@ def extract_json(text: Any) -> Any:
     return None
 
 
-def validate(instance: Any, schema: Any, path: str = "$") -> List[str]:
+def validate(instance: Any, schema: Any, path: str = "$") -> list[str]:
     """Return human-readable violations; an empty list means valid."""
 
-    errors: List[str] = []
+    errors: list[str] = []
     if not isinstance(schema, dict):
         return errors
 
@@ -168,7 +168,7 @@ def validate(instance: Any, schema: Any, path: str = "$") -> List[str]:
     return errors
 
 
-def parse_structured(text: Any, schema: Any) -> Tuple[Any, List[str]]:
+def parse_structured(text: Any, schema: Any) -> tuple[Any, list[str]]:
     """Extract JSON from a model answer and validate it against ``schema``."""
 
     obj = extract_json(text)
@@ -203,7 +203,7 @@ _TOOLS = [
 
 #: The schemas shipped with the application.  Adding one here is enough for
 #: ``mountfile ai triage --schema`` and for any MCP client to use it.
-SCHEMAS: Dict[str, dict] = {
+SCHEMAS: dict[str, dict] = {
     "file_triage": {
         "type": "object",
         "additionalProperties": False,
@@ -283,10 +283,10 @@ SCHEMAS: Dict[str, dict] = {
 READ_ONLY_SQL_PREFIXES = ("select", "with", "explain")
 
 
-def guard_sql(sql: Any) -> List[str]:
+def guard_sql(sql: Any) -> list[str]:
     """Reject anything that is not a single read-only statement."""
 
-    errors: List[str] = []
+    errors: list[str] = []
     if not isinstance(sql, str) or not sql.strip():
         return ["пустой SQL"]
     body = sql.strip().rstrip(";").strip()

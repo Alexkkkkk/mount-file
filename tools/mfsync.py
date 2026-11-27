@@ -288,7 +288,7 @@ def git(args, cwd, check=True, timeout=300):
             cwd=str(cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            universal_newlines=True,
+            text=True,
             timeout=timeout,
         )
     except OSError as exc:
@@ -663,7 +663,7 @@ def _pid_is_running(pid):
     return True
 
 
-class _lock(object):
+class _lock:
     """Small per-worktree lock that is safe against live, old lock files."""
 
     def __init__(self, cwd, timeout=0):

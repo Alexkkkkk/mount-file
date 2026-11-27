@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from mountfile.ext4_native_writer import normalize_internal_path
 from mountfile.native_write import (
@@ -143,7 +143,7 @@ def quarantine_ntfs_image(
         "reason": reason,
         "offset": offset,
         "replay": "not_requested",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     temporary_marker = f"{marker}.partial-{os.getpid()}"
     try:

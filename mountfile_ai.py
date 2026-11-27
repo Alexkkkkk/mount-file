@@ -57,9 +57,10 @@ import logging
 import os
 import sys
 import threading
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 # =============================================================================
 # THIRD-PARTY (with graceful degradation)
@@ -253,7 +254,7 @@ class Audit:
                     "refusing to append"
                 )
             body = {
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "prev": current_hash,
                 "event": event,
                 **data,

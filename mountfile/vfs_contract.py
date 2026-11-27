@@ -18,7 +18,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import BinaryIO, List, Optional, Union
+from typing import BinaryIO
 
 
 class Operation(str, Enum):
@@ -53,21 +53,21 @@ class VFSResult:
     """Результат операции VFS. Ошибки не бросаются — они возвращаются здесь."""
 
     success: bool
-    error_code: Optional[str] = None
+    error_code: str | None = None
     message: str = ""
     # Произвольные полезные данные: список записей, stat-словарь, байты и т.п.
-    data: Optional[object] = field(default=None, repr=False)
+    data: object | None = field(default=None, repr=False)
 
     @classmethod
-    def ok(cls, data: Optional[object] = None) -> "VFSResult":
+    def ok(cls, data: object | None = None) -> VFSResult:
         return cls(success=True, data=data)
 
     @classmethod
     def fail(
         cls,
-        error_code: Union[str, ErrorCode],
+        error_code: str | ErrorCode,
         message: str = "",
-    ) -> "VFSResult":
+    ) -> VFSResult:
         code = error_code.value if isinstance(error_code, ErrorCode) else error_code
         return cls(success=False, error_code=code, message=message)
 
@@ -81,7 +81,7 @@ class VFS(ABC):
     """
 
     @abstractmethod
-    def supported_operations(self) -> List[Operation]:
+    def supported_operations(self) -> list[Operation]:
         """Вернуть список реально поддерживаемых операций."""
         raise NotImplementedError
 
@@ -102,7 +102,7 @@ class VFS(ABC):
 
     @abstractmethod
     def write(
-        self, path: str, data: Union[BinaryIO, bytes], offset: int = 0
+        self, path: str, data: BinaryIO | bytes, offset: int = 0
     ) -> VFSResult:
         raise NotImplementedError
 

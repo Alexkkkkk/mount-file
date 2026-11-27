@@ -23,7 +23,7 @@ import stat
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 from . import vfs as _vfs
 from .vfs import TskImage
@@ -96,7 +96,7 @@ def _validate_offset(offset: int) -> int:
     return value
 
 
-def detect_macos_signature(data: Union[bytes, bytearray, memoryview]) -> Optional[str]:
+def detect_macos_signature(data: bytes | bytearray | memoryview) -> str | None:
     """Return ``"HFS+"`` or ``"APFS"`` for a volume-header byte string.
 
     ``data`` is relative to the beginning of a filesystem volume.  APFS uses the
@@ -118,7 +118,7 @@ def detect_macos_signature(data: Union[bytes, bytearray, memoryview]) -> Optiona
     return None
 
 
-def detect_macos_filesystem(image_path: PathLike, offset: int = 0) -> Optional[str]:
+def detect_macos_filesystem(image_path: PathLike, offset: int = 0) -> str | None:
     """Detect HFS+ or APFS at ``offset`` in an image, without mounting it.
 
     Only the small signature regions are read.  ``offset`` is useful for a
@@ -144,7 +144,7 @@ def detect_macos_filesystem(image_path: PathLike, offset: int = 0) -> Optional[s
 detect_filesystem = detect_macos_filesystem
 
 
-def apfs_fuse_path() -> Optional[str]:
+def apfs_fuse_path() -> str | None:
     """Return the ``apfs-fuse`` executable selected from ``PATH``, if any."""
 
     return shutil.which("apfs-fuse")
@@ -255,7 +255,7 @@ class APFSFuseAdapter:
         self,
         image_path: PathLike,
         offset: int = 0,
-        executable: Optional[PathLike] = None,
+        executable: PathLike | None = None,
     ) -> None:
         self.image_path = os.fspath(image_path)
         self.offset = _validate_offset(offset)
@@ -276,7 +276,7 @@ class APFSFuseAdapter:
                 "image does not contain an APFS filesystem"
             )
         self._process = None  # type: Any
-        self._mountpoint: Optional[Path] = None
+        self._mountpoint: Path | None = None
 
     @property
     def mounted(self) -> bool:
@@ -285,7 +285,7 @@ class APFSFuseAdapter:
         return self._process is not None and self._mountpoint is not None
 
     @property
-    def mountpoint(self) -> Optional[str]:
+    def mountpoint(self) -> str | None:
         return str(self._mountpoint) if self._mountpoint is not None else None
 
     @property

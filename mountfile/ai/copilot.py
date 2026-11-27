@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Callable, Mapping
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 SECTION_NAMES = ("image", "timeline", "anomalies")
 DEFAULT_MAX_ITEMS = 100
@@ -43,14 +44,14 @@ class CopilotSummaryBuilder:
 
     def __init__(
         self,
-        image_provider: Optional[Provider] = None,
-        timeline_provider: Optional[Provider] = None,
-        anomalies_provider: Optional[Provider] = None,
+        image_provider: Provider | None = None,
+        timeline_provider: Provider | None = None,
+        anomalies_provider: Provider | None = None,
         *,
-        anomaly_provider: Optional[Provider] = None,
-        image_fingerprint_provider: Optional[Provider] = None,
-        timeline_events_provider: Optional[Provider] = None,
-        anomaly_findings_provider: Optional[Provider] = None,
+        anomaly_provider: Provider | None = None,
+        image_fingerprint_provider: Provider | None = None,
+        timeline_events_provider: Provider | None = None,
+        anomaly_findings_provider: Provider | None = None,
         max_items: int = DEFAULT_MAX_ITEMS,
     ) -> None:
         self.image_provider = _coalesce_provider(
@@ -77,7 +78,7 @@ class CopilotSummaryBuilder:
         image_fingerprint: Any = _MISSING,
         timeline_events: Any = _MISSING,
         anomaly_findings: Any = _MISSING,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         """Return ``image``, ``timeline``, and ``anomalies`` sections.
 
         Explicit arguments take precedence over providers.  ``None`` is a
@@ -114,7 +115,7 @@ class CopilotSummaryBuilder:
         timeline_events: Any = _MISSING,
         anomaly_findings: Any = _MISSING,
         *,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> Future:
         """Schedule one bounded summary build and return immediately.
 
@@ -145,15 +146,15 @@ def build_summary(
     timeline_events: Any = _MISSING,
     anomaly_findings: Any = _MISSING,
     *,
-    image_provider: Optional[Provider] = None,
-    timeline_provider: Optional[Provider] = None,
-    anomalies_provider: Optional[Provider] = None,
-    anomaly_provider: Optional[Provider] = None,
-    image_fingerprint_provider: Optional[Provider] = None,
-    timeline_events_provider: Optional[Provider] = None,
-    anomaly_findings_provider: Optional[Provider] = None,
+    image_provider: Provider | None = None,
+    timeline_provider: Provider | None = None,
+    anomalies_provider: Provider | None = None,
+    anomaly_provider: Provider | None = None,
+    image_fingerprint_provider: Provider | None = None,
+    timeline_events_provider: Provider | None = None,
+    anomaly_findings_provider: Provider | None = None,
     max_items: int = DEFAULT_MAX_ITEMS,
-) -> Dict[str, Dict[str, Any]]:
+) -> dict[str, dict[str, Any]]:
     """Build a summary in one call without inspecting or transmitting files."""
 
     builder = CopilotSummaryBuilder(
@@ -174,15 +175,15 @@ def build_summary_background(
     timeline_events: Any = _MISSING,
     anomaly_findings: Any = _MISSING,
     *,
-    image_provider: Optional[Provider] = None,
-    timeline_provider: Optional[Provider] = None,
-    anomalies_provider: Optional[Provider] = None,
-    anomaly_provider: Optional[Provider] = None,
-    image_fingerprint_provider: Optional[Provider] = None,
-    timeline_events_provider: Optional[Provider] = None,
-    anomaly_findings_provider: Optional[Provider] = None,
+    image_provider: Provider | None = None,
+    timeline_provider: Provider | None = None,
+    anomalies_provider: Provider | None = None,
+    anomaly_provider: Provider | None = None,
+    image_fingerprint_provider: Provider | None = None,
+    timeline_events_provider: Provider | None = None,
+    anomaly_findings_provider: Provider | None = None,
     max_items: int = DEFAULT_MAX_ITEMS,
-    executor: Optional[Executor] = None,
+    executor: Executor | None = None,
 ) -> Future:
     """Submit a summary build to a bounded background worker and return a future."""
 
@@ -212,7 +213,7 @@ build_forensic_summary_background = build_summary_background
 def summary_to_markdown(summary: Mapping[str, Mapping[str, Any]]) -> str:
     """Render a previously built summary without doing any additional analysis."""
 
-    lines: List[str] = []
+    lines: list[str] = []
     labels = (("image", "Image"), ("timeline", "Timeline"), ("anomalies", "Anomalies"))
     for key, label in labels:
         section = summary.get(key, {}) if isinstance(summary, Mapping) else {}
@@ -238,8 +239,8 @@ def summary_to_markdown(summary: Mapping[str, Mapping[str, Any]]) -> str:
 
 
 def _coalesce_provider(
-    primary: Optional[Provider], alias: Optional[Provider], name: str
-) -> Optional[Provider]:
+    primary: Provider | None, alias: Provider | None, name: str
+) -> Provider | None:
     if primary is not None and alias is not None:
         raise ValueError("provide only one %s provider" % name)
     return primary if primary is not None else alias
@@ -253,7 +254,7 @@ def _bounded_max_items(value: Any) -> int:
     return max(1, min(result, MAX_MAX_ITEMS))
 
 
-def _resolve(provider: Any, explicit: Any) -> Tuple[Any, Optional[str]]:
+def _resolve(provider: Any, explicit: Any) -> tuple[Any, str | None]:
     source = provider if explicit is _MISSING else explicit
     if source is None or source is _MISSING:
         return None, None
@@ -271,7 +272,7 @@ def _provider_error(exc: Exception) -> str:
     return "provider failed (%s)" % type(exc).__name__
 
 
-def _image_section(value: Any, error: Optional[str]) -> Dict[str, Any]:
+def _image_section(value: Any, error: str | None) -> dict[str, Any]:
     if error is not None:
         return {"status": "error", "fingerprint": {}, "error": error}
     if value is None or value == "":
@@ -288,9 +289,9 @@ def _image_section(value: Any, error: Optional[str]) -> Dict[str, Any]:
 def _collection_section(
     field: str,
     value: Any,
-    error: Optional[str],
+    error: str | None,
     max_items: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if error is not None:
         return {
             "status": "error",
@@ -334,7 +335,7 @@ def _collection_section(
     }
 
 
-def _bounded_items(value: Any, max_items: int) -> Tuple[List[Any], bool, Optional[str]]:
+def _bounded_items(value: Any, max_items: int) -> tuple[list[Any], bool, str | None]:
     if isinstance(value, Mapping) or isinstance(
         value, (str, bytes, bytearray, memoryview)
     ):
@@ -355,7 +356,7 @@ def _bounded_items(value: Any, max_items: int) -> Tuple[List[Any], bool, Optiona
     except TypeError:
         return [_safe_value(_object_to_value(value))], False, None
 
-    items: List[Any] = []
+    items: list[Any] = []
     for _ in range(max_items):
         try:
             item = next(iterator)
@@ -422,7 +423,7 @@ def _safe_value(value: Any, depth: int = 0) -> Any:
         return "<nested value truncated>"
 
     if isinstance(value, Mapping):
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         keys = sorted(value.keys(), key=_safe_key)
         for key in keys[:MAX_NESTED_FIELDS]:
             result[_safe_key(key)] = _safe_value(value[key], depth + 1)
@@ -448,10 +449,10 @@ def _canonical(value: Any) -> str:
 
 
 def _submit_background(
-    function: Callable[..., Dict[str, Dict[str, Any]]],
-    args: Tuple[Any, ...],
+    function: Callable[..., dict[str, dict[str, Any]]],
+    args: tuple[Any, ...],
     *,
-    executor: Optional[Executor],
+    executor: Executor | None,
 ) -> Future:
     if executor is not None:
         return executor.submit(function, *args)

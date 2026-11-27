@@ -18,10 +18,11 @@ import os
 import shutil
 import tempfile
 import time
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterator, Protocol
+from typing import Protocol
 
 log = logging.getLogger(__name__)
 CHUNK_SIZE = 1 << 20

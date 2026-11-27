@@ -23,8 +23,9 @@ import hashlib
 import os
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Optional, Protocol, Union
+from typing import Any, Protocol
 
 try:
     import regex as _timeout_regex
@@ -83,7 +84,7 @@ class MountFileBackend(Protocol):
         image: Path,
         offset: int,
         inode: int,
-        original_size: Optional[int],
+        original_size: int | None,
         destination: Path,
     ) -> Any: ...
 
@@ -396,7 +397,7 @@ class DefaultBackend:
         image: Path,
         offset: int,
         inode: int,
-        original_size: Optional[int],
+        original_size: int | None,
         destination: Path,
     ) -> Any:
         try:
@@ -494,9 +495,9 @@ class MountFileMcpServer:
 
     def __init__(
         self,
-        image_root: Union[str, os.PathLike],
-        workspace: Union[str, os.PathLike],
-        backend: Optional[MountFileBackend] = None,
+        image_root: str | os.PathLike,
+        workspace: str | os.PathLike,
+        backend: MountFileBackend | None = None,
     ) -> None:
         configured_image = Path(image_root).expanduser().resolve()
         if (
@@ -554,7 +555,7 @@ class MountFileMcpServer:
             raise PathValidationError("configured image does not exist: %s" % resolved)
         return resolved
 
-    def _workspace_path(self, value: Any, *, default: Optional[Path] = None) -> Path:
+    def _workspace_path(self, value: Any, *, default: Path | None = None) -> Path:
         if value is None or value == "":
             if default is None:
                 raise PathValidationError("workspace path is required")
@@ -680,7 +681,7 @@ class MountFileMcpServer:
         image_path: str,
         offset: int,
         path: str,
-        output: Optional[str] = None,
+        output: str | None = None,
     ) -> Any:
         offset = _require_integer(offset, "offset")
         source_path = _virtual_path(path)
@@ -697,8 +698,8 @@ class MountFileMcpServer:
         image_path: str,
         offset: int,
         inode: int,
-        original_size: Optional[int] = None,
-        output: Optional[str] = None,
+        original_size: int | None = None,
+        output: str | None = None,
     ) -> Any:
         offset = _require_integer(offset, "offset")
         inode = _require_integer(inode, "inode", positive=True)
@@ -724,7 +725,7 @@ class MountFileMcpServer:
         self,
         image_path: str,
         key_name: str,
-        output: Optional[str] = None,
+        output: str | None = None,
     ) -> Any:
         if not isinstance(key_name, str) or not _SAFE_KEY.fullmatch(key_name):
             raise ValueError("key_name contains unsafe characters")
@@ -770,9 +771,9 @@ class MountFileMcpServer:
 
 def register_tools(
     app: Any,
-    image_root: Union[str, os.PathLike],
-    workspace: Union[str, os.PathLike],
-    backend: Optional[MountFileBackend] = None,
+    image_root: str | os.PathLike,
+    workspace: str | os.PathLike,
+    backend: MountFileBackend | None = None,
 ) -> MountFileMcpServer:
     """Build a service, register its tools on ``app``, and return the service."""
 
@@ -784,9 +785,9 @@ def register_tools(
 
 
 def create_server(
-    image_root: Union[str, os.PathLike],
-    workspace: Union[str, os.PathLike],
-    backend: Optional[MountFileBackend] = None,
+    image_root: str | os.PathLike,
+    workspace: str | os.PathLike,
+    backend: MountFileBackend | None = None,
     name: str = "mount-file",
 ) -> Any:
     """Create an optional FastMCP server, failing clearly when MCP is absent."""

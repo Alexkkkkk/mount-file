@@ -1,0 +1,98 @@
+name: Weekly Check
+
+# Еженедельная полная проверка репозитория: те же гейты, что и в quality.yml
+# (ruff статика + correctness, black, isort, compileall, actionlint),
+# плюс unit-набор и полный тестовый прогон, как в ci.yml.
+# Запускается по расписанию и вручную (workflow_dispatch).
+
+on:
+  schedule:
+    # Понедельник 06:00 UTC = 09:00 МСК (Europe/Moscow, UTC+3)
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Weekly quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install environment (uv.lock, pinned linters)
+        uses: ./.github/actions/python-test-env
+        with:
+          python-version: '3.12'
+          install-test-stack: 'true'
+          extra-pip: 'ruff==0.17.6 black==26.10.1 isort==9.0.2'
+
+      - name: Static check (syntax + undefined names)
+        run: ruff check . --select E9,F63,F7,F82 --output-format=github
+
+      - name: Correctness lint (issue #182 safety rules)
+        run: ruff check . --select B006,E722,S110,S112,F841 --output-format=github
+
+      - name: Format check (black)
+        run: black --check --diff .
+
+      - name: Import order check (isort)
+        run: isort --check-only --diff .
+
+      - name: Byte-compile all sources
+        run: python -m compileall -q mountfile main.py tests
+
+      - name: Validate GitHub Actions workflows (checksum-pinned actionlint)
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --location --retry 3 \
+            'https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz' \
+            -o "$ARCHIVE"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$ARCHIVE" | sha256sum --check -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
+
+  tests:
+    name: Weekly tests (unit + full, py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: quality
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install environment (uv.lock)
+        uses: ./.github/actions/python-test-env
+        with:
+          python-version: '3.12'
+          install-test-stack: 'true'
+
+      - name: Unit tests (fast, no gui/e2e)
+        run: >-
+          python -m pytest tests/ -q -n auto --dist=worksteal
+          -m "unit" -p no:cacheprovider --durations=15
+
+      - name: Full test suite (no gui/e2e)
+        run: >-
+          python -m pytest tests/ -q -n auto --dist=worksteal
+          -m "not gui and not e2e" -p no:cacheprovider --durations=25
+
+      - name: Weekly summary
+        if: always()
+        run: |
+          {
+            echo "## 📅 Еженедельная проверка — $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "| Гейт | Результат |"
+            echo "|---|---|"
+            echo "| Quality gates | ${{ needs.quality.result }} |"
+            echo "| Unit tests | см. job tests |"
+            echo "| Full suite | см. job tests |"
+          } >> "$GITHUB_STEP_SUMMARY"

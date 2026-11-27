@@ -138,11 +138,10 @@ def test_fat32_writer_rejects_fsinfo_pointer_into_file_data_without_mutation(
         with pytest.raises(ValueError, match="FSInfo sector is outside the reserved"):
             Fat32RW(image, volume_size=image.stat().st_size)
     else:
-        with image.open("rb") as handle:
-            with pytest.raises(
-                Fat32Error, match="FSInfo sector is outside the reserved"
-            ):
-                Fat32(handle)
+        with image.open("rb") as handle, pytest.raises(
+            Fat32Error, match="FSInfo sector is outside the reserved"
+        ):
+            Fat32(handle)
 
     assert hashlib.sha256(image.read_bytes()).digest() == original_hash
 

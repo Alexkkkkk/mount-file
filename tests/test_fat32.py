@@ -8,6 +8,7 @@ Run:  python -m pytest tests/ -v
 """
 
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -112,9 +113,8 @@ def test_rejects_non_mirrored_fat32_mode(tmp_path):
     struct.pack_into("<H", image, 40, 0x0080)
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="non-mirrored"):
-        with path.open("r+b") as handle:
-            Fat32(handle)
+    with pytest.raises(Fat32Error, match="non-mirrored"), path.open("r+b") as handle:
+        Fat32(handle)
 
 
 def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
@@ -127,9 +127,8 @@ def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
     image[second_fat + 8] ^= 0x01
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="mirrored FAT32 copies"):
-        with path.open("r+b") as handle:
-            Fat32(handle)
+    with pytest.raises(Fat32Error, match="mirrored FAT32 copies"), path.open("r+b") as handle:
+        Fat32(handle)
 
 
 def test_rejects_inconsistent_backup_boot_sector(tmp_path):
@@ -139,9 +138,8 @@ def test_rejects_inconsistent_backup_boot_sector(tmp_path):
     image[BACKUP_BOOT_SECTOR * BPS + 3] ^= 0x01
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="backup boot sector"):
-        with path.open("r+b") as handle:
-            Fat32(handle)
+    with pytest.raises(Fat32Error, match="backup boot sector"), path.open("r+b") as handle:
+        Fat32(handle)
 
 
 class TestFat32:
@@ -153,6 +151,7 @@ class TestFat32:
         self.fs = Fat32(self.fh)
 
     def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
         self.fh.close()
 
     def _free(self):
@@ -316,6 +315,9 @@ def test_fat32_rejects_physically_truncated_volume(tmp_path):
 class TestPartitions:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_mbr(self):
         path = os.path.join(self.tmp, "mbr.img")

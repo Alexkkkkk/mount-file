@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 import stat
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ class EvidenceManifestError(ValueError):
 
 def _utc_from_ns(timestamp_ns: int) -> str:
     return (
-        datetime.fromtimestamp(timestamp_ns / 1_000_000_000, tz=timezone.utc)
+        datetime.fromtimestamp(timestamp_ns / 1_000_000_000, tz=UTC)
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
@@ -112,7 +112,7 @@ def create_evidence_manifest(
         raise EvidenceManifestError(f"cannot open source read-only: {exc}") from exc
 
     started_at = (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
@@ -141,7 +141,7 @@ def create_evidence_manifest(
         )
 
     completed_at = (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )

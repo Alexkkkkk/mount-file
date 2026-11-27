@@ -43,8 +43,9 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 #: Manifest path relative to the repository root.
 MANIFEST_PATH = Path("docs/replay-acceptance.json")
@@ -67,7 +68,7 @@ class SliceError(RuntimeError):
     """The manifest or the checkout cannot be read, so nothing can be judged."""
 
 
-def _git(root: Path, *args: str) -> Optional[str]:
+def _git(root: Path, *args: str) -> str | None:
     """Run git and return stripped stdout, or None when git says no."""
     try:
         completed = subprocess.run(
@@ -86,6 +87,11 @@ def _git(root: Path, *args: str) -> Optional[str]:
     return value or None
 
 
+def _is_shallow(root: Path) -> bool:
+    """True when the checkout is a shallow clone (partial object store)."""
+    return _git(root, "rev-parse", "--is-shallow-repository") == "true"
+
+
 def _git_ok(root: Path, *args: str) -> bool:
     """True when git exits 0, for commands whose success prints nothing."""
     try:
@@ -102,7 +108,7 @@ def _git_ok(root: Path, *args: str) -> bool:
     return completed.returncode == 0
 
 
-def git_slice(root: Path) -> Tuple[Optional[str], Optional[str]]:
+def git_slice(root: Path) -> tuple[str | None, str | None]:
     """Return ``(branch, commit)`` of the working tree, ``(None, None)`` if gitless."""
     commit = _git(root, "rev-parse", "--short=7", "HEAD")
     if commit is None:
@@ -113,7 +119,7 @@ def git_slice(root: Path) -> Tuple[Optional[str], Optional[str]]:
     return branch, commit
 
 
-def git_branches(root: Path) -> List[str]:
+def git_branches(root: Path) -> list[str]:
     """Local and remote branch names, without the ``origin/`` prefix."""
     listing = _git(
         root, "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"
@@ -129,7 +135,7 @@ def git_branches(root: Path) -> List[str]:
     return sorted(names)
 
 
-def tree_version(root: Path) -> Optional[str]:
+def tree_version(root: Path) -> str | None:
     """Canonical version of this tree: package ``__version__``, else pyproject."""
     init = root / PACKAGE_INIT
     if init.is_file():
@@ -144,7 +150,7 @@ def tree_version(root: Path) -> Optional[str]:
     return None
 
 
-def load_manifest(path: Path) -> Dict[str, Any]:
+def load_manifest(path: Path) -> dict[str, Any]:
     """Load the manifest, raising ``SliceError`` when it is missing or broken."""
     if not path.is_file():
         raise SliceError(f"манифест не найден: {path}")
@@ -158,12 +164,12 @@ def load_manifest(path: Path) -> Dict[str, Any]:
 
 
 def slice_drift(
-    manifest: Dict[str, Any],
+    manifest: dict[str, Any],
     root: Path,
     *,
-    git_state: Optional[Tuple[Optional[str], Optional[str]]] = None,
+    git_state: tuple[str | None, str | None] | None = None,
     strict: bool = False,
-) -> Tuple[List[str], List[str]]:
+) -> tuple[list[str], list[str]]:
     """Return ``(blocking, advisory)`` reasons the slice header is stale.
 
     With ``strict=True`` the existence findings become blocking, so a header
@@ -171,8 +177,8 @@ def slice_drift(
     A missing ``.git`` and a slice commit behind HEAD stay advisory: the first
     is a property of the checkout, the second is the header's intended shape.
     """
-    blocking: List[str] = []
-    advisory: List[str] = []
+    blocking: list[str] = []
+    advisory: list[str] = []
 
     def _record(reason: str) -> None:
         """Keep a git-derived existence finding, blocking under strict mode."""
@@ -200,7 +206,17 @@ def slice_drift(
     if claimed_commit and not _git_ok(
         root, "cat-file", "-e", f"{claimed_commit}^{{commit}}"
     ):
-        _record(f"slice.commit = {claimed_commit!r} в этом checkout не разрешается")
+        if _is_shallow(root):
+            # Shallow-ness is a property of the checkout, not of the manifest:
+            # a partial clone cannot resolve old commits even when they are
+            # real and reachable on the remote. Downgrade to advisory so a
+            # shallow CI checkout does not turn a green gate red.
+            advisory.append(
+                f"slice.commit = {claimed_commit!r} не разрешается "
+                "в shallow-checkout: объект недоступен локально, дрейф не подтверждён"
+            )
+        else:
+            _record(f"slice.commit = {claimed_commit!r} в этом checkout не разрешается")
 
     claimed_branch = slice_block.get("branch")
     if claimed_branch:
@@ -223,12 +239,12 @@ def slice_drift(
 
 
 def sync_slice(
-    manifest: Dict[str, Any],
+    manifest: dict[str, Any],
     root: Path,
     *,
-    checked: Optional[str] = None,
-    git_state: Optional[Tuple[Optional[str], Optional[str]]] = None,
-) -> Dict[str, Any]:
+    checked: str | None = None,
+    git_state: tuple[str | None, str | None] | None = None,
+) -> dict[str, Any]:
     """Return the manifest with its slice header rewritten from the live tree."""
     slice_block = manifest.get("slice")
     if not isinstance(slice_block, dict):
@@ -253,13 +269,13 @@ def sync_slice(
     return manifest
 
 
-def dump_manifest(manifest: Dict[str, Any], path: Path) -> None:
+def dump_manifest(manifest: dict[str, Any], path: Path) -> None:
     """Write the manifest back with the repository's 2-space JSON style."""
     text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     path.write_text(text, encoding="utf-8")
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Проверить секцию slice манифеста #510 против живого дерева."
     )

@@ -25,8 +25,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any
 
 #: Manifest path relative to the repository root.
 MANIFEST_PATH = Path("docs/replay-acceptance.json")
@@ -59,7 +60,7 @@ class ManifestError(RuntimeError):
     """The manifest itself is malformed (not merely out of date)."""
 
 
-def load_manifest(path: Path = MANIFEST_PATH) -> Dict[str, Any]:
+def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
     """Read and structurally validate the manifest.  Raises ManifestError."""
 
     try:
@@ -101,10 +102,10 @@ def load_manifest(path: Path = MANIFEST_PATH) -> Dict[str, Any]:
     return data
 
 
-def verify(manifest: Dict[str, Any], root: Path) -> List[str]:
+def verify(manifest: dict[str, Any], root: Path) -> list[str]:
     """Return a list of problems; an empty list means the manifest is truthful."""
 
-    problems: List[str] = []
+    problems: list[str] = []
     root = Path(root)
     for item in manifest["items"]:
         ident = item["id"]
@@ -133,7 +134,7 @@ def verify(manifest: Dict[str, Any], root: Path) -> List[str]:
     return problems
 
 
-def summarise(manifest: Dict[str, Any]) -> Dict[str, int]:
+def summarise(manifest: dict[str, Any]) -> dict[str, int]:
     """Count items per status, plus the total."""
 
     counts = {name: 0 for name in STATUS_GLYPH}
@@ -143,12 +144,12 @@ def summarise(manifest: Dict[str, Any]) -> Dict[str, int]:
     return counts
 
 
-def _ordered_blocks(items: Iterable[Dict[str, Any]]) -> List[str]:
+def _ordered_blocks(items: Iterable[dict[str, Any]]) -> list[str]:
     present = {item["block"] for item in items}
     return [name for name in BLOCK_TITLES if name in present]
 
 
-def render_markdown(manifest: Dict[str, Any]) -> str:
+def render_markdown(manifest: dict[str, Any]) -> str:
     """Render the whole tracker as Markdown tables ready to paste into #510."""
 
     items = manifest["items"]
@@ -200,7 +201,7 @@ def render_markdown(manifest: Dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_text(manifest: Dict[str, Any], problems: List[str]) -> str:
+def render_text(manifest: dict[str, Any], problems: list[str]) -> str:
     """Compact terminal report."""
 
     counts = summarise(manifest)

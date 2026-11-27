@@ -2,10 +2,11 @@
 
 from types import SimpleNamespace
 
-import pytest
-
 from mountfile.capabilities import get_native_capability_status
 from tests.qt_env import needs_qt
+
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
 
 
 class _Button:

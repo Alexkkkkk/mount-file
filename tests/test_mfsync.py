@@ -42,7 +42,7 @@ def run_git(cwd, *args):
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        universal_newlines=True,
+        text=True,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()

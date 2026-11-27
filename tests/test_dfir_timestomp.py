@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from mountfile.dfir_timestomp import (
     TimestampRecord,
@@ -83,9 +83,9 @@ def test_legacy_field_aliases_and_datetime_values_are_explicit_and_deterministic
         {
             "path": "/evidence/legacy.txt",
             "id": 9,
-            "birth": datetime(2024, 1, 2, tzinfo=timezone.utc),
-            "mtime": datetime(2024, 1, 1, tzinfo=timezone.utc),
-            "atime": datetime(2024, 1, 3, tzinfo=timezone.utc),
+            "birth": datetime(2024, 1, 2, tzinfo=UTC),
+            "mtime": datetime(2024, 1, 1, tzinfo=UTC),
+            "atime": datetime(2024, 1, 3, tzinfo=UTC),
         }
     ]
 

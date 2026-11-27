@@ -30,9 +30,9 @@ import ipaddress
 import logging
 import os
 import posixpath
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Optional, Protocol, Sequence, Union
+from typing import Any, Protocol
 
 from mountfile.capabilities import get_native_capability_matrix
 from mountfile.safety import RefusalError, RefusalRuntimeError
@@ -89,9 +89,9 @@ class ServiceRegistry(Protocol):
 
     def timeline(
         self,
-        image: Optional[str] = None,
+        image: str | None = None,
         limit: int = 100,
-        path: Optional[str] = None,
+        path: str | None = None,
         offset: int = 0,
     ) -> Any: ...
 
@@ -170,7 +170,7 @@ def _is_within(candidate: Path, root: Path) -> bool:
 
 
 def _normalise_roots(
-    image_roots: Optional[Union[os.PathLike, str, Sequence[Union[os.PathLike, str]]]],
+    image_roots: os.PathLike | str | Sequence[os.PathLike | str] | None,
 ) -> tuple[Path, ...]:
     if image_roots is None:
         return ()
@@ -235,7 +235,7 @@ def _normalise_virtual_path(value: Any, name: str = "path") -> str:
     return "/" + "/".join(parts)
 
 
-def _normalise_filter(value: Any) -> Optional[str]:
+def _normalise_filter(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
@@ -268,7 +268,7 @@ def _find_operation(registry: Any, operation: str) -> Any:
     return None
 
 
-def _canonical_parameter(name: str) -> Optional[str]:
+def _canonical_parameter(name: str) -> str | None:
     lowered = name.lower()
     for canonical, aliases in _PARAMETER_ALIASES.items():
         if lowered in aliases:
@@ -361,7 +361,7 @@ def _invoke(
     return operation(*positional, **kwargs)
 
 
-def _safe_token(value: Optional[str]) -> Optional[str]:
+def _safe_token(value: str | None) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value or len(value) > MAX_AUTH_TOKEN_LENGTH:
@@ -492,13 +492,11 @@ def create_app(
     service_registry: Any = None,
     *,
     registry: Any = None,
-    image_roots: Optional[
-        Union[os.PathLike, str, Sequence[Union[os.PathLike, str]]]
-    ] = None,
-    image_root: Optional[Union[os.PathLike, str]] = None,
+    image_roots: os.PathLike | str | Sequence[os.PathLike | str] | None = None,
+    image_root: os.PathLike | str | None = None,
     host: str = "127.0.0.1",
-    auth_token: Optional[str] = None,
-    token: Optional[str] = None,
+    auth_token: str | None = None,
+    token: str | None = None,
     title: str = "mount-file API",
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> Any:
@@ -543,7 +541,7 @@ def create_app(
 
     app = FastAPI(title=title)
 
-    def require_auth(authorization: Optional[str] = Header(default=None)) -> None:
+    def require_auth(authorization: str | None = Header(default=None)) -> None:
         if configured_token is None:
             return
         if not isinstance(authorization, str):
@@ -608,7 +606,7 @@ def create_app(
         return get_native_capability_matrix()
 
     def _filesystem_context(
-        image: Optional[str],
+        image: str | None,
         path: str,
         offset: int,
     ) -> tuple[str, str, int]:
@@ -623,7 +621,7 @@ def create_app(
                 raise
             raise APIPathError("invalid image path") from exc
 
-    def _ls_impl(image: Optional[str], path: str, offset: int) -> Any:
+    def _ls_impl(image: str | None, path: str, offset: int) -> Any:
         try:
             image_path, virtual_path, partition_offset = _filesystem_context(
                 image, path, offset
@@ -648,7 +646,7 @@ def create_app(
         except Exception as exc:
             raise _http_error(exc)
 
-    def _read_impl(image: Optional[str], path: str, offset: int, length: int) -> Any:
+    def _read_impl(image: str | None, path: str, offset: int, length: int) -> Any:
         try:
             image_path, virtual_path, partition_offset = _filesystem_context(
                 image, path, offset
@@ -713,7 +711,7 @@ def create_app(
             return Response(content=bytes(value), media_type="application/octet-stream")
         return JSONResponse(content=_json_value(value))
 
-    def _status_impl(image: Optional[str], offset: int) -> Any:
+    def _status_impl(image: str | None, offset: int) -> Any:
         """Return the selected backend's v5 capability/refusal status.
 
         The injected registry is responsible for opening and validating the
@@ -745,7 +743,7 @@ def create_app(
 
     @app.get("/filesystem/ls", dependencies=[_dependency()])
     def filesystem_ls(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         path: str = Query(default="/"),
         offset: int = Query(default=0),
     ) -> Any:
@@ -753,7 +751,7 @@ def create_app(
 
     @app.get("/fs/ls", include_in_schema=False, dependencies=[_dependency()])
     def fs_ls(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         path: str = Query(default="/"),
         offset: int = Query(default=0),
     ) -> Any:
@@ -761,7 +759,7 @@ def create_app(
 
     @app.get("/filesystem/read", dependencies=[_dependency()])
     def filesystem_read(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         path: str = Query(...),
         offset: int = Query(default=0),
         length: int = Query(default=max_response_bytes),
@@ -770,14 +768,14 @@ def create_app(
 
     @app.get("/filesystem/status", dependencies=[_dependency()])
     def filesystem_status(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         offset: int = Query(default=0),
     ) -> Any:
         return _status_impl(image, offset)
 
     @app.get("/fs/read", include_in_schema=False, dependencies=[_dependency()])
     def fs_read(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         path: str = Query(...),
         offset: int = Query(default=0),
         length: int = Query(default=max_response_bytes),
@@ -786,7 +784,7 @@ def create_app(
 
     @app.get("/fs/status", include_in_schema=False, dependencies=[_dependency()])
     def fs_status(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         offset: int = Query(default=0),
     ) -> Any:
         return _status_impl(image, offset)
@@ -820,9 +818,9 @@ def create_app(
         return _status_impl(image_id, offset)
 
     def _timeline_impl(
-        image: Optional[str],
+        image: str | None,
         limit: int,
-        path: Optional[str],
+        path: str | None,
         offset: int,
     ) -> Any:
         if (
@@ -869,18 +867,18 @@ def create_app(
 
     @app.get("/timeline", dependencies=[_dependency()])
     def timeline(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         limit: int = Query(default=100),
-        path: Optional[str] = Query(default=None),
+        path: str | None = Query(default=None),
         offset: int = Query(default=0),
     ) -> Any:
         return _timeline_impl(image, limit, path, offset)
 
     @app.get("/timeline/events", include_in_schema=False, dependencies=[_dependency()])
     def timeline_events(
-        image: Optional[str] = Query(default=None),
+        image: str | None = Query(default=None),
         limit: int = Query(default=100),
-        path: Optional[str] = Query(default=None),
+        path: str | None = Query(default=None),
         offset: int = Query(default=0),
     ) -> Any:
         return _timeline_impl(image, limit, path, offset)
@@ -891,7 +889,7 @@ def create_app(
     def fs_image_timeline(
         image_id: str,
         limit: int = Query(default=100),
-        path: Optional[str] = Query(default=None),
+        path: str | None = Query(default=None),
         offset: int = Query(default=0),
     ) -> Any:
         return _timeline_impl(image_id, limit, path, offset)

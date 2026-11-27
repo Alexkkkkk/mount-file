@@ -28,6 +28,9 @@ from mountfile import tc_window
 from mountfile.ext_debugfs_writer import Ext234ImageWriter, Ext234Provider
 from mountfile.qt_compat import DialogAccepted, MB_No, MB_Yes, QApplication, QMessageBox
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def qapp():

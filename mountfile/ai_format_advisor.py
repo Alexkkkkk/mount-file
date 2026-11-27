@@ -21,9 +21,10 @@ import os
 import re
 import tempfile
 from collections import OrderedDict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any
 
 DEFAULT_REMEMBER_PATH = Path("~/.mountfile/ai_kb.json")
 MAX_MAGIC_SUMMARY_LENGTH = 256
@@ -34,7 +35,7 @@ MAX_REMEMBERED_ENTRIES = 500
 # Metadata fingerprint
 
 
-def _normalise_extension(value: Optional[Union[str, os.PathLike]]) -> str:
+def _normalise_extension(value: str | os.PathLike | None) -> str:
     """Return an extension in one predictable, lower-case form.
 
     This function only handles the supplied filename string.  It does not
@@ -97,20 +98,20 @@ class FileFingerprint:
     """
 
     filename: str
-    size: Optional[int]
+    size: int | None
     extension: str
     magic_summary: str
 
     def __init__(
         self,
-        filename: Optional[Union[str, os.PathLike]] = None,
-        size: Optional[int] = None,
-        extension: Optional[Union[str, os.PathLike]] = None,
+        filename: str | os.PathLike | None = None,
+        size: int | None = None,
+        extension: str | os.PathLike | None = None,
         magic_summary: Any = "",
         *,
-        name: Optional[Union[str, os.PathLike]] = None,
-        path: Optional[Union[str, os.PathLike]] = None,
-        ext: Optional[Union[str, os.PathLike]] = None,
+        name: str | os.PathLike | None = None,
+        path: str | os.PathLike | None = None,
+        ext: str | os.PathLike | None = None,
         magic: Any = None,
         magic_bytes: Any = None,
         magic_bytes_summary: Any = None,
@@ -171,7 +172,7 @@ class FileFingerprint:
     def magic_bytes_summary(self) -> str:
         return self.magic_summary
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return only metadata suitable for JSON persistence or prompts."""
 
         return {
@@ -186,21 +187,21 @@ class FileFingerprint:
     @classmethod
     def from_metadata(
         cls,
-        filename: Union[str, os.PathLike],
-        size: Optional[int] = None,
-        extension: Optional[Union[str, os.PathLike]] = None,
+        filename: str | os.PathLike,
+        size: int | None = None,
+        extension: str | os.PathLike | None = None,
         magic_summary: Any = "",
         **aliases: Any,
-    ) -> "FileFingerprint":
+    ) -> FileFingerprint:
         """Construct a fingerprint without doing any filesystem I/O."""
 
         return cls(filename, size, extension, magic_summary, **aliases)
 
 
 def build_fingerprint(
-    filename: Union[str, os.PathLike],
-    size: Optional[int] = None,
-    extension: Optional[Union[str, os.PathLike]] = None,
+    filename: str | os.PathLike,
+    size: int | None = None,
+    extension: str | os.PathLike | None = None,
     magic_summary: Any = "",
     **aliases: Any,
 ) -> FileFingerprint:
@@ -224,11 +225,11 @@ class FormatSpec:
 
     key: str
     name: str
-    extensions: Tuple[str, ...]
-    magic_prefixes: Tuple[str, ...]
+    extensions: tuple[str, ...]
+    magic_prefixes: tuple[str, ...]
     summary: str
-    steps: Tuple[str, ...]
-    tools: Tuple[str, ...] = ("file", "xxd")
+    steps: tuple[str, ...]
+    tools: tuple[str, ...] = ("file", "xxd")
 
     @property
     def recipe(self) -> str:
@@ -238,7 +239,7 @@ class FormatSpec:
 # Signature strings are summaries, not bytes read by this module.  The set is
 # intentionally broad enough for a useful first-pass advisor while remaining
 # deterministic and offline.
-_FORMAT_SPECS: Tuple[FormatSpec, ...] = (
+_FORMAT_SPECS: tuple[FormatSpec, ...] = (
     FormatSpec(
         "png",
         "PNG image",
@@ -421,7 +422,7 @@ class KnowledgeBase:
 
     def __init__(
         self,
-        specs: Optional[Union[Mapping[str, FormatSpec], Iterable[FormatSpec]]] = None,
+        specs: Mapping[str, FormatSpec] | Iterable[FormatSpec] | None = None,
     ) -> None:
         if specs is None:
             self._specs = OrderedDict(KNOWLEDGE_BASE)
@@ -440,8 +441,8 @@ class KnowledgeBase:
         return key in self._specs
 
     def get(
-        self, key: str, default: Optional[FormatSpec] = None
-    ) -> Optional[FormatSpec]:
+        self, key: str, default: FormatSpec | None = None
+    ) -> FormatSpec | None:
         return self._specs.get(key, default)
 
     def values(self):
@@ -469,7 +470,7 @@ class ActionableRecipe(dict):
             raise AttributeError(key) from exc
 
 
-_GENERIC_RECIPES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+_GENERIC_RECIPES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "metadata check",
         "Unknown format",
@@ -523,9 +524,9 @@ class HypothesisEngine:
 
     def __init__(
         self,
-        knowledge_base: Optional[Any] = None,
-        remember: Optional["Remember"] = None,
-        fingerprint: Optional[Union[FileFingerprint, Mapping[str, Any]]] = None,
+        knowledge_base: Any | None = None,
+        remember: Remember | None = None,
+        fingerprint: FileFingerprint | Mapping[str, Any] | None = None,
     ) -> None:
         # ``None`` also keeps construction compatible with the earlier v2
         # engine, whose first argument was an adapter.
@@ -547,7 +548,7 @@ class HypothesisEngine:
 
     @staticmethod
     def _coerce_fingerprint(
-        value: Union[FileFingerprint, Mapping[str, Any]],
+        value: FileFingerprint | Mapping[str, Any],
     ) -> FileFingerprint:
         if isinstance(value, FileFingerprint):
             return value
@@ -567,21 +568,21 @@ class HypothesisEngine:
         raise TypeError("expected FileFingerprint or metadata mapping")
 
     def suggest(
-        self, fingerprint: Optional[Union[FileFingerprint, Mapping[str, Any]]] = None
-    ) -> List[ActionableRecipe]:
+        self, fingerprint: FileFingerprint | Mapping[str, Any] | None = None
+    ) -> list[ActionableRecipe]:
         if fingerprint is None:
             fingerprint = self._fingerprint
         if fingerprint is None:
             raise TypeError("a FileFingerprint is required")
         fp = self._coerce_fingerprint(fingerprint)
-        candidates: List[ActionableRecipe] = []
+        candidates: list[ActionableRecipe] = []
 
         remembered = self.remember.recall(fp) if self.remember is not None else None
         if isinstance(remembered, Mapping) and remembered.get("format"):
             candidates.append(self._recipe_from_remembered(remembered))
 
         for spec in self.knowledge_base:
-            evidence: List[str] = []
+            evidence: list[str] = []
             score = 0.0
             if fp.extension and fp.extension in spec.extensions:
                 score += 0.45
@@ -672,7 +673,7 @@ class HypothesisEngine:
 
     @staticmethod
     def _generic_recipe(
-        item: Tuple[str, str, Tuple[str, ...]], fp: FileFingerprint
+        item: tuple[str, str, tuple[str, ...]], fp: FileFingerprint
     ) -> ActionableRecipe:
         recipe_id, name, steps = item
         evidence = "no matching extension or magic summary"
@@ -749,10 +750,10 @@ class Remember:
 
     def __init__(
         self,
-        path: Optional[Union[str, os.PathLike]] = None,
+        path: str | os.PathLike | None = None,
         *,
-        storage_path: Optional[Union[str, os.PathLike]] = None,
-        kb_path: Optional[Union[str, os.PathLike]] = None,
+        storage_path: str | os.PathLike | None = None,
+        kb_path: str | os.PathLike | None = None,
         max_entries: int = MAX_REMEMBERED_ENTRIES,
     ) -> None:
         if max_entries < 1:
@@ -766,15 +767,15 @@ class Remember:
         )
         self.path = Path(path if path is not None else self.DEFAULT_PATH).expanduser()
         self.max_entries = int(max_entries)
-        self._entries: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-        self.last_error: Optional[str] = None
+        self._entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self.last_error: str | None = None
         self.load()
 
     @property
-    def entries(self) -> List[Dict[str, Any]]:
+    def entries(self) -> list[dict[str, Any]]:
         return [dict(entry) for entry in self._entries.values()]
 
-    def load(self) -> List[Dict[str, Any]]:
+    def load(self) -> list[dict[str, Any]]:
         """Load the JSON knowledge file; missing or malformed data is ignored safely."""
 
         self.last_error = None
@@ -816,7 +817,7 @@ class Remember:
 
     def save(
         self,
-        fingerprint: Optional[Union[FileFingerprint, Mapping[str, Any]]] = None,
+        fingerprint: FileFingerprint | Mapping[str, Any] | None = None,
         recipe: Any = None,
     ) -> Path:
         """Atomically save metadata entries and return the injected/default path.
@@ -835,7 +836,7 @@ class Remember:
         parent = self.path.parent
         parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": 1, "entries": list(self._entries.values())}
-        temp_name: Optional[str] = None
+        temp_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
@@ -864,8 +865,8 @@ class Remember:
         return self.path
 
     def remember(
-        self, fingerprint: Union[FileFingerprint, Mapping[str, Any]], recipe: Any
-    ) -> Dict[str, Any]:
+        self, fingerprint: FileFingerprint | Mapping[str, Any], recipe: Any
+    ) -> dict[str, Any]:
         fp = HypothesisEngine._coerce_fingerprint(fingerprint)
         key = _fingerprint_key(fp)
         entry = {"key": key, "fingerprint": fp.to_dict(), "recipe": _json_safe(recipe)}
@@ -881,7 +882,7 @@ class Remember:
     learn = remember
     record = remember
 
-    def recall(self, fingerprint: Union[FileFingerprint, Mapping[str, Any]]) -> Any:
+    def recall(self, fingerprint: FileFingerprint | Mapping[str, Any]) -> Any:
         fp = HypothesisEngine._coerce_fingerprint(fingerprint)
         entry = self._entries.get(_fingerprint_key(fp))
         if entry is None:
@@ -891,7 +892,7 @@ class Remember:
     lookup = recall
     get = recall
 
-    def forget(self, fingerprint: Union[FileFingerprint, Mapping[str, Any]]) -> bool:
+    def forget(self, fingerprint: FileFingerprint | Mapping[str, Any]) -> bool:
         fp = HypothesisEngine._coerce_fingerprint(fingerprint)
         key = _fingerprint_key(fp)
         if key not in self._entries:
@@ -905,13 +906,13 @@ PersistentKnowledgeBase = Remember
 
 
 def advise_from_metadata(
-    filename: Union[str, os.PathLike],
-    size: Optional[int] = None,
+    filename: str | os.PathLike,
+    size: int | None = None,
     *,
-    extension: Optional[Union[str, os.PathLike]] = None,
+    extension: str | os.PathLike | None = None,
     magic_summary: Any = "",
-    remember: Optional[Remember] = None,
-) -> Tuple[FileFingerprint, List[ActionableRecipe]]:
+    remember: Remember | None = None,
+) -> tuple[FileFingerprint, list[ActionableRecipe]]:
     """Return deterministic format advice from caller-supplied metadata only.
 
     This entrypoint performs no filesystem reads, model calls, or network

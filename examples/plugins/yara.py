@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib
 from types import MappingProxyType
-from typing import Any, Optional, Tuple
+from typing import Any
 
 from mountfile.plugins import FileEvent, OpenEvent, PluginStatus
 
@@ -22,10 +22,10 @@ class YaraPlugin:
 
     def __init__(
         self,
-        rules: Optional[Any] = None,
-        rule_path: Optional[str] = None,
+        rules: Any | None = None,
+        rule_path: str | None = None,
         *,
-        yara_module: Optional[Any] = None,
+        yara_module: Any | None = None,
     ) -> None:
         if rules is not None and rule_path is not None:
             raise ValueError("provide rules or rule_path, not both")
@@ -60,7 +60,7 @@ class YaraPlugin:
         return PluginStatus(self.name, self.status, self.reason)
 
     @property
-    def matches(self) -> Tuple[MappingProxyType, ...]:
+    def matches(self) -> tuple[MappingProxyType, ...]:
         return tuple(MappingProxyType(dict(item)) for item in self._matches)
 
     def on_open(self, event: OpenEvent) -> None:
@@ -82,7 +82,7 @@ class YaraPlugin:
                 "unavailable", "YARA rules could not be compiled: %s" % exc
             )
 
-    def on_file(self, event: FileEvent, data: Optional[bytes] = None) -> None:
+    def on_file(self, event: FileEvent, data: bytes | None = None) -> None:
         if self._compiled is None:
             return
         if data is not None:

@@ -12,9 +12,10 @@ from __future__ import annotations
 import hashlib
 import operator
 import sqlite3
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from os import fspath
-from typing import Any, Iterable, Iterator, Optional, Tuple
+from typing import Any
 
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 _BITMAP_PAGE_BYTES = 4096
@@ -66,7 +67,7 @@ class UnallocatedOccurrence:
 class _ByteSource:
     """Normalize supported byte sources and enforce exact reads."""
 
-    def __init__(self, source: Any, size: Optional[int] = None) -> None:
+    def __init__(self, source: Any, size: int | None = None) -> None:
         self.source = source
         discovered = self._discover_size(source)
         if size is None:
@@ -84,7 +85,7 @@ class _ByteSource:
         self.size = size
 
     @staticmethod
-    def _discover_size(source: Any) -> Optional[int]:
+    def _discover_size(source: Any) -> int | None:
         if isinstance(source, (bytes, bytearray, memoryview)):
             return len(memoryview(source).cast("B"))
         if callable(source) or hasattr(source, "read_at"):
@@ -221,7 +222,7 @@ class UnallocatedIndexer:
     def __init__(
         self,
         database: Any = None,
-        source_size: Optional[int] = None,
+        source_size: int | None = None,
         block_size: int = _DEFAULT_BLOCK_SIZE,
         read_size: int = _DEFAULT_READ_SIZE,
         *,
@@ -261,7 +262,7 @@ class UnallocatedIndexer:
             self._connection.close()
             self._connection = None  # type: ignore[assignment]
 
-    def __enter__(self) -> "UnallocatedIndexer":
+    def __enter__(self) -> UnallocatedIndexer:
         return self
 
     def __exit__(self, _exc_type: Any, _exc_value: Any, _traceback: Any) -> None:
@@ -270,10 +271,10 @@ class UnallocatedIndexer:
     def index(
         self,
         source: Any = None,
-        ranges: Optional[Iterable[Any]] = None,
+        ranges: Iterable[Any] | None = None,
         *,
-        source_size: Optional[int] = None,
-    ) -> Tuple[UnallocatedChunk, ...]:
+        source_size: int | None = None,
+    ) -> tuple[UnallocatedChunk, ...]:
         """Hash and persist ``ranges`` in deterministic order.
 
         Duplicate ranges are ignored.  Different offsets containing identical
@@ -340,7 +341,7 @@ class UnallocatedIndexer:
             sorted(result, key=lambda item: (item.offset, item.length, item.sha256))
         )
 
-    def records(self) -> Tuple[UnallocatedChunk, ...]:
+    def records(self) -> tuple[UnallocatedChunk, ...]:
         """Return unique chunks sorted by offset, length, and SHA-256."""
 
         rows = self._connection.execute(
@@ -351,7 +352,7 @@ class UnallocatedIndexer:
             UnallocatedChunk(int(row[0]), int(row[1]), str(row[2])) for row in rows
         )
 
-    def occurrences(self) -> Tuple[UnallocatedOccurrence, ...]:
+    def occurrences(self) -> tuple[UnallocatedOccurrence, ...]:
         """Return every indexed range, including duplicate-content ranges."""
 
         rows = self._connection.execute(
@@ -412,7 +413,7 @@ class UnallocatedIndexer:
             CREATE INDEX IF NOT EXISTS occurrences_offset_idx ON occurrences(offset, length);
             """)
 
-    def _metadata_int(self, key: str) -> Optional[int]:
+    def _metadata_int(self, key: str) -> int | None:
         row = self._connection.execute(
             "SELECT value FROM metadata WHERE key = ?", (key,)
         ).fetchone()
@@ -545,7 +546,7 @@ class UnallocatedSpaceAnalyzer(UnallocatedIndexer):
         self,
         source: Any,
         database: Any = None,
-        source_size: Optional[int] = None,
+        source_size: int | None = None,
         block_size: int = _DEFAULT_BLOCK_SIZE,
         read_size: int = _DEFAULT_READ_SIZE,
         *,
@@ -574,10 +575,10 @@ def index_unallocated(
     database: Any = None,
     *,
     db_path: Any = None,
-    source_size: Optional[int] = None,
+    source_size: int | None = None,
     block_size: int = _DEFAULT_BLOCK_SIZE,
     read_size: int = _DEFAULT_READ_SIZE,
-) -> Tuple[UnallocatedChunk, ...]:
+) -> tuple[UnallocatedChunk, ...]:
     """Index caller-supplied ranges and close the SQLite handle afterward.
 
     This function is intentionally explicit: without ``ranges`` there is no

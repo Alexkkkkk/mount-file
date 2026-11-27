@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any
 
 
 class YaraUnavailableError(RuntimeError):
@@ -36,7 +36,7 @@ def _load_yara() -> Any:
         ) from exc
 
 
-def _compiled_rules(rules: Any, yara_module: Optional[Any]) -> Any:
+def _compiled_rules(rules: Any, yara_module: Any | None) -> Any:
     """Return a compiled rules object, compiling source with an injected module."""
 
     # pathlib.Path also exposes ``match()``; a rule-file path must be compiled,
@@ -84,7 +84,7 @@ def _match_value(match: Any, name: str, default: Any = None) -> Any:
     return getattr(match, name, default)
 
 
-def _as_offset(value: Any) -> Optional[int]:
+def _as_offset(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -183,7 +183,7 @@ def scan_yara(
     image_path: str | os.PathLike[str],
     rules: Any,
     *,
-    yara_module: Optional[Any] = None,
+    yara_module: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Scan *image_path* read-only with user-supplied YARA rules.
 

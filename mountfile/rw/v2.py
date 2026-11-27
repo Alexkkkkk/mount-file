@@ -23,9 +23,10 @@ from __future__ import annotations
 import struct
 import sys
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Iterator, Optional
+from typing import BinaryIO
 
 from mountfile.rw.complete import Fat32Adapter, VerificationEngine
 from mountfile.rw.universal import (
@@ -145,7 +146,7 @@ class VerifiedNtfsRW(NtfsRW):
 
 
 def create_verified(
-    image_path: Path, fs: Optional[FsType] = None, mode: Mode = Mode.RO
+    image_path: Path, fs: FsType | None = None, mode: Mode = Mode.RO
 ):
     """Фабрика проверенных бэкендов."""
     fs = fs or detect_fs(image_path)
@@ -406,11 +407,7 @@ try:
                 try:
                     # здесь в реальном тесте — вызов бэкенда
                     # в фейковом — просто эмуляция
-                    if op == "create":
-                        pass
-                    elif op == "delete":
-                        pass
-                    elif op == "rename":
+                    if op == "create" or op == "delete" or op == "rename":
                         pass
                     j.commit()
                 except Exception:

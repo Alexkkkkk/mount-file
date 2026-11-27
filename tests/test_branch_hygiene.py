@@ -24,7 +24,7 @@ def test_branch_with_open_pr_is_active_even_when_old():
         default_branch="main",
         stale_days=45,
         open_pr=123,
-        now=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
     )
     assert report["status"] == "active_pr"
     assert not report["stale"]
@@ -38,7 +38,7 @@ def test_old_branch_without_pr_is_stale_and_markdown_is_safe():
         default_branch="main",
         stale_days=45,
         open_pr=None,
-        now=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
     )
     assert report["status"] == "stale"
     markdown = render_markdown(

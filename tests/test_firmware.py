@@ -11,6 +11,7 @@ Run:  python -m pytest tests/test_firmware.py -v
 """
 
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -55,6 +56,9 @@ class TestSignatureScan:
 
     def _img(self, name, size=2 * 1024 * 1024):
         return make_image(os.path.join(self.tmp, name), size)
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_filesystem_at_offset_zero(self):
         path = self._img("unpartitioned.img")
@@ -142,6 +146,9 @@ class TestSignatureScan:
 class TestPartitionVolumes:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_mbr_fat32_partition_is_reported(self):
         src = os.path.join(self.tmp, "fat32.img")

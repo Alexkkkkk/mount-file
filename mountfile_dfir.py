@@ -26,9 +26,10 @@ import re
 import sqlite3
 import sys
 import threading
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Timeline model
@@ -194,7 +195,7 @@ class TimelineDB:
         with self._lock:
             self.conn.close()
 
-    def __enter__(self) -> "TimelineDB":
+    def __enter__(self) -> TimelineDB:
         return self
 
     def __exit__(self, *args: object) -> None:

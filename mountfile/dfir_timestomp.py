@@ -13,10 +13,11 @@ filesystem.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from numbers import Real
-from typing import Any, Iterable, Iterator, List, Mapping, Optional, Tuple, Union
+from typing import Any, Union
 
 TimestampValue = Union[Real, date]
 
@@ -32,25 +33,25 @@ class TimestampRecord:
     """
 
     path: str
-    created: Optional[TimestampValue] = None
-    modified: Optional[TimestampValue] = None
-    accessed: Optional[TimestampValue] = None
-    record_id: Optional[str] = None
+    created: TimestampValue | None = None
+    modified: TimestampValue | None = None
+    accessed: TimestampValue | None = None
+    record_id: str | None = None
 
     @property
-    def creation_time(self) -> Optional[TimestampValue]:
+    def creation_time(self) -> TimestampValue | None:
         """Alias for callers that use the longer creation-time name."""
 
         return self.created
 
     @property
-    def modification_time(self) -> Optional[TimestampValue]:
+    def modification_time(self) -> TimestampValue | None:
         """Alias for callers that use the longer modification-time name."""
 
         return self.modified
 
     @property
-    def access_time(self) -> Optional[TimestampValue]:
+    def access_time(self) -> TimestampValue | None:
         """Alias for callers that use the longer access-time name."""
 
         return self.accessed
@@ -71,10 +72,10 @@ class TimestompThresholds:
     """
 
     ordering_tolerance: float = 2.0
-    boundary_values: Tuple[TimestampValue, ...] = ()
+    boundary_values: tuple[TimestampValue, ...] = ()
     boundary_tolerance: float = 0.0
-    minimum_timestamp: Optional[TimestampValue] = None
-    maximum_timestamp: Optional[TimestampValue] = None
+    minimum_timestamp: TimestampValue | None = None
+    maximum_timestamp: TimestampValue | None = None
 
     @property
     def ordering_tolerance_seconds(self) -> float:
@@ -105,7 +106,7 @@ class TimestampFinding(Mapping[str, Any]):
     """
 
     path: str
-    record_id: Optional[str]
+    record_id: str | None
     severity: str
     reason: str
     timestamps: Mapping[str, TimestampValue]
@@ -157,12 +158,12 @@ def _timestamp_seconds(value: TimestampValue, *, field: str) -> float:
         # UTC here keeps analysis deterministic instead of consulting the host
         # machine's local timezone.
         candidate = (
-            value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         )
         seconds = candidate.timestamp()
     elif isinstance(value, date):
         seconds = datetime(
-            value.year, value.month, value.day, tzinfo=timezone.utc
+            value.year, value.month, value.day, tzinfo=UTC
         ).timestamp()
     elif isinstance(value, Real):
         seconds = float(value)
@@ -173,7 +174,7 @@ def _timestamp_seconds(value: TimestampValue, *, field: str) -> float:
     return seconds
 
 
-def _value_from(record: Any, names: Tuple[str, ...]) -> Any:
+def _value_from(record: Any, names: tuple[str, ...]) -> Any:
     """Read a field from an explicit record or mapping without modifying it."""
 
     if isinstance(record, Mapping):
@@ -275,15 +276,15 @@ def _finding(
 
 def analyze_timestomp(
     records: Iterable[Any],
-    thresholds: Optional[TimestompThresholds] = None,
+    thresholds: TimestompThresholds | None = None,
     *,
-    ordering_tolerance: Optional[float] = None,
-    boundary_values: Optional[Iterable[TimestampValue]] = None,
-    boundary_tolerance: Optional[float] = None,
-    minimum_timestamp: Optional[TimestampValue] = None,
-    maximum_timestamp: Optional[TimestampValue] = None,
-    skew: Optional[float] = None,
-) -> List[TimestampFinding]:
+    ordering_tolerance: float | None = None,
+    boundary_values: Iterable[TimestampValue] | None = None,
+    boundary_tolerance: float | None = None,
+    minimum_timestamp: TimestampValue | None = None,
+    maximum_timestamp: TimestampValue | None = None,
+    skew: float | None = None,
+) -> list[TimestampFinding]:
     """Return timestamp-order and configured-boundary findings.
 
     ``records`` is an iterable of explicit :class:`TimestampRecord` objects.
@@ -353,7 +354,7 @@ def analyze_timestomp(
         _timestamp_seconds(boundary, field="boundary_values[%d]" % index)
         for index, boundary in enumerate(thresholds.boundary_values)
     )
-    findings: List[TimestampFinding] = []
+    findings: list[TimestampFinding] = []
 
     for item in records:
         record = _coerce_record(item)

@@ -28,7 +28,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 from mountfile.rw.universal import (
     FileStat,
@@ -200,7 +200,7 @@ class Fat32Adapter(UniversalRW):
 
 def create_rw_full(
     image_path: Path,
-    fs: Optional[FsType] = None,
+    fs: FsType | None = None,
     mode: Mode = Mode.RO,
     dry_run: bool = False,
 ) -> UniversalRW:

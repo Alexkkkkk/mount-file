@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import operator
 import os
-from typing import Any, NamedTuple, Optional, Union
+from typing import Any, NamedTuple, Union
 
 ImageSource = Union[str, os.PathLike, bytes, bytearray, memoryview, Any]
 
@@ -33,7 +33,7 @@ class SlackResult(NamedTuple):
     """Bytes and absolute offset for one final-cluster slack region."""
 
     bytes: bytes
-    offset: Optional[int]
+    offset: int | None
 
     @property
     def data(self) -> bytes:
@@ -42,7 +42,7 @@ class SlackResult(NamedTuple):
         return self.bytes
 
     @property
-    def absolute_offset(self) -> Optional[int]:
+    def absolute_offset(self) -> int | None:
         """Compatibility alias emphasizing that ``offset`` is image-absolute."""
 
         return self.offset
@@ -86,7 +86,7 @@ def _is_integer_like(value: Any) -> bool:
     return True
 
 
-def _memoryview(source: Any) -> Optional[memoryview]:
+def _memoryview(source: Any) -> memoryview | None:
     """Return a byte view for an in-memory image, or ``None`` otherwise."""
 
     if isinstance(source, (bytes, bytearray, memoryview)):

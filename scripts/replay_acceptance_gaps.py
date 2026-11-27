@@ -37,9 +37,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "docs" / "replay-acceptance.json"
@@ -61,11 +62,11 @@ class Problem:
     ident: str
     message: str
 
-    def as_dict(self) -> Dict[str, str]:
+    def as_dict(self) -> dict[str, str]:
         return {"kind": self.kind, "id": self.ident, "message": self.message}
 
 
-def _load(path: Path, label: str) -> Dict[str, Any]:
+def _load(path: Path, label: str) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -74,7 +75,7 @@ def _load(path: Path, label: str) -> Dict[str, Any]:
         raise SystemExit(f"{label}: некорректный JSON в {path}: {exc}") from exc
 
 
-def load_manifest(path: Path = DEFAULT_MANIFEST) -> List[Dict[str, Any]]:
+def load_manifest(path: Path = DEFAULT_MANIFEST) -> list[dict[str, Any]]:
     document = _load(path, "manifest")
     items = document.get("items")
     if not isinstance(items, list) or not items:
@@ -82,7 +83,7 @@ def load_manifest(path: Path = DEFAULT_MANIFEST) -> List[Dict[str, Any]]:
     return items
 
 
-def load_gaps(path: Path = DEFAULT_GAPS) -> List[Dict[str, Any]]:
+def load_gaps(path: Path = DEFAULT_GAPS) -> list[dict[str, Any]]:
     document = _load(path, "gaps")
     gaps = document.get("gaps")
     if not isinstance(gaps, list) or not gaps:
@@ -90,20 +91,20 @@ def load_gaps(path: Path = DEFAULT_GAPS) -> List[Dict[str, Any]]:
     return gaps
 
 
-def _existing_evidence(root: Path, evidence: Iterable[str]) -> List[str]:
+def _existing_evidence(root: Path, evidence: Iterable[str]) -> list[str]:
     return [entry for entry in evidence if not (root / entry).exists()]
 
 
 def evaluate(
-    items: Sequence[Dict[str, Any]],
-    gaps: Sequence[Dict[str, Any]],
+    items: Sequence[dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     root: Path = REPO_ROOT,
-) -> List[Problem]:
+) -> list[Problem]:
     """Return every disagreement; an empty list means the contract holds."""
 
-    problems: List[Problem] = []
+    problems: list[Problem] = []
     by_item = {item["id"]: item for item in items}
-    seen: Dict[str, int] = {}
+    seen: dict[str, int] = {}
 
     for gap in gaps:
         ident = str(gap.get("id", "<без id>"))
@@ -180,8 +181,8 @@ def evaluate(
     return problems
 
 
-def summarise(items: Sequence[Dict[str, Any]]) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
+def summarise(items: Sequence[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for item in items:
         status = str(item.get("status"))
         counts[status] = counts.get(status, 0) + 1
@@ -190,7 +191,7 @@ def summarise(items: Sequence[Dict[str, Any]]) -> Dict[str, int]:
 
 
 def render_markdown(
-    items: Sequence[Dict[str, Any]], gaps: Sequence[Dict[str, Any]]
+    items: Sequence[dict[str, Any]], gaps: Sequence[dict[str, Any]]
 ) -> str:
     """Render the tracker block: every open item with its stated gap."""
 
@@ -220,8 +221,8 @@ def render_markdown(
 
 
 def _print_report(
-    items: Sequence[Dict[str, Any]],
-    gaps: Sequence[Dict[str, Any]],
+    items: Sequence[dict[str, Any]],
+    gaps: Sequence[dict[str, Any]],
     problems: Sequence[Problem],
 ) -> None:
     counts = summarise(items)
@@ -241,7 +242,7 @@ def _print_report(
         print(f"  [{problem.kind}] {problem.ident}: {problem.message}")
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Сверить открытые пункты #510 с описанными пробелами."
     )

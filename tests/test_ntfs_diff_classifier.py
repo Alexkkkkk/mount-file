@@ -2,9 +2,6 @@
 """Unit tests for the C6 draft classifier (pure logic, locally provable)."""
 
 from scripts.ntfs_diff_classifier import (
-    CHECKER_LIFECYCLE,
-    OUTSIDE_SCOPE,
-    REPLAY_RELEVANT,
     classify_diffs,
     parity_verdict,
 )

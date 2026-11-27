@@ -1,0 +1,36 @@
+name: Welcome
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: welcome-${{ github.event_name }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  welcome:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/first-interaction@fb2402657b4a28582200150d0a145671d0e50597 # v1.2.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          issue-message: |
+            👋 Спасибо за ваш первый issue в **Mount File**!
+            - [CONTRIBUTING.md](https://github.com/Alexkkkkk/mount-file/blob/main/CONTRIBUTING.md) — как оформить баг-репорт
+            - [Документация](https://alexkkkkk.github.io/mount-file/) — руководства GUI и CLI
+            - [SECURITY.md](https://github.com/Alexkkkkk/mount-file/blob/main/SECURITY.md) — как сообщить об уязвимости приватно
+            Для DFIR-случаев приложите: версию инструмента, тип образа (raw / дамп NAND/eMMC),
+            файловую систему и точную команду/шаги — без самих образов и пользовательских данных.
+          pr-message: |
+            🎉 Спасибо за ваш первый PR в **Mount File**!
+            - CI прогонит тесты на Linux / Windows / macOS (Python 3.11–3.12)
+            - Прочитайте [.github/copilot-instructions.md](https://github.com/Alexkkkkk/mount-file/blob/main/.github/copilot-instructions.md):
+              для путей чтения/записи действуют fail-closed правила

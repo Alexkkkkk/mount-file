@@ -7,11 +7,12 @@ Licensed under the MIT License - see the LICENSE file for details.
 [![CI](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/ci.yml)
 [![Quality](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/quality.yml)
 [![Security](https://github.com/Alexkkkkk/mount-file/actions/workflows/security.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/security.yml)
+[![Weekly Check](https://github.com/Alexkkkkk/mount-file/actions/workflows/weekly-check.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/weekly-check.yml)
 [![Docs](https://github.com/Alexkkkkk/mount-file/actions/workflows/docs.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/docs.yml)
 [![Docker](https://github.com/Alexkkkkk/mount-file/actions/workflows/docker.yml/badge.svg)](https://github.com/Alexkkkkk/mount-file/actions/workflows/docker.yml)
 [![Latest release](https://img.shields.io/github/v/release/Alexkkkkk/mount-file?sort=semver&label=release)](https://github.com/Alexkkkkk/mount-file/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/Alexkkkkk/mount-file?label=license&color=yellow)](LICENSE)
-![Python](https://img.shields.io/badge/python-3.10%E2%80%933.12-blue)
+![Python](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
 
 # Mount File
@@ -37,7 +38,7 @@ read-only анализ и умеет ограниченно писать — т�
 | Документация | [alexkkkkk.github.io/mount-file](https://alexkkkkk.github.io/mount-file/) |
 | Репозиторий | [github.com/Alexkkkkk/mount-file](https://github.com/Alexkkkkk/mount-file) |
 | Лицензия | [MIT](LICENSE) |
-| Python | 3.10, 3.11, 3.12 |
+| Python | 3.11, 3.12 |
 | Платформы | Windows 10/11, Linux, macOS |
 
 ## Содержание
@@ -153,7 +154,7 @@ python -m mountfile preflight dump.img
 
 ### Из исходников
 
-Нужен Python 3.10 или новее. Базовая установка (единственная зависимость —
+Нужен Python 3.11 или новее. Базовая установка (единственная зависимость —
 `PyQt6`) даёт Qt-приложение и нативные читатели с ограничениями:
 
 ```bash
@@ -506,7 +507,7 @@ make fmt
 | `make sync*` | помощники синхронизации репозитория — см. [`docs/sync.md`](docs/sync.md) |
 | `make clean` | удалить артефакты сборки |
 
-CI покрывает Linux, Windows и macOS на Python 3.10–3.12, плюс отдельные
+CI покрывает Linux, Windows и macOS на Python 3.11–3.12, плюс отдельные
 проверки безопасности, зависимостей, документации и сборки. Опциональные тесты
 на реальных образах могут пропускаться локально, если нет `pytsk3`,
 `dosfstools`, `exfatprogs`, `ntfs-3g`, YARA или PowerShell.

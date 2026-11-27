@@ -15,10 +15,11 @@ import csv
 import hashlib
 import mmap
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any
 
 from .dfir_unallocated_scan import UnallocatedExtractor
 
@@ -32,19 +33,19 @@ def _cached_regex(pattern):
 @dataclass(frozen=True)
 class TimelineRecord:
     path: str
-    size: Optional[int] = None
-    mtime: Optional[float] = None
-    atime: Optional[float] = None
-    ctime: Optional[float] = None
-    birth: Optional[float] = None
-    sha256: Optional[str] = None
+    size: int | None = None
+    mtime: float | None = None
+    atime: float | None = None
+    ctime: float | None = None
+    birth: float | None = None
+    sha256: str | None = None
 
 
-def _float(value: Any) -> Optional[float]:
+def _float(value: Any) -> float | None:
     return None if value in (None, "") else float(value)
 
 
-def _int(value: Any) -> Optional[int]:
+def _int(value: Any) -> int | None:
     return None if value in (None, "") else int(value)
 
 

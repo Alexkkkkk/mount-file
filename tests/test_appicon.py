@@ -44,7 +44,7 @@ def test_ico_contains_the_small_sizes():
     with Image.open(appicon.data_file(appicon.ICO_NAME)) as ico:
         sizes = {s for s in ico.info.get("sizes", set())}
     if not sizes:  # some Pillow builds do not report the directory
-        return
+        pytest.skip("this Pillow build does not expose ico.info['sizes']")
     for expected in ((16, 16), (32, 32), (48, 48), (256, 256)):
         assert expected in sizes, f"{expected} missing from icon.ico"
 

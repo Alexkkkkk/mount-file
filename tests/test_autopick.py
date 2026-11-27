@@ -16,6 +16,7 @@ Run:  python -m pytest tests/test_autopick.py -v
 
 import json
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -127,6 +128,9 @@ class TestValidate:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
 
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_valid_fat32(self):
         path = _image(os.path.join(self.tmp, "fat.img"), FAT32_BYTES, 0)
         with open(path, "rb") as f:
@@ -202,6 +206,9 @@ class TestScan:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
 
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_signature_candidate(self):
         path = _image(
             os.path.join(self.tmp, "fat.img"), FAT32_BYTES + 0x100000, 0x100000
@@ -245,6 +252,9 @@ class TestUdevHelpers:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp()
 
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_looks_like_udev(self):
         udev = _write_udev(os.path.join(self.tmp, "udev.txt"), ["0x0,0x4000,preloader"])
         assert looks_like_udev(udev)
@@ -282,6 +292,9 @@ class TestAutoSelect:
                 "0x00e5a000,0x00100000,data",
             ],
         )
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_picks_the_real_filesystem(self):
         best, cands = auto_select(self.dump, udev=self.udev, verify=True)
@@ -368,6 +381,9 @@ class TestCli:
         )
         base.update(kw)
         return SimpleNamespace(**base)
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_text_output(self, capsys):
         assert cli.cmd_autopick(self._args()) == 0

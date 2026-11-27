@@ -545,12 +545,11 @@ def test_native_exfat_writer_range_refusal_preserves_image(tmp_path, operation):
     writer = NativeExfatWriter(path, volume_size=VOLUME_SIZE)
     before = path.read_bytes()
 
-    with path.open("r+b") as stream:
-        with pytest.raises(ExfatWriteError) as caught:
-            if operation == "read":
-                writer._read_rel(stream, writer.extent_size - 1, 2)
-            else:
-                writer._write_rel(stream, writer.extent_size - 1, b"xy")
+    with path.open("r+b") as stream, pytest.raises(ExfatWriteError) as caught:
+        if operation == "read":
+            writer._read_rel(stream, writer.extent_size - 1, 2)
+        else:
+            writer._write_rel(stream, writer.extent_size - 1, b"xy")
 
     assert caught.value.code is RefusalCode.RANGE_OUT_OF_BOUNDS
     assert path.read_bytes() == before

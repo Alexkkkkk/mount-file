@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any
 
 from .timeline import iter_file_entries
 
@@ -50,7 +51,7 @@ class ContentHit:
     offset: int
     length: int
     context: str
-    path: Optional[str] = None
+    path: str | None = None
     encoding: str = "utf-8"
     exact_offset: bool = True
 
@@ -154,7 +155,7 @@ def _text_regex_hits(
         yield base + start, end - start, True
 
 
-def _validate_request(pattern: str, context: int, max_hits: Optional[int]) -> None:
+def _validate_request(pattern: str, context: int, max_hits: int | None) -> None:
     if not isinstance(pattern, str) or not pattern:
         raise SearchError("empty pattern")
     if isinstance(context, bool) or not isinstance(context, int) or context < 0:
@@ -173,8 +174,8 @@ def search_blob(
     regex: bool = False,
     base_offset: int = 0,
     context: int = 32,
-    path: Optional[str] = None,
-    max_hits: Optional[int] = None,
+    path: str | None = None,
+    max_hits: int | None = None,
 ) -> list[ContentHit]:
     """Search one in-memory blob; used directly by the file-content mode."""
 
@@ -243,7 +244,7 @@ def search_image(
     chunk: int = DEFAULT_CHUNK,
     overlap: int = DEFAULT_OVERLAP,
     context: int = 32,
-    max_hits: Optional[int] = None,
+    max_hits: int | None = None,
 ) -> list[ContentHit]:
     """Stream ``image_path`` and return every match, chunked with overlap.
 
@@ -309,9 +310,9 @@ def search_fs(
     encoding: str = "utf-8",
     regex: bool = False,
     context: int = 32,
-    max_hits: Optional[int] = None,
+    max_hits: int | None = None,
     workers: int = 4,
-    max_file_size: Optional[int] = None,
+    max_file_size: int | None = None,
 ) -> list[ContentHit]:
     """Search the content of every file in an already-open pytsk3 filesystem."""
 

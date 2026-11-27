@@ -12,6 +12,9 @@ from mountfile import tc_style
 from mountfile.qt_compat import MB_No, QAction, QApplication, QEvent, QtCore, QToolBar
 from mountfile.tc_window import MainWindow
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():

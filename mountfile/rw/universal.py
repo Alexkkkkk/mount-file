@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 from mountfile.rw.journal import Journal as _VerifiedJournal
 
@@ -489,7 +489,7 @@ class Ext4RW(UniversalRW):
 class NtfsRW(UniversalRW):
     def __init__(self, image_path: Path, mode: Mode = Mode.RO):
         super().__init__(image_path, mode)
-        self._mnt: Optional[Path] = None
+        self._mnt: Path | None = None
 
     def _open_backend(self) -> None:
         if shutil.which("ntfs-3g") is None:
@@ -595,7 +595,7 @@ def detect_fs(image_path: Path) -> FsType:
 
 
 def create_rw(
-    image_path: Path, fs: Optional[FsType] = None, mode: Mode = Mode.RO
+    image_path: Path, fs: FsType | None = None, mode: Mode = Mode.RO
 ) -> UniversalRW:
     fs = fs or detect_fs(image_path)
     if fs == FsType.FAT32:

@@ -8,7 +8,6 @@ Run:  python -m pytest tests/test_replay_acceptance_status.py -v
 
 import importlib.util
 import json
-import os
 import re
 import sys
 from pathlib import Path

@@ -232,10 +232,9 @@ def test_rollback_restores_the_image_byte_for_byte(tmp_path):
     try:
         engine.write_file("/KEEP.TXT", b"original")
         before = _sha(image)
-        with pytest.raises(RuntimeError):
-            with engine.transaction("failing batch"):
-                engine.write_file("/TEMP.BIN", b"volatile")
-                raise RuntimeError("simulated failure mid-transaction")
+        with pytest.raises(RuntimeError), engine.transaction("failing batch"):
+            engine.write_file("/TEMP.BIN", b"volatile")
+            raise RuntimeError("simulated failure mid-transaction")
         assert _sha(image) == before
         assert engine.read("/KEEP.TXT") == b"original"
         assert engine.exists("/TEMP.BIN") is False

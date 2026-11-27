@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import operator
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any
 
 DEFAULT_MIN_SLACK = 1
 DEFAULT_CHUNK = 8 * 1024 * 1024
@@ -62,7 +63,7 @@ def _integer(value: Any, name: str, *, positive: bool = False) -> int:
     return number
 
 
-def _runs(meta_file: Any, real_size: Optional[int] = None) -> list[tuple[int, int]]:
+def _runs(meta_file: Any, real_size: int | None = None) -> list[tuple[int, int]]:
     """Select only the unnamed default data stream and verify its dense run map.
 
     TSK's default data type is 1; NTFS $DATA is 128. Attribute metadata and
@@ -131,7 +132,7 @@ def slack_region_for(
     real_size: int,
     runs: list[tuple[int, int]],
     block_size: int,
-) -> Optional[SlackRegion]:
+) -> SlackRegion | None:
     """Locate EOF-cluster slack from dense runs in logical file order.
 
     The returned allocated_size describes all runs, but length is at most one
@@ -205,7 +206,7 @@ def find_slack_regions_from_fs(
     fs: Any,
     *,
     min_slack: int = DEFAULT_MIN_SLACK,
-    max_file_size: Optional[int] = None,
+    max_file_size: int | None = None,
     filesystem_offset: int = 0,
 ) -> list[SlackRegion]:
     """Locate slack in an open filesystem with an explicitly supplied origin."""
@@ -303,8 +304,8 @@ def extract_slack(
     out_dir: os.PathLike | str,
     *,
     min_slack: int = DEFAULT_MIN_SLACK,
-    max_file_size: Optional[int] = None,
-    regions: Optional[list[SlackRegion]] = None,
+    max_file_size: int | None = None,
+    regions: list[SlackRegion] | None = None,
 ) -> list[SlackRegion]:
     """Stream regions to separate new files; never overwrite the image/artifacts."""
     min_slack = _integer(min_slack, "min_slack", positive=True)

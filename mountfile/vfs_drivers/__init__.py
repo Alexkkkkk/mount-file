@@ -18,7 +18,7 @@ from mountfile.vfs_drivers.fat32_adapter import Fat32VFS
 from mountfile.vfs_drivers.ntfs_adapter import NtfsVFS
 
 # Реестр профилей ФС: каноническое имя -> класс драйвера.
-VFS_REGISTRY: Dict[str, Type[VFS]] = {
+VFS_REGISTRY: dict[str, type[VFS]] = {
     "fat32": Fat32VFS,
     "ext3": Ext4VFS,  # ext3/ext4 разделяют read-only профиль классического слоя
     "ext4": Ext4VFS,

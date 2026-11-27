@@ -34,8 +34,6 @@ hello.txt
 .tidy_report.html
 .mypy_cache/
 .ruff_cache/
-coverage.xml
-ntfs-metadata-parity.xml
 # OLMA upgrade
 *.bak
 .olma/
@@ -81,4 +79,3 @@ site/
 !.env.sample
 .mfsync/
 .hypothesis/
-.pytest_cache/

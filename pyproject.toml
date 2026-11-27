@@ -172,6 +172,12 @@ addopts = "-ra --strict-markers"
 # Зависший тест не должен съедать CI: таймаут на любой тест.
 timeout = 120
 timeout_method = "thread"
+# tmp_path-деревья живут до конца сессии, а тяжёлые образы (FAT/NTFS/ext4,
+# process-kill, fault matrix) дают десятки гигабайт на прогон. Полный suite
+# на 30-гигабайтном диске падал с "No space left on device" и умирал до
+# записи артефактов (issue #510, D1/D6).
+tmp_path_retention_count = 1
+tmp_path_retention_policy = "failed"
 markers = [
   "unit: быстрые изолированные тесты (<50мс), гоняются на каждом PR",
   "integration: реальная файловая система / реальные запуски mfsync",

@@ -11,14 +11,14 @@ with and without ``pytsk3`` / ``yara-python`` installed.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from mountfile import live_diff, search_content, slack, timeline, timestomp
 from mountfile.dfir_yara import YaraUnavailableError
 
-UTC = timezone.utc
+UTC = UTC
 
 
 # --------------------------------------------------------------------- helpers
