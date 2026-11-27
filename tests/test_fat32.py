@@ -127,7 +127,10 @@ def test_rejects_inconsistent_mirrored_fat_copy(tmp_path):
     image[second_fat + 8] ^= 0x01
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="mirrored FAT32 copies"), path.open("r+b") as handle:
+    with (
+        pytest.raises(Fat32Error, match="mirrored FAT32 copies"),
+        path.open("r+b") as handle,
+    ):
         Fat32(handle)
 
 
@@ -138,7 +141,10 @@ def test_rejects_inconsistent_backup_boot_sector(tmp_path):
     image[BACKUP_BOOT_SECTOR * BPS + 3] ^= 0x01
     path.write_bytes(image)
 
-    with pytest.raises(Fat32Error, match="backup boot sector"), path.open("r+b") as handle:
+    with (
+        pytest.raises(Fat32Error, match="backup boot sector"),
+        path.open("r+b") as handle,
+    ):
         Fat32(handle)
 
 

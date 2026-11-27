@@ -145,9 +145,7 @@ class VerifiedNtfsRW(NtfsRW):
             raise RWError(f"ntfs verify failed: {report.details}")
 
 
-def create_verified(
-    image_path: Path, fs: FsType | None = None, mode: Mode = Mode.RO
-):
+def create_verified(image_path: Path, fs: FsType | None = None, mode: Mode = Mode.RO):
     """Фабрика проверенных бэкендов."""
     fs = fs or detect_fs(image_path)
     if fs == FsType.FAT32:

@@ -15,8 +15,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from mountfile.acceptance.hashing import PUBLISH_POINTS, SourceIdentity, sha256_bytes, sha256_file
+from mountfile.acceptance.hashing import (
+    PUBLISH_POINTS,
+    SourceIdentity,
+)
 from mountfile.acceptance.hashing import publish_atomically as _publish
+from mountfile.acceptance.hashing import sha256_bytes, sha256_file
 
 #: States a matrix cell may report.
 PASSED = "passed"

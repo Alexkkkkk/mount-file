@@ -1,7 +1,8 @@
 """Behavioral checks for capability-driven GUI write controls."""
 
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from mountfile.capabilities import get_native_capability_status
 from tests.qt_env import needs_qt

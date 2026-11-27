@@ -39,9 +39,7 @@ def test_normalizes_existing_metadata_and_event_records_without_opening_paths():
         "atime",
         "read",
     ]
-    assert normalized[-1].timestamp == datetime(
-        2024, 1, 1, 0, 59, 58, tzinfo=UTC
-    )
+    assert normalized[-1].timestamp == datetime(2024, 1, 1, 0, 59, 58, tzinfo=UTC)
     assert all(event.timestamp.tzinfo == UTC for event in normalized)
     assert normalized[-1].source == "olma"
     assert normalized[-1].evidence_path == "/evidence/image.raw/report.txt"

@@ -90,9 +90,7 @@ class ReadOnlyNativeVFS(VFS):
             return VFSResult.fail(ErrorCode.RANGE_OUT_OF_BOUNDS, str(exc))
 
     # -- unsupported writes (overridden by concrete adapters) ------------
-    def write(
-        self, path: str, data: BinaryIO | bytes, offset: int = 0
-    ) -> VFSResult:
+    def write(self, path: str, data: BinaryIO | bytes, offset: int = 0) -> VFSResult:
         return self._write_refusal(
             "WRITE_NOT_SUPPORTED", "write is disabled for this profile"
         )
