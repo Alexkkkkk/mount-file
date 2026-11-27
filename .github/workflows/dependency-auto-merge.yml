@@ -1,0 +1,62 @@
+name: dependency-auto-merge
+# Fully hands-off dependency updates: Dependabot PRs are trusted by the
+# auto-merge.yml trust policy (dependabot[bot]) but need the `auto-merge`
+# opt-in label. This workflow adds the label on PR open and posts a summary,
+# so dependency updates merge with zero human involvement once every gate
+# (CI-Gate, quality-gate, security-gate, dependency-review, sync) is green.
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dependency-auto-merge-${{ github.event.pull_request.number }}
+
+jobs:
+  label:
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      !github.event.pull_request.draft &&
+      (github.event.pull_request.user.login == 'dependabot[bot]' ||
+       github.event.pull_request.user.login == 'dependabot-preview[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Add auto-merge label to trusted dependency PR
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: pr.number,
+              labels: ['auto-merge', 'dependencies'],
+            });
+            core.info(`Labeled #${pr.number} with auto-merge; auto-merge.yml will wait for all gates and merge.`);
+      - name: Post zero-touch summary
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const files = await github.paginate(github.rest.pulls.listFiles,
+              {...context.repo, pull_number: pr.number, per_page: 100});
+            const pkgs = [...new Set(files
+              .map(f => f.filename.match(/(?:^|\/)(?:requirements[\w.-]*\.txt|pyproject\.toml|uv\.lock|Dockerfile|\.pre-commit-config\.yaml)$/))
+              .filter(Boolean)
+              .map(m => m[1]))].join(', ') || 'dependency manifests';
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: pr.number,
+              body: [
+                '🤖 **Автоматическое обновление зависимостей**',
+                '',
+                `Затронутые манифесты: ${pkgs}.`,
+                'Метка `auto-merge` проставлена; PR будет смёржен автоматически,',
+                'как только все обязательные проверки (CI-Gate, quality-gate,',
+                'security-gate, dependency-review, sync) пройдут успешно.',
+                'Никаких действий от человека не требуется. 🚀',
+              ].join('\n'),
+            });
