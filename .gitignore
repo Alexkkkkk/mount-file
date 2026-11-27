@@ -35,6 +35,7 @@ hello.txt
 .mypy_cache/
 .ruff_cache/
 coverage.xml
+ntfs-metadata-parity.xml
 # OLMA upgrade
 *.bak
 .olma/
@@ -44,6 +45,7 @@ coverage.xml
 .coverage.*
 htmlcov/
 coverage.xml
+ntfs-metadata-parity.xml
 
 # local lint tool binary
 /actionlint

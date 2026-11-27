@@ -6,13 +6,15 @@
     {
       "id": "C3",
       "status": "partial",
-      "blocker": "Redo/undo применяется к данным записи $MFT и к нерезидентному $BITMAP через byte-handler, но allocation-sensitive операции исключены из allowlist, а независимого volume-level checker'а метаданных нет.",
+      "blocker": "Redo/undo применяется к $MFT и нерезидентному $BITMAP; независимый pure-Python оракул (tests/ntfs_metadata_oracle.py) побайтово сверяет $MFT/$MFTMirr/$LogFile/$Bitmap с ntfscat и сверяет геометрию, инвентарь атрибутов и $STANDARD_INFORMATION с продакшн-ридером, но allocation-sensitive операции и Windows-chkdsk parity остаются вне этого доказательства.",
       "closes_when": "После replay $MFT и $BITMAP сравниваются побайтово с эталоном независимым чекером, и allocation-sensitive операции проходят тот же оракул.",
       "owner_issue": 386,
       "evidence": [
         "mountfile/ntfs_replay.py",
         "mountfile/ntfs_replay_executor.py",
-        "tests/test_ntfs_bitmap_handler.py"
+        "tests/test_ntfs_bitmap_handler.py",
+        "tests/ntfs_metadata_oracle.py",
+        "tests/test_ntfs_metadata_parity.py"
       ]
     },
     {
@@ -28,26 +30,30 @@
     {
       "id": "C5",
       "status": "partial",
-      "blocker": "Bounded reuse записи $MFT встроен в боевой путь (gate_mft_record_reuse перед InitializeFileRecordSegment), но расширение $MFT за текущий stream, index surgery и независимая Windows-проверка не поддержаны.",
+      "blocker": "Bounded reuse записи $MFT встроен в боевой путь, и $MFTMirr теперь побайтово сверяется независимым оракулом и ntfscat на Linux-томах и фикстурах (tests/test_ntfs_metadata_parity.py), но Windows-проверка на реальном томе и аллокация за пределами текущего $MFT-стрима не поддержаны.",
       "closes_when": "$MFTMirr сверяется независимым чекером на реальном томе, и тест покрывает аллокацию новой записи за пределами текущего stream.",
       "owner_issue": 386,
       "evidence": [
         "mountfile/ntfs_mft_allocation.py",
         "tests/test_ntfs_mft_allocation.py",
-        "tests/test_ntfs_mft_reuse_after_undo.py"
+        "tests/test_ntfs_mft_reuse_after_undo.py",
+        "tests/ntfs_metadata_oracle.py",
+        "tests/test_ntfs_metadata_parity.py"
       ]
     },
     {
       "id": "C6",
       "status": "partial",
-      "blocker": "Фикстуры синтетические: реальных Windows crash-captures и эталона, восстановленного chkdsk, нет; ntfsfix -n остаётся вспомогательной проверкой, а не авторитетным оракулом.",
+      "blocker": "Фикстуры синтетические; независимый pure-Python оракул теперь подтверждает побайтовый паритет $MFT/$MFTMirr/$LogFile/$Bitmap и чистоту тома после replay вместе с ntfsfix -n, но реального Windows crash-capture и эталона, восстановленного chkdsk, по-прежнему нет.",
       "closes_when": "Появляется хотя бы один Windows-crash capture, replay на нём сравнивается побайтово ($MFT/$BITMAP) с образом после chkdsk /f, и сравнение зелёное.",
       "owner_issue": 386,
       "evidence": [
         "tests/ntfs_crash_fixture.py",
         "tests/test_ntfs_crash_oracle_matrix.py",
         "tests/ntfs_oracle.py",
-        "scripts/windows_ntfs_acceptance.ps1"
+        "scripts/windows_ntfs_acceptance.ps1",
+        "tests/ntfs_metadata_oracle.py",
+        "tests/test_ntfs_metadata_parity.py"
       ]
     },
     {

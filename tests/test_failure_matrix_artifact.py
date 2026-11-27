@@ -231,6 +231,33 @@ def test_report_round_trips_through_json_with_its_junit_source(tmp_path):
     assert validate_report(reloaded, tmp_path, junit)["verdict"] == "pass"
 
 
+def test_fat32_parameterized_failure_states_match_exception_suffixes(tmp_path):
+    junit = _junit(
+        tmp_path / "fat32-parameterized.xml",
+        [
+            (
+                "tests.test_native_writer_failure_matrix",
+                "test_fat32_staged_failure_preserves_full_image_hash[short_write-OSError]",
+                "passed",
+            ),
+            (
+                "tests.test_native_writer_failure_matrix",
+                "test_fat32_staged_failure_preserves_full_image_hash[injected_exception-OSError]",
+                "passed",
+            ),
+            (
+                "tests.test_native_writer_failure_matrix",
+                "test_fat32_staged_failure_preserves_full_image_hash[cancellation-KeyboardInterrupt]",
+                "passed",
+            ),
+        ],
+    )
+    report = build_report(tmp_path, junit)
+    assert _cell(report, "fat32", "short_write")["test_status"] == "passed"
+    assert _cell(report, "fat32", "injected_exception")["test_status"] == "passed"
+    assert _cell(report, "fat32", "cancellation")["test_status"] == "passed"
+
+
 def test_malformed_junit_is_typed_unavailable_instead_of_green(tmp_path):
     junit = tmp_path / "truncated.xml"
     junit.write_text("<testsuites><testsuite>", encoding="utf-8")
