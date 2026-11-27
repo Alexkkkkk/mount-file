@@ -15,6 +15,9 @@ from mountfile import tc_window
 from mountfile.qt_compat import MB_No, MB_Yes, QApplication, WidgetWithChildrenShortcut
 from mountfile.tc_window import HexEditorPage
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():

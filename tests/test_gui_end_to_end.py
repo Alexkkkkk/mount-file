@@ -32,6 +32,9 @@ from mountfile.firmware import detect_volumes
 from mountfile.mainwindow import MainWindow
 from mountfile.qt_compat import QApplication, QModelIndex
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 class _Dialogs:
     """Stand-in for QMessageBox: records calls instead of blocking."""

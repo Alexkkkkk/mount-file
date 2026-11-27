@@ -17,6 +17,9 @@ from mountfile import tc_style, text_editor
 from mountfile.qt_compat import MB_No, MB_Yes, QApplication, QEvent, QMessageBox
 from mountfile.tc_window import HexEditorPage, MainWindow
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture(scope="module")
 def app():

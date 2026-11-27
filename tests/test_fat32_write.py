@@ -9,6 +9,7 @@ Run:  python -m pytest tests/test_fat32_write.py -v
 
 import math
 import os
+import shutil
 import sys
 import tempfile
 
@@ -32,6 +33,7 @@ class TestDelete:
         self.fs = Fat32(self.fh)
 
     def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
         self.fh.close()
 
     def _free(self):
@@ -180,6 +182,7 @@ class TestRename:
         self.fs = Fat32(self.fh)
 
     def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
         self.fh.close()
 
     def test_rename_keeps_content(self):
@@ -328,6 +331,9 @@ class TestFat32Provider:
             fs.mkdir("/", "DIR")
             fs.write_file("/DIR", "sub.bin", bytes(range(256)) * 200)
             fs.write_file("/", "tiny.txt", b"hello")
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_list_and_read_range(self):
         with Fat32Provider(self.path) as p:

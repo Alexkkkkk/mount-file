@@ -8,6 +8,9 @@ import pytest
 
 from mountfile import components
 
+# Qt needs a QApplication; `make test-fast` and dev-setup exclude gui.
+pytestmark = pytest.mark.gui
+
 
 def test_windows_installer_uses_packaged_data_in_frozen_build(monkeypatch, tmp_path):
     package_root = tmp_path / "bundle O'Brien" / "mountfile"

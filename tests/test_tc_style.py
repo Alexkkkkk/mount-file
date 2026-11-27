@@ -9,6 +9,8 @@ import stat
 import sys
 from types import ModuleType
 
+import pytest
+
 
 def _load_tc_style():
     """Load settings helpers even on CI hosts without an installed Qt runtime."""
@@ -56,7 +58,7 @@ def test_posix_settings_are_private_and_other_preferences_are_saved(
     tmp_path, monkeypatch
 ):
     if os.name != "posix":
-        return
+        pytest.skip("POSIX permission bits only exist on POSIX hosts")
     path = tmp_path / "ui.json"
     path.write_text('{"old": true}', encoding="utf-8")
     path.chmod(0o666)
@@ -92,7 +94,7 @@ def test_posix_settings_are_private_and_other_preferences_are_saved(
 
 def test_new_posix_settings_file_uses_private_permissions(tmp_path, monkeypatch):
     if os.name != "posix":
-        return
+        pytest.skip("POSIX permission bits only exist on POSIX hosts")
     path = tmp_path / "nested" / "ui.json"
     monkeypatch.setattr(tc_style, "SETTINGS_PATH", str(path))
     assert tc_style.save_settings()
