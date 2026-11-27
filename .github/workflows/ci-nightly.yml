@@ -74,6 +74,7 @@ jobs:
           python -m pytest tests/test_writer_fault_coverage.py
           tests/test_ntfs_writer_fault_coverage.py tests/test_ntfs_replay.py
           tests/test_ntfs_replay_oracle.py
+          tests/test_ntfs_metadata_parity.py
           tests/test_native_writer_failure_matrix.py -q
       - name: Emit failure coverage matrix
         run: python scripts/failure_matrix_artifact.py --repo-root . --json-out failure-matrix-nightly.json

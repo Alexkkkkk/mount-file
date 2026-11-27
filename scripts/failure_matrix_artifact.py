@@ -163,14 +163,14 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
             _case(
                 "test_native_writer_failure_matrix",
                 "test_fat32_staged_failure_preserves_full_image_hash",
-                include=("[short_write]",),
+                include=("[short_write-",),
             )
         ],
         "injected_exception": [
             _case(
                 "test_native_writer_failure_matrix",
                 "test_fat32_staged_failure_preserves_full_image_hash",
-                include=("[injected_exception]",),
+                include=("[injected_exception-",),
             )
         ],
         "process_kill": [
@@ -183,7 +183,7 @@ TESTS: dict[str, dict[str, list[dict[str, Any]]]] = {
             _case(
                 "test_native_writer_failure_matrix",
                 "test_fat32_staged_failure_preserves_full_image_hash",
-                include=("[cancellation]",),
+                include=("[cancellation-",),
             )
         ],
     },
