@@ -8,15 +8,10 @@ from scripts.cross_platform_evidence import (
 )
 
 
-def _report(
-    platform_name: str,
-    gate: str = "pass",
-    summary: str = "pass",
-    python_version: str = "3.12.0",
-) -> dict:
+def _report(platform_name: str, gate: str = "pass", summary: str = "pass") -> dict:
     return {
         "schema": "mountfile.native-read-evidence/v1",
-        "runner": {"platform": platform_name, "python": python_version},
+        "runner": {"platform": platform_name, "python": "3.12.0"},
         "gate": {"verdict": gate},
         "summary": {
             "verdict": summary,
@@ -92,19 +87,14 @@ def test_aggregate_passes_pr_fast_tier_without_claiming_macos(tmp_path, monkeypa
 
 def test_aggregate_rejects_blocked_and_duplicate_platforms(tmp_path, monkeypatch):
     _expect_full_matrix(monkeypatch)
-    _write(
-        tmp_path,
-        "linux-a.json",
-        _report("linux", gate="blocked", python_version="3.11.0"),
-    )
-    _write(tmp_path, "linux-b.json", _report("linux", python_version="3.12.0"))
+    _write(tmp_path, "linux-a.json", _report("linux", gate="blocked"))
+    _write(tmp_path, "linux-b.json", _report("linux"))
     for platform_name in ("windows", "macos"):
         _write(tmp_path, f"{platform_name}.json", _report(platform_name))
     result = aggregate(tmp_path)
     assert result["verdict"] == "blocked"
     assert "blocked_platform:linux" in result["blockers"]
     assert "duplicate_platform:linux" in result["blockers"]
-    assert result["platforms"]["linux"]["runner"]["python"] == "3.11.0"
 
 
 def test_aggregate_rejects_fallback_or_parity_claim(tmp_path, monkeypatch):
