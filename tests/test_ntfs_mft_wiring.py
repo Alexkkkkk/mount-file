@@ -132,13 +132,21 @@ def test_in_use_pre_image_keeps_existing_behavior_without_mirror_read():
     )
 
 
-def test_unreadable_pre_image_keeps_existing_behavior_without_mirror_read():
-    _run_gate(
-        record_number=2,
-        raw_before=b"\x00" * RECORD_SIZE,
-        initialized_seq=7,
-        mirror_window=b"",
-    )
+@pytest.mark.parametrize(
+    "raw_before",
+    [
+        pytest.param(b"\x00" * RECORD_SIZE, id="zeroed"),
+        pytest.param(_raw_record(6, in_use=False, usa_mismatch=True), id="bad-usa"),
+    ],
+)
+def test_unreadable_pre_image_is_refused_before_mirror_read(raw_before):
+    with pytest.raises(NtfsReplayError, match="pre-image is invalid; reuse refused"):
+        _run_gate(
+            record_number=2,
+            raw_before=raw_before,
+            initialized_seq=7,
+            mirror_window=b"",
+        )
 
 
 needs_ntfs = pytest.mark.skipif(
