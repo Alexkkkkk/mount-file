@@ -3,8 +3,8 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "614207f",
-    "version": "2.0.2",
+    "commit": "4476234",
+    "version": "2.0.3",
     "checked": "2026-11-27"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",

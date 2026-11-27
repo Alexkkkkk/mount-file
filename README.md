@@ -61,7 +61,7 @@ read-only анализ и умеет ограниченно писать — т�
 <!-- MOUNTFILE-AUTO-STATUS:START -->
 ## Generated project status
 
-This block is generated from the canonical status data in this repository. Package version: `2.0.2`.
+This block is generated from the canonical status data in this repository. Package version: `2.0.3`.
 
 Validated automation: checker acceptance, recovery acceptance, benchmark artifact validation.
 
