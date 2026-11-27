@@ -213,10 +213,16 @@
       "evidence": [
         "mountfile/ntfs_replay.py",
         "mountfile/ntfs_replay_executor.py",
-        "tests/test_ntfs_bitmap_handler.py"
+        "tests/test_ntfs_replay.py",
+        "tests/test_ntfs_replay_oracle.py",
+        "tests/test_ntfs_bitmap_handler.py",
+        "tests/test_ntfs_mft_reuse_after_undo.py",
+        ".github/workflows/ntfs-windows-acceptance.yml",
+        "scripts/windows_ntfs_acceptance.ps1",
+        "scripts/compare_ntfs_replay.py"
       ],
       "note": "Nonresident bitmap byte handler has unit coverage for misaligned ranges, neighbor preservation and bounds refusal. Bitmap/MFT allocation operations remain excluded from the replay allowlist; no independent volume-level metadata checker is claimed. C3 remains partial.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "reproduced": "2026-11-26: Linux toolchain run passed 70 focused tests and 8/8 synthetic scenarios. Windows workflow run 45849640107 on commit 28489eb passed native chkdsk, crash fixture creation and raw $MFT/$MFTMirr/$BITMAP/$LogFile comparisons; bounded native replay returned typed blocked for a malformed $LogFile slice. This is independent Windows checker evidence, but not replay parity; C3 remains partial."
     },
     {
       "id": "C4",
@@ -236,11 +242,10 @@
       "status": "partial",
       "evidence": [
         "mountfile/ntfs_mft_allocation.py",
-        "tests/test_ntfs_mft_allocation.py",
-        "tests/test_ntfs_mft_wiring.py"
+        "tests/test_ntfs_mft_allocation.py"
       ],
-      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. Zeroed or structurally unreadable pre-images now receive typed refusal rather than bypassing the mirror gate. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
-      "reproduced": "2026-11-26: tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft_wiring.py tests/test_ntfs_replay.py — 48 passed, including typed refusal for zeroed and malformed-USA MFT pre-images; no Windows/chkdsk or independent volume-level replay parity is claimed. Earlier, 2026-11-21 (PR feat/issue-510-c5-wiring): tests for NTFS MFT wiring/allocation/replay executor/log parser/writer fault coverage passed; scripts/replay_acceptance_status.py --check reported no drift."
+      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
+      "reproduced": "2026-11-21 (PR feat/issue-510-c5-wiring): pytest tests/test_ntfs_mft_wiring.py tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft.py tests/test_ntfs_replay_executor.py tests/test_ntfs_logfile_parser.py tests/test_ntfs_writer_fault_coverage.py — зелёный прогон; scripts/replay_acceptance_status.py --check — расхождений нет"
     },
     {
       "id": "C6",
@@ -261,7 +266,7 @@
         "scripts/ntfs_oracle_evidence.py"
       ],
       "note": "Linux synthetic-fixture checks use ntfsfix -n only as a secondary consistency checker and compare byte read-back plus outputs from two runs of the same executor; they are not an independent replay oracle. Windows VHDX/chkdsk acceptance remains separate evidence. No Windows-generated NTFS crash captures or native replay-parity against chkdsk are claimed.",
-      "reproduced": "2026-11-25: scripts/ntfs_oracle_evidence.py ran all 8 synthetic scenarios: 8 pass, 0 divergence, 0 unavailable. Added committed-redo and active-transaction-undo cases for a partial nonresident $DATA update crossing a 4 KiB cluster boundary; matrix tests require exact full-stream ntfscat read-back and an unchanged image hash on the second recovery pass. MFT/$Bitmap bytes are compared across separate copies replayed by the same executor, with ntfsfix -n as secondary evidence only. Dedicated Windows chkdsk acceptance is a separate workflow. C6 remains partial: these synthetic fixtures do not prove independent replay parity or replace native crash captures."
+      "reproduced": "2026-11-26: Linux scripts/ntfs_oracle_evidence.py passed all 8 synthetic scenarios. Windows workflow run 45849640107 on commit 28489eb passed chkdsk /scan, dirty-volume repair, crash fixture creation and typed raw metadata comparisons; native replay was blocked fail-closed on a malformed $LogFile slice. Windows checker evidence is now reproducible, but this does not prove native replay parity for the crash image; C6 remains partial."
     },
     {
       "id": "C7",
@@ -359,10 +364,11 @@
         "mountfile/native_write.py",
         "tests/test_ntfs_transactional_readback.py",
         "tests/test_native_journal_writers.py",
-        "tests/test_writer_fault_coverage.py"
+        "tests/test_writer_fault_coverage.py",
+        "tests/test_native_operation_matrix.py"
       ],
-      "note": "Ext4 selected paths use e2fsck -fn plus read-back. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
-      "reproduced": "2026-11-25: focused checker/read-back suite (176 passed) exercised ext4 e2fsck-backed paths and NTFS staged read-back contracts. ntfsfix remains secondary only; no authoritative Windows checker or every-operation coverage is claimed."
+      "note": "Ext4 selected paths use e2fsck -fn plus staged read-back, including create_file payload comparison through debugfs. The VFS/application route NtfsTransactionalWriter now performs a staged read-back through the independent ntfscat helper before atomic publish and refuses publication on mismatch (tests/test_ntfs_transactional_readback.py); the gated experimental NtfsNativeWriter had this contract already. No authoritative NTFS checker or every-operation coverage is claimed. Product writes remain unsupported.",
+      "reproduced": "2026-11-26: focused operation/checker/read-back suite passed (create_file short-write refusal included); ntfsfix remains secondary only, and no authoritative Windows checker or every-operation coverage is claimed."
     },
     {
       "id": "D6",
@@ -379,8 +385,8 @@
         "tests/test_native_operation_matrix.py",
         "tests/test_writer_fault_injection_acceptance.py"
       ],
-      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. The ext4.create_file injected-exception and cancellation cells have operation-specific selectors; short_write and process_kill remain not_proven until operation-specific tests are added. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. Local test execution does not substitute for the required scheduled evidence; acceptance stays not_claimed.",
-      "reproduced": "2026-11-26: ext4.create_file cancellation test ran and passed; focused JUnit subset passed 15 tests. The 32-cell artifact mapped only ext4.create_file/cancellation to passed for that JUnit input, and --validate returned pass; artifact acceptance remains not_claimed. Earlier 2026-11-25 local focused JUnit run passed 191 D1/D3/D5/D6 and NTFS regression tests. ext4.create_file injected_exception was passed; short_write and process_kill remain not_proven. Synthetic NTFS oracle was pass, but Windows chkdsk parity and scheduled-run streak remain unavailable."
+      "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. All four ext4.create_file states have operation-specific selectors; nested transactional publish is counted explicitly for process-kill. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
+      "reproduced": "2026-11-26: local operation/checker/read-back run passed (93 passed, 10 optional NTFS skips); the 32-cell artifact mapping now has ext4.create_file selectors for injected_exception, short_write, process_kill and cancellation. Windows chkdsk parity and scheduled-run streak remain unavailable. The artifact acceptance verdict remains not_claimed."
     },
     {
       "id": "D7",
@@ -408,7 +414,7 @@
         ".github/workflows/ci.yml"
       ],
       "note": "Full main-push matrix aggregates Linux, Windows and macOS read-only VFS evidence; PR/merge-queue fast tier aggregates Linux+Windows. Independent filesystem parity is not claimed; Windows checker inventory remains unavailable.",
-      "reproduced": "2026-11-19: локальный прогон на main @ 83e2b30 (v1.98.1) — acceptance/evidence suite (test_acceptance_blocks, test_acceptance_cells_typed, test_ext4_write_phase_injection, test_ext4_writer_fault_coverage, test_hash_preservation_matrix, test_checker_acceptance, test_writer_fault_coverage, test_failure_matrix_artifact, test_ntfs_bitmap_handler, test_ntfs_logfile_parser, test_ntfs_transactional_readback, test_ntfs_writer_fault_coverage, test_ntfs_mft_allocation, test_replay_nightly_evidence, test_cross_platform_evidence): 104 passed, 146 skipped (skips = отсутствующие mkntfs/ntfscp/ntfscat и платформенные чекеры); python scripts/replay_acceptance_status.py --check → расхождений нет"
+      "reproduced": "2026-11-26: Windows NTFS acceptance workflow run 45849640107 passed on windows-latest with checker_authority=windows_native, typed crash fixture and raw metadata comparisons. macOS evidence and cross-platform filesystem parity remain unavailable; E1 remains partial."
     },
     {
       "id": "E2",

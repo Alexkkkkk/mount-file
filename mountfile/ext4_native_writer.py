@@ -36,6 +36,7 @@ import ctypes
 import ctypes.util
 import os
 import struct
+import subprocess
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -770,6 +771,28 @@ def verify_image_after_operation(
     }
 
 
+def _read_ext4_file_bytes(image_path: str, internal_path: str) -> bytes:
+    """Read a staged file through ``debugfs`` without decoding its payload."""
+
+    command = ["debugfs", "-R", f"cat /{internal_path.lstrip('/')}", image_path]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Ext4ProfileUnsupported(f"ext4 staged read-back failed: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()[-1000:]
+        suffix = f"; {detail}" if detail else ""
+        raise Ext4ProfileUnsupported(
+            f"debugfs read-back returned {result.returncode}{suffix}"
+        )
+    return result.stdout
+
+
 def recover_journal_on_copy(
     image_path: str,
     offset: int,
@@ -1046,6 +1069,10 @@ class Ext4NativeWriter:
         try:
             Ext4TransactionalWriter().create_file(temporary, internal, data, offset)
             self.last_verification = verify_image_after_operation(temporary, 0)
+            if _read_ext4_file_bytes(temporary, internal) != bytes(data):
+                raise Ext4ProfileUnsupported(
+                    f"ext4 staged read-back mismatch for {internal}"
+                )
             _require_source_unchanged(source_path, source_identity)
             _atomic_replace(source_path, temporary)
             temporary = ""

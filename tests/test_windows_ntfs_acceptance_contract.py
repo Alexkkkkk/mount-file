@@ -54,6 +54,10 @@ def test_windows_acceptance_has_clean_dirty_and_repair_stages():
     assert "sentinel hash changed during checker lifecycle" in script
     assert "windows-child-process-terminated-during-ntfs-write" in script
     assert "Stop-Process -Id $writer.Id -Force" in script
+    assert '"-Path", $crashPayload' in script
+    assert '"-LogPath", $childLog' in script
+    assert "-WorkingDirectory $OutputDirectory" in script
+    assert "abrupt-writer.log" in script
     assert "$rawCrash" in script
     assert "raw-crash-repair-comparison.json" in script
     assert 'fixture_id = "windows-ntfs-crash-v1"' in script

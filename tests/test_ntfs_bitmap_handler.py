@@ -15,7 +15,7 @@ from mountfile.ntfs_replay import (
 )
 
 
-def _record(operation: int) -> LogRecord:
+def _record(operation: int, undo_operation: int | None = None) -> LogRecord:
     return LogRecord(
         lsn=1,
         byte_offset=0,
@@ -29,7 +29,7 @@ def _record(operation: int) -> LogRecord:
         flags=0,
         data_length=0,
         redo_op=operation,
-        undo_op=operation,
+        undo_op=operation if undo_operation is None else undo_operation,
         redo_data=b"",
         undo_data=b"",
         target_attr=0xB0,
@@ -93,6 +93,47 @@ def test_misaligned_bitmap_range_updates_requested_bits_and_preserves_neighbors(
     assert result == 1
     assert stream.getvalue()[:2] == expected
     assert stream.getvalue()[2:] == bytes(510)
+
+
+def test_bitmap_redo_then_undo_restores_exact_stream_bytes() -> None:
+    """The same bounded range must round-trip through redo and undo."""
+    initial = bytes([0x00, 0x00, *([0xA5] * 510)])
+    stream = io.BytesIO(initial)
+    payload = struct.pack("<II", 3, 7)
+    record = _record(
+        OP_SET_BITS_IN_NONRESIDENT_BITMAP,
+        OP_CLEAR_BITS_IN_NONRESIDENT_BITMAP,
+    )
+
+    assert (
+        _apply_stream_operation(
+            stream,
+            None,
+            _attribute(),
+            record,
+            payload,
+            cluster_size=512,
+            base_offset=0,
+            redo=True,
+        )
+        == 1
+    )
+    assert stream.getvalue() != initial
+
+    assert (
+        _apply_stream_operation(
+            stream,
+            None,
+            _attribute(),
+            record,
+            payload,
+            cluster_size=512,
+            base_offset=0,
+            redo=False,
+        )
+        == 1
+    )
+    assert stream.getvalue() == initial
 
 
 def test_bitmap_handler_refuses_out_of_bounds_range_without_writing() -> None:
