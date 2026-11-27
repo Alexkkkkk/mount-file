@@ -3,9 +3,9 @@
   "tracker": 510,
   "slice": {
     "branch": "main",
-    "commit": "10fcfd4",
-    "version": "2.0.1",
-    "checked": "2026-11-26"
+    "commit": "b01647b",
+    "version": "2.0.2",
+    "checked": "2026-11-27"
   },
   "closure_rule": "replay нельзя объявлять supported, пока не закрыты блоки B, C и D, а README и CI-гейт статуса (#390) не отражают фактическое поведение",
   "items": [
@@ -219,11 +219,9 @@
         "tests/test_ntfs_mft_reuse_after_undo.py",
         ".github/workflows/ntfs-windows-acceptance.yml",
         "scripts/windows_ntfs_acceptance.ps1",
-        "scripts/compare_ntfs_replay.py",
-        "tests/ntfs_metadata_oracle.py",
-        "tests/test_ntfs_metadata_parity.py"
+        "scripts/compare_ntfs_replay.py"
       ],
-      "note": "Independent three-column parity evidence (2026-11-26): a standalone pure-Python NTFS oracle (tests/ntfs_metadata_oracle.py, zero mountfile imports, offsets pinned to the published on-disk layout) re-derives boot geometry, $MFT/$MFTMirr/$LogFile/$Bitmap sizes and full stream bytes from the image and agrees byte-for-byte with ntfs-3g ntfscat and with the production reader; record-0 attribute inventory and $STANDARD_INFORMATION timestamps match field-by-field; every cataloged dirty fixture replays to a volume the oracle, the production reader and ntfsfix -n all report clean. Windows chkdsk parity and allocation-sensitive operations remain outside this evidence, so the item stays partial.",
+      "note": "Nonresident bitmap byte handler has unit coverage for misaligned ranges, neighbor preservation and bounds refusal. Bitmap/MFT allocation operations remain excluded from the replay allowlist; no independent volume-level metadata checker is claimed. C3 remains partial.",
       "reproduced": "2026-11-26: Linux toolchain run passed 70 focused tests and 8/8 synthetic scenarios. Windows workflow run 45849640107 on commit 28489eb passed native chkdsk, crash fixture creation and raw $MFT/$MFTMirr/$BITMAP/$LogFile comparisons; bounded native replay returned typed blocked for a malformed $LogFile slice. This is independent Windows checker evidence, but not replay parity; C3 remains partial."
     },
     {
@@ -244,11 +242,9 @@
       "status": "partial",
       "evidence": [
         "mountfile/ntfs_mft_allocation.py",
-        "tests/test_ntfs_mft_allocation.py",
-        "tests/ntfs_metadata_oracle.py",
-        "tests/test_ntfs_metadata_parity.py"
+        "tests/test_ntfs_mft_allocation.py"
       ],
-      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported. Independent parity evidence (2026-11-26): the standalone pure-Python oracle now proves $MFTMirr byte parity against ntfscat and the production reader on real mkntfs volumes and on every replayed dirty fixture; Windows checker validation and MFT extension beyond the current stream remain open.",
+      "note": "Bounded MFT record reuse helpers are wired into the production replay path: gate_mft_record_reuse() in mountfile/ntfs_replay.py runs plan_mft_record_reuse() in front of every InitializeFileRecordSegment write (free pre-image, byte-identical $MFTMirr slot inside the mirrored window, sequence continuity mod 2**16); every refusal happens before the first byte is written. The publication executor refuses MFT allocation unless the staged-image verifier callback returns literal True; missing, implicit-None, false and other non-True results refuse publication. Checker independence remains the caller's responsibility; unit tests use an explicit synthetic True stub only for transaction mechanics, not as checker evidence. Re-verified at 4448ef2 (after #606 landed the allocation-planner gate) on 2026-11-22. Extending $MFT beyond its current stream, index surgery and independent Windows checking remain unsupported.",
       "reproduced": "2026-11-21 (PR feat/issue-510-c5-wiring): pytest tests/test_ntfs_mft_wiring.py tests/test_ntfs_mft_allocation.py tests/test_ntfs_mft.py tests/test_ntfs_replay_executor.py tests/test_ntfs_logfile_parser.py tests/test_ntfs_writer_fault_coverage.py — зелёный прогон; scripts/replay_acceptance_status.py --check — расхождений нет"
     },
     {
@@ -267,11 +263,9 @@
         "tests/test_windows_ntfs_acceptance_contract.py",
         "tests/ntfs_oracle.py",
         "tests/test_ntfs_replay_oracle.py",
-        "scripts/ntfs_oracle_evidence.py",
-        "tests/ntfs_metadata_oracle.py",
-        "tests/test_ntfs_metadata_parity.py"
+        "scripts/ntfs_oracle_evidence.py"
       ],
-      "note": "Linux synthetic-fixture checks use ntfsfix -n only as a secondary consistency checker and compare byte read-back plus outputs from two runs of the same executor; they are not an independent replay oracle. Windows VHDX/chkdsk acceptance remains separate evidence. No Windows-generated NTFS crash captures or native replay-parity against chkdsk are claimed. Independent parity evidence (2026-11-26): after replay of every cataloged dirty fixture, the standalone pure-Python oracle (tests/ntfs_metadata_oracle.py) and the production reader agree on $Volume record bytes, $MFTMirr contents and volume state, and ntfsfix -n accepts the recovered image; fixtures remain synthetic, so a Windows crash capture is still required for verification.",
+      "note": "Linux synthetic-fixture checks use ntfsfix -n only as a secondary consistency checker and compare byte read-back plus outputs from two runs of the same executor; they are not an independent replay oracle. Windows VHDX/chkdsk acceptance remains separate evidence. No Windows-generated NTFS crash captures or native replay-parity against chkdsk are claimed.",
       "reproduced": "2026-11-26: Linux scripts/ntfs_oracle_evidence.py passed all 8 synthetic scenarios. Windows workflow run 45849640107 on commit 28489eb passed chkdsk /scan, dirty-volume repair, crash fixture creation and typed raw metadata comparisons; native replay was blocked fail-closed on a malformed $LogFile slice. Windows checker evidence is now reproducible, but this does not prove native replay parity for the crash image; C6 remains partial."
     },
     {
