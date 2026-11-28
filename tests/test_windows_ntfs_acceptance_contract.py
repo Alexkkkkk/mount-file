@@ -64,6 +64,22 @@ def test_windows_acceptance_has_clean_dirty_and_repair_stages():
     assert "captured_at_utc" in script
     assert "github_run_id" in script
 
+    # Regression for the scheduled run that failed with "abrupt writer did not
+    # create payload before termination (state=running)": chkdsk /scan can still
+    # hold the volume lock, so the harness must probe writability instead of
+    # assuming a silent open-for-write succeeds, and must surface the child's
+    # stderr plus never leave the writer alive behind a blocked detach.
+    assert "function Test-VolumeWritable" in script
+    assert script.count("if (-not (Test-VolumeWritable $drive 90))") == 2
+    assert "mounted NTFS volume never became writable after chkdsk /scan" in script
+    assert "RedirectStandardError $childErr" in script
+    assert "abrupt-writer.stderr.log" in script
+    assert 'Set-Content -LiteralPath $Path -Value ("crash-line-0-' in script
+    assert (
+        "if (-not $writer.HasExited) { Stop-Process -Id $writer.Id -Force -ErrorAction SilentlyContinue }"
+        in script
+    )
+
 
 def test_windows_acceptance_does_not_claim_replay_parity():
     script = SCRIPT.read_text(encoding="utf-8")

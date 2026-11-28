@@ -65,6 +65,27 @@ function Invoke-Diskpart([string[]]$Lines, [string]$Name) {
     return Invoke-Checked "diskpart.exe" @("/s", $diskpartScript) $Name
 }
 
+function Test-VolumeWritable([string]$Drive, [int]$TimeoutSeconds = 90) {
+    # chkdsk /scan returns before the online scan necessarily releases the NTFS
+    # volume lock, so anything that opens a file for writing right after it can
+    # block indefinitely without raising an error. Probe an actual write and
+    # retry until the volume accepts one, or fail with a typed reason.
+    $probe = Join-Path $Drive "mountfile-write-probe.tmp"
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $script:volumeProbeError = "<none>"
+    while ((Get-Date) -lt $deadline) {
+        try {
+            Set-Content -LiteralPath $probe -Value "mountfile-write-probe" -ErrorAction Stop
+            Remove-Item -LiteralPath $probe -Force -ErrorAction Stop
+            return $true
+        } catch {
+            $script:volumeProbeError = $_.Exception.Message
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    return $false
+}
+
 try {
     if (-not (Get-Command chkdsk.exe -ErrorAction SilentlyContinue)) {
         throw "chkdsk.exe is unavailable"
@@ -115,10 +136,16 @@ try {
         output = $scanBefore.Trim()
     }
     if ($scanBeforeCode -ne 0) { throw "clean NTFS VHDX failed chkdsk /scan" }
+    if (-not (Test-VolumeWritable $drive 90)) {
+        throw "mounted NTFS volume never became writable after chkdsk /scan ($script:volumeProbeError)"
+    }
+    $report.volume_write_probe = [ordered]@{ before_crash = $true }
 
     $childScript = Join-Path $OutputDirectory "abrupt-writer.ps1"
     $crashPayload = Join-Path $drive "crash-payload.bin"
     $childLog = Join-Path $OutputDirectory "abrupt-writer.log"
+    $childOut = Join-Path $OutputDirectory "abrupt-writer.stdout.log"
+    $childErr = Join-Path $OutputDirectory "abrupt-writer.stderr.log"
     @'
 param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -126,7 +153,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 try {
-    for ($i = 0; $i -lt 10000; $i++) {
+    Set-Content -LiteralPath $Path -Value ("crash-line-0-{0}" -f (Get-Date).Ticks) -ErrorAction Stop
+    for ($i = 1; $i -lt 10000; $i++) {
         Add-Content -LiteralPath $Path -Value ("crash-line-{0}-{1}" -f $i, (Get-Date).Ticks)
         if (($i % 100) -eq 0) { Start-Sleep -Milliseconds 1 }
     }
@@ -138,18 +166,25 @@ try {
     $writer = Start-Process -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $childScript,
         "-Path", $crashPayload, "-LogPath", $childLog
-    ) -WorkingDirectory $OutputDirectory -PassThru
-    $deadline = (Get-Date).AddSeconds(10)
-    while (-not (Test-Path $crashPayload) -and (Get-Date) -lt $deadline) {
+    ) -WorkingDirectory $OutputDirectory -RedirectStandardOutput $childOut `
+      -RedirectStandardError $childErr -PassThru
+    $deadline = (Get-Date).AddSeconds(45)
+    while ((-not (Test-Path -LiteralPath $crashPayload)) -and ((Get-Date) -lt $deadline)) {
         if ($writer.HasExited) { break }
-        Start-Sleep -Milliseconds 50
+        Start-Sleep -Milliseconds 100
     }
-    if (-not (Test-Path $crashPayload)) {
-        $childOutput = if ($writer.HasExited) { $writer.ExitCode } else { "running" }
-        $childLogText = if (Test-Path $childLog) {
+    if (-not (Test-Path -LiteralPath $crashPayload)) {
+        $childOutput = if ($writer.HasExited) { "exited:$($writer.ExitCode)" } else { "running" }
+        $childLogText = if (Test-Path -LiteralPath $childLog) {
             Get-Content -LiteralPath $childLog -Raw
         } else { "<no child log>" }
-        throw "abrupt writer did not create payload before termination (state=$childOutput; log=$childLogText)"
+        $childErrText = if (Test-Path -LiteralPath $childErr) {
+            (Get-Content -LiteralPath $childErr -Raw).Trim()
+        } else { "<no child stderr>" }
+        # Do not leak the writer: a live child holding a handle on the volume
+        # would make the detach in `finally` fail and mask this error.
+        if (-not $writer.HasExited) { Stop-Process -Id $writer.Id -Force -ErrorAction SilentlyContinue }
+        throw "abrupt writer did not create payload before termination (state=$childOutput; log=$childLogText; stderr=$childErrText)"
     }
     Stop-Process -Id $writer.Id -Force
     $writer.WaitForExit()
@@ -201,6 +236,10 @@ try {
         output = $scanAfter.Trim()
     }
     if ($scanAfterCode -ne 0) { throw "repaired NTFS VHDX failed chkdsk /scan" }
+    if (-not (Test-VolumeWritable $drive 90)) {
+        throw "mounted NTFS volume never became writable after chkdsk /scan ($script:volumeProbeError)"
+    }
+    $report.volume_write_probe.after_repair = $true
 
     & python scripts/windows_ntfs_raw_snapshot.py `
         --device $device --offset ([int64]$partition.Offset) `
@@ -255,6 +294,10 @@ catch {
 }
 finally {
     try {
+        $liveWriter = Get-Variable -Name writer -Scope Script -ErrorAction SilentlyContinue
+        if ($null -ne $liveWriter -and -not $liveWriter.Value.HasExited) {
+            Stop-Process -Id $liveWriter.Value.Id -Force -ErrorAction SilentlyContinue
+        }
         if (Get-Volume -DriveLetter R -ErrorAction SilentlyContinue) {
             Invoke-Diskpart @(
                 "select vdisk file=$vhd"
