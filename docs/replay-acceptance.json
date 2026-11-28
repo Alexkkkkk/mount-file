@@ -386,7 +386,7 @@
         "tests/test_writer_fault_injection_acceptance.py"
       ],
       "note": "Streak evidence is emitted as replay-nightly-streak.json. The artifact now emits 32 profile x operation x state cells: the existing seven write_file profiles plus ext4.create_file. All four ext4.create_file states have operation-specific selectors; nested transactional publish is counted explicitly for process-kill. FAT12/16 selectors remain mapped to concrete short_write, cancellation and process_kill cases. A cell is green only when its mapped node runs in a scheduled job; acceptance stays not_claimed.",
-      "reproduced": "2026-11-28: JUnit-прогон на 0bc8508 — 338 passed / 4 skipped по 13 модулям матрицы; scripts/failure_matrix_artifact.py собрал 32 profile x operation x state ячейки, 27 в состоянии passed, --validate verdict pass без блокеров, acceptance по-прежнему not_claimed (нет scheduled streak и Windows chkdsk parity)."
+      "reproduced": "2026-11-28: найдена причина, по которой две ячейки ntfs.write_file (injected_exception, process_kill) оставались partial в каждом scheduled-прогоне: оба workflow (failure-matrix.yml, replay-nightly.yml) не запускали tests/test_ntfs_replay_executor.py, чьи узлы test_allocation_phase_failure_preserves_source_and_cleans_stage и test_allocation_phase_sigkill_preserves_source объявлены селекторами этих ячеек. Модуль добавлен в оба списка; локальный прогон 309 passed, scripts/failure_matrix_artifact.py -> 32/32 ячейки passed, verdict execution_recorded, acceptance по-прежнему not_claimed: повышение требует двух последовательных scheduled-прогонов уже с этим списком."
     },
     {
       "id": "D7",
